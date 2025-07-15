@@ -18,6 +18,8 @@ from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 
 from lightx2v.models.networks.wan.audio_adapter import AudioAdapter, AudioAdapterPipe, rank0_load_state_dict_from_path
 
+from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
+
 from loguru import logger
 import torch.distributed as dist
 from einops import rearrange
@@ -372,6 +374,18 @@ class WanAudioRunner(WanRunner):
             audio_frame_rate = audio_sr / fps
             return round(start_frame * audio_frame_rate), round((end_frame + 1) * audio_frame_rate)
 
+        def wan_mask_rearrange(mask: torch.Tensor):
+            # mask: 1, T, H, W, where 1 means the input mask is one-channel
+            if mask.ndim == 3:
+                mask = mask[None]
+            assert mask.ndim == 4
+            _, t, h, w = mask.shape
+            assert t == ((t - 1) // 4 * 4 + 1)
+            mask_first_frame = torch.repeat_interleave(mask[:, 0:1], repeats=4, dim=1)
+            mask = torch.concat([mask_first_frame, mask[:, 1:]], dim=1)
+            mask = mask.view(mask.shape[1] // 4, 4, h, w)
+            return mask.transpose(0, 1)  # 4, T // 4, H, W
+
         self.inputs["audio_adapter_pipe"] = self.load_audio_models()
 
         # process audio
@@ -452,11 +466,11 @@ class WanAudioRunner(WanRunner):
 
             if prev_latents is not None:
                 ltnt_channel, nframe, height, width = self.model.scheduler.latents.shape
-                bs = 1
-                prev_mask = torch.zeros((bs, 1, nframe, height, width), device=device, dtype=dtype)
-                if prev_len > 0:
-                    prev_mask[:, :, :prev_len] = 1.0
-
+                # bs = 1
+                frames_n = (nframe - 1) * 4 + 1
+                prev_mask = torch.zeros((1, frames_n, height, width), device=device, dtype=dtype)
+                prev_mask[:, prev_len:] = 0
+                prev_mask = wan_mask_rearrange(prev_mask).unsqueeze(0)
                 previmg_encoder_output = {
                     "prev_latents": prev_latents,
                     "prev_mask": prev_mask,

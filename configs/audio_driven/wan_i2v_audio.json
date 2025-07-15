@@ -1,7 +1,7 @@
 {
-    "infer_steps": 5,
+    "infer_steps": 4,
     "target_fps": 16,
-    "video_duration": 12,
+    "video_duration": 16,
     "audio_sr": 16000,
     "target_video_length": 81,
     "target_height": 480,
@@ -11,7 +11,8 @@
     "cross_attn_2_type": "flash_attn3",
     "seed": 42,
     "sample_guide_scale":1,
-    "sample_shift": 5,
+    "sample_shift": 6,
     "enable_cfg": false,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "use_tiling_vae": true
 }
