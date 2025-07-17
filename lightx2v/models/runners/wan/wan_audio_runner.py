@@ -578,7 +578,7 @@ class WanAudioRunner(WanRunner):
         os.remove(out_path)
         os.remove(audio_file)
 
-    async def run_pipeline(self):
+    def run_pipeline(self):
         if self.config["use_prompt_enhancer"]:
             self.config["prompt_enhanced"] = self.post_prompt_enhancer()
 
