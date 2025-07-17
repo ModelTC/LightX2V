@@ -19,6 +19,7 @@ from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.networks.wan.audio_adapter import AudioAdapter, AudioAdapterPipe, rank0_load_state_dict_from_path
 
 from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
+from lightx2v.models.schedulers.wan.audio.scheduler import EulerSchedulerTimestepFix
 
 from loguru import logger
 import torch.distributed as dist
@@ -33,6 +34,45 @@ from torchvision.transforms.functional import resize
 import subprocess
 import warnings
 from typing import Optional, Tuple, Union
+
+
+def add_mask_to_frames(
+    frames: np.ndarray,
+    mask_rate: float = 0.1,
+    rnd_state: np.random.RandomState = None,
+) -> np.ndarray:
+    if mask_rate is None:
+        return frames
+
+    if rnd_state is None:
+        rnd_state = np.random.RandomState()
+
+    h, w = frames.shape[-2:]
+    mask = rnd_state.rand(h, w) > mask_rate
+    frames = frames * mask
+    return frames
+
+
+def add_noise_to_frames(
+    frames: np.ndarray,
+    noise_mean: float = -3.0,
+    noise_std: float = 0.5,
+    rnd_state: np.random.RandomState = None,
+) -> np.ndarray:
+    if noise_mean is None or noise_std is None:
+        return frames
+
+    if rnd_state is None:
+        rnd_state = np.random.RandomState()
+
+    shape = frames.shape
+    bs = 1 if len(shape) == 4 else shape[0]
+    sigma = rnd_state.normal(loc=noise_mean, scale=noise_std, size=(bs,))
+    sigma = np.exp(sigma)
+    sigma = np.expand_dims(sigma, axis=tuple(range(1, len(shape))))
+    noise = rnd_state.randn(*shape) * sigma
+    frames = frames + noise
+    return frames
 
 
 def get_crop_bbox(ori_h, ori_w, tgt_h, tgt_w):
@@ -77,7 +117,12 @@ def adaptive_resize(img):
     aspect_ratios = np.array(np.array(list(bucket_config.keys())))
     closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
     closet_ratio = aspect_ratios[closet_aspect_idx]
-    target_h, target_w = 480, 832
+    if ori_ratio < 1.0:
+        target_h, target_w = 480, 832
+    elif ori_ratio == 1.0:
+        target_h, target_w = 480, 480
+    else:
+        target_h, target_w = 832, 480
     for resolution in bucket_config[closet_ratio][0]:
         if ori_height * ori_weight >= resolution[0] * resolution[1]:
             target_h, target_w = resolution
@@ -254,6 +299,10 @@ def save_audio(
 class WanAudioRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
+
+    def init_scheduler(self):
+        scheduler = EulerSchedulerTimestepFix(self.config)
+        self.model.set_scheduler(scheduler)
 
     def load_audio_models(self):
         ##音频特征提取器
@@ -441,7 +490,14 @@ class WanAudioRunner(WanRunner):
 
             elif res_frame_num > 5 and idx == interval_num - 1:  # 最后一段可能不够81帧
                 prev_frames = torch.zeros((1, 3, max_num_frames, tgt_h, tgt_w), device=device)
-                prev_frames[:, :, :prev_frame_length] = gen_video_list[-1][:, :, -prev_frame_length:]
+                last_frames = gen_video_list[-1][:, :, -prev_frame_length:].clone().to(device)
+
+                last_frames = last_frames.cpu().detach().numpy()
+                last_frames = add_noise_to_frames(last_frames)
+                last_frames = add_mask_to_frames(last_frames, mask_rate=0.1)  # mask 0.10
+                last_frames = torch.from_numpy(last_frames).to(dtype=dtype, device=device)
+
+                prev_frames[:, :, :prev_frame_length] = last_frames
                 prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config)[0].to(dtype)
                 prev_len = prev_token_length
                 audio_start, audio_end = get_audio_range(idx * max_num_frames - idx * prev_frame_length, expected_frames, fps=target_fps, audio_sr=audio_sr)
@@ -452,7 +508,14 @@ class WanAudioRunner(WanRunner):
 
             else:  # 中间段满81帧带pre_latens
                 prev_frames = torch.zeros((1, 3, max_num_frames, tgt_h, tgt_w), device=device)
-                prev_frames[:, :, :prev_frame_length] = gen_video_list[-1][:, :, -prev_frame_length:]
+                last_frames = gen_video_list[-1][:, :, -prev_frame_length:].clone().to(device)
+
+                last_frames = last_frames.cpu().detach().numpy()
+                last_frames = add_noise_to_frames(last_frames)
+                last_frames = add_mask_to_frames(last_frames, mask_rate=0.1)  # mask 0.10
+                last_frames = torch.from_numpy(last_frames).to(dtype=dtype, device=device)
+
+                prev_frames[:, :, :prev_frame_length] = last_frames
                 prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config)[0].to(dtype)
                 prev_len = prev_token_length
                 audio_start, audio_end = get_audio_range(idx * max_num_frames - idx * prev_frame_length, (idx + 1) * max_num_frames - idx * prev_frame_length, fps=target_fps, audio_sr=audio_sr)
@@ -497,13 +560,13 @@ class WanAudioRunner(WanRunner):
             start_audio_frame = 0 if idx == 0 else int((prev_frame_length + 1) * audio_sr / target_fps)
 
             if res_frame_num > 5 and idx == interval_num - 1:
-                gen_video_list.append(gen_video[:, :, start_frame:res_frame_num])
+                gen_video_list.append(gen_video[:, :, start_frame:res_frame_num].cpu())
                 cut_audio_list.append(audio_array[start_audio_frame:useful_length])
             elif expected_frames < max_num_frames and useful_length != -1:
-                gen_video_list.append(gen_video[:, :, start_frame:expected_frames])
+                gen_video_list.append(gen_video[:, :, start_frame:expected_frames].cpu())
                 cut_audio_list.append(audio_array[start_audio_frame:useful_length])
             else:
-                gen_video_list.append(gen_video[:, :, start_frame:])
+                gen_video_list.append(gen_video[:, :, start_frame:].cpu())
                 cut_audio_list.append(audio_array[start_audio_frame:])
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()

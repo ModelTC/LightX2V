@@ -46,6 +46,7 @@ class WanAudioPreInfer(WanPreInfer):
             "timestep": t,
         }
         audio_dit_blocks.append(inputs["audio_adapter_pipe"](**audio_model_input))
+        ##audio_dit_blocks = None##Debug Drop Audio
 
         if positive:
             context = inputs["text_encoder_output"]["context"]
