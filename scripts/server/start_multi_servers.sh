@@ -16,13 +16,13 @@ if [ -z "${num_gpus}" ]; then
 fi
 
 # Check required parameters
-if [ -z "$lightx2v_path" ]; then
-    echo "Error: lightx2v_path not set"
+if [ -z "${lightx2v_path}" ]; then
+    echo "Error: lightx2v_path is not set. Please set this variable first."
     exit 1
 fi
 
-if [ -z "$model_path" ]; then
-    echo "Error: model_path not set"
+if [ -z "${model_path}" ]; then
+    echo "Error: model_path is not set. Please set this variable first."
     exit 1
 fi
 
@@ -37,7 +37,7 @@ export DTYPE=BF16
 python -m lightx2v.api_multi_servers \
     --num_gpus $num_gpus \
     --start_port 8000 \
-    --model_cls wan2.1 \
-    --task t2v \
+    --model_cls wan2.1_distill \
+    --task i2v \
     --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/wan/wan_t2v.json
+    --config_json ${lightx2v_path}/configs/distill/wan_i2v_distill_4step_cfg.json
