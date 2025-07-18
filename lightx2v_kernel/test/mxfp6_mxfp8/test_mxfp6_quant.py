@@ -27,10 +27,12 @@ class TestQuantBF162MXFP6(unittest.TestCase):
                         weight = torch.randn(n, k, dtype=self.dtype, device=self.device)
                         weight_quant_pred, weight_scale_pred = scaled_fp6_quant(weight)
 
-                        alpha = torch.tensor(1.0, device=self.device, dtype=torch.float32)
-                        mm_pred = cutlass_scaled_mxfp6_mxfp8_mm(activation_quant_pred, weight_quant_pred, activation_scale_pred, weight_scale_pred, alpha=alpha)
+                        bias = torch.rand(1, n, dtype=self.dtype, device=self.device) * 10
 
-                        mm_real = linear(activation, weight, bias=None).to(torch.bfloat16)
+                        alpha = torch.tensor(1.0, device=self.device, dtype=torch.float32)
+                        mm_pred = cutlass_scaled_mxfp6_mxfp8_mm(activation_quant_pred, weight_quant_pred, activation_scale_pred, weight_scale_pred, alpha=alpha, bias=bias)
+
+                        mm_real = linear(activation, weight, bias=bias).to(torch.bfloat16)
 
                         self.assertTrue(error(mm_pred, mm_real) < 1e-2, f"Accuracy test failed for shape {m, k, n}: Error {error(mm_pred, mm_real)} exceeds threshold.")
 

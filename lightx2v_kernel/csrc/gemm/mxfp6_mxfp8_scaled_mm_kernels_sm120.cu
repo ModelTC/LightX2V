@@ -4,6 +4,7 @@
 
 // clang-format off
 #include "cutlass/cutlass.h"
+#include "cutlass/epilogue/fusion/operations.hpp"
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
@@ -60,6 +61,9 @@ struct Mxfp6Mxfp8GemmSm120 {
     using ThreadBlockShape    = Shape<_128,_128,_128>;                          // Threadblock's tile size
     using ClusterShape        = Shape<_1,_1,_1>;                                // Shape of the threadblocks in a cluster
 
+    // use per-column bias, i.e. every column has different bias
+    using EVTOp = cutlass::epilogue::fusion::LinCombPerColBias<ElementD, ElementAccumulator>;
+
     using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
         ArchTag, OperatorClass,
         ThreadBlockShape, ClusterShape,
@@ -67,7 +71,8 @@ struct Mxfp6Mxfp8GemmSm120 {
         ElementAccumulator, ElementAccumulator,
         ElementC, LayoutCTag, AlignmentC,
         ElementD, LayoutDTag, AlignmentD,
-        cutlass::epilogue::collective::EpilogueScheduleAuto                      // Epilogue schedule policy
+        cutlass::epilogue::collective::EpilogueScheduleAuto,                      // Epilogue schedule policy
+        EVTOp
     >::CollectiveOp;
 
     using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
@@ -127,7 +132,7 @@ typename Mxfp6Mxfp8GemmSm120::Gemm::Arguments args_from_options_mxfp6_mxfp8(
   auto layout_SFB = Sm1xxBlkScaledConfig::tile_atom_to_shape_SFB(cute::make_shape(m, n, k, 1));
 
   if (bias){
-    auto stride_bias = cutlass::make_cute_packed_stride(Mxfp6Mxfp8GemmSm120::StrideC{}, {});
+    using StrideBias = Stride<cutlass::_0, cutlass::_1, int64_t>;
 
     typename Mxfp6Mxfp8GemmSm120::Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
@@ -143,12 +148,16 @@ typename Mxfp6Mxfp8GemmSm120::Gemm::Arguments args_from_options_mxfp6_mxfp8(
        layout_SFB},
       {     // Epilogue arguments
        {},  // epilogue.thread
-       static_cast<Mxfp6Mxfp8GemmSm120::Gemm::ElementC const*>(bias->data_ptr()),
-       stride_bias,
+       static_cast<Mxfp6Mxfp8GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
+       stride_D,
        static_cast<Mxfp6Mxfp8GemmSm120::Gemm::ElementD*>(D.data_ptr()),
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
+    static const float beta_zero = 0.0f;
+    fusion_args.beta_ptr = &beta_zero;
+    fusion_args.bias_ptr = static_cast<Mxfp6Mxfp8GemmSm120::Gemm::ElementC const*>(bias->data_ptr());
+    fusion_args.dBias = StrideBias{};
     return arguments;
   } else {
     typename Mxfp6Mxfp8GemmSm120::Gemm::Arguments arguments{
@@ -171,6 +180,8 @@ typename Mxfp6Mxfp8GemmSm120::Gemm::Arguments args_from_options_mxfp6_mxfp8(
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
+    static const float beta_zero = 0.0f;
+    fusion_args.beta_ptr = &beta_zero;
     return arguments;
   }
 }
