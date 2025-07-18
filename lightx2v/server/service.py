@@ -316,7 +316,6 @@ class VideoGenerationService:
 
     async def generate_video(self, message: TaskRequest) -> TaskResponse:
         try:
-            # 只包含显式设置的字段，排除使用默认值的字段
             task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
             task_data["task_id"] = message.task_id
 
