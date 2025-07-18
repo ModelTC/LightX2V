@@ -62,7 +62,7 @@
 
 ---
 
-## 配置说明
+## 表格说明
 
 - **Wan2.1 Official**: 基于[Wan2.1官方仓库](https://github.com/Wan-Video/Wan2.1)
 - **FastVideo**: 基于[FastVideo官方仓库](https://github.com/hao-ai-lab/FastVideo)，使用SageAttention后端
@@ -71,3 +71,6 @@
 - **LightX2V_3**: 引入FP8量化技术显著减少计算精度要求，结合Tiling VAE技术优化显存使用
 - **LightX2V_3-Distill**: 在LightX2V_3基础上使用4步蒸馏模型(`infer_step=4`, `enable_cfg=False`)，进一步减少推理步数并保持生成质量。
 - **LightX2V_4**: 在LightX2V_3基础上加入TeaCache(teacache_thresh=0.2)缓存复用技术，通过智能跳过冗余计算实现加速
+- **配置文件参考**: 基准测试相关的配置文件和运行脚本可在以下位置获取：
+  - [配置文件](https://github.com/ModelTC/LightX2V/tree/main/configs/bench) - 包含各种优化配置的JSON文件
+  - [运行脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/bench) - 包含基准测试的执行脚本

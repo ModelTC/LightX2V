@@ -33,7 +33,7 @@
 
 **Test Configuration:**
 - **Model**: [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
-- **Parameters**: infer_steps=40, seed=42, enable_cfg=True
+- **Parameters**: infer_steps=40, seed=1234, enable_cfg=True
 
 #### Performance Comparison
 
@@ -70,3 +70,6 @@
 - **LightX2V_3**: Introduces FP8 quantization technology to significantly reduce computational precision requirements, combined with Tiling VAE technology to optimize memory usage
 - **LightX2V_3-Distill**: Based on LightX2V_3 using 4-step distillation model(`infer_step=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality.
 - **LightX2V_4**: Based on LightX2V_3 with TeaCache(teacache_thresh=0.2) caching reuse technology, achieving acceleration through intelligent redundant computation skipping
+- **Configuration Files Reference**: Benchmark-related configuration files and execution scripts are available at:
+  - [Configuration Files](https://github.com/ModelTC/LightX2V/tree/main/configs/bench) - Contains JSON files with various optimization configurations
+  - [Execution Scripts](https://github.com/ModelTC/LightX2V/tree/main/scripts/bench) - Contains benchmark execution scripts
