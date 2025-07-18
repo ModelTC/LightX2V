@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Set paths
-lightx2v_path=
-model_path=
+lightx2v_path="/data/lightx2v-dev/"
+model_path="/data/lightx2v-dev/Wan2.1-I2V-14B-480P/"
 
 # Check parameters
 if [ -z "${CUDA_VISIBLE_DEVICES}" ]; then
@@ -37,10 +37,10 @@ echo "=========================================="
 
 # Start API server with distributed inference service
 python -m lightx2v.api_server \
---model_cls wan2.1 \
+--model_cls wan2.1_distill \
 --task i2v \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/wan/wan_i2v_dist.json \
+--config_json ${lightx2v_path}/configs/distill/wan_i2v_distill_4step_cfg.json \
 --port 8000 \
 --nproc_per_node 1
 
