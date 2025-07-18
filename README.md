@@ -49,7 +49,7 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 ## 🚀 Core Features
 
 ### 🎯 **Ultimate Performance Optimization**
-- **🔥 SOTA Inference Speed**: Achieve **~15x** acceleration via step distillation and system optimization (single GPU)
+- **🔥 SOTA Inference Speed**: Achieve **~20x** acceleration via step distillation and system optimization (single GPU)
 - **⚡️ Revolutionary 4-Step Distillation**: Compress original 40-50 step inference to just 4 steps without CFG requirements
 - **🛠️ Advanced Operator Support**: Integrated with cutting-edge operators including [Sage Attention](https://github.com/thu-ml/SageAttention), [Flash Attention](https://github.com/Dao-AILab/flash-attention), [Radial Attention](https://github.com/mit-han-lab/radial-attention), [q8-kernel](https://github.com/KONAKONA666/q8_kernels), [sgl-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel), [vllm](https://github.com/vllm-project/vllm)
 

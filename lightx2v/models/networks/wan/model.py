@@ -96,7 +96,7 @@ class WanModel:
         return weight_dict
 
     def _load_quant_ckpt(self, use_bf16, skip_bf16):
-        ckpt_path = self.config.dit_quantized_ckpt
+        ckpt_path = self.dit_quantized_ckpt
         logger.info(f"Loading quant dit model from {ckpt_path}")
 
         index_files = [f for f in os.listdir(ckpt_path) if f.endswith(".index.json")]
@@ -126,7 +126,7 @@ class WanModel:
         return weight_dict
 
     def _load_quant_split_ckpt(self, use_bf16, skip_bf16):
-        lazy_load_model_path = self.config.dit_quantized_ckpt
+        lazy_load_model_path = self.dit_quantized_ckpt
         logger.info(f"Loading splited quant model from {lazy_load_model_path}")
         pre_post_weight_dict = {}
 

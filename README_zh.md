@@ -47,7 +47,7 @@
 ## 🚀 核心特性
 
 ### 🎯 **极致性能优化**
-- **🔥 SOTA推理速度**: 通过步数蒸馏和系统优化实现**15倍**极速加速(单GPU)
+- **🔥 SOTA推理速度**: 通过步数蒸馏和系统优化实现**20倍**极速加速(单GPU)
 - **⚡️ 革命性4步蒸馏**: 将原始40-50步推理压缩至仅需4步，且无需CFG配置
 - **🛠️ 先进算子支持**: 集成顶尖算子，包括[Sage Attention](https://github.com/thu-ml/SageAttention)、[Flash Attention](https://github.com/Dao-AILab/flash-attention)、[Radial Attention](https://github.com/mit-han-lab/radial-attention)、[q8-kernel](https://github.com/KONAKONA666/q8_kernels)、[sgl-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)、[vllm](https://github.com/vllm-project/vllm)
 
