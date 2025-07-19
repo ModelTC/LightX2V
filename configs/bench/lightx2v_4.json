@@ -24,5 +24,6 @@
     // [-114.36346466, 65.26524496, -18.82220707, 4.91518089, -0.23412683]
     // ],
     "use_ret_steps": false,
-    "teacache_thresh": 0.2
+    "teacache_thresh": 0.2,
+    "use_tiling_vae": true
 }

@@ -1,23 +1,30 @@
-# Benchmark
+# 🚀 Benchmark
+
+> This document showcases the performance test results of LightX2V across different hardware environments, including detailed comparison data for H200 and RTX 4090 platforms.
 
 ---
 
-## H200 (~140GB VRAM)
+## 🖥️ H200 Environment (~140GB VRAM)
 
-**Software Environment:**
-- **Python**: 3.11
-- **PyTorch**: 2.7.1+cu128
-- **SageAttention**: 2.2.0
-- **vLLM**: 0.9.2
-- **sgl-kernel**: 0.1.8
+### 📋 Software Environment Configuration
 
-### 480P 5s Video
+| Component | Version |
+|:----------|:--------|
+| **Python** | 3.11 |
+| **PyTorch** | 2.7.1+cu128 |
+| **SageAttention** | 2.2.0 |
+| **vLLM** | 0.9.2 |
+| **sgl-kernel** | 0.1.8 |
+
+---
+
+### 🎬 480P 5s Video Test
 
 **Test Configuration:**
 - **Model**: [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v)
-- **Parameters**: infer_steps=40, seed=42, enable_cfg=True
+- **Parameters**: `infer_steps=40`, `seed=42`, `enable_cfg=True`
 
-#### Performance Comparison
+#### 📊 Performance Comparison Table
 
 | Configuration | Inference Time(s) | GPU Memory(GB) | Speedup | Video Effect |
 |:-------------|:-----------------:|:--------------:|:-------:|:------------:|
@@ -29,13 +36,15 @@
 | **LightX2V_3-Distill** | 14 | 35 | **🏆 20.85x** | <video src="https://github.com/user-attachments/assets/b4dc403c-919d-4ba1-b29f-ef53640c0334" width="200px"></video> |
 | **LightX2V_4** | 107 | 35 | **3.41x** | <video src="https://github.com/user-attachments/assets/49cd2760-4be2-432c-bf4e-01af9a1303dd" width="200px"></video> |
 
-### 720P 5s Video
+---
+
+### 🎬 720P 5s Video Test
 
 **Test Configuration:**
 - **Model**: [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
-- **Parameters**: infer_steps=40, seed=1234, enable_cfg=True
+- **Parameters**: `infer_steps=40`, `seed=1234`, `enable_cfg=True`
 
-#### Performance Comparison
+#### 📊 Performance Comparison Table
 
 | Configuration | Inference Time(s) | GPU Memory(GB) | Speedup | Video Effect |
 |:-------------|:-----------------:|:--------------:|:-------:|:------------:|
@@ -49,27 +58,92 @@
 
 ---
 
-## RTX 4090 (~24GB VRAM)
+## 🖥️ RTX 4090 Environment (~24GB VRAM)
 
-### 480P 5s Video
+### 📋 Software Environment Configuration
 
-*Coming soon...*
-
-### 720P 5s Video
-
-*Coming soon...*
+| Component | Version |
+|:----------|:--------|
+| **Python** | 3.9.16 |
+| **PyTorch** | 2.5.1+cu124 |
+| **SageAttention** | 2.1.0 |
+| **vLLM** | 0.6.6 |
+| **sgl-kernel** | 0.0.5 |
+| **q8-kernels** | 0.0.0 |
 
 ---
 
-## Configuration Descriptions
+### 🎬 480P 5s Video Test
 
-- **Wan2.1 Official**: Based on [Wan2.1 official repository](https://github.com/Wan-Video/Wan2.1)
-- **FastVideo**: Based on [FastVideo official repository](https://github.com/hao-ai-lab/FastVideo), using SageAttention backend
-- **LightX2V_1**: Uses SageAttention2 to replace native attention mechanism, adopts DIT BF16+FP32 (partial sensitive layers) mixed precision computation, improving computational efficiency while maintaining precision
-- **LightX2V_2**: Unified BF16 precision computation, further reducing memory usage and computational overhead while maintaining generation quality
-- **LightX2V_3**: Introduces FP8 quantization technology to significantly reduce computational precision requirements, combined with Tiling VAE technology to optimize memory usage
-- **LightX2V_3-Distill**: Based on LightX2V_3 using 4-step distillation model(`infer_step=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality.
-- **LightX2V_4**: Based on LightX2V_3 with TeaCache(teacache_thresh=0.2) caching reuse technology, achieving acceleration through intelligent redundant computation skipping
-- **Configuration Files Reference**: Benchmark-related configuration files and execution scripts are available at:
-  - [Configuration Files](https://github.com/ModelTC/LightX2V/tree/main/configs/bench) - Contains JSON files with various optimization configurations
-  - [Execution Scripts](https://github.com/ModelTC/LightX2V/tree/main/scripts/bench) - Contains benchmark execution scripts
+**Test Configuration:**
+- **Model**: [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v)
+- **Parameters**: `infer_steps=40`, `seed=42`, `enable_cfg=True`
+
+#### 📊 Performance Comparison Table
+
+| Configuration | Inference Time(s) | GPU Memory(GB) | Speedup | Video Effect |
+|:-------------|:-----------------:|:--------------:|:-------:|:------------:|
+| **Wan2GP(profile=3)** | 779 | 20 | **1.0x** | <video src="" width="200px"></video> |
+| **LightX2V_5** | 738 | 16 | **1.05x** | <video src="" width="200px"></video> |
+| **LightX2V_5-Distill** | 68 | 16 | **11.45x** | <video src="" width="200px"></video> |
+| **LightX2V_6** | 630 | 12 | **1.24x** | <video src="" width="200px"></video> |
+| **LightX2V_6-Distill** | 63 | 12 | **🏆 12.36x** | <video src="" width="200px"></video> |
+
+---
+
+### 🎬 720P 5s Video Test
+
+**Test Configuration:**
+- **Model**: [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
+- **Parameters**: `infer_steps=40`, `seed=1234`, `enable_cfg=True`
+
+#### 📊 Performance Comparison Table
+
+| Configuration | Inference Time(s) | GPU Memory(GB) | Speedup | Video Effect |
+|:-------------|:-----------------:|:--------------:|:-------:|:------------:|
+| **Wan2GP(profile=3)** | -- | OOM | -- | <video src="--" width="200px"></video> |
+| **LightX2V_5** | 2473 | 23 | -- | <video src="" width="200px"></video> |
+| **LightX2V_5-Distill** | 183 | 23 | -- | <video src="" width="200px"></video> |
+| **LightX2V_6** | 2169 | 18 | -- | <video src="" width="200px"></video> |
+| **LightX2V_6-Distill** | 171 | 18 | -- | <video src="" width="200px"></video> |
+
+---
+
+## 📖 Configuration Descriptions
+
+### 🖥️ H200 Environment Configuration Descriptions
+
+| Configuration | Technical Features |
+|:--------------|:------------------|
+| **Wan2.1 Official** | Based on [Wan2.1 official repository](https://github.com/Wan-Video/Wan2.1) original implementation |
+| **FastVideo** | Based on [FastVideo official repository](https://github.com/hao-ai-lab/FastVideo), using SageAttention2 backend optimization |
+| **LightX2V_1** | Uses SageAttention2 to replace native attention mechanism, adopts DIT BF16+FP32 (partial sensitive layers) mixed precision computation, improving computational efficiency while maintaining precision |
+| **LightX2V_2** | Unified BF16 precision computation, further reducing memory usage and computational overhead while maintaining generation quality |
+| **LightX2V_3** | Introduces FP8 quantization technology to significantly reduce computational precision requirements, combined with Tiling VAE technology to optimize memory usage |
+| **LightX2V_3-Distill** | Based on LightX2V_3 using 4-step distillation model(`infer_steps=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality |
+| **LightX2V_4** | Based on LightX2V_3 with TeaCache(teacache_thresh=0.2) caching reuse technology, achieving acceleration through intelligent redundant computation skipping |
+
+### 🖥️ RTX 4090 Environment Configuration Descriptions
+
+| Configuration | Technical Features |
+|:--------------|:------------------|
+| **Wan2GP(profile=3)** | Implementation based on [Wan2GP repository](https://github.com/deepbeepmeep/Wan2GP), using MMGP optimization technology. Profile=3 configuration is suitable for RTX 3090/4090 environments with at least 32GB RAM and 24GB VRAM, adapting to limited memory resources by sacrificing VRAM. Uses quantized models: [480P model](https://huggingface.co/DeepBeepMeep/Wan2.1/blob/main/wan2.1_image2video_480p_14B_quanto_mbf16_int8.safetensors) and [720P model](https://huggingface.co/DeepBeepMeep/Wan2.1/blob/main/wan2.1_image2video_720p_14B_quanto_mbf16_int8.safetensors) |
+| **LightX2V_5** | Uses SageAttention2 to replace native attention mechanism, adopts DIT FP8+FP32 (partial sensitive layers) mixed precision computation, enables CPU offload technology, executes partial sensitive layers with FP32 precision, asynchronously offloads DIT inference process data to CPU, saves VRAM, with block-level offload granularity |
+| **LightX2V_5-Distill** | Based on LightX2V_5 using 4-step distillation model(`infer_steps=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality |
+| **LightX2V_6** | Based on LightX2V_3 with CPU offload technology enabled, executes partial sensitive layers with FP32 precision, asynchronously offloads DIT inference process data to CPU, saves VRAM, with block-level offload granularity |
+| **LightX2V_6-Distill** | Based on LightX2V_6 using 4-step distillation model(`infer_steps=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality |
+
+---
+
+## 📁 Configuration Files Reference
+
+Benchmark-related configuration files and execution scripts are available at:
+
+| Type | Link | Description |
+|:-----|:-----|:------------|
+| **Configuration Files** | [configs/bench](https://github.com/ModelTC/LightX2V/tree/main/configs/bench) | Contains JSON files with various optimization configurations |
+| **Execution Scripts** | [scripts/bench](https://github.com/ModelTC/LightX2V/tree/main/scripts/bench) | Contains benchmark execution scripts |
+
+---
+
+> 💡 **Tip**: It is recommended to choose the appropriate optimization solution based on your hardware configuration to achieve the best performance.
