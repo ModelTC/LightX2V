@@ -82,6 +82,7 @@
 #### 📊 Performance Comparison Table
 
 | Configuration | Inference Time(s) | GPU Memory(GB) | Speedup | Video Effect |
+|:-------------|:-----------------:|:--------------:|:-------:|:------------:|
 | **Wan2GP(profile=3)** | 779 | 20 | **1.0x** | <video src="https://github.com/user-attachments/assets/ba548a48-04f8-4616-a55a-ad7aed07d438" width="200px"></video> |
 | **LightX2V_5** | 738 | 16 | **1.05x** | <video src="https://github.com/user-attachments/assets/ce72ab7d-50a7-4467-ac8c-a6ed1b3827a7" width="200px"></video> |
 | **LightX2V_5-Distill** | 68 | 16 | **11.45x** | <video src="https://github.com/user-attachments/assets/5df4b8a7-3162-47f8-a359-e22fbb4d1836" width="200px"></video> |
