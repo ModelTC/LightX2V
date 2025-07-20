@@ -27,11 +27,6 @@ class WanScheduler(BaseScheduler):
 
         self.prepare_latents(self.config.target_shape, dtype=torch.float32)
 
-        if self.config.task in ["t2v"]:
-            self.seq_len = math.ceil((self.config.target_shape[2] * self.config.target_shape[3]) / (self.config.patch_size[1] * self.config.patch_size[2]) * self.config.target_shape[1])
-        elif self.config.task in ["i2v"]:
-            self.seq_len = ((self.config.target_video_length - 1) // self.config.vae_stride[0] + 1) * self.config.lat_h * self.config.lat_w // (self.config.patch_size[1] * self.config.patch_size[2])
-
         alphas = np.linspace(1, 1 / self.num_train_timesteps, self.num_train_timesteps)[::-1].copy()
         sigmas = 1.0 - alphas
         sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32)
