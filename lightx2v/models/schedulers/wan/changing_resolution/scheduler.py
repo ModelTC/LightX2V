@@ -30,7 +30,7 @@ class WanScheduler4ChangingResolution(WanScheduler):
         )
 
     def step_post(self):
-        if self.step_index == self.changing_resolution_steps:
+        if self.step_index == self.changing_resolution_steps - 1:
             self.step_post_upsample()
         else:
             super().step_post()

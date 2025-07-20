@@ -7,6 +7,7 @@ from lightx2v.utils.envs import *
 class WanPreInfer:
     def __init__(self, config):
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
+        self.config = config
         d = config["dim"] // config["num_heads"]
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.task = config["task"]
@@ -44,7 +45,11 @@ class WanPreInfer:
         if self.task == "i2v":
             clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
 
-            image_encoder = inputs["image_encoder_output"]["vae_encode_out"]
+            if self.config.get("changing_resolution", False) and self.scheduler.step_index > self.config.changing_resolution_steps - 1:
+                image_encoder = inputs["image_encoder_output"]["vae_encode_out_original_resolution"]
+            else:
+                image_encoder = inputs["image_encoder_output"]["vae_encode_out"]
+
             frame_seq_length = (image_encoder.size(2) // 2) * (image_encoder.size(3) // 2)
             if kv_end - kv_start >= frame_seq_length:  # 如果是CausalVid, image_encoder取片段
                 idx_s = kv_start // frame_seq_length

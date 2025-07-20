@@ -208,10 +208,23 @@ class WanRunner(DefaultRunner):
         max_area = self.config.target_height * self.config.target_width
         lat_h = round(np.sqrt(max_area * aspect_ratio) // self.config.vae_stride[1] // self.config.patch_size[1] * self.config.patch_size[1])
         lat_w = round(np.sqrt(max_area / aspect_ratio) // self.config.vae_stride[2] // self.config.patch_size[2] * self.config.patch_size[2])
+
+        if self.config.get("changing_resolution", False):
+            self.config.lat_h, self.config.lat_w = lat_h, lat_w
+            vae_encode_out_original_resolution = self.get_vae_encoder_output(img, lat_h, lat_w)
+
+            # get vae encode out at low resolution
+            lat_h, lat_w = int(self.config.lat_h * self.config.resolution_rate) // 2 * 2, int(self.config.lat_w * self.config.resolution_rate) // 2 * 2
+            vae_encode_out = self.get_vae_encoder_output(img, lat_h, lat_w)
+            return vae_encode_out, vae_encode_out_original_resolution  # low resolution, original resolution
+        else:
+            self.config.lat_h, self.config.lat_w = lat_h, lat_w
+            vae_encode_out = self.get_vae_encoder_output(img, lat_h, lat_w)
+            return vae_encode_out
+
+    def get_vae_encoder_output(self, img, lat_h, lat_w):
         h = lat_h * self.config.vae_stride[1]
         w = lat_w * self.config.vae_stride[2]
-
-        self.config.lat_h, self.config.lat_w = lat_h, lat_w
 
         msk = torch.ones(
             1,
@@ -246,10 +259,18 @@ class WanRunner(DefaultRunner):
         return vae_encode_out
 
     def get_encoder_output_i2v(self, clip_encoder_out, vae_encode_out, text_encoder_output, img):
-        image_encoder_output = {
-            "clip_encoder_out": clip_encoder_out,
-            "vae_encode_out": vae_encode_out,
-        }
+        if self.config.get("changing_resolution", False):
+            image_encoder_output = {
+                "clip_encoder_out": clip_encoder_out,
+                "vae_encode_out": vae_encode_out[0],
+                "vae_encode_out_original_resolution": vae_encode_out[1],
+            }
+        else:
+            image_encoder_output = {
+                "clip_encoder_out": clip_encoder_out,
+                "vae_encode_out": vae_encode_out,
+            }
+
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output,
