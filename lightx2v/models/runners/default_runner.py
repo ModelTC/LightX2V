@@ -140,7 +140,7 @@ class DefaultRunner(BaseRunner):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = Image.open(self.config["image_path"]).convert("RGB")
         clip_encoder_out = self.run_image_encoder(img)
-        vae_encode_out, kwargs = self.run_vae_encoder(img)
+        vae_encode_out = self.run_vae_encoder(img)
         text_encoder_output = self.run_text_encoder(prompt, img)
         torch.cuda.empty_cache()
         gc.collect()
@@ -158,7 +158,7 @@ class DefaultRunner(BaseRunner):
         }
 
     @ProfilingContext("Run DiT")
-    def _run_dit_local(self, kwargs):
+    def _run_dit_local(self):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
         self.init_scheduler()
@@ -205,9 +205,9 @@ class DefaultRunner(BaseRunner):
 
         self.inputs = self.run_input_encoder()
 
-        kwargs = self.set_target_shape()
+        self.set_target_shape()
 
-        latents, generator = self.run_dit(kwargs)
+        latents, generator = self.run_dit()
 
         images = self.run_vae_decoder(latents, generator)
 

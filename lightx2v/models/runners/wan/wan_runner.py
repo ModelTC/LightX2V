@@ -202,7 +202,6 @@ class WanRunner(DefaultRunner):
         return clip_encoder_out
 
     def run_vae_encoder(self, img):
-        kwargs = {}
         img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
         h, w = img.shape[1:]
         aspect_ratio = h / w
@@ -212,8 +211,7 @@ class WanRunner(DefaultRunner):
         h = lat_h * self.config.vae_stride[1]
         w = lat_w * self.config.vae_stride[2]
 
-        self.config.lat_h, kwargs["lat_h"] = lat_h, lat_h
-        self.config.lat_w, kwargs["lat_w"] = lat_w, lat_w
+        self.config.lat_h, self.config.lat_w = lat_h, lat_w
 
         msk = torch.ones(
             1,
@@ -245,7 +243,7 @@ class WanRunner(DefaultRunner):
             torch.cuda.empty_cache()
             gc.collect()
         vae_encode_out = torch.concat([msk, vae_encode_out]).to(torch.bfloat16)
-        return vae_encode_out, kwargs
+        return vae_encode_out
 
     def get_encoder_output_i2v(self, clip_encoder_out, vae_encode_out, text_encoder_output, img):
         image_encoder_output = {
@@ -258,7 +256,6 @@ class WanRunner(DefaultRunner):
         }
 
     def set_target_shape(self):
-        ret = {}
         num_channels_latents = self.config.get("num_channels_latents", 16)
         if self.config.task == "i2v":
             self.config.target_shape = (
@@ -267,8 +264,6 @@ class WanRunner(DefaultRunner):
                 self.config.lat_h,
                 self.config.lat_w,
             )
-            ret["lat_h"] = self.config.lat_h
-            ret["lat_w"] = self.config.lat_w
         elif self.config.task == "t2v":
             self.config.target_shape = (
                 num_channels_latents,
@@ -276,8 +271,6 @@ class WanRunner(DefaultRunner):
                 int(self.config.target_height) // self.config.vae_stride[1],
                 int(self.config.target_width) // self.config.vae_stride[2],
             )
-        ret["target_shape"] = self.config.target_shape
-        return ret
 
     def save_video_func(self, images):
         cache_video(
