@@ -405,6 +405,7 @@ def run_inference(
         "rotary_chunk": rotary_chunk,
         "rotary_chunk_size": rotary_chunk_size,
         "clean_cuda_cache": clean_cuda_cache,
+        "denoising_step_list": [1000, 750, 500, 250]
     }
 
     args = argparse.Namespace(
@@ -818,18 +819,22 @@ def main():
                                 randomize_btn.click(fn=generate_random_seed, inputs=None, outputs=seed)
 
                                 with gr.Column():
+                                    # 根据模型类别设置默认推理步数
+                                    default_infer_steps = 4 if model_cls == "wan2.1_distill" else 40
                                     infer_steps = gr.Slider(
                                         label="推理步数",
                                         minimum=1,
                                         maximum=100,
                                         step=1,
-                                        value=40,
+                                        value=default_infer_steps,
                                         info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
                                     )
 
+                            # 根据模型类别设置默认CFG
+                            default_enable_cfg = False if model_cls == "wan2.1_distill" else True
                             enable_cfg = gr.Checkbox(
                                 label="启用无分类器引导",
-                                value=True,
+                                value=default_enable_cfg,
                                 info="启用无分类器引导以控制提示词强度",
                             )
                             cfg_scale = gr.Slider(
@@ -1147,7 +1152,7 @@ def main():
                 outputs=output_video,
             )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name)
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True)
 
 
 if __name__ == "__main__":
@@ -1156,9 +1161,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_cls",
         type=str,
-        choices=["wan2.1"],
+        choices=["wan2.1", "wan2.1_distill"],
         default="wan2.1",
-        help="要使用的模型类别",
+        help="要使用的模型类别 (wan2.1: 标准模型, wan2.1_distill: 蒸馏模型，推理更快)",
     )
     parser.add_argument("--model_size", type=str, required=True, choices=["14b", "1.3b"], help="模型大小：14b 或 1.3b")
     parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="指定任务类型。'i2v'用于图像到视频转换，'t2v'用于文本到视频生成。")

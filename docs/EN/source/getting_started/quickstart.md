@@ -1,39 +1,241 @@
-# Quick Start
+# LightX2V Quick Start Guide
 
-## Prepare Environment
+Welcome to LightX2V! This guide will help you quickly set up the environment and start using LightX2V for video generation.
 
-We recommend using a docker environment. Here is the [dockerhub](https://hub.docker.com/r/lightx2v/lightx2v/tags) for lightx2v. Please select the tag with the latest date, for example, 25061301.
+## 📋 Table of Contents
 
-```shell
+- [System Requirements](#system-requirements)
+- [Linux Environment Setup](#linux-environment-setup)
+  - [Docker Environment (Recommended)](#docker-environment-recommended)
+  - [Conda Environment Setup](#conda-environment-setup)
+- [Windows Environment Setup](#windows-environment-setup)
+- [Inference Usage](#inference-usage)
+
+## 🚀 System Requirements
+
+- **Operating System**: Linux (Ubuntu 18.04+) or Windows 10/11
+- **Python**: 3.10 or higher
+- **GPU**: NVIDIA GPU with CUDA support, at least 8GB VRAM
+- **Memory**: 16GB or more recommended
+- **Storage**: At least 50GB available space
+
+## 🐧 Linux Environment Setup
+
+### 🐳 Docker Environment (Recommended)
+
+We strongly recommend using the Docker environment, which is the simplest and fastest installation method.
+
+#### 1. Pull Image
+
+Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags) and select a tag with the latest date, such as `25061301`:
+
+```bash
+# Pull the latest version of LightX2V image
 docker pull lightx2v/lightx2v:25061301
-docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings]  --entrypoint /bin/bash [image_id]
 ```
 
-If you want to set up the environment yourself using conda, you can refer to the following steps:
+#### 2. Run Container
 
-```shell
-# clone repo and submodules
-git clone https://github.com/ModelTC/lightx2v.git lightx2v && cd lightx2v
+```bash
+docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
+```
 
-conda create -n lightx2v python=3.11 && conda activate lightx2v
+#### 3. Domestic Mirror Source (Optional)
+
+For users in mainland China, if the network is unstable when pulling images, you can pull from [Duduniao](https://docker.aityp.com/r/docker.io/lightx2v/lightx2v):
+
+```bash
+docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/lightx2v/lightx2v:25061301
+```
+
+### 🐍 Conda Environment Setup
+
+If you prefer to set up the environment yourself using Conda, please follow these steps:
+
+#### Step 1: Clone Repository
+
+```bash
+# Download project code
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
+```
+
+#### Step 2: Create Conda Virtual Environment
+
+```bash
+# Create and activate conda environment
+conda create -n lightx2v python=3.12 -y
+conda activate lightx2v
+```
+
+#### Step 3: Install Dependencies
+
+```bash
+# Install basic dependencies
 pip install -r requirements.txt
+```
 
-# The Hunyuan model needs to run under this version of transformers. If you do not need to run the Hunyuan model, you can ignore this step.
-# pip install transformers==4.45.2
+> 💡 **Note**: The Hunyuan model needs to run under transformers version 4.45.2. If you don't need to run the Hunyuan model, you can skip the transformers version restriction.
 
-# install flash-attention 2
+#### Step 4: Install Attention Operators
+
+**Option A: Flash Attention 2**
+```bash
 git clone https://github.com/Dao-AILab/flash-attention.git --recursive
 cd flash-attention && python setup.py install
+```
 
-# install flash-attention 3, only if hopper
+**Option B: Flash Attention 3 (for Hopper architecture GPUs)**
+```bash
 cd flash-attention/hopper && python setup.py install
 ```
 
-## Infer
+**Option C: SageAttention 2 (Recommended)**
+```bash
+git clone https://github.com/thu-ml/SageAttention.git
+cd SageAttention && python setup.py install
+```
 
-```shell
-# Modify the path in the script
+## 🪟 Windows Environment Setup
+
+Windows systems only support Conda environment setup. Please follow these steps:
+
+### 🐍 Conda Environment Setup
+
+#### Step 1: Check CUDA Version
+
+First, confirm your GPU driver and CUDA version:
+
+```cmd
+nvidia-smi
+```
+
+Record the **CUDA Version** information in the output, which needs to be consistent in subsequent installations.
+
+#### Step 2: Create Python Environment
+
+```cmd
+# Create new environment (Python 3.12 recommended)
+conda create -n lightx2v python=3.12 -y
+
+# Activate environment
+conda activate lightx2v
+```
+
+> 💡 **Note**: Python 3.10 or higher is recommended for best compatibility.
+
+#### Step 3: Install PyTorch Framework
+
+**Method 1: Download Official Wheel Package (Recommended)**
+
+1. Visit the [PyTorch Official Download Page](https://download.pytorch.org/whl/torch/)
+2. Select the corresponding version wheel package, paying attention to matching:
+   - **Python Version**: Consistent with your environment
+   - **CUDA Version**: Matches your GPU driver
+   - **Platform**: Select Windows version
+
+**Example (Python 3.12 + PyTorch 2.6 + CUDA 12.4):**
+
+```cmd
+# Download and install PyTorch
+pip install torch-2.6.0+cu124-cp312-cp312-win_amd64.whl
+
+# Install supporting packages
+pip install torchvision==0.21.0 torchaudio==2.6.0
+```
+
+**Method 2: Direct Installation via pip**
+
+```cmd
+# CUDA 12.4 version example
+pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 torchaudio==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+```
+
+#### Step 4: Install Windows Version vLLM
+
+Download the corresponding wheel package from [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases).
+
+**Version Matching Requirements:**
+- Python version matching
+- PyTorch version matching
+- CUDA version matching
+
+```cmd
+# Install vLLM (please adjust according to actual filename)
+pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
+```
+
+#### Step 5: Install Attention Mechanism Operators
+
+**Option A: Flash Attention 2**
+
+```cmd
+pip install flash-attn==2.7.2.post1
+```
+
+**Option B: SageAttention 2 (Strongly Recommended)**
+
+**Download Sources:**
+- [Windows Special Version 1](https://github.com/woct0rdho/SageAttention/releases)
+- [Windows Special Version 2](https://github.com/sdbds/SageAttention-for-windows/releases)
+
+```cmd
+# Install SageAttention (please adjust according to actual filename)
+pip install sageattention-2.1.1+cu126torch2.6.0-cp312-cp312-win_amd64.whl
+```
+
+> ⚠️ **Note**: SageAttention's CUDA version doesn't need to be strictly aligned, but Python and PyTorch versions must match.
+
+#### Step 6: Clone Repository
+
+```cmd
+# Clone project code
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
+
+# Install Windows-specific dependencies
+pip install -r requirements_win.txt
+```
+
+## 🎯 Inference Usage
+
+### 📥 Model Preparation
+
+Before starting inference, you need to download the model files in advance. We recommend:
+
+- **Download Source**: Download models from [LightX2V Official Hugging Face](https://huggingface.co/lightx2v/) or other open-source model repositories
+- **Storage Location**: It's recommended to store models on SSD disks for better read performance
+- **Available Models**: Including Wan2.1-I2V, Wan2.1-T2V, and other models supporting different resolutions and functionalities
+
+### 📁 Configuration Files and Scripts
+
+The configuration files used for inference are available [here](https://github.com/ModelTC/LightX2V/tree/main/configs), and scripts are available [here](https://github.com/ModelTC/LightX2V/tree/main/scripts).
+
+You need to configure the downloaded model path in the run script. In addition to the input arguments in the script, there are also some necessary parameters in the configuration file specified by `--config_json`. You can modify them as needed.
+
+### 🚀 Start Inference
+
+#### Linux Environment
+
+```bash
+# Run after modifying the path in the script
 bash scripts/wan/run_wan_t2v.sh
 ```
 
-In addition to the existing input arguments in the script, there are also some necessary parameters in the `wan_t2v.json` file specified by `--config_json`. You can modify them as needed.
+#### Windows Environment
+
+```cmd
+# Use Windows batch script
+scripts\win\run_wan_t2v.bat
+```
+
+## 📞 Get Help
+
+If you encounter problems during installation or usage, please:
+
+1. Search for related issues in [GitHub Issues](https://github.com/ModelTC/LightX2V/issues)
+2. Submit a new Issue describing your problem
+
+---
+
+🎉 **Congratulations!** You have successfully set up the LightX2V environment and can now start enjoying video generation!

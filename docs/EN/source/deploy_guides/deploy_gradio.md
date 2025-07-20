@@ -1,8 +1,20 @@
-# Gradio Deployment
+# Gradio Deployment Guide
 
 ## 📖 Overview
 
 Lightx2v is a lightweight video inference and generation engine that provides a web interface based on Gradio, supporting both Image-to-Video and Text-to-Video generation modes.
+
+## 📁 File Structure
+
+```
+LightX2V/app/
+├── gradio_demo.py          # English interface demo
+├── gradio_demo_zh.py       # Chinese interface demo
+├── run_gradio.sh          # Startup script
+├── README.md              # Documentation
+├── saved_videos/          # Generated video save directory
+└── inference_logs.log     # Inference logs
+```
 
 This project contains two main demo files:
 - `gradio_demo.py` - English interface version
@@ -10,21 +22,9 @@ This project contains two main demo files:
 
 ## 🚀 Quick Start
 
-### System Requirements
+### Environment Requirements
 
-- Python 3.10+ (recommended)
-- CUDA 12.4+ (recommended)
-- At least 8GB GPU VRAM
-- At least 16GB system memory (preferably at least 32GB)
-- At least 128GB SSD solid-state drive (**💾 Strongly recommend using SSD solid-state drives to store model files! During "lazy loading" startup, significantly improves model loading speed and inference performance**)
-
-### Install Dependencies
-
-```bash
-# Install basic dependencies
-pip install -r requirements.txt
-pip install gradio
-```
+Follow the [Quick Start Guide](../getting_started/quickstart.md) to install the environment
 
 #### Recommended Optimization Library Configuration
 
@@ -33,6 +33,8 @@ pip install gradio
 - ✅ [vllm-kernel](https://github.com/vllm-project/vllm)
 - ✅ [sglang-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)
 - ✅ [q8-kernel](https://github.com/KONAKONA666/q8_kernels) (only supports ADA architecture GPUs)
+
+Install according to the project homepage tutorials for each operator as needed
 
 ### 🤖 Supported Models
 
@@ -54,15 +56,21 @@ pip install gradio
 | ✅ [Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v) | 14B | Distilled optimized version | High quality + fast inference |
 
 **💡 Model Selection Recommendations**:
-- **First-time use**: Recommend choosing distilled versions
+- **First-time use**: Recommend choosing distilled versions (`wan2.1_distill`)
 - **Pursuing quality**: Choose 720p resolution or 14B parameter models
-- **Pursuing speed**: Choose 480p resolution or 1.3B parameter models
+- **Pursuing speed**: Choose 480p resolution or 1.3B parameter models, prioritize distilled versions
 - **Resource-constrained**: Prioritize distilled versions and lower resolutions
+- **Real-time applications**: Strongly recommend using distilled models (`wan2.1_distill`)
+
+**🎯 Model Category Description**:
+- **`wan2.1`**: Standard model, provides the best video generation quality, suitable for scenarios with extremely high quality requirements
+- **`wan2.1_distill`**: Distilled model, optimized through knowledge distillation technology, significantly improves inference speed, maintains good quality while greatly reducing computation time, suitable for most application scenarios
 
 ### Startup Methods
 
 #### Method 1: Using Startup Script (Recommended)
 
+**Linux Environment:**
 ```bash
 # 1. Edit the startup script to configure relevant paths
 cd app/
@@ -79,41 +87,84 @@ vim run_gradio.sh
 # 2. Run the startup script
 bash run_gradio.sh
 
-# 3. Or start with parameters (recommended)
-bash run_gradio.sh --task i2v --lang en --model_size 14b --port 8032
-# bash run_gradio.sh --task i2v --lang en --model_size 14b --port 8032
-# bash run_gradio.sh --task i2v --lang en --model_size 1.3b --port 8032
+# 3. Or start with parameters (recommended using distilled models)
+bash run_gradio.sh --task i2v --lang en --model_cls wan2.1 --model_size 14b --port 8032
+bash run_gradio.sh --task t2v --lang en --model_cls wan2.1 --model_size 1.3b --port 8032
+bash run_gradio.sh --task i2v --lang en --model_cls wan2.1_distill --model_size 14b --port 8032
+bash run_gradio.sh --task t2v --lang en --model_cls wan2.1_distill --model_size 1.3b --port 8032
+```
+
+**Windows Environment:**
+```cmd
+# 1. Edit the startup script to configure relevant paths
+cd app\
+notepad run_gradio_win.bat
+
+# Configuration items that need to be modified:
+# - lightx2v_path: Lightx2v project root directory path
+# - i2v_model_path: Image-to-video model path
+# - t2v_model_path: Text-to-video model path
+
+# 💾 Important note: Recommend pointing model paths to SSD storage locations
+# Example: D:\models\ or E:\models\
+
+# 2. Run the startup script
+run_gradio_win.bat
+
+# 3. Or start with parameters (recommended using distilled models)
+run_gradio_win.bat --task i2v --lang en --model_cls wan2.1 --model_size 14b --port 8032
+run_gradio_win.bat --task t2v --lang en --model_cls wan2.1 --model_size 1.3b --port 8032
+run_gradio_win.bat --task i2v --lang en --model_cls wan2.1_distill --model_size 14b --port 8032
+run_gradio_win.bat --task t2v --lang en --model_cls wan2.1_distill --model_size 1.3b --port 8032
 ```
 
 #### Method 2: Direct Command Line Startup
 
+**Linux Environment:**
+
 **Image-to-Video Mode:**
 ```bash
 python gradio_demo.py \
-    --model_path /path/to/Wan2.1-I2V-14B-720P-Lightx2v \
+    --model_path /path/to/Wan2.1-I2V-14B-480P-Lightx2v \
+    --model_cls wan2.1 \
     --model_size 14b \
     --task i2v \
     --server_name 0.0.0.0 \
     --server_port 7862
 ```
 
-**Text-to-Video Mode:**
+**English Interface Version:**
 ```bash
 python gradio_demo.py \
-    --model_path /path/to/Wan2.1-T2V-1.3B \
-    --model_size 1.3b \
+    --model_path /path/to/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v \
+    --model_cls wan2.1_distill \
+    --model_size 14b \
     --task t2v \
     --server_name 0.0.0.0 \
     --server_port 7862
 ```
 
-**Chinese Interface Version:**
-```bash
-python gradio_demo_zh.py \
-    --model_path /path/to/model \
-    --model_size 14b \
-    --task i2v \
-    --server_name 0.0.0.0 \
+**Windows Environment:**
+
+**Image-to-Video Mode:**
+```cmd
+python gradio_demo.py ^
+    --model_path D:\models\Wan2.1-I2V-14B-480P-Lightx2v ^
+    --model_cls wan2.1 ^
+    --model_size 14b ^
+    --task i2v ^
+    --server_name 127.0.0.1 ^
+    --server_port 7862
+```
+
+**English Interface Version:**
+```cmd
+python gradio_demo.py ^
+    --model_path D:\models\Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v ^
+    --model_cls wan2.1_distill ^
+    --model_size 14b ^
+    --task t2v ^
+    --server_name 127.0.0.1 ^
     --server_port 7862
 ```
 
@@ -122,8 +173,8 @@ python gradio_demo_zh.py \
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `--model_path` | str | ✅ | - | Model folder path |
-| `--model_cls` | str | ❌ | wan2.1 | Model class (currently only supports wan2.1) |
-| `--model_size` | str | ✅ | - | Model size: `14b(t2v or i2v)` or `1.3b(t2v)` |
+| `--model_cls` | str | ❌ | wan2.1 | Model class: `wan2.1` (standard model) or `wan2.1_distill` (distilled model, faster inference) |
+| `--model_size` | str | ✅ | - | Model size: `14b (image-to-video or text-to-video)` or `1.3b (text-to-video)` |
 | `--task` | str | ✅ | - | Task type: `i2v` (image-to-video) or `t2v` (text-to-video) |
 | `--server_port` | int | ❌ | 7862 | Server port |
 | `--server_name` | str | ❌ | 0.0.0.0 | Server IP address |
@@ -197,23 +248,11 @@ After enabling "Auto-configure Inference Options", the system will automatically
 
 **💡 For devices with insufficient VRAM or performance constraints**:
 
-- **🎯 Model Selection**: Prioritize using distilled version models (StepDistill-CfgDistill)
+- **🎯 Model Selection**: Prioritize using distilled version models (`wan2.1_distill`)
 - **⚡ Inference Steps**: Recommend setting to 4 steps
 - **🔧 CFG Settings**: Recommend disabling CFG option to improve generation speed
 - **🔄 Auto-Configuration**: Enable "Auto-configure Inference Options"
-
-
-## 📁 File Structure
-
-```
-lightx2v/app/
-├── gradio_demo.py          # English interface demo
-├── gradio_demo_zh.py       # Chinese interface demo
-├── run_gradio.sh          # Startup script
-├── README.md              # Documentation
-├── saved_videos/          # Generated video save directory
-└── inference_logs.log     # Inference logs
-```
+- **💾 Storage Optimization**: Ensure models are stored on SSD for optimal loading performance
 
 ## 🎨 Interface Description
 
@@ -278,5 +317,6 @@ nvidia-smi
 htop
 ```
 
+Welcome to submit Issues and Pull Requests to improve this project!
 
 **Note**: Please comply with relevant laws and regulations when using videos generated by this tool, and do not use them for illegal purposes.

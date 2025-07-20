@@ -3,8 +3,8 @@ chcp 65001 >nul
 echo 启动LightX2V T2V推理...
 
 :: 设置路径
-set lightx2v_path=F:\project\code\lightx2v-main\LightX2V-main\LightX2V-main
-set model_path=D:\Wan2.1-T2V-1.3B-Lightx2v
+set lightx2v_path=D:\LightX2V
+set model_path=D:\models\Wan2.1-T2V-1.3B-Lightx2v
 
 :: 检查CUDA_VISIBLE_DEVICES
 if "%CUDA_VISIBLE_DEVICES%"=="" (

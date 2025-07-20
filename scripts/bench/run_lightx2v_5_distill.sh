@@ -30,7 +30,7 @@ export ENABLE_PROFILING_DEBUG=true
 export ENABLE_GRAPH_MODE=false
 
 python -m lightx2v.infer \
---model_cls wan2.1 \
+--model_cls wan2.1_distill \
 --task i2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/bench/lightx2v_5_distill.json \

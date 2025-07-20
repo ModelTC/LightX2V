@@ -403,6 +403,7 @@ def run_inference(
         "rotary_chunk": rotary_chunk,
         "rotary_chunk_size": rotary_chunk_size,
         "clean_cuda_cache": clean_cuda_cache,
+        "denoising_step_list": [1000, 750, 500, 250]
     }
 
     args = argparse.Namespace(
@@ -818,18 +819,22 @@ def main():
                                 randomize_btn.click(fn=generate_random_seed, inputs=None, outputs=seed)
 
                                 with gr.Column():
+                                    # Set default inference steps based on model class
+                                    default_infer_steps = 4 if model_cls == "wan2.1_distill" else 40
                                     infer_steps = gr.Slider(
                                         label="Inference Steps",
                                         minimum=1,
                                         maximum=100,
                                         step=1,
-                                        value=40,
+                                        value=default_infer_steps,
                                         info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
                                     )
 
+                            # Set default CFG based on model class
+                            default_enable_cfg = False if model_cls == "wan2.1_distill" else True
                             enable_cfg = gr.Checkbox(
                                 label="Enable Classifier-Free Guidance",
-                                value=True,
+                                value=default_enable_cfg,
                                 info="Enable classifier-free guidance to control prompt strength",
                             )
                             cfg_scale = gr.Slider(
@@ -1149,7 +1154,7 @@ def main():
                 outputs=output_video,
             )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name)
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True)
 
 
 if __name__ == "__main__":
@@ -1158,9 +1163,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_cls",
         type=str,
-        choices=["wan2.1"],
+        choices=["wan2.1", "wan2.1_distill"],
         default="wan2.1",
-        help="Model class to use",
+        help="Model class to use (wan2.1: standard model, wan2.1_distill: distilled model for faster inference)",
     )
     parser.add_argument("--model_size", type=str, required=True, choices=["14b", "1.3b"], help="Model type to use")
     parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="Specify the task type. 'i2v' for image-to-video translation, 't2v' for text-to-video generation.")
