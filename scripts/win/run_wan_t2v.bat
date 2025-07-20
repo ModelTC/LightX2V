@@ -50,4 +50,4 @@ python -m lightx2v.infer ^
 --save_video_path %lightx2v_path%/save_results/output_lightx2v_wan_t2v.mp4
 
 echo 推理完成！
-pause 
+pause

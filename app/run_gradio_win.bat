@@ -261,4 +261,4 @@ echo ==========================================
 echo 📊 Final system resource usage:
 wmic OS get TotalVisibleMemorySize,FreePhysicalMemory /format:table
 
-pause 
+pause

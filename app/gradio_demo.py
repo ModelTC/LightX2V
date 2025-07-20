@@ -403,7 +403,7 @@ def run_inference(
         "rotary_chunk": rotary_chunk,
         "rotary_chunk_size": rotary_chunk_size,
         "clean_cuda_cache": clean_cuda_cache,
-        "denoising_step_list": [1000, 750, 500, 250]
+        "denoising_step_list": [1000, 750, 500, 250],
     }
 
     args = argparse.Namespace(
