@@ -12,6 +12,6 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "changing_resolution": true,
-    "resolution_rate": [0.75],
-    "changing_resolution_steps": [20]
+    "resolution_rate": [1.0, 0.75],
+    "changing_resolution_steps": [5, 25]
 }

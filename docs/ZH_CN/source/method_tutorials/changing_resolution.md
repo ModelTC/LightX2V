@@ -9,6 +9,7 @@
 ### 分阶段去噪策略
 
 变分辨率推理基于以下观察：
+
 - **前期去噪**：主要处理粗糙的噪声和整体结构，不需要过多的细节信息
 - **后期去噪**：专注于细节优化和高频信息恢复，需要完整的分辨率信息
 
@@ -25,10 +26,39 @@
    - 恢复细节信息，完成精细化处理
 
 
+### U型分辨率策略
+
+如果在刚开始的去噪步，降低分辨率，可能会导致最后的生成的视频和正常推理的生成的视频，整体差异偏大。因为可以采用U型的分辨率策略，即最一开始保持几步的原始分辨率，再降低分辨率推理。
+
 ## 使用方式
 
 变分辨率推理的config文件在[这里](https://github.com/ModelTC/LightX2V/tree/main/configs/changing_resolution)
 
 通过指定--config_json到具体的config文件，即可以测试变分辨率推理。
 
-可以参考[该脚本](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan/run_wan_t2v_changing_resolution.sh)。
+可以参考[这里](https://github.com/ModelTC/LightX2V/blob/main/scripts/changing_resolution)的脚本运行。
+
+
+### 举例1：
+```
+{
+    "infer_steps": 50,
+    "changing_resolution": true,
+    "resolution_rate": [0.75],
+    "changing_resolution_steps": [25]
+}
+```
+
+表示总步数为50，0到25步的分辨率为0.75倍原始分辨率，26到最后一步的分辨率为原始分辨率。
+
+### 举例2：
+```
+{
+    "infer_steps": 50,
+    "changing_resolution": true,
+    "resolution_rate": [1.0, 0.75],
+    "changing_resolution_steps": [10, 35]
+}
+```
+
+表示总步数为50，0到10步的分辨率为原始分辨率，11到35步的分辨率为0.75倍原始分辨率，36到最后一步的分辨率为原始分辨率。
