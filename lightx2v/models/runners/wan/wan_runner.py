@@ -211,12 +211,12 @@ class WanRunner(DefaultRunner):
 
         if self.config.get("changing_resolution", False):
             self.config.lat_h, self.config.lat_w = lat_h, lat_w
-            vae_encode_out_original_resolution = self.get_vae_encoder_output(img, lat_h, lat_w)
-
-            # get vae encode out at low resolution
-            lat_h, lat_w = int(self.config.lat_h * self.config.resolution_rate) // 2 * 2, int(self.config.lat_w * self.config.resolution_rate) // 2 * 2
-            vae_encode_out = self.get_vae_encoder_output(img, lat_h, lat_w)
-            return vae_encode_out, vae_encode_out_original_resolution  # low resolution, original resolution
+            vae_encode_out_list = []
+            for i in range(len(self.config["resolution_rate"])):
+                lat_h, lat_w = int(self.config.lat_h * self.config.resolution_rate[i]) // 2 * 2, int(self.config.lat_w * self.config.resolution_rate[i]) // 2 * 2
+                vae_encode_out_list.append(self.get_vae_encoder_output(img, lat_h, lat_w))
+            vae_encode_out_list.append(self.get_vae_encoder_output(img, self.config.lat_h, self.config.lat_w))
+            return vae_encode_out_list
         else:
             self.config.lat_h, self.config.lat_w = lat_h, lat_w
             vae_encode_out = self.get_vae_encoder_output(img, lat_h, lat_w)
@@ -259,18 +259,10 @@ class WanRunner(DefaultRunner):
         return vae_encode_out
 
     def get_encoder_output_i2v(self, clip_encoder_out, vae_encode_out, text_encoder_output, img):
-        if self.config.get("changing_resolution", False):
-            image_encoder_output = {
-                "clip_encoder_out": clip_encoder_out,
-                "vae_encode_out": vae_encode_out[0],
-                "vae_encode_out_original_resolution": vae_encode_out[1],
-            }
-        else:
-            image_encoder_output = {
-                "clip_encoder_out": clip_encoder_out,
-                "vae_encode_out": vae_encode_out,
-            }
-
+        image_encoder_output = {
+            "clip_encoder_out": clip_encoder_out,
+            "vae_encode_out": vae_encode_out,
+        }
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output,

@@ -45,8 +45,8 @@ class WanPreInfer:
         if self.task == "i2v":
             clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
 
-            if self.config.get("changing_resolution", False) and self.scheduler.step_index > self.config.changing_resolution_steps - 1:
-                image_encoder = inputs["image_encoder_output"]["vae_encode_out_original_resolution"]
+            if self.config.get("changing_resolution", False):
+                image_encoder = inputs["image_encoder_output"]["vae_encode_out"][self.scheduler.changing_resolution_index]
             else:
                 image_encoder = inputs["image_encoder_output"]["vae_encode_out"]
 
