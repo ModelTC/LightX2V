@@ -22,6 +22,7 @@ from magicdrivedit.datasets import save_sample
 from magicdrivedit.utils.inference_utils import apply_mask_strategy, edit_pos, concat_n_views_pt
 from magicdrivedit.utils.misc import collate_bboxes_to_maxlen, move_to
 from magicdrivedit.datasets.carla import CARLAVariableDataset
+from magicdrivedit.schedulers.rf.rectified_flow import timestep_transform
 from loguru import logger
 
 
@@ -217,6 +218,7 @@ class MagicDriverRunner(DefaultRunner):
         return model_args
 
     def get_additional_inputs(self):
+        # import pdb; pdb.set_trace()
         timesteps = [(1.0 - i / self.num_sampling_steps) * self.num_timesteps for i in range(self.num_sampling_steps)]     
         dataset_params_json = self.config.get("dataset_params_json")
         with open(dataset_params_json, 'r') as file:
@@ -306,7 +308,10 @@ class MagicDriverRunner(DefaultRunner):
         # noise_added = mask_t_upper
         model_args["x_mask"] = mask
         model_args["x"] = z
+        # import pdb; pdb.set_trace()
         self.timesteps = [torch.tensor([t] * z.shape[0], device=self.init_device) for t in timesteps] 
+        self.timesteps = [timestep_transform(t, model_args, num_timesteps=self.num_timesteps, cog_style=True) for t in self.timesteps]
+        # self.timesteps = torch.tensor([(1.0 - i / self.num_sampling_steps) * self.num_timesteps for i in range(self.num_sampling_steps)], device=self.init_device)
         
         return prompts, neg_prompts, model_args
     
@@ -403,17 +408,17 @@ class MagicDriverRunner(DefaultRunner):
                 self.uncond_inputs['x'] = z
                 self.uncond_inputs['timestep'] = self.timesteps[step_index]
                 noise_added = mask_t_upper
-            
+            # import pdb; pdb.set_trace()
             with ProfilingContext4Debug("cond infer"):
                 if self.cond_inputs['x_mask'] is not None:
                     self.cond_inputs['x_mask'] = mask_t_upper
                 self.model.infer(self.cond_inputs)
-                
+            # import pdb; pdb.set_trace()
             with ProfilingContext4Debug("uncond infer"):
                 if self.uncond_inputs['x_mask'] is not None:
                     self.uncond_inputs['x_mask'] = mask_t_upper
                 self.model.infer(self.uncond_inputs)
-
+            # import pdb; pdb.set_trace()
             v_pred = self.uncond_inputs['x'] + self.guidance_scale * (self.cond_inputs['x'] - self.uncond_inputs['x'])
             dt = self.timesteps[step_index] - self.timesteps[step_index + 1] if step_index < len(self.timesteps) - 1 else self.timesteps[step_index]
             dt = dt / self.num_timesteps
@@ -421,9 +426,9 @@ class MagicDriverRunner(DefaultRunner):
             # import pdb; pdb.set_trace()
             if self.cond_inputs['x_mask'] is not None and self.uncond_inputs['x_mask'] is not None:
                 z = torch.where(mask_t_upper[:, None, :, None, None], z, x0)
+                # import pdb; pdb.set_trace()
                 self.cond_inputs['x'] = z
                 self.uncond_inputs['x'] = z
-
             with ProfilingContext4Debug("step_post"):
                 self.model.scheduler.step_post()
         
