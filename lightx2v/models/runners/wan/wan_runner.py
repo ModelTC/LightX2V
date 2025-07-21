@@ -57,17 +57,19 @@ class WanRunner(DefaultRunner):
             if clip_quantized:
                 clip_quant_scheme = self.config.get("clip_quant_scheme", None)
                 assert clip_quant_scheme is not None
+                tmp_clip_quant_scheme = clip_quant_scheme.split("-")[0]
                 clip_quantized_ckpt = self.config.get(
                     "clip_quantized_ckpt",
                     os.path.join(
-                        os.path.join(self.config.model_path, clip_quant_scheme),
-                        f"clip-{clip_quant_scheme}.pth",
+                        os.path.join(self.config.model_path, tmp_clip_quant_scheme),
+                        f"clip-{tmp_clip_quant_scheme}.pth",
                     ),
                 )
             else:
                 clip_quantized_ckpt = None
                 clip_quant_scheme = None
 
+            print(clip_quant_scheme)
             image_encoder = CLIPModel(
                 dtype=torch.float16,
                 device=self.init_device,
@@ -93,18 +95,19 @@ class WanRunner(DefaultRunner):
         t5_quantized = self.config.get("t5_quantized", False)
         if t5_quantized:
             t5_quant_scheme = self.config.get("t5_quant_scheme", None)
+            tmp_t5_quant_scheme = t5_quant_scheme.split("-")[0]
             assert t5_quant_scheme is not None
             t5_quantized_ckpt = self.config.get(
                 "t5_quantized_ckpt",
                 os.path.join(
-                    os.path.join(self.config.model_path, t5_quant_scheme),
-                    f"models_t5_umt5-xxl-enc-{t5_quant_scheme}.pth",
+                    os.path.join(self.config.model_path, tmp_t5_quant_scheme),
+                    f"models_t5_umt5-xxl-enc-{tmp_t5_quant_scheme}.pth",
                 ),
             )
         else:
             t5_quant_scheme = None
             t5_quantized_ckpt = None
-
+        print(t5_quant_scheme)
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,

@@ -10,7 +10,7 @@ import torchvision.transforms as T
 
 from lightx2v.attentions import attention
 from loguru import logger
-from lightx2v.models.input_encoders.hf.q_linear import QuantLinearInt8, QuantLinearFp8
+from lightx2v.models.input_encoders.hf.q_linear import VllmQuantLinearInt8, VllmQuantLinearFp8, TorchaoQuantLinearInt8
 from einops import rearrange
 from torch import Tensor
 from transformers import CLIPVisionModel
@@ -63,9 +63,11 @@ class SelfAttention(nn.Module):
         # layers
         if quantized:
             if quant_scheme == "int8":
-                linear_cls = QuantLinearInt8
+                linear_cls = VllmQuantLinearInt8
             elif quant_scheme == "fp8":
-                linear_cls = QuantLinearFp8
+                linear_cls = VllmQuantLinearFp8
+            elif quant_scheme == "int8-torchao":
+                linear_cls = TorchaoQuantLinearInt8
         else:
             linear_cls = nn.Linear
 
@@ -135,9 +137,11 @@ class AttentionBlock(nn.Module):
         # layers
         if quantized:
             if quant_scheme == "int8":
-                linear_cls = QuantLinearInt8
+                linear_cls = VllmQuantLinearInt8
             elif quant_scheme == "fp8":
-                linear_cls = QuantLinearFp8
+                linear_cls = VllmQuantLinearFp8
+            elif quant_scheme == "int8-torchao":
+                linear_cls = TorchaoQuantLinearInt8
         else:
             linear_cls = nn.Linear
 
