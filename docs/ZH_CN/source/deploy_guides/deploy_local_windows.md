@@ -94,7 +94,7 @@ model_cls=wan2.1
 
 此说明将指导您如何下载与使用便携版的Lightx2v-ComfyUI环境，如此可以免去手动配置环境的步骤，适用于想要在Windows系统下快速开始体验使用Lightx2v加速视频生成的用户。
 
-## 下载Windows便携环境：
+#### 下载Windows便携环境：
 
 - [百度网盘下载](https://pan.baidu.com/s/1FVlicTXjmXJA1tAVvNCrBw?pwd=wfid)，提取码：wfid
 
@@ -109,7 +109,7 @@ lightx2v_env
 └── run_nvidia_gpu.bat            # Windows启动脚本（双击启动）
 ```
 
-## 启动ComfyUI
+#### 启动ComfyUI
 
 直接双击run_nvidia_gpu.bat文件，系统会打开一个Command Prompt窗口并运行程序，一般第一次启动时间会比较久，请耐心等待，启动完成后会自动打开浏览器并出现ComfyUI的前端界面。
 
@@ -117,7 +117,7 @@ lightx2v_env
 
 LightX2V-ComfyUI的插件使用的是，[ComfyUI-Lightx2vWrapper](https://github.com/ModelTC/ComfyUI-Lightx2vWrapper)，示例工作流可以从此项目中获取。
 
-## 已测试显卡（offload模式）
+#### 已测试显卡（offload模式）
 
 - 测试模型`Wan2.1-I2V-14B-480P`
 
@@ -128,6 +128,6 @@ LightX2V-ComfyUI的插件使用的是，[ComfyUI-Lightx2vWrapper](https://github
 | 3060Ti    | I2V        | 8G         | 6.1G        | 7.1G          |
 
 
-### 环境打包和使用参考
+#### 环境打包和使用参考
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 - [Portable-Windows-ComfyUI-Docs](https://docs.comfy.org/zh-CN/installation/comfyui_portable_windows#portable-%E5%8F%8A%E8%87%AA%E9%83%A8%E7%BD%B2)

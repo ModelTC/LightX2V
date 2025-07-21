@@ -115,7 +115,7 @@ Double-click to run the `start_lightx2v.bat` file, the script will:
 
 This guide will instruct you on how to download and use the portable version of the Lightx2v-ComfyUI environment, so you can avoid manual environment configuration steps. This is suitable for users who want to quickly start experiencing accelerated video generation with Lightx2v on Windows systems.
 
-## Download the Windows Portable Environment:
+#### Download the Windows Portable Environment:
 
 - [Baidu Cloud Download](https://pan.baidu.com/s/1FVlicTXjmXJA1tAVvNCrBw?pwd=wfid), extraction code: wfid
 
@@ -130,7 +130,7 @@ lightx2v_env
 └── run_nvidia_gpu.bat            # Windows startup script (double-click to start)
 ```
 
-## Start ComfyUI
+#### Start ComfyUI
 
 Directly double-click the run_nvidia_gpu.bat file. The system will open a Command Prompt window and run the program. The first startup may take a while, please be patient. After startup is complete, the browser will automatically open and display the ComfyUI frontend interface.
 
@@ -138,7 +138,7 @@ Directly double-click the run_nvidia_gpu.bat file. The system will open a Comman
 
 The plugin used by LightX2V-ComfyUI is [ComfyUI-Lightx2vWrapper](https://github.com/ModelTC/ComfyUI-Lightx2vWrapper). Example workflows can be obtained from this project.
 
-## Tested Graphics Cards (offload mode)
+#### Tested Graphics Cards (offload mode)
 
 - Tested model: `Wan2.1-I2V-14B-480P`
 
@@ -149,6 +149,6 @@ The plugin used by LightX2V-ComfyUI is [ComfyUI-Lightx2vWrapper](https://github.
 | 3060Ti     | I2V         | 8G            | 6.1G                 | 7.1G                 |
 
 
-### Environment Packaging and Usage Reference
+#### Environment Packaging and Usage Reference
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 - [Portable-Windows-ComfyUI-Docs](https://docs.comfy.org/zh-CN/installation/comfyui_portable_windows#portable-%E5%8F%8A%E8%87%AA%E9%83%A8%E7%BD%B2)
