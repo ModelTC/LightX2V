@@ -1,5 +1,5 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp4_quant, cutlass_scaled_fp4_mm
+from lightx2v_kernel.gemm import scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm
 
 
 FLOAT4_E2M1_MAX = 6.0
@@ -110,8 +110,8 @@ def test_nvfp4_gemm(
     print(f"b_global_scale : {b_global_scale}, {b_global_scale.shape}")
 
     alpha = 1.0 / (a_global_scale * b_global_scale)
-    a_fp4, a_scale_interleaved = scaled_fp4_quant(a_dtype, a_global_scale)
-    b_fp4, b_scale_interleaved = scaled_fp4_quant(b_dtype, b_global_scale)
+    a_fp4, a_scale_interleaved = scaled_nvfp4_quant(a_dtype, a_global_scale)
+    b_fp4, b_scale_interleaved = scaled_nvfp4_quant(b_dtype, b_global_scale)
 
     expected_out = get_ref_results(
         a_fp4,
@@ -130,7 +130,7 @@ def test_nvfp4_gemm(
 
     print(f"alpha {alpha}, {alpha.shape}, {alpha.dtype}")
 
-    out = cutlass_scaled_fp4_mm(a_fp4, b_fp4, a_scale_interleaved, b_scale_interleaved, alpha, bias)
+    out = cutlass_scaled_nvfp4_mm(a_fp4, b_fp4, a_scale_interleaved, b_scale_interleaved, alpha, bias)
 
     print(f"out : {out}, {out.shape}, {out.dtype}")
     print(f"expected_out : {expected_out}, {expected_out.shape}, {expected_out.dtype}")

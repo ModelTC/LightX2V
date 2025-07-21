@@ -1,7 +1,7 @@
 import unittest
 import torch
 from lightx2v_kernel.gemm import cutlass_scaled_mxfp6_mxfp8_mm
-from lightx2v_kernel.gemm import scaled_fp6_quant, scaled_fp8_quant
+from lightx2v_kernel.gemm import scaled_mxfp6_quant, scaled_mxfp8_quant
 from torch.nn.functional import linear
 from lightx2v_kernel.utils import error, benchmark
 
@@ -22,10 +22,10 @@ class TestQuantBF162MXFP6(unittest.TestCase):
                 for n in self.channels:
                     with self.subTest(shape=[m, k, n]):
                         activation = torch.randn(m, k, dtype=self.dtype, device=self.device)
-                        activation_quant_pred, activation_scale_pred = scaled_fp8_quant(activation)
+                        activation_quant_pred, activation_scale_pred = scaled_mxfp8_quant(activation)
 
                         weight = torch.randn(n, k, dtype=self.dtype, device=self.device)
-                        weight_quant_pred, weight_scale_pred = scaled_fp6_quant(weight)
+                        weight_quant_pred, weight_scale_pred = scaled_mxfp6_quant(weight)
 
                         bias = torch.rand(1, n, dtype=self.dtype, device=self.device) * 10
 
@@ -44,7 +44,7 @@ class TestQuantBF162MXFP6(unittest.TestCase):
                     input = torch.randn(m, k, dtype=self.dtype, device=self.device)
                     shape = [m, k]
                     tflops = 2 * (m * k / 1024**4)
-                    benchmark(scaled_fp6_quant, shape, tflops, 100, input)
+                    benchmark(scaled_mxfp6_quant, shape, tflops, 100, input)
 
 
 if __name__ == "__main__":

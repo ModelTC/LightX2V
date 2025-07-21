@@ -1,5 +1,5 @@
 import torch
-from lightx2v_kernel.gemm import cutlass_scaled_fp4_mm
+from lightx2v_kernel.gemm import cutlass_scaled_nvfp4_mm
 
 
 """
@@ -16,7 +16,7 @@ bias = None
 
 
 def test_mm(input_tensor_quant, weight, input_tensor_scale, weight_scale, alpha, bias):
-    output_tensor = cutlass_scaled_fp4_mm(input_tensor_quant, weight, input_tensor_scale, weight_scale, alpha=alpha, bias=bias)
+    output_tensor = cutlass_scaled_nvfp4_mm(input_tensor_quant, weight, input_tensor_scale, weight_scale, alpha=alpha, bias=bias)
     return output_tensor
 
 

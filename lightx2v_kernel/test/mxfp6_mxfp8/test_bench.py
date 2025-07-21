@@ -1,9 +1,9 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp8_quant, scaled_fp6_quant, cutlass_scaled_mxfp6_mxfp8_mm
+from lightx2v_kernel.gemm import scaled_mxfp8_quant, scaled_mxfp6_quant, cutlass_scaled_mxfp6_mxfp8_mm
 import time
 
 
-class MMWeightMxfp8ActMxfp6:
+class MMWeightMxfp6ActMxfp8:
     def __init__(self, weight, bias):
         self.load_fp6_weight(weight, bias)
         self.act_quant_func = self.act_quant_fp8
@@ -17,7 +17,7 @@ class MMWeightMxfp8ActMxfp6:
 
     @torch.no_grad()
     def load_fp6_weight(self, weight, bias):
-        self.weight, self.weight_scale = scaled_fp6_quant(weight)
+        self.weight, self.weight_scale = scaled_mxfp6_quant(weight)
         self.bias = bias
 
     def set_alpha(self):
@@ -25,7 +25,7 @@ class MMWeightMxfp8ActMxfp6:
 
     @torch.no_grad()
     def act_quant_fp8(self, x):
-        return scaled_fp8_quant(x)
+        return scaled_mxfp8_quant(x)
 
 
 def test_speed(m, k, n):
@@ -35,7 +35,7 @@ def test_speed(m, k, n):
         # bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
         bias = None
 
-        mm = MMWeightMxfp8ActMxfp6(weight, bias)
+        mm = MMWeightMxfp6ActMxfp8(weight, bias)
 
         # warmup
         output_tensor = mm.apply(input_tensor)
@@ -87,7 +87,7 @@ def test_accuracy(m, k, n):
 
         ref_output_tensor = linear(input_tensor)
 
-        mm = MMWeightMxfp8ActMxfp6(weight, bias)
+        mm = MMWeightMxfp6ActMxfp8(weight, bias)
 
         output_tensor = mm.apply(input_tensor)
 

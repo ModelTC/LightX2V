@@ -1,31 +1,31 @@
 import torch
-from lightx2v_kernel.gemm import scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm
+from lightx2v_kernel.gemm import scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm
 import time
 
 
-class MMWeightMxfp8:
+class MMWeightMxfp4ActMxfp4:
     def __init__(self, weight, bias):
-        self.load_fp8_weight(weight, bias)
-        self.act_quant_func = self.act_quant_fp8
+        self.load_fp4_weight(weight, bias)
+        self.act_quant_func = self.act_quant_fp4
         self.set_alpha()
 
     @torch.no_grad()
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = cutlass_scaled_mxfp8_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
+        output_tensor = cutlass_scaled_mxfp4_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
         return output_tensor
 
     @torch.no_grad()
-    def load_fp8_weight(self, weight, bias):
-        self.weight, self.weight_scale = scaled_mxfp8_quant(weight)
+    def load_fp4_weight(self, weight, bias):
+        self.weight, self.weight_scale = scaled_mxfp4_quant(weight)
         self.bias = bias
 
     def set_alpha(self):
         self.alpha = torch.tensor(1.0, dtype=torch.float32, device=self.weight.device)
 
     @torch.no_grad()
-    def act_quant_fp8(self, x):
-        return scaled_mxfp8_quant(x)
+    def act_quant_fp4(self, x):
+        return scaled_mxfp4_quant(x)
 
 
 def test_speed(m, k, n):
@@ -35,7 +35,7 @@ def test_speed(m, k, n):
         # bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
         bias = None
 
-        mm = MMWeightMxfp8(weight, bias)
+        mm = MMWeightMxfp4ActMxfp4(weight, bias)
 
         # warmup
         output_tensor = mm.apply(input_tensor)
@@ -87,7 +87,7 @@ def test_accuracy(m, k, n):
 
         ref_output_tensor = linear(input_tensor)
 
-        mm = MMWeightMxfp8(weight, bias)
+        mm = MMWeightMxfp4ActMxfp4(weight, bias)
 
         output_tensor = mm.apply(input_tensor)
 

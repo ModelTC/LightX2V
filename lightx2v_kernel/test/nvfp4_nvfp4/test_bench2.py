@@ -1,5 +1,5 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp4_quant, cutlass_scaled_fp4_mm
+from lightx2v_kernel.gemm import scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm
 import time
 
 
@@ -14,13 +14,13 @@ class MMWeightFp4:
     @torch.no_grad()
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = cutlass_scaled_fp4_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
+        output_tensor = cutlass_scaled_nvfp4_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
         return output_tensor
 
     @torch.no_grad()
     def load_fp4_weight(self, weight, bias):
         self.weight_global_scale = (2688.0 / torch.max(torch.abs(weight))).to(torch.float32)
-        self.weight, self.weight_scale = scaled_fp4_quant(weight, self.weight_global_scale)
+        self.weight, self.weight_scale = scaled_nvfp4_quant(weight, self.weight_global_scale)
         self.bias = bias
 
     def calibrate_x_absmax(self):
@@ -30,7 +30,7 @@ class MMWeightFp4:
 
     @torch.no_grad()
     def act_quant_fp4(self, x):
-        return scaled_fp4_quant(x, self.input_global_scale)
+        return scaled_nvfp4_quant(x, self.input_global_scale)
 
 
 def test_speed(m, k, n):
