@@ -137,7 +137,27 @@ def array_to_video(
     resolution: Optional[Union[Tuple[int, int], Tuple[float, float]]] = None,
     disable_log: bool = False,
     lossless: bool = True,
+    output_pix_fmt: str = "yuv420p",
 ) -> None:
+    """Convert an array to a video directly, gif not supported.
+
+    Args:
+        image_array (np.ndarray): shape should be (f * h * w * 3).
+        output_path (str): output video file path.
+        fps (Union[int, float, optional): fps. Defaults to 30.
+        resolution (Optional[Union[Tuple[int, int], Tuple[float, float]]],
+            optional): (height, width) of the output video.
+            Defaults to None.
+        disable_log (bool, optional): whether close the ffmepg command info.
+            Defaults to False.
+        output_pix_fmt (str): output pix_fmt in ffmpeg command.
+    Raises:
+        FileNotFoundError: check output path.
+        TypeError: check input array.
+
+    Returns:
+        None.
+    """
     if not isinstance(image_array, np.ndarray):
         raise TypeError("Input should be np.ndarray.")
     assert image_array.ndim == 4
@@ -175,6 +195,7 @@ def array_to_video(
             output_path,
         ]
     else:
+        output_pix_fmt = output_pix_fmt or "yuv420p"
         command = [
             "/usr/bin/ffmpeg",
             "-y",  # (optional) overwrite output file if it exists
@@ -194,6 +215,8 @@ def array_to_video(
             "-",  # The input comes from a pipe
             "-vcodec",
             "libx264",
+            "-pix_fmt",
+            f"{output_pix_fmt}",
             "-an",  # Tells FFMPEG not to expect any audio
             output_path,
         ]
