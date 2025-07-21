@@ -682,3 +682,116 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
         self.previous_e0_odd = None
 
         torch.cuda.empty_cache()
+
+
+# 1. FirstBlock
+class WanTransformerInferFirstBlock(WanTransformerInfer):
+    # 1.1 初始化
+    def _init_(self, config):
+        # 1.1 初始化
+        super().__init__(config)
+
+        # 1.2 本方法: 阈值，29个block的缓存
+        self.residual_diff_threshold = 0.03
+        self.prev_first_block_residual_even = None
+        self.prev_remaining_blocks_residual_even = None
+        self.prev_first_block_residual_odd = None
+        self.prev_remaining_blocks_residual_odd = None
+
+    # 1.2 推理
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        # 1.1 推理FirstBlock
+        # 1.1.1 并进行判断，判断之后缓存，这样永远只需要缓存一个张量，节约显存
+        ori_x = x.clone()
+        x = super().infer_block(weights.blocks[0], grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+        x_residual = x - ori_x
+        del ori_x
+
+        # 1.1 条件推理
+        if self.infer_conditional:
+            # 1.2 更新决策数组
+            index = self.scheduler.step_index
+            caching_records = self.scheduler.caching_records
+            if index <= self.scheduler.infer_steps - 1:
+                should_calc = self.calculate_should_calc(x_residual)
+                self.scheduler.caching_records[index] = should_calc
+
+            # 1.3 29个Block完全计算 | 缓存复用
+            if caching_records[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(x)
+
+        # 1.2 非条件推理
+        else:
+            # 1.2 更新决策数组
+            index = self.scheduler.step_index
+            caching_records_2 = self.scheduler.caching_records_2
+            if index <= self.scheduler.infer_steps - 1:
+                should_calc = self.calculate_should_calc(x_residual)
+                self.scheduler.caching_records_2[index] = should_calc
+
+            # 1.3 29个Block完全计算 | 缓存复用
+            if caching_records_2[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(x)
+
+        if self.config.enable_cfg:
+            self.switch_status()
+
+        return x
+
+    def calculate_should_calc(self, x_residual):
+        diff = 1.0
+        if self.infer_conditional:
+            if self.prev_first_block_residual_even is not None:
+                t1 = self.prev_x_residual_even
+                t2 = x_residual
+                mean_diff = (t1 - t2).abs().mean()
+                mean_t1 = t1.abs().mean()
+                diff = (mean_diff / mean_t1).item()
+            self.prev_first_block_residual_even = x_residual
+        else:
+            if self.prev_first_block_residual_odd is not None:
+                t1 = self.prev_x_residual_odd
+                t2 = x_residual
+                mean_diff = (t1 - t2).abs().mean()
+                mean_t1 = t1.abs().mean()
+                diff = (mean_diff / mean_t1).item()
+            self.prev_first_block_residual_odd = x_residual
+
+        return diff >= self.residual_diff_threshold
+
+    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        # 1.1. 初始输入
+        ori_x = x.clone()
+
+        # 1.2 29个blocks推理
+        for block_idx in range(1, self.blocks_num):
+            x = super().infer_block(
+                weights.blocks[block_idx],
+                grid_sizes,
+                embed,
+                x,
+                embed0,
+                seq_lens,
+                freqs,
+                context,
+            )
+
+        # 1.3 记录残差缓存
+        if self.infer_conditional:
+            self.prev_remaining_blocks_residual_even = x = ori_x
+        else:
+            self.prev_remaining_blocks_residual_odd = x = ori_x
+        del ori_x
+
+        # 1.4 返回x
+        return x
+
+    def infer_using_cache(self, x):
+        if self.infer_conditional:
+            return x.add_(self.prev_remaining_blocks_residual_even)
+        else:
+            return x.add_(self.prev_remaining_blocks_residual_odd)
