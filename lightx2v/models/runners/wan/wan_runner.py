@@ -69,7 +69,6 @@ class WanRunner(DefaultRunner):
                 clip_quantized_ckpt = None
                 clip_quant_scheme = None
 
-            print(clip_quant_scheme)
             image_encoder = CLIPModel(
                 dtype=torch.float16,
                 device=self.init_device,
@@ -107,7 +106,7 @@ class WanRunner(DefaultRunner):
         else:
             t5_quant_scheme = None
             t5_quantized_ckpt = None
-        print(t5_quant_scheme)
+
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
