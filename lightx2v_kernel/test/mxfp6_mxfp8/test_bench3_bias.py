@@ -1,6 +1,6 @@
 import torch
 import time
-from test_bench import MMWeightMxfp8ActMxfp6
+from test_bench import MMWeightMxfp6ActMxfp8
 
 
 def test_speed(m, k, n):
@@ -9,7 +9,7 @@ def test_speed(m, k, n):
         weight = torch.randn(n, k, dtype=torch.bfloat16, device="cuda")
         bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
 
-        mm = MMWeightMxfp8ActMxfp6(weight, bias)
+        mm = MMWeightMxfp6ActMxfp8(weight, bias)
 
         # warmup
         output_tensor = mm.apply(input_tensor)
@@ -60,7 +60,7 @@ def test_accuracy(m, k, n):
 
         ref_output_tensor = linear(input_tensor)
 
-        mm = MMWeightMxfp8ActMxfp6(weight, bias)
+        mm = MMWeightMxfp6ActMxfp8(weight, bias)
 
         output_tensor = mm.apply(input_tensor)
 

@@ -315,7 +315,7 @@ inline int getMultiProcessorCount() {
   return multi_processor_count;  // Return the cached value on subsequent calls
 }
 
-void scaled_fp6_quant_sm120(
+void scaled_mxfp6_quant_sm120(
     torch::Tensor& output, torch::Tensor const& input, torch::Tensor& output_sf) {
   int32_t m = input.size(0);
   int32_t n = input.size(1);

@@ -30,20 +30,20 @@
 using namespace cute;
 
 
-struct Fp4GemmSm120 {
+struct Mxfp4GemmSm120 {
     /////////////////////////////////////////////////////////////////////////////////////////////////
     /// GEMM kernel configurations
     /////////////////////////////////////////////////////////////////////////////////////////////////
 
     // A matrix configuration
-    using         ElementA    = cutlass::nv_float4_t<cutlass::float_e2m1_t>;    // Element type for A matrix operand
+    using         ElementA    = cutlass::mx_float4_t<cutlass::float_e2m1_t>;    // Element type for A matrix operand
     using         LayoutATag  = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-    static constexpr int AlignmentA  = 32;                                             // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
+    static constexpr int AlignmentA  = 128;                                             // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
     // B matrix configuration
-    using         ElementB    = cutlass::nv_float4_t<cutlass::float_e2m1_t>;    // Element type for B matrix operand
+    using         ElementB    = cutlass::mx_float4_t<cutlass::float_e2m1_t>;    // Element type for B matrix operand
     using         LayoutBTag  = cutlass::layout::ColumnMajor;                   // Layout type for B matrix operand
-    static constexpr int AlignmentB  = 32;                                             // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
+    static constexpr int AlignmentB  = 128;                                             // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
     // C/D matrix configuration
     using         ElementD    = cutlass::bfloat16_t;                            // Element type for D matrix operand
@@ -108,7 +108,7 @@ struct Fp4GemmSm120 {
 
 
 // Populates a Gemm::Arguments structure from the given commandline options
-typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4(
+typename Mxfp4GemmSm120::Gemm::Arguments args_from_options_mxp4_mxfp4(
     at::Tensor& D,
     at::Tensor const& A,
     at::Tensor const& B,
@@ -119,14 +119,14 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4(
     int64_t M,
     int64_t N,
     int64_t K) {
-  using Sm1xxBlkScaledConfig = typename Fp4GemmSm120::Gemm::GemmKernel::CollectiveMainloop::Sm1xxBlkScaledConfig;
+  using Sm1xxBlkScaledConfig = typename Mxfp4GemmSm120::Gemm::GemmKernel::CollectiveMainloop::Sm1xxBlkScaledConfig;
 
   int m = static_cast<int>(M);
   int n = static_cast<int>(N);
   int k = static_cast<int>(K);
-  auto stride_A = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideA{}, {m, k, 1});
-  auto stride_B = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideB{}, {n, k, 1});
-  auto stride_D = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideD{}, {m, n, 1});
+  auto stride_A = cutlass::make_cute_packed_stride(Mxfp4GemmSm120::StrideA{}, {m, k, 1});
+  auto stride_B = cutlass::make_cute_packed_stride(Mxfp4GemmSm120::StrideB{}, {n, k, 1});
+  auto stride_D = cutlass::make_cute_packed_stride(Mxfp4GemmSm120::StrideD{}, {m, n, 1});
 
   auto layout_SFA = Sm1xxBlkScaledConfig::tile_atom_to_shape_SFA(cute::make_shape(m, n, k, 1));
   auto layout_SFB = Sm1xxBlkScaledConfig::tile_atom_to_shape_SFB(cute::make_shape(m, n, k, 1));
@@ -134,49 +134,49 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4(
   if (bias){
     using StrideBias = Stride<cutlass::_0, cutlass::_1, int64_t>;
 
-    typename Fp4GemmSm120::Gemm::Arguments arguments{
+    typename Mxfp4GemmSm120::Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
       {m, n, k, 1},
       {// Mainloop arguments
-       static_cast<Fp4GemmSm120::Gemm::ElementA const*>(A.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementA const*>(A.data_ptr()),
        stride_A,
-       static_cast<Fp4GemmSm120::Gemm::ElementB const*>(B.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementB const*>(B.data_ptr()),
        stride_B,
-       static_cast<cutlass::float_ue4m3_t const*>(A_sf.data_ptr()),
+       static_cast<cutlass::float_ue8m0_t const*>(A_sf.data_ptr()),
        layout_SFA,
-       static_cast<cutlass::float_ue4m3_t const*>(B_sf.data_ptr()),
+       static_cast<cutlass::float_ue8m0_t const*>(B_sf.data_ptr()),
        layout_SFB},
       {     // Epilogue arguments
        {},  // epilogue.thread
-       static_cast<Fp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
        stride_D,
-       static_cast<Fp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
     static const float beta_zero = 0.0f;
     fusion_args.beta_ptr = &beta_zero;
-    fusion_args.bias_ptr = static_cast<Fp4GemmSm120::Gemm::ElementC const*>(bias->data_ptr());
+    fusion_args.bias_ptr = static_cast<Mxfp4GemmSm120::Gemm::ElementC const*>(bias->data_ptr());
     fusion_args.dBias = StrideBias{};
     return arguments;
   } else {
-    typename Fp4GemmSm120::Gemm::Arguments arguments{
+    typename Mxfp4GemmSm120::Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
       {m, n, k, 1},
       {// Mainloop arguments
-       static_cast<Fp4GemmSm120::Gemm::ElementA const*>(A.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementA const*>(A.data_ptr()),
        stride_A,
-       static_cast<Fp4GemmSm120::Gemm::ElementB const*>(B.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementB const*>(B.data_ptr()),
        stride_B,
-       static_cast<cutlass::float_ue4m3_t const*>(A_sf.data_ptr()),
+       static_cast<cutlass::float_ue8m0_t const*>(A_sf.data_ptr()),
        layout_SFA,
-       static_cast<cutlass::float_ue4m3_t const*>(B_sf.data_ptr()),
+       static_cast<cutlass::float_ue8m0_t const*>(B_sf.data_ptr()),
        layout_SFB},
       {     // Epilogue arguments
        {},  // epilogue.thread
-       static_cast<Fp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
        stride_D,
-       static_cast<Fp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
+       static_cast<Mxfp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
@@ -187,7 +187,7 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4(
 }
 
 
-void runGemmNvfp4Sm120(
+void runGemmMxfp4Sm120(
     at::Tensor& D,
     at::Tensor const& A,
     at::Tensor const& B,
@@ -199,10 +199,10 @@ void runGemmNvfp4Sm120(
     int64_t n,
     int64_t k,
     cudaStream_t stream) {
-  typename Fp4GemmSm120::Gemm gemm;
+  typename Mxfp4GemmSm120::Gemm gemm;
 
-  auto arguments = args_from_options_nvfp4_nvfp4(D, A, B, A_sf, B_sf, alpha, bias, m, n, k);
-  size_t workspace_size = Fp4GemmSm120::Gemm::get_workspace_size(arguments);
+  auto arguments = args_from_options_mxp4_mxfp4(D, A, B, A_sf, B_sf, alpha, bias, m, n, k);
+  size_t workspace_size = Mxfp4GemmSm120::Gemm::get_workspace_size(arguments);
   auto const workspace_options = torch::TensorOptions().dtype(torch::kUInt8).device(A.device());
   auto workspace = torch::empty(workspace_size, workspace_options);
 
@@ -213,9 +213,9 @@ void runGemmNvfp4Sm120(
 
 
 constexpr auto FLOAT4_E2M1X2 = at::ScalarType::Byte;
-constexpr auto SF_DTYPE = at::ScalarType::Float8_e4m3fn;
+constexpr auto SF_DTYPE = at::ScalarType::Float8_e8m0fnu;
 
-void cutlass_scaled_nvfp4_mm_sm120(
+void cutlass_scaled_mxfp4_mm_sm120(
     torch::Tensor& D,
     torch::Tensor const& A,
     torch::Tensor const& B,
@@ -250,7 +250,7 @@ void cutlass_scaled_nvfp4_mm_sm120(
   auto const n = B.sizes()[0];
   auto const k = A.sizes()[1] * 2;
 
-  constexpr int alignment = 32;
+  constexpr int alignment = 128;
   TORCH_CHECK(
       k % alignment == 0,
       "Expected k to be divisible by ",
@@ -275,9 +275,9 @@ void cutlass_scaled_nvfp4_mm_sm120(
   auto round_up = [](int x, int y) { return (x + y - 1) / y * y; };
   int rounded_m = round_up(m, 128);
   int rounded_n = round_up(n, 128);
-  // Since k is divisible by 32 (alignment), k / 16 is guaranteed to be an
+  // Since k is divisible by 128 (alignment), k / 32 is guaranteed to be an
   // integer.
-  int rounded_k = round_up(k / 16, 4);
+  int rounded_k = round_up(k / 32, 4);
 
   TORCH_CHECK(A_sf.dim() == 2, "scale_a must be a matrix");
   TORCH_CHECK(B_sf.dim() == 2, "scale_b must be a matrix");
@@ -319,5 +319,5 @@ void cutlass_scaled_nvfp4_mm_sm120(
   at::cuda::CUDAGuard device_guard{(char)A.get_device()};
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream(A.get_device());
 
-  runGemmNvfp4Sm120(D, A, B, A_sf, B_sf, alpha, bias, m, n, k, stream);
+  runGemmMxfp4Sm120(D, A, B, A_sf, B_sf, alpha, bias, m, n, k, stream);
 }

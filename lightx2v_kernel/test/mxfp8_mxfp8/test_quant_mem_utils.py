@@ -1,9 +1,9 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp8_quant
+from lightx2v_kernel.gemm import scaled_mxfp8_quant
 
 
 def quantize_fp8(x):
-    return scaled_fp8_quant(x)
+    return scaled_mxfp8_quant(x)
 
 
 def test_memory_bandwidth(func, x, num_warmup=10, num_runs=100):

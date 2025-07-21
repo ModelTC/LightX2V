@@ -1,41 +1,15 @@
 import torch
-from lightx2v_kernel.gemm import scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm
 import time
-
-
-class MMWeightMxfp8:
-    def __init__(self, weight, bias):
-        self.load_fp8_weight(weight, bias)
-        self.act_quant_func = self.act_quant_fp8
-        self.set_alpha()
-
-    @torch.no_grad()
-    def apply(self, input_tensor):
-        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = cutlass_scaled_mxfp8_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
-        return output_tensor
-
-    @torch.no_grad()
-    def load_fp8_weight(self, weight, bias):
-        self.weight, self.weight_scale = scaled_mxfp8_quant(weight)
-        self.bias = bias
-
-    def set_alpha(self):
-        self.alpha = torch.tensor(1.0, dtype=torch.float32, device=self.weight.device)
-
-    @torch.no_grad()
-    def act_quant_fp8(self, x):
-        return scaled_mxfp8_quant(x)
+from test_bench import MMWeightMxfp4ActMxfp4
 
 
 def test_speed(m, k, n):
     with torch.no_grad():
         input_tensor = torch.randn(m, k, dtype=torch.bfloat16).cuda()
         weight = torch.randn(n, k, dtype=torch.bfloat16, device="cuda")
-        # bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
-        bias = None
+        bias = torch.ones(1, n, dtype=torch.bfloat16).cuda() * 50
 
-        mm = MMWeightMxfp8(weight, bias)
+        mm = MMWeightMxfp4ActMxfp4(weight, bias)
 
         # warmup
         output_tensor = mm.apply(input_tensor)
@@ -54,9 +28,9 @@ def test_speed(m, k, n):
         weight = torch.randn(k, n, dtype=torch.bfloat16, device="cuda")
         bias = torch.randn(1, k, dtype=torch.bfloat16).cuda()
 
-        linear = torch.nn.Linear(k, n, bias=False).cuda()
+        linear = torch.nn.Linear(k, n, bias=True).cuda()
         linear.weight.data = weight
-        # linear.bias.data = bias
+        linear.bias.data = bias
 
         # warmup
         ref_output_tensor = linear(input_tensor)
@@ -78,16 +52,15 @@ def test_accuracy(m, k, n):
     with torch.no_grad():
         input_tensor = torch.randn(m, k, dtype=torch.bfloat16).cuda()
         weight = torch.randn(n, k, dtype=torch.bfloat16, device="cuda")
-        # bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
-        bias = None
+        bias = torch.ones(1, n, dtype=torch.bfloat16).cuda() * 50
 
-        linear = torch.nn.Linear(k, n, bias=False).cuda()
+        linear = torch.nn.Linear(k, n, bias=True).cuda()
         linear.weight.data = weight
-        # linear.bias.data = bias
+        linear.bias.data = bias
 
         ref_output_tensor = linear(input_tensor)
 
-        mm = MMWeightMxfp8(weight, bias)
+        mm = MMWeightMxfp4ActMxfp4(weight, bias)
 
         output_tensor = mm.apply(input_tensor)
 

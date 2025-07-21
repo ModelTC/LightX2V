@@ -1,5 +1,4 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp4_quant, cutlass_scaled_fp4_mm
 import time
 from test_bench2 import MMWeightFp4
 
