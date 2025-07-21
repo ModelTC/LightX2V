@@ -1,6 +1,7 @@
 #!/bin/bash
 
-source /kaiwu_vepfs/kaiwu/huangxinchi/metavdt/bin/activate
+# source /kaiwu_vepfs/kaiwu/huangxinchi/metavdt/bin/activate
+source /kaiwu_vepfs/kaiwu/xujin2/envs/metavdt/bin/activate
 
 export PYTHONPATH=/kaiwu_vepfs/kaiwu/huangxinchi/metavdt/lib/python3.10/site-packages:$PYTHONPATH
 
@@ -9,7 +10,8 @@ lightx2v_path=/kaiwu_vepfs/kaiwu/huangxinchi/lightx2v
 magicdrivedit_path=/kaiwu_vepfs/kaiwu/huangxinchi/drivescapedit
 model_path='/kaiwu_vepfs/kaiwu/xujin2/code_hsy/magicdrivedit/outputs/zhiji_0509/MagicDriveSTDiT3-XL-2_zhiji_0509_20250513-0620/epoch0-global_step512/ema.pt'
 
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=3
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # check section
 if [ -z "${CUDA_VISIBLE_DEVICES}" ]; then
@@ -35,6 +37,8 @@ echo $PYTHONPATH
 export DTYPE=BF16
 export ENABLE_PROFILING_DEBUG=true
 export ENABLE_GRAPH_MODE=false
+
+# python3 /kaiwu_vepfs/kaiwu/huangxinchi/lightx2v/lightx2v/models/runners/magicdrive/test.py
 
 python -m lightx2v.infer_magicdrive \
 --model_cls mgcdr \

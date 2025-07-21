@@ -4,12 +4,8 @@ import einops
 import json
 import copy
 from copy import deepcopy
-from PIL import Image
-import traceback
-from lightx2v.common.apis import text_encoder
 import torch
 import torch.nn.functional as F
-from torchvision.datasets.folder import IMG_EXTENSIONS
 from torchvision.utils import save_image
 from einops import repeat, rearrange
 from torchvision.io import write_video
@@ -122,13 +118,14 @@ class MagicDriverRunner(DefaultRunner):
         del vid_samples
         del samples
         
-        video = [video_clips][0][0]
+        # import pdb; pdb.set_trace()
+        video = [video_clips[0][0]]
         video = torch.cat(video, dim=1)
         
         save_sample(
             video,
             fps=self.save_fps, # 8
-            save_path=self.save_path,
+            save_path=self.config.get('save_video_path'),
             high_quality=True,
             verbose=False,
             save_per_n_frame=self.config.get("save_per_n_frame", -1), # -1
@@ -369,14 +366,15 @@ class MagicDriverRunner(DefaultRunner):
     def run_vae_decoer(self, samples):
         samples = rearrange(samples, "B (C NC) T ... -> (B NC) C T ...", NC=self.NC)
         num_frames = self.model_args["num_frames"]
-        del self.cond_inputs
-        del self.uncond_inputs
-        del self.model_args
-        del self.dataset
+        # del self.cond_inputs
+        # del self.uncond_inputs
+        # del self.model_args
+        # del self.dataset
         torch.cuda.empty_cache()
         # self.vae.to('cuda')
-        import pdb; pdb.set_trace()
-        samples = self.vae.decode(samples.to(torch.bfloat16), num_frames=num_frames)
+        # import pdb; pdb.set_trace()
+        with torch.no_grad():
+            samples = self.vae.decode(samples.to(torch.bfloat16), num_frames=num_frames)
         # self.vae.to('cpu')
         samples = rearrange(samples, "(B NC) C T ... -> B NC C T ...", NC=self.NC)
         # import pdb; pdb.set_trace()
@@ -429,7 +427,7 @@ class MagicDriverRunner(DefaultRunner):
             with ProfilingContext4Debug("step_post"):
                 self.model.scheduler.step_post()
         
-        samples = self.cond_inputs['x']
+        samples = self.cond_inputs['x'].clone().detach()
         return samples
     
     def run_dit(self):
@@ -443,6 +441,6 @@ class MagicDriverRunner(DefaultRunner):
         samples = self.run_dit()
         samples = self.run_vae_decoer(samples)
         self.save_video(samples)
-        del samples, generator
+        del samples
         torch.cuda.empty_cache()
         gc.collect()
