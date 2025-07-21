@@ -36,14 +36,14 @@ def init_runner(config):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_cls", type=str, required=True, choices=["mgcdr"], default="hunyuan")
+    parser.add_argument("--model_cls", type=str, required=True, choices=["mgcdr"], default="mgcdr")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--dataset_params_json", type=str, required=True)
     parser.add_argument("--camera_params_json", type=str, required=True)
     parser.add_argument("--raw_meta_files", type=str, required=True)
-    parser.add_argument("--prompt", type=str, required=True)
-    parser.add_argument("--negative_prompt", type=str, default="")
+    # parser.add_argument("--prompt", type=str, required=True)
+    # parser.add_argument("--negative_prompt", type=str, default="")
     parser.add_argument("--save_video_path", type=str, default="./output_lightx2v.mp4", help="The path to save video path/file")
     args = parser.parse_args()
     logger.info(f"args: {args}")

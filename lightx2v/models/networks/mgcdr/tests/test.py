@@ -11,13 +11,13 @@ from lightx2v.models.networks.mgcdr.weights.post_weights import MagicDrivePostWe
 
 
 def main():
-    with open('/kaiwu_vepfs/kaiwu/huangxinchi/lightx2v/test_inputs/_model_args.pkl', 'rb') as f:
+    with open('/kaiwu_vepfs/kaiwu/huangxinchi/test_inputs/_model_args.pkl', 'rb') as f:
         _model_args = pickle.load(f)
-    with open('/kaiwu_vepfs/kaiwu/huangxinchi/lightx2v/test_inputs/t.pkl', 'rb') as f:
+    with open('/kaiwu_vepfs/kaiwu/huangxinchi/test_inputs/t.pkl', 'rb') as f:
         t = pickle.load(f)
-    with open('/kaiwu_vepfs/kaiwu/huangxinchi/lightx2v/test_inputs/z.pkl', 'rb') as f:
+    with open('/kaiwu_vepfs/kaiwu/huangxinchi/test_inputs/z.pkl', 'rb') as f:
         z = pickle.load(f)
-    with open('/kaiwu_vepfs/kaiwu/huangxinchi/lightx2v/test_inputs/a_res.pkl', 'rb') as f:
+    with open('/kaiwu_vepfs/kaiwu/huangxinchi/test_inputs/a_res.pkl', 'rb') as f:
         a_res = pickle.load(f) 
     
     model_path = '/kaiwu_vepfs/kaiwu/xujin2/code_hsy/magicdrivedit/outputs/zhiji_0509/MagicDriveSTDiT3-XL-2_zhiji_0509_20250513-0620/epoch0-global_step512/ema.pt'

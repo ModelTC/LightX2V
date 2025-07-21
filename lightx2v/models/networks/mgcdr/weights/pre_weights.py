@@ -138,7 +138,7 @@ class MagicDriveSelfAttention(WeightModule):
         )
         self.add_module(
             'attn',
-            ATTN_WEIGHT_REGISTER[self.config['attention_type']]()
+            ATTN_WEIGHT_REGISTER['flash_attn2_base']()
         )
         self.add_module(
             'attn_proj',
@@ -169,6 +169,13 @@ class MagicDrivePreWeights(WeightModule):
         
         self.bbox_embedder_attn = MagicDriveSelfAttention(config=config, prefix='bbox_embedder')
         self.frame_embedder_attn = MagicDriveSelfAttention(config=config, prefix='frame_embedder')
+        
+        self.add_module(
+            'bbox_embedder_attn', self.bbox_embedder_attn
+        )
+        self.add_module(
+            'frame_embedder_attn', self.frame_embedder_attn
+        )
         
         self.add_module(
             't_embedder_0',

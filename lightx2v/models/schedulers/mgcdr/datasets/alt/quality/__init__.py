@@ -1,1 +1,0 @@
-from .quality_inspection import ObjectQualityInspection  # noqa

@@ -121,7 +121,7 @@ class MagicDrivePreInfer:
         '''
         self.y_embedder
         '''
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         if drop_cond_mask is not None:
             force_drop_ids = 1 - drop_cond_mask
             y = self.token_drop(weights, y, force_drop_ids)
@@ -200,7 +200,7 @@ class MagicDrivePreInfer:
         return x
     
     def _encode_box(self, weights: MagicDrivePreWeights, bboxes, classes, null_mask=None, mask=None, box_latent=None):
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         (B, N) = classes.shape
         bboxes = rearrange(bboxes, 'b n ... -> (b n) ...')
         
@@ -261,7 +261,7 @@ class MagicDrivePreInfer:
         
     
     def encode_box(self, weights: MagicDrivePreWeights, bboxes, drop_mask):  # changed
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         B, T, seq_len = bboxes['bboxes'].shape[:3]
         bbox_embedder_kwargs = {}
         for k, v in bboxes.items():
@@ -590,7 +590,7 @@ class MagicDrivePreInfer:
         s = rearrange(s, "b d -> (b d)")
         s_freq = self.timestep_embedding(s, self.frequency_embedding_size)
         s_freq = s_freq.to(self.dtype)
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         fps = weights.fps_embedder_0.apply(s_freq)
         fps = F.silu(fps)
         fps = weights.fps_embedder_2.apply(fps)
@@ -619,7 +619,7 @@ class MagicDrivePreInfer:
         
         y, y_lens = self.encode_cond_sequence(weights, 
             bbox, cams, rel_pos, y, mask, drop_cond_mask, drop_frame_mask)  # (B, L, D)
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         c = self.encode_map(weights, maps, NC, h_pad_size, x_in_shape)
         c = rearrange(c, "B (T S) C -> B T S C", T=T)  # [B, T, S, 1152]
         

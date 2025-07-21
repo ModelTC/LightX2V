@@ -4,270 +4,29 @@ import einops
 import json
 import copy
 from copy import deepcopy
+from PIL import Image
+import traceback
+from lightx2v.common.apis import text_encoder
 import torch
 import torch.nn.functional as F
 from torchvision.datasets.folder import IMG_EXTENSIONS
 from torchvision.utils import save_image
 from einops import repeat, rearrange
+from torchvision.io import write_video
 from typing import Optional, Tuple, List, Dict, Any
-from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.mgcdr.scheduler import MagicDriverScheduler
-from lightx2v.models.schedulers.mgcdr.datasets.carla import CARLAVariableDataset
+# from lightx2v.models.schedulers.mgcdr.datasets.carla import CARLAVariableDataset
 from lightx2v.models.networks.mgcdr.model import MagicDriveModel
-from lightx2v.models.video_encoders.hf.mgcdr.vae import VideoAutoencoderKLCogVideoX
-from lightx2v.models.input_encoders.hf.t5_v1_1_xxl.model import T5EncoderModel_v1_1_xxl
-from lightx2v.utils.mgcdr.utils import apply_mask_strategy
+from magicdrivedit.models.vae.vae_cogvideox import VideoAutoencoderKLCogVideoX
+from magicdrivedit.models.text_encoder.t5 import T5Encoder
 from lightx2v.utils.profiler import ProfilingContext4Debug
+from magicdrivedit.datasets import save_sample
+from magicdrivedit.utils.inference_utils import apply_mask_strategy, edit_pos, concat_n_views_pt
+from magicdrivedit.utils.misc import collate_bboxes_to_maxlen, move_to
+from magicdrivedit.datasets.carla import CARLAVariableDataset
 from loguru import logger
-
-
-VID_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv")
-
-
-def is_img(path):
-    ext = os.path.splitext(path)[-1].lower()
-    return ext in IMG_EXTENSIONS
-
-
-def is_vid(path):
-    ext = os.path.splitext(path)[-1].lower()
-    return ext in VID_EXTENSIONS
-
-
-def save_sample(x, save_path=None, fps=8, normalize=True, value_range=(-1, 1), force_video=False, 
-                high_quality=False, verbose=True, with_postfix=True, force_image=False, save_per_n_frame=-1, tag=None):
-    """
-    Args:
-        x (Tensor): shape [C, T, H, W]
-    """
-    try:
-        assert x.ndim == 4, f"Input dim is {x.ndim}/{x.shape}"
-        x = x.to("cpu")
-        if with_postfix:
-            save_path += f"_{x.shape[-2]}x{x.shape[-1]}"
-        if tag is not None:
-            save_path += f"_{tag}"
-
-        if not force_video and x.shape[1] == 1:  # T = 1: save as image
-            if not is_img(save_path):
-                save_path += ".png"
-            x = x.squeeze(1)
-            save_image([x], save_path, normalize=normalize, value_range=value_range)
-        else:
-            if with_postfix:
-                save_path += f"_f{x.shape[1]}_fps{fps}.mp4"
-            elif not is_vid(save_path):
-                save_path += ".mp4"
-            if normalize:
-                low, high = value_range
-                x.clamp_(min=low, max=high)
-                x.sub_(low).div_(max(high - low, 1e-5))
-
-            x = x.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 3, 0).to(torch.uint8)
-            imgList = [xi for xi in x.numpy()]
-            if force_image:
-                os.makedirs(save_path)
-                for xi, _x in enumerate(imgList):
-                    _save_path = os.path.join(save_path, f"f{xi:05d}.png")
-                    Image.fromarray(_x).save(_save_path)
-            elif high_quality:
-                if save_per_n_frame > 0 and len(imgList) > save_per_n_frame:
-                    single_value = len(imgList) % 2
-                    for i in range(0, len(imgList) - single_value, save_per_n_frame):
-                        if i == 0:
-                            _save_path = f"_f0-{save_per_n_frame + 1}".join(os.path.splitext(save_path))
-                            vid_len = save_per_n_frame + single_value
-                        else:
-                            vid_len = save_per_n_frame
-                            _save_path = f"_f{i + 1}-{i + 1 + vid_len}".join(os.path.splitext(save_path))
-                            i += single_value
-                        if len(imgList[i:i+vid_len]) < vid_len:
-                            logging.warning(f"{len(imgList)} will stop at frame {i}.")
-                            break
-                        clip = ImageSequenceClip(imgList[i:i+vid_len], fps=fps)
-                        clip.write_videofile(
-                            _save_path, verbose=verbose, bitrate="4M",
-                            logger='bar' if verbose else None)
-                        clip.close()
-                else:
-                    clip = ImageSequenceClip(imgList, fps=fps)
-                    clip.write_videofile(
-                        save_path, verbose=verbose, bitrate="4M",
-                        logger='bar' if verbose else None)
-                    clip.close()
-            else:
-                write_video(save_path, x, fps=fps, video_codec="h264")
-        # if verbose:
-        if True:
-            print(f"Saved to {save_path}")
-    except Exception as e:
-        traceback.print_exc()
-    return save_path
-
-
-def move_to(obj, device, dtype=None, filter=lambda x: True):
-    if torch.is_tensor(obj):
-        if filter(obj):
-            if dtype is None:
-                dtype = obj.dtype
-            return obj.to(device, dtype)
-        else:
-            return obj
-    elif isinstance(obj, dict):
-        res = {}
-        for k, v in obj.items():
-            res[k] = move_to(v, device, dtype, filter)
-        return res
-    elif isinstance(obj, list):
-        res = []
-        for v in obj:
-            res.append(move_to(v, device, dtype, filter))
-        return res
-    elif obj is None:
-        return obj
-    else:
-        raise TypeError(f"Invalid type {obj.__class__} for move_to.")
-
-
-def unsqueeze_tensors_in_dict(in_dict: Dict[str, Any], dim) -> Dict[str, Any]:
-    out_dict = {}
-    for k, v in in_dict.items():
-        if isinstance(v, torch.Tensor):
-            out_dict[k] = v.unsqueeze(dim)
-        elif isinstance(v, dict):
-            out_dict[k] = unsqueeze_tensors_in_dict(v, dim)
-        elif isinstance(v, list):
-            if dim == 0:
-                out_dict[k] = [v]
-            elif dim == 1:
-                out_dict[k] = [[vi] for vi in v]
-            else:
-                raise ValueError(
-                    f"cannot handle {k}:{v} ({v.__class__}) with dim={dim}")
-        elif v is None:
-            out_dict[k] = None
-        else:
-            raise TypeError(f"Unknow dtype for {k}:{v} ({v.__class__})")
-    return out_dict
-
-
-def stack_tensors_in_dicts(
-        dicts: List[Dict[str, Any]], dim, holder=None) -> Dict[str, Any]:
-    """stack any Tensor in list of dicts. If holder is provided, dicts will be
-    stacked ahead of holder tensor. Make sure no dict is changed in place.
-
-    Args:
-        dicts (List[Dict[str, Any]]): dicts to stack, without the desired dim.
-        dim (int): dim to add for stack.
-        holder (_type_, optional): dict to hold, with the desired dim. Defaults
-        to None. 
-
-    Raises:
-        TypeError: if the datatype for values are not Tensor or dict.
-
-    Returns:
-        Dict[str, Any]: stacked dict.
-    """
-    if len(dicts) == 1:
-        if holder is None:
-            return unsqueeze_tensors_in_dict(dicts[0], dim)
-        else:
-            this_dict = dicts[0]
-            final_dict = deepcopy(holder)
-    else:
-        this_dict = dicts[0]  # without dim
-        final_dict = stack_tensors_in_dicts(dicts[1:], dim)  # with dim
-    for k, v in final_dict.items():
-        if isinstance(v, torch.Tensor):
-            # for v in this_dict, we need to add dim before concat.
-            if this_dict[k].shape != v.shape[1:]:
-                print("Error")
-            final_dict[k] = torch.cat([this_dict[k].unsqueeze(dim), v], dim=dim)
-        elif isinstance(v, dict):
-            final_dict[k] = stack_tensors_in_dicts(
-                [this_dict[k]], dim, holder=v)
-        elif isinstance(v, list):
-            if dim == 0:
-                final_dict[k] = [this_dict[k]] + v
-            elif dim == 1:
-                final_dict[k] = [
-                    [this_vi] + vi for this_vi, vi in zip(this_dict[k], v)]
-            else:
-                raise ValueError(
-                    f"cannot handle {k}:{v} ({v.__class__}) with dim={dim}")
-        elif v is None:
-            assert final_dict[k] is None
-        else:
-            raise TypeError(f"Unknow dtype for {k}:{v} ({v.__class__})")
-    return final_dict
-
-
-def pad_bboxes_to_maxlen(
-        bbox_shape, max_len, bboxes=None, classes=None, masks=None, **kwargs):
-    # NOTE: our latest mask has 0: none, 1: use, -1: drop
-    B, N_out = bbox_shape[:2]  # only mask always has NC dim
-    ret_bboxes = torch.zeros(B, N_out, max_len, *bbox_shape[3:], dtype=torch.float32)
-    # we set unknown to -1. since we have mask, it does not matter.
-    ret_classes = -torch.ones(B, N_out, max_len, dtype=torch.int32)
-    ret_masks = torch.zeros(B, N_out, max_len, dtype=torch.int32)
-    if bboxes is not None:
-        for _b in range(B):
-            # box and classes
-            _bboxes = bboxes[_b]
-            _classes = classes[_b]
-            if len(_bboxes) == N_out:
-                for _n in range(N_out):
-                    if _bboxes[_n] is None:  # never happen
-                        continue  # empty for this view
-                    this_box_num = len(_bboxes[_n])
-                    ret_bboxes[_b, _n, :this_box_num] = _bboxes[_n]
-                    ret_classes[_b, _n, :this_box_num] = _classes[_n]
-                    if masks is not None:
-                        ret_masks[_b, _n, :this_box_num] = masks[_b, _n]
-                    else:
-                        ret_masks[_b, _n, :this_box_num] = 1
-            elif len(_bboxes) == 1:
-                this_box_num = len(_bboxes[0])
-                ret_bboxes[_b, :, :this_box_num] = _bboxes
-                ret_classes[_b, :, :this_box_num] = _classes
-                if masks is not None:
-                    ret_masks[_b, :, :this_box_num] = masks[_b]
-                else:
-                    ret_masks[_b, :, :this_box_num] = 1
-            else:
-                raise RuntimeError(f"Wrong bboxes shape: {bboxes.shape}")
-
-    # assemble as input format
-    ret_dict = {
-        "bboxes": ret_bboxes,
-        "classes": ret_classes,
-        "masks": ret_masks
-    }
-    return ret_dict
-
-
-def collate_bboxes_to_maxlen(bbox, device, dtype, NC, T) -> None or dict:
-    bbox_maxlen = 0
-    bbox_shape = [T, NC, None, 8, 3]  # TODO: hard-coded bbox shape
-    for bboxes_3d_data in bbox:  # loop over B
-        if bboxes_3d_data is not None:
-            mask_shape = bboxes_3d_data['masks'].shape
-            bbox_maxlen = max(bbox_maxlen, mask_shape[2])  # T, NC, len, ...
-    if bbox_maxlen == 0:
-        # return None
-        # HACK: training cannot take None bbox, we add one padding box
-        bbox_maxlen = 1
-    ret_dicts = []
-    for bboxes_3d_data in bbox:
-        bboxes_3d_data = {} if bboxes_3d_data is None else bboxes_3d_data
-        new_data = pad_bboxes_to_maxlen(
-            bbox_shape, bbox_maxlen, **bboxes_3d_data)  # treat T as B
-        ret_dicts.append(new_data)
-    ret = stack_tensors_in_dicts(ret_dicts, dim=0)  # add B dim
-    ret = move_to(ret, device, dtype)
-    return ret
 
 
 @RUNNER_REGISTER("mgcdr")
@@ -277,8 +36,9 @@ class MagicDriverRunner(DefaultRunner):
         self.dataset_class = CARLAVariableDataset
         self.dtype = torch.bfloat16
         self.save_fps = self.config.get("save_video_fps", 8)
-        self.num_sampling_steps = self.config.get("num_sampling_steps", 1)
+        self.num_sampling_steps = self.config.get("infer_steps", 1)
         self.num_timesteps = self.config.get("num_timesteps", 1000)
+        self.guidance_scale = self.config.get("guidance_scale",  2.0)
         
     def init_modules(self):
         self.model = self.load_transformer()
@@ -290,14 +50,22 @@ class MagicDriverRunner(DefaultRunner):
         return model
     
     def load_text_encoder(self):
-        text_encoder = T5EncoderModel_v1_1_xxl(
-            self.config
+        t5_path = self.config.get('t5_path')
+        model_max_length = self.config.get('t5_max_length', 300)
+        t5_config = {
+            'from_pretrained': t5_path,
+            'model_max_length': model_max_length,
+            'shardformer': True
+        }
+        text_encoder = T5Encoder(
+            **t5_config
         )
         text_encoders = [text_encoder]
         return text_encoders
     
     def load_vae(self):
-        vae_path = f'{self.config.get('vae_path')}'
+        # import pdb; pdb.set_trace()
+        vae_path = self.config.get('vae_path')
         vae_micro_frame_size = self.config.get('micro_frame_size', 32)
         vae_micro_batch_size = self.config.get('micro_batch_size', 1)
         vae_config = {
@@ -306,21 +74,27 @@ class MagicDriverRunner(DefaultRunner):
             'micro_frame_size': vae_micro_frame_size, 
             'micro_batch_size': vae_micro_batch_size
         }
+        # vae_config.update(additional_config)
         vae = VideoAutoencoderKLCogVideoX(
             **vae_config
         )
-        return vae
+        return vae.to('cuda', torch.bfloat16).eval()
     
     def run_text_encoder(self, text, neg_text):
+        self.text_encoders[0].t5.model.to('cuda')
+        # import pdb; pdb.set_trace()
         n = len(text)
-        text_encoder_output = {}
-        y, mask = self.text_encoders[0].infer([text], self.config, return_attention_mask=True)
-        text_encoder_output["y"] = y
+        # text_encoder_output = {}
+        # import pdb; pdb.set_trace()
+        text_encoder_output = self.text_encoders[0].encode(text)
+        # text_encoder_output['x_mask'] = text_encoder_output.pop('mask')
+        # text_encoder_output["y"] = y
         if neg_text is None:
-            text_encoder_output["y_null"] = self.model.pre_weight_class.y_embedder_y_embedding.tensor[None].repeat(n, 1, 1)[:, None].to(self.init_device)
+            text_encoder_output["y_null"] = self.model.pre_weight.y_embedder_y_embedding.tensor[None].repeat(n, 1, 1)[:, None].to(self.init_device)
         else:
-            text_encoder_output["y_null"] = self.text_encoders[0].infer([neg_text], self.config)
-        text_encoder_output["mask"] = mask
+            text_encoder_output["y_null"] = self.text_encoders[0].encode(neg_text)
+        # text_encoder_output["mask"] = mask
+        self.text_encoders[0].t5.model.to('cpu')
         return text_encoder_output
     
     def init_scheduler(self):
@@ -333,7 +107,24 @@ class MagicDriverRunner(DefaultRunner):
     def set_target_shape(self):
         pass
     
-    def save_video_func(self, video):
+    def save_video_func(self, samples):
+        sample = samples[0]
+        video_clips = []
+        vid_samples = []
+        pose_vis_i = rearrange(self.pose_vis[0], "T H W C -> T C H W")
+        if pose_vis_i.shape[-2:] != sample.shape[-2:]: # go
+            pose_vis_i = F.interpolate(pose_vis_i, size=sample.shape[-2:])
+        pose_vis_i = rearrange(pose_vis_i, "T C H W -> 1 C T H W")
+        sample = torch.cat([sample, pose_vis_i])
+        vid_samples.append(concat_n_views_pt(sample, oneline=False))
+        samples = torch.stack(vid_samples, dim=0)
+        video_clips.append(samples)
+        del vid_samples
+        del samples
+        
+        video = [video_clips][0][0]
+        video = torch.cat(video, dim=1)
+        
         save_sample(
             video,
             fps=self.save_fps, # 8
@@ -429,37 +220,38 @@ class MagicDriverRunner(DefaultRunner):
         return model_args
 
     def get_additional_inputs(self):
-        timesteps = [(1.0 - i / self.num_sampling_steps) * self.num_timesteps for i in range(self.num_sampling_steps)]      
+        timesteps = [(1.0 - i / self.num_sampling_steps) * self.num_timesteps for i in range(self.num_sampling_steps)]     
         dataset_params_json = self.config.get("dataset_params_json")
         with open(dataset_params_json, 'r') as file:
             dataset_args_dict = json.load(file)
-        cam_params_json = self.config.get("cam_params_json")
+        camera_params_json = self.config.get("camera_params_json")
         raw_meta_files = [self.config.get("raw_meta_files")]
-        scene_description_file = [self.config.get("scene_description_file")]
+        scene_description_file = self.config.get("scene_description_file")
         dataset_args_dict.update(
             {
-                "pap_cam_init_path": cam_params_json,
+                "pap_cam_init_path": camera_params_json,
                 "raw_meta_files": raw_meta_files,
                 "scene_description_file": scene_description_file
             }
         )
         self.dataset = self.dataset_class(**dataset_args_dict)
-        batch = self.dataset[0]
-        
+        batch = self.dataset['0-65-10']
+        batch["pixel_values"] = batch["pixel_values"].unsqueeze(0)
         B, T, NC = batch["pixel_values"].shape[:3]
+        self.B, self.T, self.NC = B, T, NC
         latent_size = self.vae.get_latent_size((T, *batch["pixel_values"].shape[-2:]))
         x = batch.pop("pixel_values").to(self.init_device, self.dtype)
         x = rearrange(x, "B T NC C ... -> (B NC) C T ...")
-        y = batch.pop("captions")[0]
-        maps = batch.pop("bev_map_with_aux").to(self.init_device, self.dtype)
-        bbox = batch.pop("bboxes_3d_data")
+        y = [batch.pop("captions")[0]]
+        maps = batch.pop("bev_map_with_aux").to(self.init_device, self.dtype).unsqueeze(0)
+        bbox = [batch.pop("bboxes_3d_data")]
         bbox = [bbox_i.data for bbox_i in bbox]
         bbox = collate_bboxes_to_maxlen(bbox, self.init_device, self.dtype, NC, T)
-        cams = batch.pop("camera_param").to(self.init_device, self.dtype)
+        cams = torch.tensor(batch.pop("camera_param")).to(self.init_device, self.dtype).unsqueeze(0)
         cams = rearrange(cams, "B T NC ... -> (B NC) T 1 ...")  # BxNC, T, 1, 3, 7
-        rel_pos = batch.pop("frame_emb").to(self.init_device, self.dtype)
+        rel_pos = torch.tensor(batch.pop("frame_emb")).to(self.init_device, self.dtype).unsqueeze(0)
         trans_scale = self.config.get("trans_scale", 1)
-        rel_pos, pose_vis = edit_pos(rel_pos, self.config.get("traj", None), trans_scale,
+        rel_pos, self.pose_vis = edit_pos(rel_pos, self.config.get("traj", None), trans_scale,
             edit_param1=self.config.get("traj_param1", None),
             edit_param2=self.config.get("traj_param2", None),
             edit_param3=self.config.get("traj_param3", None),
@@ -476,12 +268,12 @@ class MagicDriverRunner(DefaultRunner):
         model_args["bbox"] = bbox
         model_args["cams"] = cams
         model_args["rel_pos"] = rel_pos
-        model_args["fps"] = batch.pop('fps')
+        model_args["fps"] = torch.tensor([batch.pop('fps')])
         model_args['drop_cond_mask'] = torch.ones((B))  # camera
         model_args['drop_frame_mask'] = torch.ones((B, T))  # box & rel_pos
-        model_args["height"] = batch.pop("height")
-        model_args["width"] = batch.pop("width")
-        model_args["num_frames"] = batch.pop("num_frames")
+        model_args["height"] = torch.tensor([batch.pop("height")])
+        model_args["width"] = torch.tensor([batch.pop("width")])
+        model_args["num_frames"] = torch.tensor([batch.pop("num_frames")])
         model_args = move_to(model_args, device=self.init_device, dtype=self.dtype)
         # no need to move these
         model_args["mv_order_map"] = self.config.get(
@@ -497,7 +289,7 @@ class MagicDriverRunner(DefaultRunner):
             }
         )
         model_args["t_order_map"] = self.config.get("t_order_map", None)
-        
+        # import pdb; pdb.set_trace()
         bbox = self.add_box_latent(bbox, B, NC, T)
         new_bbox = {}
         for k, v in bbox.items():
@@ -508,16 +300,16 @@ class MagicDriverRunner(DefaultRunner):
         if mask is not None:
             noise_added = torch.zeros_like(mask, dtype=torch.bool)
             noise_added = noise_added | (mask == 1)
-        mask_t = mask * self.num_timesteps
-        x0 = z.clone()
-        x_noise = self.add_noise(x0, torch.randn_like(x0), timesteps)
-        mask_t_upper = mask_t >= timesteps.unsqueeze(1)
-        mask_add_noise = mask_t_upper & ~noise_added
-        z = torch.where(mask_add_noise[:, None, :, None, None], x_noise, x0)
-        noise_added = mask_t_upper
-        model_args["x_mask"] = mask_t_upper
+        # mask_t = mask * self.num_timesteps
+        # x0 = z.clone()
+        # x_noise = self.add_noise(x0, torch.randn_like(x0), timesteps)
+        # mask_t_upper = mask_t >= timesteps.unsqueeze(1)
+        # mask_add_noise = mask_t_upper & ~noise_added
+        # z = torch.where(mask_add_noise[:, None, :, None, None], x_noise, x0)
+        # noise_added = mask_t_upper
+        model_args["x_mask"] = mask
         model_args["x"] = z
-        model_args["timestep"] = timesteps
+        self.timesteps = [torch.tensor([t] * z.shape[0], device=self.init_device) for t in timesteps] 
         
         return prompts, neg_prompts, model_args
     
@@ -546,7 +338,7 @@ class MagicDriverRunner(DefaultRunner):
         
         # _bbox_latent = sample_func(B * max_len)
         _bbox_latent = torch.randn(
-            (B*max_len, self.config.get["hidden_size", 1152])
+            (B*max_len, self.config.get("hidden_size", 1152))
         ) 
         
         if _bbox_latent is not None:
@@ -557,49 +349,99 @@ class MagicDriverRunner(DefaultRunner):
         return bbox
     
     def run_input_encoder(self):
-        self.cond_inputs = {}
+        cond_inputs = {}
         prompts, neg_prompts, model_args = self.get_additional_inputs()
-        self.cond_inputs.update(model_args)
+        cond_inputs.update(model_args)
         text_encoder_outputs = self.run_text_encoder(prompts, neg_prompts)
+        # cond_y = text_encoder_outputs.pop('y')
         uncond_y = text_encoder_outputs.pop('y_null')
-        model_args.update(text_encoder_outputs)
-        self.uncond_inputs = copy.deepcopy(self.cond_inputs)
-        uncond_cam = self.model.pre_weight.camera_embedder_uncond_cam
-        uncond_rel_pos = self.model.pre_weight.frame_embedder_uncond_cam
-        self.uncond_inputs = self.replace_with_null_condition(self.uncond_inputs, uncond_cam, uncond_rel_pos, uncond_y, keys=["y", "bbox", "cams", "rel_pos", "maps"], append=False)
+        cond_inputs.update(text_encoder_outputs)
+        uncond_inputs = copy.deepcopy(cond_inputs)
+        uncond_cam = self.model.pre_weight.camera_embedder_uncond_cam.tensor
+        uncond_rel_pos = self.model.pre_weight.frame_embedder_uncond_cam.tensor
+        # import pdb; pdb.set_trace()
+        uncond_inputs = self.replace_with_null_condition(uncond_inputs, uncond_cam, uncond_rel_pos, uncond_y, keys=["y", "bbox", "cams", "rel_pos", "maps"], append=False)
+
+        self.cond_inputs = cond_inputs
+        self.uncond_inputs = uncond_inputs
+        self.model_args = model_args
         
     def run_vae_decoer(self, samples):
-        pass
-    
-    def set_model_args(self):
-        pass
+        samples = rearrange(samples, "B (C NC) T ... -> (B NC) C T ...", NC=self.NC)
+        num_frames = self.model_args["num_frames"]
+        del self.cond_inputs
+        del self.uncond_inputs
+        del self.model_args
+        del self.dataset
+        torch.cuda.empty_cache()
+        # self.vae.to('cuda')
+        import pdb; pdb.set_trace()
+        samples = self.vae.decode(samples.to(torch.bfloat16), num_frames=num_frames)
+        # self.vae.to('cpu')
+        samples = rearrange(samples, "(B NC) C T ... -> B NC C T ...", NC=self.NC)
+        # import pdb; pdb.set_trace()
+        return samples
     
     def run(self):
+        if self.cond_inputs['x_mask'] is not None:
+            noise_added = torch.zeros_like(self.cond_inputs['x_mask'], dtype=torch.bool)
+            noise_added = noise_added | (self.cond_inputs['x_mask'] == 1)
+            
         for step_index in range(self.model.scheduler.infer_steps):
             logger.info(f"==> step_index: {step_index + 1} / {self.model.scheduler.infer_steps}")
 
             with ProfilingContext4Debug("step_pre"):
                 self.model.scheduler.step_pre(step_index=step_index)
-
+            # import pdb; pdb.set_trace()
+            if self.cond_inputs['x_mask'] is not None:
+                mask_t = self.cond_inputs['x_mask'] * self.num_timesteps
+                x0 = self.cond_inputs['x'].clone()
+                x_noise = self.add_noise(x0, torch.randn_like(x0), self.timesteps[step_index])
+                mask_t_upper = mask_t >= self.timesteps[step_index].unsqueeze(1)
+                mask_add_noise = mask_t_upper & ~noise_added
+                z = torch.where(mask_add_noise[:, None, :, None, None], x_noise, x0)
+                self.cond_inputs['x'] = z
+                self.cond_inputs['timestep'] = self.timesteps[step_index]
+                self.uncond_inputs['x'] = z
+                self.uncond_inputs['timestep'] = self.timesteps[step_index]
+                noise_added = mask_t_upper
+            
             with ProfilingContext4Debug("cond infer"):
+                if self.cond_inputs['x_mask'] is not None:
+                    self.cond_inputs['x_mask'] = mask_t_upper
                 self.model.infer(self.cond_inputs)
                 
             with ProfilingContext4Debug("uncond infer"):
+                if self.uncond_inputs['x_mask'] is not None:
+                    self.uncond_inputs['x_mask'] = mask_t_upper
                 self.model.infer(self.uncond_inputs)
+
+            v_pred = self.uncond_inputs['x'] + self.guidance_scale * (self.cond_inputs['x'] - self.uncond_inputs['x'])
+            dt = self.timesteps[step_index] - self.timesteps[step_index + 1] if step_index < len(self.timesteps) - 1 else self.timesteps[step_index]
+            dt = dt / self.num_timesteps
+            z = z + v_pred * dt[:, None, None, None, None]
+            # import pdb; pdb.set_trace()
+            if self.cond_inputs['x_mask'] is not None and self.uncond_inputs['x_mask'] is not None:
+                z = torch.where(mask_t_upper[:, None, :, None, None], z, x0)
+                self.cond_inputs['x'] = z
+                self.uncond_inputs['x'] = z
 
             with ProfilingContext4Debug("step_post"):
                 self.model.scheduler.step_post()
+        
+        samples = self.cond_inputs['x']
+        return samples
     
     def run_dit(self):
         self.init_scheduler()
-        self.model.scheduler.prepare()
-        samples, generator = self.run()
-        return samples, generator
+        # self.model.scheduler.prepare()
+        samples = self.run()
+        return samples
     
     async def run_pipeline(self):
-        await self.run_input_encoder()
-        samples, generator = await self.run_dit()
-        samples = await self.run_vae_decoer(samples)
+        self.run_input_encoder()
+        samples = self.run_dit()
+        samples = self.run_vae_decoer(samples)
         self.save_video(samples)
         del samples, generator
         torch.cuda.empty_cache()

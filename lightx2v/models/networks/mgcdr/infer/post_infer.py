@@ -44,7 +44,7 @@ class MagicDrivePostInfer:
         return x
         
     def infer(self, weights: MagicDrivePostWeights, x, t, x_mask, t0, S, NC, T, H, W, Tx, Hx, Wx):
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         t = repeat(t, "b d -> (b NC) d", NC=NC)
         t0 = repeat(t0, "b d -> (b NC) d", NC=NC)
         shift, scale = (weights.final_layer_scale_shift_table.tensor[None] + t[:, None]).chunk(2, dim=1)  
@@ -57,7 +57,7 @@ class MagicDrivePostInfer:
         # x = x.reshape(-1, x_shape[-1])
         x = weights.final_layer_linear.apply(x)
         # x = x.reshape(x_shape[0], x_shape[1], -1)
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         x = self.unpatchify(x, T, H, W, Tx, Hx, Wx)
         x = rearrange(x, "(B NC) C T ... -> B (C NC) T ...", NC=NC)
         

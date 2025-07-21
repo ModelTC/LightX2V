@@ -36,7 +36,7 @@ class MagicDriveTransformerAttnBlock(WeightModule):
         
         self.add_module(
             'attn',
-            ATTN_WEIGHT_REGISTER[self.config['attention_type']]()
+            ATTN_WEIGHT_REGISTER['flash_attn2_base']()
         )
         self.add_module(
             'attn_xformers',

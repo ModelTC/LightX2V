@@ -1,4 +1,10 @@
 {
+  "task": "magicdrive",
+  "infer_steps": 1,
+  "seed": 12351,
+  "vae_path": "/kaiwu_vepfs/kaiwu/huangxinchi/drivescapedit/pretrained/CogVideoX-2b",
+  "t5_path": "/kaiwu_vepfs/kaiwu/huangxinchi/drivescapedit/pretrained/t5-v1_1-xxl",
+  "scene_description_file": ["/iag_ad_01/ad/xujin2/data/pap_pvb/caption_collect/zhiji.pkl"],
   "bbox_embedder_cls": "magicdrivedit.models.magicdrive.embedder.ContinuousBBoxWithTextTempEmbedding",
   "bbox_embedder_param": {
     "after_proj": true,

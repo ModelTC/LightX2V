@@ -9,15 +9,15 @@ from lightx2v.models.networks.mgcdr.weights.pre_weights import MagicDrivePreWeig
 from lightx2v.models.networks.mgcdr.weights.post_weights import MagicDrivePostWeights
 
 
-class ModelInputs(BaseModel):
-    y: torch.Tensor
-    mask: torch.Tensor
-    maps: torch.Tensor
-    bbox: torch.Tensor
-    cams: torch.Tensor
-    rel_pos: torch.Tensor
-    fps: torch.Tensor
-    drop_cond_mask: torch.Tensor
+# class ModelInputs(BaseModel):
+#     y: torch.Tensor
+#     mask: torch.Tensor
+#     maps: torch.Tensor
+#     bbox: torch.Tensor
+#     cams: torch.Tensor
+#     rel_pos: torch.Tensor
+#     fps: torch.Tensor
+#     drop_cond_mask: torch.Tensor
 
 
 class MagicDriveModel:
@@ -32,6 +32,7 @@ class MagicDriveModel:
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+        # self.set_scheduler()
         
     def _init_infer_class(self):
         self.pre_infer_class = MagicDrivePreInfer
@@ -67,8 +68,10 @@ class MagicDriveModel:
         
     @torch.no_grad()
     def infer(self, inputs: dict):
-        x, y, c, t, t_mlp, y_lens, x_mask, t0, t0_mlp, T, H, W, S, NC, Tx, Hx, Wx, mv_order_map  = self.pre_infer.infer(self.pre_weights, **inputs)
+        # import pdb; pdb.set_trace()
+        x, y, c, t, t_mlp, y_lens, x_mask, t0, t0_mlp, T, H, W, S, NC, Tx, Hx, Wx, mv_order_map  = self.pre_infer.infer(self.pre_weight, **inputs)
         x = self.transformer_infer.infer(self.transformer_weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map)
         x = self.post_infer.infer(self.post_weight, x, t, x_mask, t0, S, NC, T, H, W, Tx, Hx, Wx)
-        return x
+        inputs['x'] = x
+        # return x
         

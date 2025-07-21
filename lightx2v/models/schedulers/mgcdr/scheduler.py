@@ -8,8 +8,8 @@ class MagicDriverScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.device = torch.device("cuda")
-        self.infer_steps = self.config.infer_steps
-        self.target_video_length = self.config.target_video_length
+        self.infer_steps = self.config.get("infer_steps", 30)
+        # self.target_video_length = self.config.get("target_video_length")
         self.num_timesteps = self.config.get("num_timesteps", 1000)
         self.noise_added = None
     
@@ -27,16 +27,16 @@ class MagicDriverScheduler(BaseScheduler):
         self.generator = torch.Generator(device=self.device)
         self.generator.manual_seed(self.config.seed)
         self.prepare_latents(self.config.target_shape, dtype=torch.bfloat16)
-        self.set_timesteps(self.infer_steps, device=self.device)
+        # self.set_timesteps(self.infer_steps, device=self.device)
         
-    def set_timesteps(
-        self,
-        infer_steps: Union[int, None] = None,
-        device: Union[str, torch.device] = None,
-    ):
-        timesteps = [(1.0 - i / infer_steps) * self.num_timesteps for i in range(infer_steps)]
-        timesteps = [torch.tensor([t] * z.shape[0], device=device) for t in timesteps]
-        self.timesteps = timesteps
+    # def set_timesteps(
+    #     self,
+    #     infer_steps: Union[int, None] = None,
+    #     device: Union[str, torch.device] = None,
+    # ):
+    #     timesteps = [(1.0 - i / infer_steps) * self.num_timesteps for i in range(infer_steps)]
+    #     timesteps = [torch.tensor([t] * z.shape[0], device=device) for t in timesteps]
+    #     self.timesteps = timesteps
 
     def add_noise(self, original_samples: torch.FloatTensor, noise: torch.FloatTensor, timesteps: torch.IntTensor) -> torch.FloatTensor:
         timepoints = timesteps.float() / self.num_timesteps
@@ -60,6 +60,9 @@ class MagicDriverScheduler(BaseScheduler):
     #     mask_add_noise = mask_t_upper & ~self.noise_added # all False
     #     self.latents = torch.where(mask_add_noise[:, None, :, None, None], latents_noise, self.ori_latents)
     #     self.noise_added = mask_t_upper
+    
+    def step_pre(self, step_index):
+        self.step_index = step_index
         
     def step_post(self, ):
         pass

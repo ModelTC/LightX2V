@@ -402,7 +402,7 @@ class MagicDriveTransformerInfer:
             )
             x = x + c_skip
             # import pdb; pdb.set_trace()
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         for block_idx in range(self.control_blocks_num, self.blocks_num):
             x = self.infer_block(
                 weights.base_blocks_s_list[block_idx],
@@ -438,5 +438,5 @@ class MagicDriveTransformerInfer:
                 temporal=True,
                 is_control_block=False
             )
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         return x
