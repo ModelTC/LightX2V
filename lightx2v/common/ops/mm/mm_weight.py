@@ -26,7 +26,7 @@ except ImportError:
     deep_gemm = None
 
 try:
-    from torch.ao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
+    from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
 except ModuleNotFoundError:
     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
