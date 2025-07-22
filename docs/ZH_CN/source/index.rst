@@ -52,6 +52,7 @@ HuggingFace: https://huggingface.co/lightx2v
    变分辨率推理 <method_tutorials/changing_resolution.md>
    步数蒸馏 <method_tutorials/step_distill.md>
    自回归蒸馏 <method_tutorials/autoregressive_distill.md>
+   视频帧插值 <method_tutorials/video_frame_interpolation.md>
 
 .. toctree::
    :maxdepth: 1

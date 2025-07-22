@@ -1,0 +1,20 @@
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "seed": 42,
+    "sample_guide_scale": 6,
+    "sample_shift": 8,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 24,
+        "model_path": "/path to flownet.pkl"
+    }
+}
