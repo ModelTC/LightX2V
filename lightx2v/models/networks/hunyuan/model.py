@@ -7,8 +7,12 @@ from lightx2v.models.networks.hunyuan.weights.transformer_weights import Hunyuan
 from lightx2v.models.networks.hunyuan.infer.pre_infer import HunyuanPreInfer
 from lightx2v.models.networks.hunyuan.infer.post_infer import HunyuanPostInfer
 from lightx2v.models.networks.hunyuan.infer.transformer_infer import HunyuanTransformerInfer
-from lightx2v.models.networks.hunyuan.infer.feature_caching.transformer_infer import HunyuanTransformerInferTaylorCaching, HunyuanTransformerInferTeaCaching
-
+from lightx2v.models.networks.hunyuan.infer.feature_caching.transformer_infer import (
+    HunyuanTransformerInferTaylorCaching,
+    HunyuanTransformerInferTeaCaching,
+    HunyuanTransformerInferAdaCaching,
+    HunyuanTransformerInferCustomCaching,
+)
 import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
 import lightx2v.attentions.distributed.ring.wrap as ring_dist_wrap
 from lightx2v.utils.envs import *
@@ -156,10 +160,6 @@ class HunyuanModel:
         if self.config["cpu_offload"]:
             self.pre_weight.to_cpu()
             self.post_weight.to_cpu()
-        if self.config["feature_caching"] == "Tea":
-            self.scheduler.cnt += 1
-            if self.scheduler.cnt == self.scheduler.num_steps:
-                self.scheduler.cnt = 0
 
     def _init_infer_class(self):
         self.pre_infer_class = HunyuanPreInfer
@@ -170,5 +170,9 @@ class HunyuanModel:
             self.transformer_infer_class = HunyuanTransformerInferTaylorCaching
         elif self.config["feature_caching"] == "Tea":
             self.transformer_infer_class = HunyuanTransformerInferTeaCaching
+        elif self.config["feature_caching"] == "Ada":
+            self.transformer_infer_class = HunyuanTransformerInferAdaCaching
+        elif self.config["feature_caching"] == "Custom":
+            self.transformer_infer_class = HunyuanTransformerInferCustomCaching
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")

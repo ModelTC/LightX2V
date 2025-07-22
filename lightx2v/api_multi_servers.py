@@ -82,7 +82,7 @@ def start_server(config: ServerConfig) -> Optional[tuple[subprocess.Popen, str]]
 
         # Wait for server to start, up to 600 seconds
         node_ip = get_node_ip()
-        service_url = f"http://{node_ip}:{config.port}/v1/local/video/generate/service_status"
+        service_url = f"http://{node_ip}:{config.port}/v1/service/status"
 
         # Check once per second, up to 600 times
         for _ in range(600):
@@ -149,14 +149,14 @@ def main():
                 logger.error(f"Error occurred while starting server: {e}")
 
     # Print all server URLs
-    print("\nAll server URLs:")
+    logger.info("\nAll server URLs:")
     for url in urls:
-        print(url)
+        logger.info(url)
 
     # Print node information
     node_ip = get_node_ip()
-    print(f"\nCurrent node IP: {node_ip}")
-    print(f"Number of servers started: {len(urls)}")
+    logger.info(f"\nCurrent node IP: {node_ip}")
+    logger.info(f"Number of servers started: {len(urls)}")
 
     try:
         # Wait for all processes

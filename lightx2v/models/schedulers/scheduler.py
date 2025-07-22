@@ -7,7 +7,10 @@ class BaseScheduler:
         self.config = config
         self.step_index = 0
         self.latents = None
+        self.infer_steps = config.infer_steps
+        self.caching_records = [True] * config.infer_steps
         self.flag_df = False
+        self.transformer_infer = None
 
     def step_pre(self, step_index):
         self.step_index = step_index

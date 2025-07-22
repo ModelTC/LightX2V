@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import torch
+import gc
 from typing import List, Optional, Tuple, Union
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
@@ -18,16 +19,13 @@ class WanScheduler(BaseScheduler):
         self.solver_order = 2
         self.noise_pred = None
 
+        self.caching_records_2 = [True] * self.config.infer_steps
+
     def prepare(self, image_encoder_output=None):
         self.generator = torch.Generator(device=self.device)
         self.generator.manual_seed(self.config.seed)
 
         self.prepare_latents(self.config.target_shape, dtype=torch.float32)
-
-        if self.config.task in ["t2v"]:
-            self.seq_len = math.ceil((self.config.target_shape[2] * self.config.target_shape[3]) / (self.config.patch_size[1] * self.config.patch_size[2]) * self.config.target_shape[1])
-        elif self.config.task in ["i2v"]:
-            self.seq_len = ((self.config.target_video_length - 1) // self.config.vae_stride[0] + 1) * self.config.lat_h * self.config.lat_w // (self.config.patch_size[1] * self.config.patch_size[2])
 
         alphas = np.linspace(1, 1 / self.num_train_timesteps, self.num_train_timesteps)[::-1].copy()
         sigmas = 1.0 - alphas
@@ -112,6 +110,17 @@ class WanScheduler(BaseScheduler):
         sigma_t = self.sigmas[self.step_index]
         x0_pred = sample - sigma_t * model_output
         return x0_pred
+
+    def reset(self):
+        self.model_outputs = [None] * self.solver_order
+        self.timestep_list = [None] * self.solver_order
+        self.last_sample = None
+        self.noise_pred = None
+        self.this_order = None
+        self.lower_order_nums = 0
+        self.prepare_latents(self.config.target_shape, dtype=torch.float32)
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def multistep_uni_p_bh_update(
         self,

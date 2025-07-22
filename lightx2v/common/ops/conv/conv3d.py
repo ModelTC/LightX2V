@@ -66,3 +66,10 @@ class Conv3dWeight(Conv3dWeightTemplate):
         if self.bias is not None:
             destination[self.bias_name] = self.bias.cpu().detach().clone()
         return destination
+
+    def clear(self):
+        attrs = ["weight", "bias", "pinned_weight", "pinned_bias"]
+        for attr in attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+                setattr(self, attr, None)

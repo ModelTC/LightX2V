@@ -5,33 +5,48 @@ from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 class WanScheduler4ChangingResolution(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.resolution_rate = config.get("resolution_rate", 0.75)
-        self.changing_resolution_steps = config.get("changing_resolution_steps", config.infer_steps // 2)
+        if "resolution_rate" not in config:
+            config["resolution_rate"] = [0.75]
+        if "changing_resolution_steps" not in config:
+            config["changing_resolution_steps"] = [config.infer_steps // 2]
+        assert len(config["resolution_rate"]) == len(config["changing_resolution_steps"])
 
     def prepare_latents(self, target_shape, dtype=torch.float32):
-        self.latents = torch.randn(
-            target_shape[0],
-            target_shape[1],
-            int(target_shape[2] * self.resolution_rate) // 2 * 2,
-            int(target_shape[3] * self.resolution_rate) // 2 * 2,
-            dtype=dtype,
-            device=self.device,
-            generator=self.generator,
+        self.latents_list = []
+        for i in range(len(self.config["resolution_rate"])):
+            self.latents_list.append(
+                torch.randn(
+                    target_shape[0],
+                    target_shape[1],
+                    int(target_shape[2] * self.config["resolution_rate"][i]) // 2 * 2,
+                    int(target_shape[3] * self.config["resolution_rate"][i]) // 2 * 2,
+                    dtype=dtype,
+                    device=self.device,
+                    generator=self.generator,
+                )
+            )
+
+        # add original resolution latents
+        self.latents_list.append(
+            torch.randn(
+                target_shape[0],
+                target_shape[1],
+                target_shape[2],
+                target_shape[3],
+                dtype=dtype,
+                device=self.device,
+                generator=self.generator,
+            )
         )
 
-        self.noise_original_resolution = torch.randn(
-            target_shape[0],
-            target_shape[1],
-            target_shape[2],
-            target_shape[3],
-            dtype=dtype,
-            device=self.device,
-            generator=self.generator,
-        )
+        # set initial latents
+        self.latents = self.latents_list[0]
+        self.changing_resolution_index = 0
 
     def step_post(self):
-        if self.step_index == self.changing_resolution_steps:
+        if self.step_index + 1 in self.config["changing_resolution_steps"]:
             self.step_post_upsample()
+            self.changing_resolution_index += 1
         else:
             super().step_post()
 
@@ -45,19 +60,21 @@ class WanScheduler4ChangingResolution(WanScheduler):
 
         # 2. upsample clean noise to target shape
         denoised_sample_5d = denoised_sample.unsqueeze(0)  # (C,T,H,W) -> (1,C,T,H,W)
-        clean_noise = torch.nn.functional.interpolate(denoised_sample_5d, size=(self.config.target_shape[1], self.config.target_shape[2], self.config.target_shape[3]), mode="trilinear")
+
+        shape_to_upsampled = self.latents_list[self.changing_resolution_index + 1].shape[1:]
+        clean_noise = torch.nn.functional.interpolate(denoised_sample_5d, size=shape_to_upsampled, mode="trilinear")
         clean_noise = clean_noise.squeeze(0)  # (1,C,T,H,W) -> (C,T,H,W)
 
         # 3. add noise to clean noise
-        noisy_sample = self.add_noise(clean_noise, self.noise_original_resolution, self.timesteps[self.step_index + 1])
+        noisy_sample = self.add_noise(clean_noise, self.latents_list[self.changing_resolution_index + 1], self.timesteps[self.step_index + 1])
 
         # 4. update latents
         self.latents = noisy_sample
 
         # self.disable_corrector = [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37] # maybe not needed
 
-        # 5. update timesteps using shift + 2 更激进的去噪
-        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift + 2)
+        # 5. update timesteps using shift + self.changing_resolution_index + 1 更激进的去噪
+        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift + self.changing_resolution_index + 1)
 
     def add_noise(self, original_samples, noise, timesteps):
         sigma = self.sigmas[self.step_index]

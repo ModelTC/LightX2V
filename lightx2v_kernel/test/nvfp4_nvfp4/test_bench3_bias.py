@@ -1,5 +1,4 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp4_quant, cutlass_scaled_fp4_mm
 import time
 from test_bench2 import MMWeightFp4
 
@@ -8,7 +7,7 @@ def test_speed(m, k, n):
     with torch.no_grad():
         input_tensor = torch.randn(m, k, dtype=torch.bfloat16).cuda()
         weight = torch.randn(n, k, dtype=torch.bfloat16, device="cuda")
-        bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
+        bias = torch.ones(1, n, dtype=torch.bfloat16).cuda() * 50
 
         mm = MMWeightFp4(weight, bias)
 
@@ -53,7 +52,7 @@ def test_accuracy(m, k, n):
     with torch.no_grad():
         input_tensor = torch.randn(m, k, dtype=torch.bfloat16).cuda()
         weight = torch.randn(n, k, dtype=torch.bfloat16, device="cuda")
-        bias = torch.randn(1, n, dtype=torch.bfloat16).cuda()
+        bias = torch.ones(1, n, dtype=torch.bfloat16).cuda() * 50
 
         linear = torch.nn.Linear(k, n, bias=True).cuda()
         linear.weight.data = weight

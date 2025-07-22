@@ -1,7 +1,7 @@
 import unittest
 import torch
 from lightx2v_kernel.gemm import cutlass_scaled_mxfp8_mm
-from lightx2v_kernel.gemm import scaled_fp8_quant
+from lightx2v_kernel.gemm import scaled_mxfp8_quant
 from torch.nn.functional import linear
 from lightx2v_kernel.utils import error, benchmark
 
@@ -22,15 +22,17 @@ class TestQuantBF162MXFP8(unittest.TestCase):
                 for n in self.channels:
                     with self.subTest(shape=[m, k, n]):
                         activation = torch.randn(m, k, dtype=self.dtype, device=self.device)
-                        activation_quant_pred, activation_scale_pred = scaled_fp8_quant(activation)
+                        activation_quant_pred, activation_scale_pred = scaled_mxfp8_quant(activation)
 
                         weight = torch.randn(n, k, dtype=self.dtype, device=self.device)
-                        weight_quant_pred, weight_scale_pred = scaled_fp8_quant(weight)
+                        weight_quant_pred, weight_scale_pred = scaled_mxfp8_quant(weight)
+
+                        bias = torch.rand(1, n, dtype=self.dtype, device=self.device) * 10
 
                         alpha = torch.tensor(1.0, device=self.device, dtype=torch.float32)
-                        mm_pred = cutlass_scaled_mxfp8_mm(activation_quant_pred, weight_quant_pred, activation_scale_pred, weight_scale_pred, alpha=alpha)
+                        mm_pred = cutlass_scaled_mxfp8_mm(activation_quant_pred, weight_quant_pred, activation_scale_pred, weight_scale_pred, alpha=alpha, bias=bias)
 
-                        mm_real = linear(activation, weight, bias=None).to(torch.bfloat16)
+                        mm_real = linear(activation, weight, bias=bias).to(torch.bfloat16)
 
                         self.assertTrue(error(mm_pred, mm_real) < 1e-2, f"Accuracy test failed for shape {m, k, n}: Error {error(mm_pred, mm_real)} exceeds threshold.")
 
@@ -42,7 +44,7 @@ class TestQuantBF162MXFP8(unittest.TestCase):
                     input = torch.randn(m, k, dtype=self.dtype, device=self.device)
                     shape = [m, k]
                     tflops = 2 * (m * k / 1024**4)
-                    benchmark(scaled_fp8_quant, shape, tflops, 100, input)
+                    benchmark(scaled_mxfp8_quant, shape, tflops, 100, input)
 
 
 if __name__ == "__main__":

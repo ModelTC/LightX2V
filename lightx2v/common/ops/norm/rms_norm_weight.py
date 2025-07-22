@@ -23,7 +23,11 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
 
     def clear(self):
-        del self.weight
+        attrs = ["weight", "pinned_weight"]
+        for attr in attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+                setattr(self, attr, None)
 
     @abstractmethod
     def apply(self, input_tensor):

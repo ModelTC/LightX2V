@@ -142,6 +142,18 @@ def is_fp8_supported_gpu():
     return (major == 8 and minor == 9) or (major >= 9)
 
 
+def is_ada_architecture_gpu():
+    if not torch.cuda.is_available():
+        return False
+    try:
+        gpu_name = torch.cuda.get_device_name(0).upper()
+        ada_keywords = ["RTX 40", "RTX40", "4090", "4080", "4070", "4060"]
+        return any(keyword in gpu_name for keyword in ada_keywords)
+    except Exception as e:
+        logger.warning(f"Failed to get GPU name: {e}")
+        return False
+
+
 global_runner = None
 current_config = None
 cur_dit_quant_scheme = None
@@ -343,6 +355,8 @@ def run_inference(
                 mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Sgl"
         elif quant_op == "q8f":
             mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Q8F"
+            t5_quant_scheme = f"{t5_quant_scheme}-q8f"
+            clip_quant_scheme = f"{clip_quant_scheme}-q8f"
 
         dit_quantized_ckpt = os.path.join(model_path, dit_quant_scheme)
         if os.path.exists(os.path.join(dit_quantized_ckpt, "config.json")):
@@ -389,7 +403,7 @@ def run_inference(
         "clip_quantized_ckpt": clip_quant_ckpt,
         "clip_quant_scheme": clip_quant_scheme,
         "use_tiling_vae": use_tiling_vae,
-        "tiny_vae": use_tiny_vae,
+        "use_tiny_vae": use_tiny_vae,
         "tiny_vae_path": (os.path.join(model_path, "taew2_1.pth") if use_tiny_vae else None),
         "lazy_load": lazy_load,
         "do_mm_calib": False,
@@ -405,6 +419,7 @@ def run_inference(
         "rotary_chunk": rotary_chunk,
         "rotary_chunk_size": rotary_chunk_size,
         "clean_cuda_cache": clean_cuda_cache,
+        "denoising_step_list": [1000, 750, 500, 250],
     }
 
     args = argparse.Namespace(
@@ -420,7 +435,6 @@ def run_inference(
 
     config.update({k: v for k, v in vars(args).items()})
     config = EasyDict(config)
-    config["mode"] = "infer"
     config.update(model_config)
     config.update(quant_model_config)
 
@@ -508,7 +522,11 @@ def auto_configure(enable_auto_config, resolution):
         quant_type = "int8"
 
     attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
-    quant_op_priority = ["sgl", "vllm", "q8f"]
+
+    if is_ada_architecture_gpu():
+        quant_op_priority = ["q8f", "vllm", "sgl"]
+    else:
+        quant_op_priority = ["sgl", "vllm", "q8f"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -738,6 +756,30 @@ def main():
         .warning { color: #ff6b6b; font-weight: bold; }
         .advanced-options { background: #f9f9ff; border-radius: 10px; padding: 15px; }
         .tab-button { font-size: 16px; padding: 10px 20px; }
+        .auto-config-title {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            text-align: center;
+            margin: 0 !important;
+            padding: 8px;
+            border: 2px solid #4ecdc4;
+            border-radius: 8px;
+            background-color: #f0f8ff;
+        }
+        .auto-config-checkbox {
+            border: 2px solid #ff6b6b !important;
+            border-radius: 8px !important;
+            padding: 10px !important;
+            background: linear-gradient(135deg, #fff5f5, #f0fff0) !important;
+            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.2) !important;
+        }
+        .auto-config-checkbox label {
+            font-size: 16px !important;
+            font-weight: bold !important;
+            color: #2c3e50 !important;
+        }
     """,
     ) as demo:
         gr.Markdown(f"# 🎬 {model_cls} 视频生成器")
@@ -802,9 +844,14 @@ def main():
                                     )
 
                                 with gr.Column():
-                                    enable_auto_config = gr.Checkbox(
-                                        label="自动配置推理选项", value=False, info="自动优化GPU设置以匹配当前分辨率。修改分辨率后，请重新勾选此选项，否则可能导致性能下降或运行失败。"
-                                    )
+                                    with gr.Group():
+                                        gr.Markdown("### 🚀 **智能配置推荐**", elem_classes=["auto-config-title"])
+                                        enable_auto_config = gr.Checkbox(
+                                            label="🎯 **自动配置推理选项**",
+                                            value=False,
+                                            info="💡 **智能优化GPU设置以匹配当前分辨率。修改分辨率后，请重新勾选此选项，否则可能导致性能下降或运行失败。**",
+                                            elem_classes=["auto-config-checkbox"],
+                                        )
                                 with gr.Column(scale=9):
                                     seed = gr.Slider(
                                         label="随机种子",
@@ -819,18 +866,22 @@ def main():
                                 randomize_btn.click(fn=generate_random_seed, inputs=None, outputs=seed)
 
                                 with gr.Column():
+                                    # 根据模型类别设置默认推理步数
+                                    default_infer_steps = 4 if model_cls == "wan2.1_distill" else 40
                                     infer_steps = gr.Slider(
                                         label="推理步数",
                                         minimum=1,
                                         maximum=100,
                                         step=1,
-                                        value=40,
+                                        value=default_infer_steps,
                                         info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
                                     )
 
+                            # 根据模型类别设置默认CFG
+                            default_enable_cfg = False if model_cls == "wan2.1_distill" else True
                             enable_cfg = gr.Checkbox(
                                 label="启用无分类器引导",
-                                value=True,
+                                value=default_enable_cfg,
                                 info="启用无分类器引导以控制提示词强度",
                             )
                             cfg_scale = gr.Slider(
@@ -1148,7 +1199,7 @@ def main():
                 outputs=output_video,
             )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name)
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True)
 
 
 if __name__ == "__main__":
@@ -1157,9 +1208,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_cls",
         type=str,
-        choices=["wan2.1"],
+        choices=["wan2.1", "wan2.1_distill"],
         default="wan2.1",
-        help="要使用的模型类别",
+        help="要使用的模型类别 (wan2.1: 标准模型, wan2.1_distill: 蒸馏模型，推理更快)",
     )
     parser.add_argument("--model_size", type=str, required=True, choices=["14b", "1.3b"], help="模型大小：14b 或 1.3b")
     parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="指定任务类型。'i2v'用于图像到视频转换，'t2v'用于文本到视频生成。")

@@ -17,8 +17,7 @@ def get_default_config():
         "teacache_thresh": 0.26,
         "use_ret_steps": False,
         "use_bfloat16": True,
-        "lora_path": None,
-        "strength_model": 1.0,
+        "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
         "mm_config": {},
         "use_prompt_enhancer": False,
     }
@@ -38,6 +37,13 @@ def set_config(args):
         with open(os.path.join(config.model_path, "config.json"), "r") as f:
             model_config = json.load(f)
         config.update(model_config)
+
+    if config.get("dit_quantized_ckpt", None) is not None:
+        config_path = os.path.join(config.dit_quantized_ckpt, "config.json")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
 
     if config.task == "i2v":
         if config.target_video_length % config.vae_stride[0] != 1:

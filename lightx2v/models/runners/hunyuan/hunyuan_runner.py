@@ -6,7 +6,7 @@ from PIL import Image
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan.scheduler import HunyuanScheduler
-from lightx2v.models.schedulers.hunyuan.feature_caching.scheduler import HunyuanSchedulerTaylorCaching, HunyuanSchedulerTeaCaching
+from lightx2v.models.schedulers.hunyuan.feature_caching.scheduler import HunyuanSchedulerTaylorCaching, HunyuanSchedulerTeaCaching, HunyuanSchedulerAdaCaching, HunyuanSchedulerCustomCaching
 from lightx2v.models.input_encoders.hf.llama.model import TextEncoderHFLlamaModel
 from lightx2v.models.input_encoders.hf.clip.model import TextEncoderHFClipModel
 from lightx2v.models.input_encoders.hf.llava.model import TextEncoderHFLlavaModel
@@ -47,6 +47,10 @@ class HunyuanRunner(DefaultRunner):
             scheduler = HunyuanSchedulerTeaCaching(self.config)
         elif self.config.feature_caching == "TaylorSeer":
             scheduler = HunyuanSchedulerTaylorCaching(self.config)
+        elif self.config.feature_caching == "Ada":
+            scheduler = HunyuanSchedulerAdaCaching(self.config)
+        elif self.config.feature_caching == "Custom":
+            scheduler = HunyuanSchedulerCustomCaching(self.config)
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
         self.model.set_scheduler(scheduler)

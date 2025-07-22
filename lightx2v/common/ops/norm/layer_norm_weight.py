@@ -28,14 +28,18 @@ class LNWeightTemplate(metaclass=ABCMeta):
                 self.bias = None
 
     def _calculate_size(self):
+        if self.weight is None:
+            return 0
         if self.bias is not None:
             return self.weight.numel() * self.weight.element_size() + self.bias.numel() * self.bias.element_size()
         return self.weight.numel() * self.weight.element_size()
 
     def clear(self):
-        del self.weight
-        if self.bias is not None:
-            del self.bias
+        attrs = ["weight", "bias", "pinned_weight", "pinned_bias"]
+        for attr in attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+                setattr(self, attr, None)
 
     @abstractmethod
     def apply(self, input_tensor):
@@ -106,43 +110,3 @@ class LNWeight(LNWeightTemplate):
         else:
             input_tensor = torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), self.weight, self.bias, self.eps)
         return input_tensor
-    
-
-@LN_WEIGHT_REGISTER("Apex")
-class LNWeight(LNWeightTemplate):
-    def __init__(self, weight_name=None, bias_name=None, lazy_load=False, lazy_load_file=None, eps=1e-6):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file, eps)
-
-    def load_from_disk(self):
-        if self.weight_name is not None:
-            if not torch._dynamo.is_compiling():
-                self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(torch.bfloat16).pin_memory()
-            else:
-                self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(torch.bfloat16)
-        else:
-            self.weight = None
-
-        if self.bias_name is not None:
-            if not torch._dynamo.is_compiling():
-                self.bias = self.lazy_load_file.get_tensor(self.bias_name).to(torch.bfloat16).pin_memory()
-            else:
-                self.bias = self.lazy_load_file.get_tensor(self.bias_name).to(torch.bfloat16)
-        else:
-            self.bias = None
-
-    def apply(self, input_tensor, elementwise_affine=False):
-        if elementwise_affine:
-            return fused_layer_norm_affine(input_tensor, self.weight, self.bias, (input_tensor.shape[-1],), self.eps)
-        else:
-            return fused_layer_norm(input_tensor, (input_tensor.shape[-1],), self.eps)
-        # if GET_DTYPE() != "BF16":
-        #     input_tensor = torch.nn.functional.layer_norm(
-        #         input_tensor.float(),
-        #         (input_tensor.shape[-1],),
-        #         self.weight,
-        #         self.bias,
-        #         self.eps,
-        #     ).to(torch.bfloat16)
-        # else:
-        #     input_tensor = torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), self.weight, self.bias, self.eps)
-        # return input_tensor

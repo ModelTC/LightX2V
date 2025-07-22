@@ -5,12 +5,13 @@
 ###  ViGen-DiT Project Url: https://github.com/yl-1993/ViGen-DiT
 ###
 import torch
-from safetensors.torch import save_file
 import sys
 import os
+from safetensors.torch import save_file
+from safetensors.torch import load_file
 
 if len(sys.argv) != 3:
-    print("用法: python convert_lora.py <输入文件.pt> <输出文件.safetensors>")
+    print("用法: python convert_lora.py <输入文件> <输出文件.safetensors>")
     sys.exit(1)
 
 ckpt_path = sys.argv[1]
@@ -20,7 +21,10 @@ if not os.path.exists(ckpt_path):
     print(f"❌ 输入文件不存在: {ckpt_path}")
     sys.exit(1)
 
-state_dict = torch.load(ckpt_path, map_location="cpu")
+if ckpt_path.endswith(".safetensors"):
+    state_dict = load_file(ckpt_path)
+else:
+    state_dict = torch.load(ckpt_path, map_location="cpu")
 
 if "state_dict" in state_dict:
     state_dict = state_dict["state_dict"]

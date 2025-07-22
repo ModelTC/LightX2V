@@ -1,0 +1,29 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 81,
+    "target_height": 480, // 720
+    "target_width": 832, // 1280
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "seed": 42, //1234
+    "sample_guide_scale": 5,
+    "sample_shift": 5,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "mm_config": {
+        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl-ActVllm"
+    },
+    "feature_caching": "Tea",
+    "coefficients": [
+        [2.57151496e05, -3.54229917e04, 1.40286849e03, -1.35890334e01, 1.32517977e-01],
+        [-3.02331670e02, 2.23948934e02, -5.25463970e01, 5.87348440e00, -2.01973289e-01]
+    ],
+    //  "coefficients": [
+    // [8.10705460e03, 2.13393892e03, -3.72934672e02, 1.66203073e01, -4.17769401e-02],
+    // [-114.36346466, 65.26524496, -18.82220707, 4.91518089, -0.23412683]
+    // ],
+    "use_ret_steps": false,
+    "teacache_thresh": 0.2,
+    "use_tiling_vae": true
+}

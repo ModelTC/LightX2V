@@ -3,132 +3,121 @@ from loguru import logger
 import random
 import string
 import time
+import threading
 from datetime import datetime
+from tqdm import tqdm
 
 
-# same as lightx2v/utils/generate_task_id.py
-# from lightx2v.utils.generate_task_id import generate_task_id
-def generate_task_id():
-    """
-    Generate a random task ID in the format XXXX-XXXX-XXXX-XXXX-XXXX.
-    Features:
-    1. Does not modify the global random state.
-    2. Each X is an uppercase letter or digit (0-9).
-    3. Combines time factors to ensure high randomness.
-    For example: N1PQ-PRM5-N1BN-Z3S1-BGBJ
-    """
-    # Save the current random state (does not affect external randomness)
-    original_state = random.getstate()
-
+def send_and_monitor_task(url, message, task_index, complete_bar, complete_lock):
+    """Send task to server and monitor until completion"""
     try:
-        # Define character set (uppercase letters + digits)
-        characters = string.ascii_uppercase + string.digits
+        # Step 1: Send task and get task_id
+        response = requests.post(f"{url}/v1/tasks/", json=message)
+        response_data = response.json()
+        task_id = response_data.get("task_id")
 
-        # Create an independent random instance
-        local_random = random.Random(time.perf_counter_ns())
+        if not task_id:
+            logger.error(f"No task_id received from {url}")
+            return False
 
-        # Generate 5 groups of 4-character random strings
-        groups = []
-        for _ in range(5):
-            # Mix new time factor for each group
-            time_mix = int(datetime.now().timestamp())
-            local_random.seed(time_mix + local_random.getstate()[1][0] + time.perf_counter_ns())
+        # Step 2: Monitor task status until completion
+        while True:
+            try:
+                status_response = requests.get(f"{url}/v1/tasks/{task_id}/status")
+                status_data = status_response.json()
+                task_status = status_data.get("status")
 
-            groups.append("".join(local_random.choices(characters, k=4)))
+                if task_status == "completed":
+                    # Update completion bar safely
+                    if complete_bar and complete_lock:
+                        with complete_lock:
+                            complete_bar.update(1)
+                    return True
+                elif task_status == "failed":
+                    logger.error(f"Task {task_index + 1} (task_id: {task_id}) failed")
+                    if complete_bar and complete_lock:
+                        with complete_lock:
+                            complete_bar.update(1)  # Still update progress even if failed
+                    return False
+                else:
+                    # Task still running, wait and check again
+                    time.sleep(0.5)
 
-        return "-".join(groups)
+            except Exception as e:
+                logger.error(f"Failed to check status for task_id {task_id}: {e}")
+                time.sleep(0.5)
 
-    finally:
-        # Restore the original random state
-        random.setstate(original_state)
+    except Exception as e:
+        logger.error(f"Failed to send task to {url}: {e}")
+        return False
 
 
-def post_all_tasks(urls, messages):
-    msg_num = len(messages)
-    msg_index = 0
+def get_available_urls(urls):
+    """Check which URLs are available and return the list"""
     available_urls = []
     for url in urls:
         try:
             _ = requests.get(f"{url}/v1/service/status").json()
+            available_urls.append(url)
         except Exception as e:
             continue
-        available_urls.append(url)
 
     if not available_urls:
         logger.error("No available urls.")
-        return
+        return None
 
     logger.info(f"available_urls: {available_urls}")
+    return available_urls
 
+
+def find_idle_server(available_urls):
+    """Find an idle server from available URLs"""
     while True:
         for url in available_urls:
-            response = requests.get(f"{url}/v1/service/status").json()
-            if response["service_status"] == "idle":
-                logger.info(f"{url} service is idle, start task...")
-                response = requests.post(f"{url}/v1/tasks/", json=messages[msg_index])
-                logger.info(f"response: {response.json()}")
-                msg_index += 1
-                if msg_index == msg_num:
-                    logger.info("All tasks have been sent.")
-                    return
-        time.sleep(5)
+            try:
+                response = requests.get(f"{url}/v1/service/status").json()
+                if response["service_status"] == "idle":
+                    return url
+            except Exception as e:
+                continue
+        time.sleep(3)
 
 
-if __name__ == "__main__":
-    urls = ["http://localhost:8000", "http://localhost:8001"]
+def process_tasks_async(messages, available_urls, show_progress=True):
+    """Process a list of tasks asynchronously across multiple servers"""
+    if not available_urls:
+        logger.error("No available servers to process tasks.")
+        return False
 
-    messages = [
-        {
-            "task_id": generate_task_id(),  # task_id also can be string you like, such as "test_task_001"
-            "task_id_must_unique": True,  # If True, the task_id must be unique, otherwise, it will raise an error. Default is False.
-            "prompt": "A cat walks on the grass, realistic style.",
-            "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-            "image_path": "",
-            "save_video_path": "./output_lightx2v_wan_t2v_t01.mp4",  # It is best to set it to an absolute path.
-        },
-        {
-            "task_id": generate_task_id(),  # task_id also can be string you like, such as "test_task_001"
-            "task_id_must_unique": True,  # If True, the task_id must be unique, otherwise, it will raise an error. Default is False.
-            "prompt": "A person is riding a bike. Realistic, Natural lighting, Casual.",
-            "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-            "image_path": "",
-            "save_video_path": "./output_lightx2v_wan_t2v_t02.mp4",  # It is best to set it to an absolute path.
-        },
-        {
-            "task_id": generate_task_id(),  # task_id also can be string you like, such as "test_task_001"
-            "task_id_must_unique": True,  # If True, the task_id must be unique, otherwise, it will raise an error. Default is False.
-            "prompt": "A car turns a corner. Realistic, Natural lighting, Casual.",
-            "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-            "image_path": "",
-            "save_video_path": "./output_lightx2v_wan_t2v_t03.mp4",  # It is best to set it to an absolute path.
-        },
-        {
-            "task_id": generate_task_id(),  # task_id also can be string you like, such as "test_task_001"
-            "task_id_must_unique": True,  # If True, the task_id must be unique, otherwise, it will raise an error. Default is False.
-            "prompt": "An astronaut is flying in space, Van Gogh style. Dark, Mysterious.",
-            "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-            "image_path": "",
-            "save_video_path": "./output_lightx2v_wan_t2v_t04.mp4",  # It is best to set it to an absolute path.
-        },
-        {
-            "task_id": generate_task_id(),  # task_id also can be string you like, such as "test_task_001"
-            "task_id_must_unique": True,  # If True, the task_id must be unique, otherwise, it will raise an error. Default is False.
-            "prompt": "A beautiful coastal beach in spring, waves gently lapping on the sand, the camera movement is Zoom In. Realistic, Natural lighting, Peaceful.",
-            "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-            "image_path": "",
-            "save_video_path": "./output_lightx2v_wan_t2v_t05.mp4",  # It is best to set it to an absolute path.
-        },
-        {
-            "task_id": generate_task_id(),  # task_id also can be string you like, such as "test_task_001"
-            "task_id_must_unique": True,  # If True, the task_id must be unique, otherwise, it will raise an error. Default is False.
-            "prompt": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
-            "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-            "image_path": "",
-            "save_video_path": "./output_lightx2v_wan_t2v_t06.mp4",  # It is best to set it to an absolute path.
-        },
-    ]
+    active_threads = []
 
-    logger.info(f"urls: {urls}")
-    logger.info(f"message: {messages}")
+    logger.info(f"Sending {len(messages)} tasks to available servers...")
 
-    post_all_tasks(urls, messages)
+    # Create completion progress bar
+    if show_progress:
+        complete_bar = tqdm(total=len(messages), desc="Completing tasks")
+        complete_lock = threading.Lock()  # Thread-safe updates to completion bar
+
+    for idx, message in enumerate(messages):
+        # Find an idle server
+        server_url = find_idle_server(available_urls)
+
+        # Create and start thread for sending and monitoring task
+        thread = threading.Thread(target=send_and_monitor_task, args=(server_url, message, idx, complete_bar if show_progress else None, complete_lock if show_progress else None))
+        thread.daemon = False
+        thread.start()
+        active_threads.append(thread)
+
+        # Small delay to let thread start
+        time.sleep(0.5)
+
+    # Wait for all threads to complete
+    for thread in active_threads:
+        thread.join()
+
+    # Close completion bar
+    if show_progress:
+        complete_bar.close()
+
+    logger.info("All tasks processing completed!")
+    return True

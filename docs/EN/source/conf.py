@@ -40,10 +40,16 @@ extensions = [
     "sphinx_copybutton",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
+    "sphinx.ext.mathjax",
     "myst_parser",
     "sphinxarg.ext",
     "sphinxcontrib.redoc",
     "sphinxcontrib.openapi",
+]
+
+myst_enable_extensions = [
+    "dollarmath",
+    "amsmath",
 ]
 
 html_static_path = ["_static"]

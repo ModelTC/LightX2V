@@ -2,7 +2,9 @@
     "infer_steps": 20,
     "target_video_length": 33,
     "i2v_resolution": "720p",
-    "attention_type": "flash_attn3",
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
     "seed": 0,
     "sub_servers": {
         "dit": ["http://localhost:9000"],

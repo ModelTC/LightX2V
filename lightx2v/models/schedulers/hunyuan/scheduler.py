@@ -237,7 +237,6 @@ def get_1d_rotary_pos_embed_riflex(
 class HunyuanScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.infer_steps = self.config.infer_steps
         self.shift = 7.0
         self.timesteps, self.sigmas = set_timesteps_sigmas(self.infer_steps, self.shift, device=torch.device("cuda"))
         assert len(self.timesteps) == self.infer_steps

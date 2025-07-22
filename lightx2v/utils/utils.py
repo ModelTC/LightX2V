@@ -59,6 +59,14 @@ def cache_video(
     value_range=(-1, 1),
     retry=5,
 ):
+    save_dir = os.path.dirname(save_file)
+    try:
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Failed to create directory: {save_dir}, error: {e}")
+        return None
+
     cache_file = save_file
 
     # save to cache

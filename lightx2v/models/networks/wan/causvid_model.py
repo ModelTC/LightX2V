@@ -12,6 +12,7 @@ from lightx2v.models.networks.wan.infer.causvid.transformer_infer import (
     WanTransformerInferCausVid,
 )
 from lightx2v.utils.envs import *
+from safetensors import safe_open
 
 
 class WanCausVidModel(WanModel):
@@ -27,20 +28,23 @@ class WanCausVidModel(WanModel):
         self.post_infer_class = WanPostInfer
         self.transformer_infer_class = WanTransformerInferCausVid
 
-    def _load_ckpt(self):
-        use_bfloat16 = GET_DTYPE() == "BF16"
-        ckpt_path = os.path.join(self.model_path, "causal_model.pt")
-        if not os.path.exists(ckpt_path):
-            # 文件不存在，调用父类的 _load_ckpt 方法
-            return super()._load_ckpt()
+    def _load_ckpt(self, use_bf16, skip_bf16):
+        ckpt_folder = "causvid_models"
+        safetensors_path = os.path.join(self.model_path, f"{ckpt_folder}/causal_model.safetensors")
+        if os.path.exists(safetensors_path):
+            with safe_open(safetensors_path, framework="pt") as f:
+                weight_dict = {key: (f.get_tensor(key).to(torch.bfloat16) if use_bf16 or all(s not in key for s in skip_bf16) else f.get_tensor(key)).pin_memory().to(self.device) for key in f.keys()}
+                return weight_dict
 
-        weight_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        ckpt_path = os.path.join(self.model_path, f"{ckpt_folder}/causal_model.pt")
+        if os.path.exists(ckpt_path):
+            weight_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+            weight_dict = {
+                key: (weight_dict[key].to(torch.bfloat16) if use_bf16 or all(s not in key for s in skip_bf16) else weight_dict[key]).pin_memory().to(self.device) for key in weight_dict.keys()
+            }
+            return weight_dict
 
-        dtype = torch.bfloat16 if use_bfloat16 else None
-        for key, value in weight_dict.items():
-            weight_dict[key] = value.to(device=self.device, dtype=dtype)
-
-        return weight_dict
+        return super()._load_ckpt(use_bf16, skip_bf16)
 
     @torch.no_grad()
     def infer(self, inputs, kv_start, kv_end):

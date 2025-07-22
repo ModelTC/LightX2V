@@ -38,20 +38,20 @@ pip install dist/*whl --force-reinstall --no-deps
 
 ##### cos and speed test, mm without bias
 ```
-python test/test_bench2.py
+python test/nvfp4_nvfp4/test_bench2.py
 ```
 
 ##### cos and speed test, mm with bias
 ```
-python test/test_bench3_bias.py
+python test/nvfp4_nvfp4/test_bench3_bias.py
 ```
 
 ##### Bandwidth utilization test for quant
 ```
-python test/test_quant_mem_utils.py
+python test/nvfp4_nvfp4/test_quant_mem_utils.py
 ```
 
 ##### tflops test for mm
 ```
-python test/test_mm_tflops.py
+python test/nvfp4_nvfp4/test_mm_tflops.py
 ```

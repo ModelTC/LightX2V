@@ -1,6 +1,5 @@
 import math
 import torch
-import torch.cuda.amp as amp
 from lightx2v.utils.envs import *
 
 
@@ -8,6 +7,7 @@ class WanPostInfer:
     def __init__(self, config):
         self.out_dim = config["out_dim"]
         self.patch_size = (1, 2, 2)
+        self.clean_cuda_cache = config.get("clean_cuda_cache", False)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -21,16 +21,21 @@ class WanPostInfer:
             e = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
             e = [ei.squeeze(1) for ei in e]
 
-        norm_out = weights.norm.apply(x)
+        x = weights.norm.apply(x)
 
         if GET_DTYPE() != "BF16":
-            norm_out = norm_out.float()
-        out = norm_out * (1 + e[1].squeeze(0)) + e[0].squeeze(0)
+            x = x.float()
+        x.mul_(1 + e[1].squeeze(0)).add_(e[0].squeeze(0))
         if GET_DTYPE() != "BF16":
-            out = out.to(torch.bfloat16)
+            x = x.to(torch.bfloat16)
 
-        x = weights.head.apply(out)
+        x = weights.head.apply(x)
         x = self.unpatchify(x, grid_sizes)
+
+        if self.clean_cuda_cache:
+            del e, grid_sizes
+            torch.cuda.empty_cache()
+
         return [u.float() for u in x]
 
     def unpatchify(self, x, grid_sizes):

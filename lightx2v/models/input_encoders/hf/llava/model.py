@@ -151,12 +151,3 @@ class TextEncoderHFLlavaModel:
         if config.cpu_offload:
             self.to_cpu()
         return last_hidden_state, attention_mask
-
-
-if __name__ == "__main__":
-    model = TextEncoderHFLlavaModel("/mtc/yongyang/models/x2v_models/hunyuan/lightx2v_format/i2v/text_encoder_i2v", torch.device("cuda"))
-    text = "An Asian man with short hair in black tactical uniform and white clothes waves a firework stick."
-    img_path = "/mtc/yongyang/projects/lightx2v/assets/inputs/imgs/img_1.jpg"
-    img = Image.open(img_path).convert("RGB")
-    outputs = model.infer(text, img, None)
-    logger.info(outputs)

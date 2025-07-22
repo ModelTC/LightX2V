@@ -25,7 +25,7 @@
     "clip_quantized_ckpt": "/path/to/clip-fp8.pth",
     "clip_quant_scheme": "fp8",
     "use_tiling_vae": true,
-    "tiny_vae": true,
+    "use_tiny_vae": true,
     "tiny_vae_path": "/path/to/taew2_1.pth",
     "lazy_load": true,
     "rotary_chunk": true,

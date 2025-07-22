@@ -56,3 +56,13 @@ class WanPreWeights(WeightModule):
                 "proj_4",
                 LN_WEIGHT_REGISTER["Default"]("img_emb.proj.4.weight", "img_emb.proj.4.bias"),
             )
+
+        if config.model_cls == "wan2.1_distill" and config.get("enable_dynamic_cfg", False):
+            self.add_module(
+                "cfg_cond_proj_1",
+                MM_WEIGHT_REGISTER["Default"]("guidance_embedding.linear_1.weight", "guidance_embedding.linear_1.bias"),
+            )
+            self.add_module(
+                "cfg_cond_proj_2",
+                MM_WEIGHT_REGISTER["Default"]("guidance_embedding.linear_2.weight", "guidance_embedding.linear_2.bias"),
+            )

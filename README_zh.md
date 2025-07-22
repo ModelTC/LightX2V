@@ -1,5 +1,5 @@
 <div align="center" style="font-family: charter;">
-  <h1>⚡️ LightX2V：<br>轻量级视频生成推理框架</h1>
+  <h1>⚡️ LightX2V:<br> 轻量级视频生成推理框架</h1>
 
 <img alt="logo" src="assets/img_lightx2v.png" width=75%></img>
 
@@ -16,60 +16,125 @@
 
 --------------------------------------------------------------------------------
 
-**LightX2V** 是一个轻量级的视频生成推理框架，集成多种先进的视频生成推理技术，统一支持 文本生成视频 (T2V)、图像生成视频 (I2V) 等多种生成任务及模型。**X2V 表示将不同的输入模态（X，如文本或图像）转换（to）为视频输出（V）。**
+**LightX2V** 是一个先进的轻量级视频生成推理框架，专为提供高效、高性能的视频合成解决方案而设计。该统一平台集成了多种前沿的视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视频输出(V)**。
 
 ## 💡 快速开始
 
-请参考文档：**[English Docs](https://lightx2v-en.readthedocs.io/en/latest/)** | **[中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
+详细使用说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
 
-## 🤖 支持的模型列表
+## 🤖 支持的模型生态
 
-- ✅ [HunyuanVideo-T2V](https://huggingface.co/tencent/HunyuanVideo)
-- ✅ [HunyuanVideo-I2V](https://huggingface.co/tencent/HunyuanVideo-I2V)
-- ✅ [Wan2.1-T2V](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B)
-- ✅ [Wan2.1-I2V](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P)
-- ✅ [Wan2.1-T2V-StepDistill-CfgDistill](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill) (推荐 🚀🚀🚀)
-- ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
+### 官方开源模型
+- ✅ [HunyuanVideo](https://huggingface.co/tencent/HunyuanVideo)
+- ✅ [Wan2.1](https://huggingface.co/Wan-AI/)
 - ✅ [SkyReels-V2-DF](https://huggingface.co/Skywork/SkyReels-V2-DF-14B-540P)
 - ✅ [CogVideoX1.5-5B-T2V](https://huggingface.co/THUDM/CogVideoX1.5-5B)
 
-## 🧾 贡献指南
+### 量化模型
+- ✅ [Wan2.1-T2V-1.3B-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-1.3B-Lightx2v)
+- ✅ [Wan2.1-T2V-14B-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-Lightx2v)
+- ✅ [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v)
+- ✅ [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
 
-我们使用 `pre-commit` 统一代码格式。
+### 蒸馏模型 (**🚀 推荐：4步推理**)
+- ✅ [Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v)
+- ✅ [Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v)
+- ✅ [Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v)
 
-> [!Tip]
-> - 下载需要的依赖:
+### 自回归模型
+- ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
+
+## 🚀 核心特性
+
+### 🎯 **极致性能优化**
+- **🔥 SOTA推理速度**: 通过步数蒸馏和系统优化实现**20倍**极速加速(单GPU)
+- **⚡️ 革命性4步蒸馏**: 将原始40-50步推理压缩至仅需4步，且无需CFG配置
+- **🛠️ 先进算子支持**: 集成顶尖算子，包括[Sage Attention](https://github.com/thu-ml/SageAttention)、[Flash Attention](https://github.com/Dao-AILab/flash-attention)、[Radial Attention](https://github.com/mit-han-lab/radial-attention)、[q8-kernel](https://github.com/KONAKONA666/q8_kernels)、[sgl-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)、[vllm](https://github.com/vllm-project/vllm)
+
+### 💾 **资源高效部署**
+- **💡 突破硬件限制**: **仅需8GB显存 + 16GB内存**即可运行14B模型生成480P/720P视频
+- **🔧 智能参数卸载**: 先进的磁盘-CPU-GPU三级卸载架构，支持阶段/块级别的精细化管理
+- **⚙️ 全面量化支持**: 支持`w8a8-int8`、`w8a8-fp8`、`w4a4-nvfp4`等多种量化策略
+
+### 🎨 **丰富功能生态**
+- **📈 智能特征缓存**: 智能缓存机制，消除冗余计算，提升效率
+- **🔄 并行推理加速**: 多GPU并行处理，显著提升性能表现
+- **📱 灵活部署选择**: 支持Gradio、服务化部署、ComfyUI等多种部署方式
+- **🎛️ 动态分辨率推理**: 自适应分辨率调整，优化生成质量
+
+
+## 🏆 性能基准测试
+
+详细的性能指标和对比分析，请参考我们的[基准测试文档](https://github.com/ModelTC/LightX2V/blob/main/docs/ZH_CN/source/getting_started/benchmark_source.md)。
+
+[详细服务部署指南 →](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html)
+
+## 📚 技术文档
+
+### 📖 **方法教程**
+- [模型量化](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/quantization.html) - 量化策略全面指南
+- [特征缓存](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/cache.html) - 智能缓存机制详解
+- [注意力机制](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/attention.html) - 前沿注意力算子
+- [参数卸载](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/offload.html) - 三级存储架构
+- [并行推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/parallel.html) - 多GPU加速策略
+- [步数蒸馏](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/step_distill.html) - 4步推理技术
+
+### 🛠️ **部署指南**
+- [低资源场景部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_resource.html) - 优化的8GB显存解决方案
+- [低延迟场景部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_latency.html) - 极速推理优化
+- [Gradio部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_gradio.html) - Web界面搭建
+- [服务化部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html) - 生产级API服务部署
+
+## 🧾 代码贡献指南
+
+我们通过自动化的预提交钩子来保证代码质量，确保项目代码格式的一致性。
+
+> [!TIP]
+> **安装说明：**
 >
+> 1. 安装必要的依赖：
 > ```shell
 > pip install ruff pre-commit
->```
+> ```
 >
-> - 然后，在提交前运行下述指令:
->
+> 2. 提交前运行：
 > ```shell
 > pre-commit run --all-files
->```
+> ```
 
-欢迎贡献！
+感谢您为LightX2V的改进做出贡献！
 
 ## 🤝 致谢
 
-本仓库实现参考了以上列出的所有模型对应的代码仓库。
+我们向所有启发和促进LightX2V开发的模型仓库和研究社区表示诚挚的感谢。此框架基于开源社区的集体努力而构建。
 
-## 🌟 Star 记录
+## 🌟 Star 历史
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ModelTC/lightx2v&type=Timeline)](https://star-history.com/#ModelTC/lightx2v&Timeline)
 
 ## ✏️ 引用
 
-如果您觉得本框架对您的研究有帮助，请引用：
+如果您发现LightX2V对您的研究有用，请考虑引用我们的工作：
 
 ```bibtex
 @misc{lightx2v,
-  author = {lightx2v contributors},
-  title  = {LightX2V: Light Video Generation Inference Framework},
-  year   = {2025},
-  publisher = {GitHub},
-  howpublished = {\url{https://github.com/ModelTC/lightx2v}},
+ author = {LightX2V Contributors},
+ title = {LightX2V: Light Video Generation Inference Framework},
+ year = {2025},
+ publisher = {GitHub},
+ journal = {GitHub repository},
+ howpublished = {\url{https://github.com/ModelTC/lightx2v}},
 }
 ```
+
+## 📞 联系与支持
+
+如有任何问题、建议或需要支持，欢迎通过以下方式联系我们：
+- 🐛 [GitHub Issues](https://github.com/ModelTC/lightx2v/issues) - 错误报告和功能请求
+- 💬 [GitHub Discussions](https://github.com/ModelTC/lightx2v/discussions) - 社区讨论和问答
+
+---
+
+<div align="center">
+由 LightX2V 团队用 ❤️ 构建
+</div>

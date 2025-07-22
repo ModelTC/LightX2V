@@ -1,31 +1,29 @@
-from tqdm import tqdm
 import argparse
 import glob
 import os
-import requests
-import time
+from loguru import logger
+from post_multi_servers import get_available_urls, process_tasks_async
 
 
-def post_i2v(image_path, output_path):
-    url = "http://localhost:8000"
+def create_i2v_messages(img_files, output_path):
+    """Create messages for image-to-video tasks"""
+    messages = []
+    negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
-    file_name = os.path.basename(image_path)
-    prompt = os.path.splitext(file_name)[0]
-    save_video_path = os.path.join(output_path, f"{prompt}.mp4")
+    for img_path in img_files:
+        file_name = os.path.basename(img_path)
+        prompt = os.path.splitext(file_name)[0]
+        save_video_path = os.path.join(output_path, f"{prompt}.mp4")
 
-    message = {
-        "prompt": prompt,
-        "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-        "image_path": image_path,
-        "save_video_path": save_video_path,
-    }
+        message = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "image_path": img_path,
+            "save_video_path": save_video_path,
+        }
+        messages.append(message)
 
-    while True:
-        response = requests.get(f"{url}/v1/service/status").json()
-        if response["service_status"] == "idle":
-            response = requests.post(f"{url}/v1/tasks/", json=message)
-            return
-        time.sleep(3)
+    return messages
 
 
 if __name__ == "__main__":
@@ -34,11 +32,35 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, default="./vbench_i2v", help="output video path.")
     args = parser.parse_args()
 
+    # Create server URLs
+    urls = [f"http://localhost:{port}" for port in range(8000, 8008)]
+
+    # Get available servers
+    available_urls = get_available_urls(urls)
+    if not available_urls:
+        exit(1)
+
+    # Find image files
     if os.path.exists(args.data_path):
         img_files = glob.glob(os.path.join(args.data_path, "*.jpg"))
-        print(f"Found {len(img_files)} image files.")
+        logger.info(f"Found {len(img_files)} image files.")
 
-        with tqdm(total=len(img_files)) as progress_bar:
-            for idx, img_path in enumerate(img_files):
-                post_i2v(img_path, args.output_path)
-                progress_bar.update()
+        if not img_files:
+            logger.error("No image files found.")
+            exit(1)
+
+        # Create messages for all images
+        messages = create_i2v_messages(img_files, args.output_path)
+        logger.info(f"Created {len(messages)} tasks.")
+
+        # Process tasks asynchronously
+        success = process_tasks_async(messages, available_urls, show_progress=True)
+
+        if success:
+            logger.info("All image-to-video tasks completed successfully!")
+        else:
+            logger.error("Some tasks failed.")
+            exit(1)
+    else:
+        logger.error(f"Data path does not exist: {args.data_path}")
+        exit(1)

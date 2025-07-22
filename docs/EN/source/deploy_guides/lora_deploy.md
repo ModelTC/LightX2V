@@ -17,10 +17,12 @@ Specify LoRA path in configuration file:
 
 ```json
 {
-  "lora_path": [
-    "/path/to/your/lora.safetensors"
-  ],
-  "strength_model": 1.0
+  "lora_configs": [
+    {
+      "path": "/path/to/your/lora.safetensors",
+      "strength": 1.0
+    }
+  ]
 }
 ```
 

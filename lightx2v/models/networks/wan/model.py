@@ -1,5 +1,4 @@
 import os
-import sys
 import torch
 import glob
 import json
@@ -15,6 +14,9 @@ from lightx2v.models.networks.wan.infer.transformer_infer import (
 )
 from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import (
     WanTransformerInferTeaCaching,
+    WanTransformerInferTaylorCaching,
+    WanTransformerInferAdaCaching,
+    WanTransformerInferCustomCaching,
 )
 from safetensors import safe_open
 import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
@@ -31,9 +33,15 @@ class WanModel:
     def __init__(self, model_path, config, device):
         self.model_path = model_path
         self.config = config
+        self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
 
         self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
-        self.dit_quantized_ckpt = self.config.get("dit_quantized_ckpt", None)
+        if self.dit_quantized:
+            dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
+            self.dit_quantized_ckpt = self.config.get("dit_quantized_ckpt", os.path.join(model_path, dit_quant_scheme))
+        else:
+            self.dit_quantized_ckpt = None
+        self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
         self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
         if self.dit_quantized:
             assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
@@ -42,7 +50,6 @@ class WanModel:
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
-        self.current_lora = None
 
         if config["parallel_attn_type"]:
             if config["parallel_attn_type"] == "ulysses":
@@ -59,6 +66,12 @@ class WanModel:
             self.transformer_infer_class = WanTransformerInfer
         elif self.config["feature_caching"] == "Tea":
             self.transformer_infer_class = WanTransformerInferTeaCaching
+        elif self.config["feature_caching"] == "TaylorSeer":
+            self.transformer_infer_class = WanTransformerInferTaylorCaching
+        elif self.config["feature_caching"] == "Ada":
+            self.transformer_infer_class = WanTransformerInferAdaCaching
+        elif self.config["feature_caching"] == "Custom":
+            self.transformer_infer_class = WanTransformerInferCustomCaching
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 
@@ -71,7 +84,12 @@ class WanModel:
         safetensors_files = glob.glob(safetensors_pattern)
 
         if not safetensors_files:
-            raise FileNotFoundError(f"No .safetensors files found in directory: {self.model_path}")
+            original_pattern = os.path.join(self.model_path, "original", "*.safetensors")
+            safetensors_files = glob.glob(original_pattern)
+
+            if not safetensors_files:
+                raise FileNotFoundError(f"No .safetensors files found in directory: {self.model_path}")
+
         weight_dict = {}
         for file_path in safetensors_files:
             file_weights = self._load_safetensor_to_dict(file_path, use_bf16, skip_bf16)
@@ -79,7 +97,7 @@ class WanModel:
         return weight_dict
 
     def _load_quant_ckpt(self, use_bf16, skip_bf16):
-        ckpt_path = self.config.dit_quantized_ckpt
+        ckpt_path = self.dit_quantized_ckpt
         logger.info(f"Loading quant dit model from {ckpt_path}")
 
         index_files = [f for f in os.listdir(ckpt_path) if f.endswith(".index.json")]
@@ -109,9 +127,9 @@ class WanModel:
         return weight_dict
 
     def _load_quant_split_ckpt(self, use_bf16, skip_bf16):
-        lazy_load_model_path = self.config.dit_quantized_ckpt
+        lazy_load_model_path = self.dit_quantized_ckpt
         logger.info(f"Loading splited quant model from {lazy_load_model_path}")
-        pre_post_weight_dict, transformer_weight_dict = {}, {}
+        pre_post_weight_dict = {}
 
         safetensor_path = os.path.join(lazy_load_model_path, "non_block.safetensors")
         with safe_open(safetensor_path, framework="pt", device="cpu") as f:
@@ -124,27 +142,19 @@ class WanModel:
                 else:
                     pre_post_weight_dict[k] = f.get_tensor(k).pin_memory().to(self.device)
 
-        safetensors_pattern = os.path.join(lazy_load_model_path, "block_*.safetensors")
-        safetensors_files = glob.glob(safetensors_pattern)
-        if not safetensors_files:
-            raise FileNotFoundError(f"No .safetensors files found in directory: {lazy_load_model_path}")
-
-        for file_path in safetensors_files:
-            with safe_open(file_path, framework="pt") as f:
-                for k in f.keys():
-                    if "modulation" in k:
-                        if f.get_tensor(k).dtype == torch.float:
-                            if use_bf16 or all(s not in k for s in skip_bf16):
-                                transformer_weight_dict[k] = f.get_tensor(k).pin_memory().to(torch.bfloat16).to(self.device)
-                            else:
-                                transformer_weight_dict[k] = f.get_tensor(k).pin_memory().to(self.device)
-
-        return pre_post_weight_dict, transformer_weight_dict
+        return pre_post_weight_dict
 
     def _init_weights(self, weight_dict=None):
         use_bf16 = GET_DTYPE() == "BF16"
         # Some layers run with float32 to achieve high accuracy
-        skip_bf16 = {"norm", "embedding", "modulation", "time", "img_emb.proj.0", "img_emb.proj.4"}
+        skip_bf16 = {
+            "norm",
+            "embedding",
+            "modulation",
+            "time",
+            "img_emb.proj.0",
+            "img_emb.proj.4",
+        }
         if weight_dict is None:
             if not self.dit_quantized or self.weight_auto_quant:
                 self.original_weight_dict = self._load_ckpt(use_bf16, skip_bf16)
@@ -152,10 +162,7 @@ class WanModel:
                 if not self.config.get("lazy_load", False):
                     self.original_weight_dict = self._load_quant_ckpt(use_bf16, skip_bf16)
                 else:
-                    (
-                        self.original_weight_dict,
-                        self.transformer_weight_dict,
-                    ) = self._load_quant_split_ckpt(use_bf16, skip_bf16)
+                    self.original_weight_dict = self._load_quant_split_ckpt(use_bf16, skip_bf16)
         else:
             self.original_weight_dict = weight_dict
         # init weights
@@ -165,10 +172,7 @@ class WanModel:
         # load weights
         self.pre_weight.load(self.original_weight_dict)
         self.post_weight.load(self.original_weight_dict)
-        if hasattr(self, "transformer_weight_dict"):
-            self.transformer_weights.load(self.transformer_weight_dict)
-        else:
-            self.transformer_weights.load(self.original_weight_dict)
+        self.transformer_weights.load(self.original_weight_dict)
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
@@ -201,24 +205,23 @@ class WanModel:
         x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
         noise_pred_cond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
 
-        if self.config["feature_caching"] == "Tea":
-            self.scheduler.cnt += 1
-            if self.scheduler.cnt >= self.scheduler.num_steps:
-                self.scheduler.cnt = 0
         self.scheduler.noise_pred = noise_pred_cond
+
+        if self.clean_cuda_cache:
+            del x, embed, pre_infer_out, noise_pred_cond, grid_sizes
+            torch.cuda.empty_cache()
 
         if self.config["enable_cfg"]:
             embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, positive=False)
             x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
             noise_pred_uncond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
 
-            if self.config["feature_caching"] == "Tea":
-                self.scheduler.cnt += 1
-                if self.scheduler.cnt >= self.scheduler.num_steps:
-                    self.scheduler.cnt = 0
-
-            self.scheduler.noise_pred = noise_pred_uncond + self.config.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            self.scheduler.noise_pred = noise_pred_uncond + self.config.sample_guide_scale * (self.scheduler.noise_pred - noise_pred_uncond)
 
             if self.config["cpu_offload"]:
                 self.pre_weight.to_cpu()
                 self.post_weight.to_cpu()
+
+                if self.clean_cuda_cache:
+                    del x, embed, pre_infer_out, noise_pred_uncond, grid_sizes
+                    torch.cuda.empty_cache()

@@ -24,13 +24,13 @@ class WanAudioPreInfer(WanPreInfer):
         self.text_len = config["text_len"]
 
     def infer(self, weights, inputs, positive):
-        ltnt_channel = self.scheduler.latents.size(0)
+        ltnt_frames = self.scheduler.latents.size(1)
 
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"].unsqueeze(0)
         prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
 
         hidden_states = self.scheduler.latents.unsqueeze(0)
-        hidden_states = torch.cat([hidden_states[:, :ltnt_channel], prev_latents, prev_mask], dim=1)
+        hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=1)
         hidden_states = hidden_states.squeeze(0)
 
         x = [hidden_states]
@@ -44,6 +44,7 @@ class WanAudioPreInfer(WanPreInfer):
             "timestep": t,
         }
         audio_dit_blocks.append(inputs["audio_adapter_pipe"](**audio_model_input))
+        ##audio_dit_blocks = None##Debug Drop Audio
 
         if positive:
             context = inputs["text_encoder_output"]["context"]

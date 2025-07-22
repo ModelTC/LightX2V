@@ -1,6 +1,11 @@
 import torch
-from qtorch.quant import float_quantize
 from loguru import logger
+
+try:
+    from qtorch.quant import float_quantize
+except Exception:
+    logger.warning("qtorch not found, please install qtorch.Please install qtorch (pip install qtorch).")
+    float_quantize = None
 
 
 class BaseQuantizer(object):

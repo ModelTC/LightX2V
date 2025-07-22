@@ -24,12 +24,21 @@ class WanDistillRunner(WanRunner):
         super().__init__(config)
 
     def load_transformer(self):
-        model = WanDistillModel(self.config.model_path, self.config, self.init_device)
-        if self.config.lora_path:
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            model = WanModel(
+                self.config.model_path,
+                self.config,
+                self.init_device,
+            )
             lora_wrapper = WanLoraWrapper(model)
-            lora_name = lora_wrapper.load_lora(self.config.lora_path)
-            lora_wrapper.apply_lora(lora_name, self.config.strength_model)
-            logger.info(f"Loaded LoRA: {lora_name}")
+            for lora_config in self.config.lora_configs:
+                lora_path = lora_config["path"]
+                strength = lora_config.get("strength", 1.0)
+                lora_name = lora_wrapper.load_lora(lora_path)
+                lora_wrapper.apply_lora(lora_name, strength)
+                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        else:
+            model = WanDistillModel(self.config.model_path, self.config, self.init_device)
         return model
 
     def init_scheduler(self):

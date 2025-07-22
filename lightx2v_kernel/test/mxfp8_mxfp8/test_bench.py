@@ -1,5 +1,5 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp8_quant, cutlass_scaled_mxfp8_mm
+from lightx2v_kernel.gemm import scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm
 import time
 
 
@@ -17,7 +17,7 @@ class MMWeightMxfp8:
 
     @torch.no_grad()
     def load_fp8_weight(self, weight, bias):
-        self.weight, self.weight_scale = scaled_fp8_quant(weight)
+        self.weight, self.weight_scale = scaled_mxfp8_quant(weight)
         self.bias = bias
 
     def set_alpha(self):
@@ -25,7 +25,7 @@ class MMWeightMxfp8:
 
     @torch.no_grad()
     def act_quant_fp8(self, x):
-        return scaled_fp8_quant(x)
+        return scaled_mxfp8_quant(x)
 
 
 def test_speed(m, k, n):

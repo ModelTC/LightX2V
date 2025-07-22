@@ -12,6 +12,7 @@ from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistill
 from lightx2v.utils.profiler import ProfilingContext4Debug, ProfilingContext
 from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
+from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.causvid_model import WanCausVidModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
@@ -23,14 +24,29 @@ import torch.distributed as dist
 class WanCausVidRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.num_frame_per_block = self.model.config.num_frame_per_block
-        self.num_frames = self.model.config.num_frames
-        self.frame_seq_length = self.model.config.frame_seq_length
-        self.infer_blocks = self.model.config.num_blocks
-        self.num_fragments = self.model.config.num_fragments
+        self.num_frame_per_block = self.config.num_frame_per_block
+        self.num_frames = self.config.num_frames
+        self.frame_seq_length = self.config.frame_seq_length
+        self.infer_blocks = self.config.num_blocks
+        self.num_fragments = self.config.num_fragments
 
     def load_transformer(self):
-        return WanCausVidModel(self.config.model_path, self.config, self.init_device)
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            model = WanModel(
+                self.config.model_path,
+                self.config,
+                self.init_device,
+            )
+            lora_wrapper = WanLoraWrapper(model)
+            for lora_config in self.config.lora_configs:
+                lora_path = lora_config["path"]
+                strength = lora_config.get("strength", 1.0)
+                lora_name = lora_wrapper.load_lora(lora_path)
+                lora_wrapper.apply_lora(lora_name, strength)
+                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        else:
+            model = WanCausVidModel(self.config.model_path, self.config, self.init_device)
+        return model
 
     def set_inputs(self, inputs):
         super().set_inputs(inputs)

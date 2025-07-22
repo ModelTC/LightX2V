@@ -4,6 +4,7 @@
 
 // clang-format off
 #include "cutlass/cutlass.h"
+#include "cutlass/epilogue/fusion/operations.hpp"
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
@@ -60,6 +61,9 @@ struct Fp4GemmSm120 {
     using ThreadBlockShape    = Shape<_128,_128,_128>;                          // Threadblock's tile size
     using ClusterShape        = Shape<_1,_1,_1>;                                // Shape of the threadblocks in a cluster
 
+    // use per-column bias, i.e. every column has different bias
+    using EVTOp = cutlass::epilogue::fusion::LinCombPerColBias<ElementD, ElementAccumulator>;
+
     using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
         ArchTag, OperatorClass,
         ThreadBlockShape, ClusterShape,
@@ -67,7 +71,8 @@ struct Fp4GemmSm120 {
         ElementAccumulator, ElementAccumulator,
         ElementC, LayoutCTag, AlignmentC,
         ElementD, LayoutDTag, AlignmentD,
-        cutlass::epilogue::collective::EpilogueScheduleAuto                      // Epilogue schedule policy
+        cutlass::epilogue::collective::EpilogueScheduleAuto,                      // Epilogue schedule policy
+        EVTOp
     >::CollectiveOp;
 
     using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
@@ -103,7 +108,7 @@ struct Fp4GemmSm120 {
 
 
 // Populates a Gemm::Arguments structure from the given commandline options
-typename Fp4GemmSm120::Gemm::Arguments args_from_options(
+typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4(
     at::Tensor& D,
     at::Tensor const& A,
     at::Tensor const& B,
@@ -127,7 +132,7 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options(
   auto layout_SFB = Sm1xxBlkScaledConfig::tile_atom_to_shape_SFB(cute::make_shape(m, n, k, 1));
 
   if (bias){
-    auto stride_bias = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideC{}, {});
+    using StrideBias = Stride<cutlass::_0, cutlass::_1, int64_t>;
 
     typename Fp4GemmSm120::Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
@@ -143,12 +148,16 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options(
        layout_SFB},
       {     // Epilogue arguments
        {},  // epilogue.thread
-       static_cast<Fp4GemmSm120::Gemm::ElementC const*>(bias->data_ptr()),
-       stride_bias,
+       static_cast<Fp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
+       stride_D,
        static_cast<Fp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
+    static const float beta_zero = 0.0f;
+    fusion_args.beta_ptr = &beta_zero;
+    fusion_args.bias_ptr = static_cast<Fp4GemmSm120::Gemm::ElementC const*>(bias->data_ptr());
+    fusion_args.dBias = StrideBias{};
     return arguments;
   } else {
     typename Fp4GemmSm120::Gemm::Arguments arguments{
@@ -171,12 +180,14 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options(
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
+    static const float beta_zero = 0.0f;
+    fusion_args.beta_ptr = &beta_zero;
     return arguments;
   }
 }
 
 
-void runGemm(
+void runGemmNvfp4Sm120(
     at::Tensor& D,
     at::Tensor const& A,
     at::Tensor const& B,
@@ -190,7 +201,7 @@ void runGemm(
     cudaStream_t stream) {
   typename Fp4GemmSm120::Gemm gemm;
 
-  auto arguments = args_from_options(D, A, B, A_sf, B_sf, alpha, bias, m, n, k);
+  auto arguments = args_from_options_nvfp4_nvfp4(D, A, B, A_sf, B_sf, alpha, bias, m, n, k);
   size_t workspace_size = Fp4GemmSm120::Gemm::get_workspace_size(arguments);
   auto const workspace_options = torch::TensorOptions().dtype(torch::kUInt8).device(A.device());
   auto workspace = torch::empty(workspace_size, workspace_options);
@@ -204,7 +215,7 @@ void runGemm(
 constexpr auto FLOAT4_E2M1X2 = at::ScalarType::Byte;
 constexpr auto SF_DTYPE = at::ScalarType::Float8_e4m3fn;
 
-void cutlass_scaled_fp4_mm_sm120(
+void cutlass_scaled_nvfp4_mm_sm120(
     torch::Tensor& D,
     torch::Tensor const& A,
     torch::Tensor const& B,
@@ -308,5 +319,5 @@ void cutlass_scaled_fp4_mm_sm120(
   at::cuda::CUDAGuard device_guard{(char)A.get_device()};
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream(A.get_device());
 
-  runGemm(D, A, B, A_sf, B_sf, alpha, bias, m, n, k, stream);
+  runGemmNvfp4Sm120(D, A, B, A_sf, B_sf, alpha, bias, m, n, k, stream);
 }

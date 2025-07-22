@@ -868,7 +868,7 @@ class WanVAE:
         """
         videos: A list of videos each with shape [C, T, H, W].
         """
-        if args.cpu_offload:
+        if hasattr(args, "cpu_offload") and args.cpu_offload:
             self.to_cuda()
 
         if self.use_tiling:
@@ -876,7 +876,7 @@ class WanVAE:
         else:
             out = [self.model.encode(u.unsqueeze(0), self.scale).float().squeeze(0) for u in videos]
 
-        if args.cpu_offload:
+        if hasattr(args, "cpu_offload") and args.cpu_offload:
             self.to_cpu()
         return out
 

@@ -10,6 +10,7 @@ from safetensors import safe_open, torch as st
 from loguru import logger
 from tqdm import tqdm
 from collections import defaultdict
+from qtorch.quant import float_quantize
 
 
 def get_key_mapping_rules(direction, model_type):
@@ -314,7 +315,8 @@ def quantize_tensor(w, w_bit=8, dtype=torch.int8):
     max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
 
     if dtype == torch.float8_e4m3fn:
-        qmin, qmax = -448, 448
+        finfo = torch.finfo(dtype)
+        qmin, qmax = finfo.min, finfo.max
     elif dtype == torch.int8:
         qmin, qmax = -128, 127
 
@@ -322,7 +324,9 @@ def quantize_tensor(w, w_bit=8, dtype=torch.int8):
     scales = max_val / qmax
 
     if dtype == torch.float8_e4m3fn:
-        w_q = torch.clamp(w / scales, qmin, qmax).to(dtype)
+        scaled_tensor = w / scales
+        scaled_tensor = torch.clip(scaled_tensor, qmin, qmax)
+        w_q = float_quantize(scaled_tensor.float(), 4, 3, rounding="nearest").to(dtype)
     else:
         w_q = torch.clamp(torch.round(w / scales), qmin, qmax).to(dtype)
 
@@ -341,7 +345,8 @@ def quantize_model(
     target_keys=["attn", "ffn"],
     key_idx=2,
     ignore_key=None,
-    dtype=torch.int8,
+    linear_dtype=torch.int8,
+    non_linear_dtype=torch.float,
 ):
     """
     Quantize model weights in-place
@@ -370,16 +375,20 @@ def quantize_model(
 
             # Skip non-tensors, small tensors, and non-2D tensors
             if not isinstance(tensor, torch.Tensor) or tensor.dim() != 2:
+                if tensor.dtype != non_linear_dtype:
+                    weights[key] = tensor.to(non_linear_dtype)
                 continue
 
             # Check if key matches target modules
             parts = key.split(".")
             if len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
+                if tensor.dtype != non_linear_dtype:
+                    weights[key] = tensor.to(non_linear_dtype)
                 continue
 
             try:
                 # Quantize tensor and store results
-                w_q, scales = quantize_tensor(tensor, w_bit, dtype)
+                w_q, scales = quantize_tensor(tensor, w_bit, linear_dtype)
 
                 # Replace original tensor and store scales
                 weights[key] = w_q
@@ -396,6 +405,56 @@ def quantize_model(
 
         logger.info(f"Quantized {total_quantized} tensors, reduced size by {total_size:.2f} MB")
     return weights
+
+
+def load_loras(lora_path, weight_dict, alpha):
+    logger.info(f"Loading LoRA from: {lora_path}")
+    with safe_open(lora_path, framework="pt") as f:
+        lora_weights = {k: f.get_tensor(k) for k in f.keys()}
+
+    lora_pairs = {}
+    lora_diffs = {}
+    prefix = "diffusion_model."
+
+    def try_lora_pair(key, suffix_a, suffix_b, target_suffix):
+        if key.endswith(suffix_a):
+            base_name = key[len(prefix) :].replace(suffix_a, target_suffix)
+            pair_key = key.replace(suffix_a, suffix_b)
+            if pair_key in lora_weights:
+                lora_pairs[base_name] = (key, pair_key)
+
+    def try_lora_diff(key, suffix, target_suffix):
+        if key.endswith(suffix):
+            base_name = key[len(prefix) :].replace(suffix, target_suffix)
+            lora_diffs[base_name] = key
+
+    for key in lora_weights.keys():
+        if not key.startswith(prefix):
+            continue
+
+        try_lora_pair(key, "lora_A.weight", "lora_B.weight", "weight")
+        try_lora_pair(key, "lora_down.weight", "lora_up.weight", "weight")
+        try_lora_diff(key, "diff", "weight")
+        try_lora_diff(key, "diff_b", "bias")
+        try_lora_diff(key, "diff_m", "modulation")
+
+    applied_count = 0
+    for name, param in weight_dict.items():
+        if name in lora_pairs:
+            name_lora_A, name_lora_B = lora_pairs[name]
+            lora_A = lora_weights[name_lora_A].to(param.device, param.dtype)
+            lora_B = lora_weights[name_lora_B].to(param.device, param.dtype)
+            param += torch.matmul(lora_B, lora_A) * alpha
+            applied_count += 1
+        elif name in lora_diffs:
+            name_diff = lora_diffs[name]
+            lora_diff = lora_weights[name_diff].to(param.device, param.dtype)
+            try:
+                param += lora_diff * alpha
+                applied_count += 1
+            except Exception as e:
+                continue
+    logger.info(f"Applied {applied_count} LoRA weight adjustments")
 
 
 def convert_weights(args):
@@ -423,6 +482,16 @@ def convert_weights(args):
             raise ValueError(f"Duplicate keys found: {duplicate_keys} in file {file_path}")
         merged_weights.update(weights)
 
+    if args.lora_path is not None:
+        # Handle alpha list - if single alpha, replicate for all LoRAs
+        if len(args.lora_alpha) == 1 and len(args.lora_path) > 1:
+            args.lora_alpha = args.lora_alpha * len(args.lora_path)
+        elif len(args.lora_alpha) != len(args.lora_path):
+            raise ValueError(f"Number of lora_alpha ({len(args.lora_alpha)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
+
+        for path, alpha in zip(args.lora_path, args.lora_alpha):
+            load_loras(path, merged_weights, alpha)
+
     if args.direction is not None:
         rules = get_key_mapping_rules(args.direction, args.model_type)
         converted_weights = {}
@@ -442,7 +511,8 @@ def convert_weights(args):
             target_keys=args.target_keys,
             key_idx=args.key_idx,
             ignore_key=args.ignore_key,
-            dtype=args.dtype,
+            linear_dtype=args.linear_dtype,
+            non_linear_dtype=args.non_linear_dtype,
         )
 
     os.makedirs(args.output, exist_ok=True)
@@ -514,7 +584,7 @@ def convert_weights(args):
             json.dump(index, f, indent=2)
         logger.info(f"Index file written to: {index_path}")
 
-    if os.path.isdir(args.source):
+    if os.path.isdir(args.source) and args.copy_no_weight_files:
         copy_non_weight_files(args.source, args.output)
 
 
@@ -579,20 +649,32 @@ def main():
         help="Device to use for quantization (cpu/cuda)",
     )
     parser.add_argument(
-        "--dtype",
+        "--linear_dtype",
         type=str,
         choices=["torch.int8", "torch.float8_e4m3fn"],
-        help="Data type for quantization",
+        help="Data type for linear",
     )
+    parser.add_argument(
+        "--non_linear_dtype",
+        type=str,
+        default="torch.float32",
+        choices=["torch.bfloat16", "torch.float16"],
+        help="Data type for non-linear",
+    )
+    parser.add_argument("--lora_path", type=str, nargs="*", help="Path(s) to LoRA file(s). Can specify multiple paths separated by spaces.")
+    parser.add_argument(
+        "--lora_alpha",
+        type=float,
+        nargs="*",
+        default=[1.0],
+        help="Alpha for LoRA weight scaling",
+    )
+    parser.add_argument("--copy_no_weight_files", action="store_true")
     args = parser.parse_args()
 
     if args.quantized:
-        if args.dtype == "torch.int8":
-            args.dtype = torch.int8
-        elif args.dtype == "torch.float8_e4m3fn":
-            args.dtype = torch.float8_e4m3fn
-        else:
-            raise ValueError(f"Not support dtype :{args.dtype}")
+        args.linear_dtype = eval(args.linear_dtype)
+        args.non_linear_dtype = eval(args.non_linear_dtype)
 
         model_type_keys_map = {
             "wan_dit": {

@@ -22,7 +22,11 @@ class DefaultTensor:
             self.pinned_tensor = torch.empty(self.tensor.shape, pin_memory=True, dtype=self.tensor.dtype)
 
     def clear(self):
-        del self.tensor
+        attrs = ["tensor", "pinned_tensor"]
+        for attr in attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+                setattr(self, attr, None)
 
     def _calculate_size(self):
         return self.tensor.numel() * self.tensor.element_size()

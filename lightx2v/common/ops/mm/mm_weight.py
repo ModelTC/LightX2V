@@ -26,6 +26,11 @@ try:
 except ImportError:
     deep_gemm = None
 
+try:
+    from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
+except ModuleNotFoundError:
+    quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
+
 
 class MMWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
@@ -146,7 +151,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.pinned_weight = self.pinned_weight.t()
 
     def clear(self):
-        attrs = ["weight", "weight_scale", "bias"]
+        attrs = ["weight", "weight_scale", "bias", "pinned_weight", "pinned_weight_scale", "pinned_bias"]
         for attr in attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -233,6 +238,9 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     # =========================
     # act quant kernels
     # =========================
+    def act_quant_int8_perchannel_sym_torchao(self, x):
+        input_tensor_quant, input_tensor_scale = quantize_activation_per_token_absmax(x)
+        return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_vllm(self, x):
         input_tensor_quant, input_tensor_scale = ops.scaled_fp8_quant(x, None, scale_ub=None, use_per_token_if_dynamic=True)
@@ -653,6 +661,33 @@ class MMWeight(MMWeightTemplate):
         if hasattr(self, "bias") and self.bias is not None:
             destination[self.bias_name] = self.bias.cpu().detach().clone()
         return destination
+
+
+@MM_WEIGHT_REGISTER("W-int8-channel-sym-A-int8-channel-sym-dynamic-Torchao")
+class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
+    """
+    Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Torchao
+
+    Quant MM:
+        Weight: int8 perchannel sym
+        Act: int8 perchannel dynamic sym
+        Kernel: Torchao
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_int8_perchannel_sym
+        self.weight_need_transpose = True
+        self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
+
+    def apply(self, input_tensor):
+        input_tensor = input_tensor
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        output_tensor = quant_int8_per_token_matmul(input_tensor_quant, input_tensor_scale, self.weight, self.weight_scale.t().float(), output_dtype=torch.bfloat16)
+        if self.bias is not None:
+            output_tensor = output_tensor + self.bias
+
+        return output_tensor
 
 
 if __name__ == "__main__":

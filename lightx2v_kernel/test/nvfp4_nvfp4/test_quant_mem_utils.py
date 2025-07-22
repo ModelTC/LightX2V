@@ -1,12 +1,12 @@
 import torch
-from lightx2v_kernel.gemm import scaled_fp4_quant
+from lightx2v_kernel.gemm import scaled_nvfp4_quant
 
 
 input_global_scale = torch.tensor(808.0, dtype=torch.float32).cuda()
 
 
 def quantize_fp4(x):
-    return scaled_fp4_quant(x, input_global_scale)
+    return scaled_nvfp4_quant(x, input_global_scale)
 
 
 def test_memory_bandwidth(func, x, num_warmup=10, num_runs=100):

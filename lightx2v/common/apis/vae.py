@@ -168,7 +168,6 @@ if __name__ == "__main__":
 
     with ProfilingContext("Init Server Cost"):
         config = set_config(args)
-        config["mode"] = "split_server"
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         runner = VAERunner(config)
 

@@ -40,9 +40,6 @@ class WanLoraWrapper:
         if lora_name not in self.lora_metadata:
             logger.info(f"LoRA {lora_name} not found. Please load it first.")
 
-        if hasattr(self.model, "current_lora") and self.model.current_lora:
-            self.remove_lora()
-
         if not hasattr(self.model, "original_weight_dict"):
             logger.error("Model does not have 'original_weight_dict'. Cannot apply LoRA.")
             return False
@@ -52,33 +49,58 @@ class WanLoraWrapper:
         self._apply_lora_weights(weight_dict, lora_weights, alpha)
         self.model._init_weights(weight_dict)
 
-        self.model.current_lora = lora_name
         logger.info(f"Applied LoRA: {lora_name} with alpha={alpha}")
+        del lora_weights  # 删除节约显存
         return True
 
     @torch.no_grad()
     def _apply_lora_weights(self, weight_dict, lora_weights, alpha):
         lora_pairs = {}
+        lora_diffs = {}
         prefix = "diffusion_model."
 
+        def try_lora_pair(key, suffix_a, suffix_b, target_suffix):
+            if key.endswith(suffix_a):
+                base_name = key[len(prefix) :].replace(suffix_a, target_suffix)
+                pair_key = key.replace(suffix_a, suffix_b)
+                if pair_key in lora_weights:
+                    lora_pairs[base_name] = (key, pair_key)
+
+        def try_lora_diff(key, suffix, target_suffix):
+            if key.endswith(suffix):
+                base_name = key[len(prefix) :].replace(suffix, target_suffix)
+                lora_diffs[base_name] = key
+
         for key in lora_weights.keys():
-            if key.endswith("lora_A.weight") and key.startswith(prefix):
-                base_name = key[len(prefix) :].replace("lora_A.weight", "weight")
-                b_key = key.replace("lora_A.weight", "lora_B.weight")
-                if b_key in lora_weights:
-                    lora_pairs[base_name] = (key, b_key)
+            if not key.startswith(prefix):
+                continue
+
+            try_lora_pair(key, "lora_A.weight", "lora_B.weight", "weight")
+            try_lora_pair(key, "lora_down.weight", "lora_up.weight", "weight")
+            try_lora_diff(key, "diff", "weight")
+            try_lora_diff(key, "diff_b", "bias")
+            try_lora_diff(key, "diff_m", "modulation")
 
         applied_count = 0
         for name, param in weight_dict.items():
             if name in lora_pairs:
                 if name not in self.override_dict:
                     self.override_dict[name] = param.clone().cpu()
-
                 name_lora_A, name_lora_B = lora_pairs[name]
                 lora_A = lora_weights[name_lora_A].to(param.device, param.dtype)
                 lora_B = lora_weights[name_lora_B].to(param.device, param.dtype)
-                param += torch.matmul(lora_B, lora_A) * alpha
-                applied_count += 1
+                if param.shape == (lora_B.shape[0], lora_A.shape[1]):
+                    param += torch.matmul(lora_B, lora_A) * alpha
+                    applied_count += 1
+            elif name in lora_diffs:
+                if name not in self.override_dict:
+                    self.override_dict[name] = param.clone().cpu()
+
+                name_diff = lora_diffs[name]
+                lora_diff = lora_weights[name_diff].to(param.device, param.dtype)
+                if param.shape == lora_diff.shape:
+                    param += lora_diff * alpha
+                    applied_count += 1
 
         logger.info(f"Applied {applied_count} LoRA weight adjustments")
         if applied_count == 0:
@@ -88,30 +110,22 @@ class WanLoraWrapper:
 
     @torch.no_grad()
     def remove_lora(self):
-        if not self.model.current_lora:
-            logger.info("No LoRA currently applied")
-            return
-        logger.info(f"Removing LoRA {self.model.current_lora}...")
+        logger.info(f"Removing LoRA ...")
 
         restored_count = 0
         for k, v in self.override_dict.items():
             self.model.original_weight_dict[k] = v.to(self.model.device)
             restored_count += 1
 
-        logger.info(f"LoRA {self.model.current_lora} removed, restored {restored_count} weights")
+        logger.info(f"LoRA removed, restored {restored_count} weights")
 
         self.model._init_weights(self.model.original_weight_dict)
 
         torch.cuda.empty_cache()
         gc.collect()
 
-        if self.model.current_lora and self.model.current_lora in self.lora_metadata:
-            del self.lora_metadata[self.model.current_lora]
+        self.lora_metadata = {}
         self.override_dict = {}
-        self.model.current_lora = None
 
     def list_loaded_loras(self):
         return list(self.lora_metadata.keys())
-
-    def get_current_lora(self):
-        return self.model.current_lora

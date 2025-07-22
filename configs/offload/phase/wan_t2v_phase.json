@@ -18,7 +18,7 @@
     "mm_config": {
         "mm_type": "W-int8-channel-sym-A-int8-channel-sym-dynamic-Q8F"
     },
-    "tiny_vae": true,
+    "use_tiny_vae": true,
     "tiny_vae_path": "/x2v_models/taew2_1.pth",
     "t5_offload_granularity": "block"
 }
