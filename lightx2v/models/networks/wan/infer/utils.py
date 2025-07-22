@@ -172,7 +172,7 @@ def sinusoidal_embedding_1d(dim, position):
     return x
 
 
-def guidance_scale_embedding(w, embedding_dim=256, cfg_range=(0.0, 8.0), target_range=1000.0, dtype=torch.float32):
+def guidance_scale_embedding(w, embedding_dim=256, cfg_range=(1.0, 6.0), target_range=1000.0, dtype=torch.float32):
     """
     Args:
     timesteps: torch.Tensor: generate embedding vectors at these timesteps
@@ -184,6 +184,8 @@ def guidance_scale_embedding(w, embedding_dim=256, cfg_range=(0.0, 8.0), target_
     """
     assert len(w.shape) == 1
     cfg_min, cfg_max = cfg_range
+    w = torch.round(w)
+    w = torch.clamp(w, min=cfg_min, max=cfg_max)
     w = (w - cfg_min) / (cfg_max - cfg_min)  # [0, 1]
     w = w * target_range
     half_dim = embedding_dim // 2

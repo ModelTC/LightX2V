@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path="/data/lightx2v-dev/"
-model_path="/data/lightx2v-dev/Wan2.1-T2V-14B/"
+lightx2v_path=
+model_path=
 
 # check section
 if [ -z "${CUDA_VISIBLE_DEVICES}" ]; then
