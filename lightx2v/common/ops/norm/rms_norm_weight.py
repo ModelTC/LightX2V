@@ -116,3 +116,33 @@ class RMSWeightSgl(RMSWeight):
                 input_tensor = (input_tensor * self.weight).type_as(input_tensor)
 
         return input_tensor
+
+
+@RMS_WEIGHT_REGISTER("Mgcdr")
+class RMSWeight(RMSWeightTemplate):
+    def __init__(self, weight_name, lazy_load=False, lazy_load_file=None, eps=1e-6):
+        super().__init__(weight_name, lazy_load, lazy_load_file, eps)
+
+    def load(self, weight_dict):
+        if not self.lazy_load:
+            self.weight = weight_dict[self.weight_name]
+            self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
+
+    def load_from_disk(self):
+        if not torch._dynamo.is_compiling():
+            self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(torch.bfloat16).pin_memory()
+        else:
+            self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(torch.bfloat16)
+
+    def apply(self, input_tensor):
+        input_dtype = input_tensor.dtype
+        input_tensor = input_tensor.to(torch.float32)
+        variance = input_tensor.pow(2).mean(-1, keepdim=True)
+        input_tensor = input_tensor * torch.rsqrt(variance + self.eps)
+        return self.weight * input_tensor.to(input_dtype)
+
+    def state_dict(self, destination=None):
+        if destination is None:
+            destination = {}
+        destination[self.weight_name] = self.weight.cpu().detach().clone()
+        return destination

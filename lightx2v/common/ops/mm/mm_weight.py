@@ -3,6 +3,7 @@ from abc import ABCMeta, abstractmethod
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 from lightx2v.utils.quant_utils import IntegerQuantizer, FloatQuantizer
 from lightx2v.utils.envs import *
+from torch.nn import functional as F
 from loguru import logger
 
 try:
@@ -630,6 +631,36 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             self.bias,
         )
         return output_tensor
+    
+    
+@MM_WEIGHT_REGISTER("Flinear")
+class MMWeight(MMWeightTemplate):
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+
+    def load(self, weight_dict):
+        self.weight = weight_dict[self.weight_name]
+        self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
+        self.bias = weight_dict[self.bias_name] if self.bias_name is not None else None
+        self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype) if self.bias is not None else None
+
+    def apply(self, input_tensor):
+        return F.linear(input_tensor, self.weight, self.bias)
+        # shape = (input_tensor.shape[0], self.weight.shape[1])
+        # dtype = input_tensor.dtype
+        # device = input_tensor.device
+        # output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        # if self.bias is None:
+        #     return torch.mm(input_tensor, self.weight, out=output_tensor)
+        # return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
+
+    def state_dict(self, destination=None):
+        if destination is None:
+            destination = {}
+        destination[self.weight_name] = self.weight.cpu().detach().clone().t().contiguous()
+        if hasattr(self, "bias") and self.bias is not None:
+            destination[self.bias_name] = self.bias.cpu().detach().clone()
+        return destination
 
 
 @MM_WEIGHT_REGISTER("W-int8-channel-sym-A-int8-channel-sym-dynamic-Torchao")

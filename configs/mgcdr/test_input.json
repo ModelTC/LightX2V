@@ -1,0 +1,86 @@
+{
+    "path_to_aoss_config": "/kaiwu_vepfs/kaiwu/xujin2/aoss.conf",
+    "pap_cam_init_path": "/iag_ad_01/ad/xujin2/data/carla/zhiji_cam_params2",
+    "s3_path": "",
+    "raw_meta_files": [
+        "/kaiwu_vepfs/kaiwu/hule/codes/drivescapedit/outputs_infer/test_checked"
+    ],
+    "caption_dir": null,
+    "sqrt_required_text_keys": [
+        "weather",
+        "time",
+        "lighting",
+        "road_type",
+        "general"
+    ],
+    "camera_list": [
+        "center_camera_fov120",
+        "right_front_camera",
+        "right_rear_camera",
+        "rear_camera",
+        "left_rear_camera",
+        "left_front_camera",
+        "center_camera_fov30"
+    ],
+    "sequence_length": [1, 9, 17, 33, 65],
+    "fps_list": [
+        [100],
+        [10],
+        [10],
+        [10],
+        [10]
+    ],
+    "data_fps": 10,
+    "split": "test",
+    "use_random_seed": false,
+    "expected_vae_size": [512, 1024],
+    "full_size": [512, 7168],
+    "user_frame_emb": true,
+    "data_split": "train",
+    "add_geo": true,
+    "scene_description_file": [
+        "/iag_ad_01/ad/xujin2/data/pap_pvb/caption_collect/zhiji.pkl"
+    ],
+    "random_caption": "random",
+    "random_caption_key": {
+        "weather": {
+        "choices": ["sunny", "foggy", "rainy", "cloudy", "clear", "snowy"],
+        "weights": [0.5, 0.1, 0.15, 0.1, 0.1, 0.05]
+        },
+        "time": {
+        "choices": [
+            "daytime",
+            "night time",
+            "evening",
+            "night",
+            "dusk",
+            "nighttime",
+            "early morning",
+            "time is irrelevant in the provided context"
+        ],
+        "weights": [0.55, 0.1, 0.05, 0.1, 0.1, 0.05, 0.1, 0.0]
+        },
+        "lighting": {
+        "choices": [
+            "bright",
+            "evening with street light",
+            "evening without street light",
+            "backlighting"
+        ],
+        "weights": [1.0, 0.0, 0.0, 0.0]
+        },
+        "road_type": {
+        "choices": ["urban", "highway", "countryside", "tunnel", "road"],
+        "weights": [0.25, 0.25, 0.2, 0.05, 0.25]
+        }
+    },
+    "caption_join_func": "format_caption",
+    "add_controller": {
+        "dataset_tag": "zhiji",
+        "controller": "zhiji"
+    },
+    "traj_edit_type": null,
+    "traj_param1": null,
+    "traj_param2": null,
+    "traj_param3": null
+}

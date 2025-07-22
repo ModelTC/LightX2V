@@ -9,6 +9,7 @@ import imageio
 import random
 
 import os
+from pydantic import BaseModel, ValidationError
 
 
 def seed_all(seed):
@@ -94,3 +95,14 @@ def cache_video(
     else:
         logger.info(f"cache_video failed, error: {error}", flush=True)
         return None
+
+
+def validate_dict(data: dict, model: BaseModel) -> bool:
+    try:
+        # 使用 Pydantic 的 parse_obj 方法进行验证
+        model.parse_obj(data)
+        return True  # 如果验证通过，返回 True
+    except ValidationError as e:
+        # 如果验证失败，打印错误信息并返回 False
+        print("Validation Error:", e)
+        return False

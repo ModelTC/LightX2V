@@ -117,25 +117,21 @@ Multiple configuration options are provided in the [configs/distill/](https://gi
 
 **Complete Model:**
 Place the downloaded model (`distill_model.pt` or `distill_model.safetensors`) in the `distill_models/` folder under the Wan model root directory:
-
 - For T2V: `Wan2.1-T2V-14B/distill_models/`
 - For I2V-480P: `Wan2.1-I2V-14B-480P/distill_models/`
 
 **LoRA:**
-
 1. Place the downloaded LoRA in any location
 2. Modify the `lora_path` parameter in the configuration file to the LoRA storage path
 
 ### Inference Scripts
 
 **T2V Complete Model:**
-
 ```bash
 bash scripts/wan/run_wan_t2v_distill_4step_cfg.sh
 ```
 
 **I2V Complete Model:**
-
 ```bash
 bash scripts/wan/run_wan_i2v_distill_4step_cfg.sh
 ```
@@ -143,13 +139,11 @@ bash scripts/wan/run_wan_i2v_distill_4step_cfg.sh
 ### Step Distillation LoRA Inference Scripts
 
 **T2V LoRA:**
-
 ```bash
 bash scripts/wan/run_wan_t2v_distill_4step_cfg_lora.sh
 ```
 
 **I2V LoRA:**
-
 ```bash
 bash scripts/wan/run_wan_i2v_distill_4step_cfg_lora.sh
 ```

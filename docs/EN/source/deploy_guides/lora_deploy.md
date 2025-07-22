@@ -27,7 +27,6 @@ Specify LoRA path in configuration file:
 ```
 
 **Configuration Parameter Description:**
-
 - `lora_path`: LoRA weight file path list, supports loading multiple LoRAs simultaneously
 - `strength_model`: LoRA strength coefficient (alpha), controls LoRA's influence on the original model
 
@@ -140,7 +139,6 @@ python tools/extract/lora_extractor.py \
 ### Advanced Usage Examples
 
 **Extract High-Rank LoRA:**
-
 ```bash
 python tools/extract/lora_extractor.py \
   --source-model /path/to/base/model \
@@ -151,7 +149,6 @@ python tools/extract/lora_extractor.py \
 ```
 
 **Save Weight Differences Only:**
-
 ```bash
 python tools/extract/lora_extractor.py \
   --source-model /path/to/base/model \
@@ -190,7 +187,6 @@ python tools/extract/lora_merger.py \
 ### Advanced Usage Examples
 
 **Partial Strength Merging:**
-
 ```bash
 python tools/extract/lora_merger.py \
   --source-model /path/to/base/model \
@@ -201,7 +197,6 @@ python tools/extract/lora_merger.py \
 ```
 
 **Multi-Format Support:**
-
 ```bash
 python tools/extract/lora_merger.py \
   --source-model /path/to/base/model.pt \

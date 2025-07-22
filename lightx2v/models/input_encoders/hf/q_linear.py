@@ -174,8 +174,9 @@ class Q8FQuantLinearInt8(nn.Module):
             self.register_buffer("bias", None)
 
     def act_quant_func(self, x):
-        input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
-        return input_tensor_quant, input_tensor_scale
+        # input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
+        # return input_tensor_quant, input_tensor_scale
+        pass
 
     def forward(self, x):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(x)

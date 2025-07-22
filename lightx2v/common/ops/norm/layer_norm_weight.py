@@ -2,6 +2,7 @@ import torch
 from abc import ABCMeta, abstractmethod
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
 from lightx2v.utils.envs import *
+from apex.normalization.fused_layer_norm import fused_layer_norm, fused_layer_norm_affine
 
 
 class LNWeightTemplate(metaclass=ABCMeta):

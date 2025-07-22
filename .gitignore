@@ -24,6 +24,7 @@
 *.mp4
 build/
 dist/
+mgcdr_inputs
 .cache/
 server_cache/
 app/.gradio/

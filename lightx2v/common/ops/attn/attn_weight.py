@@ -13,6 +13,7 @@ except ImportError:
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_varlen_func
+    from flash_attn import flash_attn_func
 except ImportError:
     logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
     flash_attn_varlen_func = None
@@ -66,6 +67,61 @@ class AttnWeightTemplate(metaclass=ABCMeta):
         if destination is None:
             destination = {}
         return destination
+
+
+@ATTN_WEIGHT_REGISTER("naive")
+class FlashAttn2Weight(AttnWeightTemplate):
+    def __init__(self):
+        self.config = {}
+
+    def apply(self, q, k, v, softmax_scale, is_causal, model_cls=None):
+        dtype = q.dtype
+        q = q * softmax_scale
+        attn = q @ k.transpose(-2, -1)  # translate attn to float32
+        attn = attn.to(torch.float32)
+        if is_causal:
+            causal_mask = torch.tril(torch.ones_like(attn), diagonal=0)
+            causal_mask = torch.where(causal_mask.bool(), 0, float('-inf'))
+            attn += causal_mask
+        attn = attn.softmax(dim=-1)
+        attn = attn.to(dtype)  # cast back attn to original dtype
+        x = attn @ v
+        x = x.transpose(1, 2).contiguous()
+        return x
+
+
+@ATTN_WEIGHT_REGISTER("flash_attn2_base")
+class FlashAttn2Weight(AttnWeightTemplate):
+    def __init__(self):
+        self.config = {}
+
+    def apply(self, q, k, v, dropout_p, softmax_scale, is_causal, model_cls=None):
+        x = flash_attn_func(
+            q,
+            k,
+            v,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            causal=is_causal,
+        )
+        return x
+
+
+@ATTN_WEIGHT_REGISTER("xformers")
+class FlashAttn2Weight(AttnWeightTemplate):
+    def __init__(self):
+        self.config = {}
+
+    def apply(self, q, k, v, dropout_p, softmax_scale, attn_bias, model_cls=None):
+        x = xformers.ops.memory_efficient_attention(
+            q, 
+            k, 
+            v, 
+            p=dropout_p,
+            attn_bias=attn_bias, 
+            scale=softmax_scale
+        )
+        return x
 
 
 @ATTN_WEIGHT_REGISTER("flash_attn2")

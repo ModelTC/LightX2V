@@ -15,7 +15,7 @@ class T5EncoderModel_v1_1_xxl:
     def to_cuda(self):
         self.model = self.model.to("cuda")
 
-    def infer(self, texts, config):
+    def infer(self, texts, config, return_attention_mask=False):
         text_inputs = self.tokenizer(
             texts,
             padding="max_length",
@@ -23,6 +23,7 @@ class T5EncoderModel_v1_1_xxl:
             truncation=True,
             add_special_tokens=True,
             return_tensors="pt",
+            return_attention_mask=return_attention_mask
         ).to("cuda")
 
         text_input_ids = text_inputs.input_ids
