@@ -353,6 +353,8 @@ def run_inference(
                 mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Sgl"
         elif quant_op == "q8f":
             mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Q8F"
+            t5_quant_scheme = f"{t5_quant_scheme}-q8f"
+            clip_quant_scheme = f"{clip_quant_scheme}-q8f"
 
         dit_quantized_ckpt = os.path.join(model_path, dit_quant_scheme)
         if os.path.exists(os.path.join(dit_quantized_ckpt, "config.json")):
