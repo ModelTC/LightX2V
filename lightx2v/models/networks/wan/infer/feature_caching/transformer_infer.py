@@ -687,7 +687,7 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
 # 1. FirstBlock
 class WanTransformerInferFirstBlock(WanTransformerInfer):
     # 1.1 初始化
-    def _init_(self, config):
+    def __init__(self, config):
         # 1.1 初始化
         super().__init__(config)
 
