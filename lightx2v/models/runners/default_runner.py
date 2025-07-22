@@ -49,12 +49,22 @@ class DefaultRunner(BaseRunner):
         else:
             self.init_device = torch.device("cuda")
 
+    def load_vfi_model(self):
+        if self.config.get("vfi", None) == "rife":
+            from lightx2v.models.vfi.rife.rife_comfyui_wrapper import RIFEWrapper
+
+            logger.info("Loading RIFE model...")
+            return RIFEWrapper()
+        else:
+            raise ValueError(f"Unsupported VFI model: {self.config['vfi']}")
+
     @ProfilingContext("Load models")
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
+        self.vfi_model = self.load_vfi_model()
 
     def check_sub_servers(self, task_type):
         urls = self.config.get("sub_servers", {}).get(task_type, [])
@@ -179,11 +189,6 @@ class DefaultRunner(BaseRunner):
             gc.collect()
         return images
 
-    @ProfilingContext("Save video")
-    def save_video_v2(self, images):
-        images = vae_to_comfyui_image(images)
-        save_to_video(images, self.config.save_video_path, fps=self.config.get("fps", 16), method="ffmpeg")  # type: ignore
-
     def post_prompt_enhancer(self):
         while True:
             for url in self.config["sub_servers"]["prompt_enhancer"]:
@@ -213,9 +218,19 @@ class DefaultRunner(BaseRunner):
         images = self.run_vae_decoder(latents, generator)
         images = vae_to_comfyui_image(images)
 
+        if self.vfi_model is not None and self.config.get("video_fps", None) is not None:
+            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {self.config.get('video_fps', 16)}")
+
+            images = self.vfi_model.interpolate_frames(
+                images,
+                source_fps=self.config.get("fps", 16),
+                target_fps=self.config.get("video_fps", 16),
+            )
+
         if save_video:
+            fps = self.config.get("video_fps", None) or self.config.get("fps", 16)
             logger.info(f"Saving video to {self.config.save_video_path}")
-            save_to_video(images, self.config.save_video_path, fps=self.config.get("fps", 16), method="ffmpeg")  # type: ignore
+            save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
 
         del latents, generator
         torch.cuda.empty_cache()

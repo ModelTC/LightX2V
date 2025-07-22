@@ -1,10 +1,17 @@
+import os
+from typing import List, Optional, Tuple
+
+from loguru import logger
 import torch
 from torch.nn import functional as F
-from typing import Tuple, Optional, List
+
+from lightx2v.utils.profiler import ProfilingContext
 
 
 class RIFEWrapper:
     """Wrapper for RIFE model to work with ComfyUI Image tensors"""
+
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     def __init__(self, model_dir: str = "train_log", device: Optional[torch.device] = None):
         """
@@ -14,7 +21,13 @@ class RIFEWrapper:
             model_dir: Directory containing trained model files
             device: Torch device (cuda/cpu). If None, will auto-detect
         """
-        self.model_dir = model_dir
+
+        if os.path.isabs(model_dir):
+            model_dir = model_dir
+        else:
+            model_dir = os.path.join(self.BASE_DIR, model_dir)
+        logger.info(f"Loading RIFE model from {model_dir}")
+
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Setup torch for optimal performance
@@ -24,13 +37,15 @@ class RIFEWrapper:
             torch.backends.cudnn.benchmark = True
 
         # Load model
-        from train_log.RIFE_HDv3 import Model
+        from .train_log.RIFE_HDv3 import Model
 
         self.model = Model()
-        self.model.load_model(model_dir, -1)
-        self.model.eval()
-        self.model.device()
+        with ProfilingContext("Load RIFE model"):
+            self.model.load_model(model_dir, -1)
+            self.model.eval()
+            self.model.device()
 
+    @ProfilingContext("Interpolate frames")
     def interpolate_frames(
         self,
         images: torch.Tensor,
@@ -52,6 +67,9 @@ class RIFEWrapper:
         """
         # Validate input
         assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
+
+        if source_fps == target_fps:
+            return images
 
         total_source_frames = images.shape[0]
         height, width = images.shape[1:3]

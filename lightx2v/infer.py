@@ -57,6 +57,8 @@ def main():
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file for audio-to-video (a2v) task")
 
     parser.add_argument("--save_video_path", type=str, default="./output_lightx2v.mp4", help="The path to save video path/file")
+    parser.add_argument("--video_fps", type=int, default=16, help="The fps of the output video")
+    parser.add_argument("--vfi", type=str, default=None, help="support: [rife]")
     args = parser.parse_args()
 
     logger.info(f"args: {args}")

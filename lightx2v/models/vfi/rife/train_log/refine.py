@@ -1,14 +1,8 @@
 import torch
 import torch.nn as nn
-import numpy as np
-from torch.optim import AdamW
-import torch.optim as optim
-import itertools
-from model.warplayer import warp
-from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
 
-device = torch.device("cuda")
+from ..model.warplayer import warp
 
 
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
