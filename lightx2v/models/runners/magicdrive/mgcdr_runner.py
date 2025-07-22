@@ -36,6 +36,15 @@ class MagicDriverRunner(DefaultRunner):
         self.num_sampling_steps = self.config.get("infer_steps", 1)
         self.num_timesteps = self.config.get("num_timesteps", 1000)
         self.guidance_scale = self.config.get("guidance_scale",  2.0)
+    
+    def get_encoder_output_i2v(self):
+        pass
+    
+    def load_image_encoder(self):
+        pass
+    
+    def run_image_encoder(self):
+        pass
         
     def init_modules(self):
         self.model = self.load_transformer()
