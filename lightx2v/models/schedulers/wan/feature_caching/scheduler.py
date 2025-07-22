@@ -43,3 +43,11 @@ class WanSchedulerFirstBlock(WanScheduler):
 
     def clear(self):
         self.transformer_infer.clear()
+
+
+class WanSchedulerDualBlock(WanScheduler):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def clear(self):
+        self.transformer_infer.clear()
