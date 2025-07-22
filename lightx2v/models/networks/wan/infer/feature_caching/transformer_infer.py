@@ -692,7 +692,7 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
         super().__init__(config)
 
         # 1.2 本方法: 阈值，29个block的缓存
-        self.residual_diff_threshold = 0.03
+        self.residual_diff_threshold = config.residual_diff_threshold
         self.prev_first_block_residual_even = None
         self.prev_remaining_blocks_residual_even = None
         self.prev_first_block_residual_odd = None
