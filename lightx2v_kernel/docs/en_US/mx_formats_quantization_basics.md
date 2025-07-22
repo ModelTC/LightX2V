@@ -6,9 +6,13 @@
 Target data format reference: [MX-Formats](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf). Note that we do not need to pack raw data and scale factors together here.
 
 Source data format: fp16/bf16
+
 Target data format: mxfp4/6/8
-Quantization factor data format: E8M0, *Per-Row/Per-Column quantization typically stores quantization factors in fp32, whereas E8M0 has the same numerical range as fp32. After rounding, the quantization factors can be stored directly, though the loss of mantissa bits may affect precision.*
+
+Quantization factor data format: E8M0, Per-Row/Per-Column quantization typically stores quantization factors in fp32, whereas E8M0 has the same numerical range as fp32. After rounding, the quantization factors can be stored directly, though the loss of mantissa bits may affect precision.
+
 Quantization granularity: \[1X32\]
+
 Quantization dimension: Following Cutlass GEMM conventions, where M, N, K represent the three dimensions of matrix multiplication, we should quantize along K dimension.
 
 ### Rounding and Clamp

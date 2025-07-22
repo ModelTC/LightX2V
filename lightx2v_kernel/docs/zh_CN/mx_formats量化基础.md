@@ -6,9 +6,13 @@
 目标数据格式参考：[MX-Formats](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf)，需要注意的是，我们这里不需要将raw data和scale factor打包在一起
 
 源数据格式：fp16/bf16
+
 目标数据格式：mxfp4/6/8
-量化因子数据格式：E8M0, *Per-Row/Per-Column量化的量化因子一般以fp32进行存储，而E8M0与fp32数值范围一致，经过rounding后可直接存储量化因子，缺点是尾数的丢失会影响精度。*
+
+量化因子数据格式：E8M0, Per-Row/Per-Column量化的量化因子一般以fp32进行存储，而E8M0与fp32数值范围一致，经过rounding后可直接存储量化因子，缺点是尾数的丢失会影响精度。
+
 量化粒度：\[1X32\]
+
 量化维度：以Cutlass GEMM的规范，M N K表示矩阵乘的三个维度，需要沿着K维度量化
 
 ### Rounding与Clamp
