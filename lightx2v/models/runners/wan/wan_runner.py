@@ -142,7 +142,7 @@ class WanRunner(DefaultRunner):
             "parallel": self.config.parallel_vae,
             "use_tiling": self.config.get("use_tiling_vae", False),
         }
-        if self.config.get("tiny_vae", False):
+        if self.config.get("use_tiny_vae", False):
             tiny_vae_path = self.config.get("tiny_vae_path", os.path.join(self.config.model_path, "taew2_1.pth"))
             vae_decoder = WanVAE_tiny(
                 vae_pth=tiny_vae_path,
@@ -154,7 +154,7 @@ class WanRunner(DefaultRunner):
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
-        if vae_encoder is None or self.config.get("tiny_vae", False):
+        if vae_encoder is None or self.config.get("use_tiny_vae", False):
             vae_decoder = self.load_vae_decoder()
         else:
             vae_decoder = vae_encoder

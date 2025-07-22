@@ -158,12 +158,12 @@ use_tiling_vae = True          # 启用VAE分块推理
 
 #### 轻量级VAE
 
-可以在这里下载：https://github.com/madebyollin/taehv/blob/main/taew2_1.pth
-
 ```python
 # VAE优化配置
-tiny_vae = True            # 使用轻量级VAE
+use_tiny_vae = True
+tiny_vae_path = "/path to taew2_1.pth"
 ```
+taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)下载
 
 **VAE优化效果**:
 - 标准VAE: 基准性能，100%质量保持

@@ -401,7 +401,7 @@ def run_inference(
         "clip_quantized_ckpt": clip_quant_ckpt,
         "clip_quant_scheme": clip_quant_scheme,
         "use_tiling_vae": use_tiling_vae,
-        "tiny_vae": use_tiny_vae,
+        "use_tiny_vae": use_tiny_vae,
         "tiny_vae_path": (os.path.join(model_path, "taew2_1.pth") if use_tiny_vae else None),
         "lazy_load": lazy_load,
         "do_mm_calib": False,

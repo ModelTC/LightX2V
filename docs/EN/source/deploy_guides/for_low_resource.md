@@ -158,12 +158,12 @@ use_tiling_vae = True          # Enable VAE chunked inference
 
 #### Lightweight VAE
 
-You can download it here: https://github.com/madebyollin/taehv/blob/main/taew2_1.pth
-
 ```python
 # VAE optimization configuration
-tiny_vae = True            # Use lightweight VAE
+use_tiny_vae = True            # Use lightweight VAE
+tiny_vae_path = "/path to taew2_1.pth"
 ```
+You can download taew2_1.pth [here](https://github.com/madebyollin/taehv/blob/main/taew2_1.pth)
 
 **VAE Optimization Effects**:
 - Standard VAE: Baseline performance, 100% quality retention
