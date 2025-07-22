@@ -6,7 +6,7 @@ Lightx2v 是一个轻量级的视频推理和生成引擎，提供基于 Gradio 
 
 对于Windows系统，我们提供了便捷的一键部署方式，支持自动环境配置和智能参数优化。详细操作请参考[一键启动Gradio](./deploy_local_windows.md/#一键启动gradio推荐)章节。
 
-![Gradio中文界面](../../../../assets/figs/portabl_windows/pig_gradio_zh.png)
+![Gradio中文界面](../../../../assets/figs/portabl_windows/pic_gradio_zh.png)
 
 ## 📁 文件结构
 

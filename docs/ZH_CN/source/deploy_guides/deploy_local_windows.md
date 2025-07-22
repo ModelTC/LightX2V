@@ -88,7 +88,7 @@ model_cls=wan2.1
 
 **💡 使用建议**: 当打开Gradio Web页面后，建议勾选"自动配置推理选项"，系统会自动选择合适的优化配置针对您的机器。当重新选择分辨率后，也需要重新勾选"自动配置推理选项"。
 
-![Gradio中文界面](../../../../assets/figs/portabl_windows/pig_gradio_zh.png)
+![Gradio中文界面](../../../../assets/figs/portabl_windows/pic_gradio_zh.png)
 
 **⚠️ 重要提示**:
 - **首次运行**: 系统会自动解压环境文件 `env.zip`，此过程需要几分钟时间，请耐心等待。后续启动无需重复此步骤。

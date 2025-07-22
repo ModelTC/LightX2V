@@ -6,7 +6,7 @@ Lightx2v is a lightweight video inference and generation engine that provides a 
 
 For Windows systems, we provide a convenient one-click deployment solution with automatic environment configuration and intelligent parameter optimization. Please refer to the [One-Click Gradio Startup (Recommended)](./deploy_local_windows.md/#one-click-gradio-startup-recommended) section for detailed instructions.
 
-![Gradio English Interface](../../../../assets/figs/portabl_windows/pig_gradio_en.png)
+![Gradio English Interface](../../../../assets/figs/portabl_windows/pic_gradio_en.png)
 
 ## 📁 File Structure
 

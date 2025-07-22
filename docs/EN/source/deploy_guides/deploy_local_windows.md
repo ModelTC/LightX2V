@@ -88,7 +88,7 @@ Double-click to run the `start_lightx2v.bat` file, the script will:
 
 **💡 Usage Suggestion**: After opening the Gradio Web page, it's recommended to check "Auto-configure Inference Options", the system will automatically select appropriate optimization configurations for your machine. When reselecting resolution, you also need to re-check "Auto-configure Inference Options".
 
-![Gradio English Interface](../../../../assets/figs/portabl_windows/pig_gradio_en.png)
+![Gradio English Interface](../../../../assets/figs/portabl_windows/pic_gradio_en.png)
 
 **⚠️ Important Notes**:
 - **First Run**: The system will automatically extract the environment file `env.zip`, which may take several minutes. Please be patient. Subsequent launches will skip this step.
