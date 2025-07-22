@@ -208,10 +208,11 @@ class DefaultRunner(BaseRunner):
         latents, generator = self.run_dit()
 
         images = self.run_vae_decoder(latents, generator)
+        images = vae_to_comfyui_image(images)
 
         if save_video:
             logger.info(f"Saving video to {self.config.save_video_path}")
-            self.save_video_v2(images)
+            save_to_video(images, self.config.save_video_path, fps=self.config.get("fps", 16), method="ffmpeg")  # type: ignore
 
         del latents, generator
         torch.cuda.empty_cache()
