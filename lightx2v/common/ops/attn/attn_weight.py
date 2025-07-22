@@ -3,6 +3,7 @@ import torch.nn as nn
 from abc import ABCMeta, abstractmethod
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 import torch.nn.functional as F
+import xformers.ops
 from loguru import logger
 
 try:
