@@ -746,7 +746,7 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
         diff = 1.0
         if self.infer_conditional:
             if self.prev_first_block_residual_even is not None:
-                t1 = self.prev_x_residual_even
+                t1 = self.prev_first_block_residual_even
                 t2 = x_residual
                 mean_diff = (t1 - t2).abs().mean()
                 mean_t1 = t1.abs().mean()
