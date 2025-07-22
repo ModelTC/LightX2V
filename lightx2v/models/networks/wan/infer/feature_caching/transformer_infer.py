@@ -782,9 +782,9 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
 
         # 1.3 记录残差缓存
         if self.infer_conditional:
-            self.prev_remaining_blocks_residual_even = x = ori_x
+            self.prev_remaining_blocks_residual_even = x - ori_x
         else:
-            self.prev_remaining_blocks_residual_odd = x = ori_x
+            self.prev_remaining_blocks_residual_odd = x - ori_x
         del ori_x
 
         # 1.4 返回x
