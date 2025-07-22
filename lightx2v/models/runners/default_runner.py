@@ -3,15 +3,13 @@ import requests
 from requests.exceptions import RequestException
 import torch
 import torch.distributed as dist
-import torchvision.transforms.functional as TF
 from PIL import Image
 from lightx2v.utils.profiler import ProfilingContext4Debug, ProfilingContext
-from lightx2v.utils.utils import save_videos_grid, cache_video
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.envs import *
-from lightx2v.utils.service_utils import TensorTransporter, ImageTransporter
 from loguru import logger
 from .base_runner import BaseRunner
+from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
 
 
 class DefaultRunner(BaseRunner):
@@ -179,9 +177,9 @@ class DefaultRunner(BaseRunner):
         return images
 
     @ProfilingContext("Save video")
-    def save_video(self, images):
-        if not self.config.parallel_attn_type or (self.config.parallel_attn_type and dist.get_rank() == 0):
-            self.save_video_func(images)
+    def save_video_v2(self, images):
+        images = vae_to_comfyui_image(images)
+        save_to_video(images, self.config.save_video_path, fps=self.config.get("fps", 16), method="ffmpeg")  # type: ignore
 
     def post_prompt_enhancer(self):
         while True:
@@ -212,7 +210,8 @@ class DefaultRunner(BaseRunner):
         images = self.run_vae_decoder(latents, generator)
 
         if save_video:
-            self.save_video(images)
+            logger.info(f"Saving video to {self.config.save_video_path}")
+            self.save_video_v2(images)
 
         del latents, generator
         torch.cuda.empty_cache()
