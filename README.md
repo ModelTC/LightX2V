@@ -63,6 +63,7 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 - **🔄 Parallel Inference**: Multi-GPU parallel processing for enhanced performance
 - **📱 Flexible Deployment Options**: Support for Gradio, service deployment, ComfyUI and other deployment methods
 - **🎛️ Dynamic Resolution Inference**: Adaptive resolution adjustment for optimal generation quality
+- **🎞️ Video Frame Interpolation**: RIFE-based frame interpolation for smooth frame rate enhancement
 
 
 ## 🏆 Performance Benchmarks
@@ -80,6 +81,7 @@ For detailed performance metrics and comparisons, please refer to our [benchmark
 - [Parameter Offloading](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/offload.html) - Three-tier storage architecture
 - [Parallel Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/parallel.html) - Multi-GPU acceleration strategies
 - [Step Distillation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/step_distill.html) - 4-step inference technology
+- [Video Frame Interpolation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/video_frame_interpolation.html) - RIFE-based frame interpolation
 
 ### 🛠️ **Deployment Guides**
 - [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) - Optimized 8GB VRAM solutions
