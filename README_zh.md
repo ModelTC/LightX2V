@@ -44,6 +44,22 @@
 ### 自回归模型
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 
+## 🚀 前端展示
+
+我们提供了多种前端界面部署方式：
+
+- **🎨 Gradio界面**: 简洁易用的Web界面，适合快速体验和原型开发
+  - 📖 [Gradio部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_gradio.html)
+- **🎯 ComfyUI界面**: 强大的节点式工作流界面，支持复杂的视频生成任务
+  - 📖 [ComfyUI部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_comfyui.html)
+- **🚀 Windows一键部署**: 专为Windows用户设计的便捷部署方案，支持自动环境配置和智能参数优化
+  - 📖 [Windows一键部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_local_windows.html)
+
+**💡 推荐方案**:
+- **首次使用**: 建议选择Windows一键部署方案
+- **高级用户**: 推荐使用ComfyUI界面获得更多自定义选项
+- **快速体验**: Gradio界面提供最直观的操作体验
+
 ## 🚀 核心特性
 
 ### 🎯 **极致性能优化**
@@ -61,7 +77,6 @@
 - **🔄 并行推理加速**: 多GPU并行处理，显著提升性能表现
 - **📱 灵活部署选择**: 支持Gradio、服务化部署、ComfyUI等多种部署方式
 - **🎛️ 动态分辨率推理**: 自适应分辨率调整，优化生成质量
-- **🎞️ 视频帧插值**: 基于RIFE的帧插值技术，实现流畅的帧率提升
 
 
 ## 🏆 性能基准测试

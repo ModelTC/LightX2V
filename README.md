@@ -45,6 +45,21 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 ### Autoregressive Models
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 
+## 🚀 Frontend Interfaces
+
+We provide multiple frontend interface deployment options:
+
+- **🎨 Gradio Interface**: Clean and user-friendly web interface, perfect for quick experience and prototyping
+  - 📖 [Gradio Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html)
+- **🎯 ComfyUI Interface**: Powerful node-based workflow interface, supporting complex video generation tasks
+  - 📖 [ComfyUI Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_comfyui.html)
+- **🚀 Windows One-Click Deployment**: Convenient deployment solution designed for Windows users, featuring automatic environment configuration and intelligent parameter optimization
+  - 📖 [Windows One-Click Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_local_windows.html)
+
+**💡 Recommended Solutions**:
+- **First-time Users**: We recommend the Windows one-click deployment solution
+- **Advanced Users**: We recommend the ComfyUI interface for more customization options
+- **Quick Experience**: The Gradio interface provides the most intuitive operation experience
 
 ## 🚀 Core Features
 
@@ -81,7 +96,6 @@ For detailed performance metrics and comparisons, please refer to our [benchmark
 - [Parameter Offloading](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/offload.html) - Three-tier storage architecture
 - [Parallel Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/parallel.html) - Multi-GPU acceleration strategies
 - [Step Distillation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/step_distill.html) - 4-step inference technology
-- [Video Frame Interpolation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/video_frame_interpolation.html) - RIFE-based frame interpolation
 
 ### 🛠️ **Deployment Guides**
 - [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) - Optimized 8GB VRAM solutions

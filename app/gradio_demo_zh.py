@@ -128,10 +128,10 @@ def cleanup_memory():
         pass
 
 
-def generate_unique_filename(base_dir="./saved_videos"):
-    os.makedirs(base_dir, exist_ok=True)
+def generate_unique_filename(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(base_dir, f"{model_cls}_{timestamp}.mp4")
+    return os.path.join(output_dir, f"{model_cls}_{timestamp}.mp4")
 
 
 def is_fp8_supported_gpu():
@@ -302,7 +302,7 @@ def run_inference(
                 ],
             ]
 
-    save_video_path = generate_unique_filename()
+    save_video_path = generate_unique_filename(output_dir)
 
     is_dit_quant = dit_quant_scheme != "bf16"
     is_t5_quant = t5_quant_scheme != "bf16"
@@ -867,15 +867,35 @@ def main():
 
                                 with gr.Column():
                                     # 根据模型类别设置默认推理步数
-                                    default_infer_steps = 4 if model_cls == "wan2.1_distill" else 40
-                                    infer_steps = gr.Slider(
-                                        label="推理步数",
-                                        minimum=1,
-                                        maximum=100,
-                                        step=1,
-                                        value=default_infer_steps,
-                                        info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
-                                    )
+                                    if model_cls == "wan2.1_distill":
+                                        infer_steps = gr.Slider(
+                                            label="推理步数",
+                                            minimum=4,
+                                            maximum=4,
+                                            step=1,
+                                            value=4,
+                                            interactive=False,
+                                            info="推理步数固定为4，以获得最佳性能(对于蒸馏模型)。",
+                                        )
+                                    elif model_cls == "wan2.1":
+                                        if task == "i2v":
+                                            infer_steps = gr.Slider(
+                                                label="推理步数",
+                                                minimum=1,
+                                                maximum=100,
+                                                step=1,
+                                                value=40,
+                                                info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
+                                            )
+                                        elif task == "t2v":
+                                            infer_steps = gr.Slider(
+                                                label="推理步数",
+                                                minimum=1,
+                                                maximum=100,
+                                                step=1,
+                                                value=50,
+                                                info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
+                                            )
 
                             # 根据模型类别设置默认CFG
                             default_enable_cfg = False if model_cls == "wan2.1_distill" else True
@@ -920,7 +940,7 @@ def main():
 
                         save_video_path = gr.Textbox(
                             label="输出视频路径",
-                            value=generate_unique_filename(),
+                            value=generate_unique_filename(output_dir),
                             info="必须包含.mp4扩展名。如果留空或使用默认值，将自动生成唯一文件名。",
                         )
                     with gr.Column(scale=6):
@@ -1199,7 +1219,7 @@ def main():
                 outputs=output_video,
             )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True)
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
 
 
 if __name__ == "__main__":
@@ -1216,12 +1236,14 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="指定任务类型。'i2v'用于图像到视频转换，'t2v'用于文本到视频生成。")
     parser.add_argument("--server_port", type=int, default=7862, help="服务器端口")
     parser.add_argument("--server_name", type=str, default="0.0.0.0", help="服务器IP")
+    parser.add_argument("--output_dir", type=str, default="./outputs", help="输出视频保存目录")
     args = parser.parse_args()
 
-    global model_path, model_cls, model_size
+    global model_path, model_cls, model_size, output_dir
     model_path = args.model_path
     model_cls = args.model_cls
     model_size = args.model_size
     task = args.task
+    output_dir = args.output_dir
 
     main()

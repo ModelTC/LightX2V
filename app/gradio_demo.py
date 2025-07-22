@@ -126,10 +126,10 @@ def cleanup_memory():
         pass
 
 
-def generate_unique_filename(base_dir="./saved_videos"):
-    os.makedirs(base_dir, exist_ok=True)
+def generate_unique_filename(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(base_dir, f"{model_cls}_{timestamp}.mp4")
+    return os.path.join(output_dir, f"{model_cls}_{timestamp}.mp4")
 
 
 def is_fp8_supported_gpu():
@@ -300,7 +300,7 @@ def run_inference(
                 ],
             ]
 
-    save_video_path = generate_unique_filename()
+    save_video_path = generate_unique_filename(output_dir)
 
     is_dit_quant = dit_quant_scheme != "bf16"
     is_t5_quant = t5_quant_scheme != "bf16"
@@ -744,7 +744,7 @@ def auto_configure(enable_auto_config, resolution):
 
 def main():
     def toggle_image_input(task):
-        return gr.update(visible=(task == "Image to Video"))
+        return gr.update(visible=(task == "i2v"))
 
     with gr.Blocks(
         title="Lightx2v (Lightweight Video Inference and Generation Engine)",
@@ -865,15 +865,35 @@ def main():
 
                                 with gr.Column():
                                     # Set default inference steps based on model class
-                                    default_infer_steps = 4 if model_cls == "wan2.1_distill" else 40
-                                    infer_steps = gr.Slider(
-                                        label="Inference Steps",
-                                        minimum=1,
-                                        maximum=100,
-                                        step=1,
-                                        value=default_infer_steps,
-                                        info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
-                                    )
+                                    if model_cls == "wan2.1_distill":
+                                        infer_steps = gr.Slider(
+                                            label="Inference Steps",
+                                            minimum=4,
+                                            maximum=4,
+                                            step=1,
+                                            value=4,
+                                            interactive=False,
+                                            info="Inference steps fixed at 4 for optimal performance for distill model.",
+                                        )
+                                    elif model_cls == "wan2.1":
+                                        if task == "i2v":
+                                            infer_steps = gr.Slider(
+                                                label="Inference Steps",
+                                                minimum=1,
+                                                maximum=100,
+                                                step=1,
+                                                value=40,
+                                                info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
+                                            )
+                                        elif task == "t2v":
+                                            infer_steps = gr.Slider(
+                                                label="Inference Steps",
+                                                minimum=1,
+                                                maximum=100,
+                                                step=1,
+                                                value=50,
+                                                info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
+                                            )
 
                             # Set default CFG based on model class
                             default_enable_cfg = False if model_cls == "wan2.1_distill" else True
@@ -918,7 +938,7 @@ def main():
 
                         save_video_path = gr.Textbox(
                             label="Output Video Path",
-                            value=generate_unique_filename(),
+                            value=generate_unique_filename(output_dir),
                             info="Must include .mp4 extension. If left blank or using the default value, a unique filename will be automatically generated.",
                         )
                     with gr.Column(scale=6):
@@ -1199,7 +1219,7 @@ def main():
                 outputs=output_video,
             )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True)
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
 
 
 if __name__ == "__main__":
@@ -1216,12 +1236,14 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="Specify the task type. 'i2v' for image-to-video translation, 't2v' for text-to-video generation.")
     parser.add_argument("--server_port", type=int, default=7862, help="Server port")
     parser.add_argument("--server_name", type=str, default="0.0.0.0", help="Server ip")
+    parser.add_argument("--output_dir", type=str, default="./outputs", help="Output video save directory")
     args = parser.parse_args()
 
-    global model_path, model_cls, model_size
+    global model_path, model_cls, model_size, output_dir
     model_path = args.model_path
     model_cls = args.model_cls
     model_size = args.model_size
     task = args.task
+    output_dir = args.output_dir
 
     main()
