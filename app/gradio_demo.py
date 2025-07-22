@@ -140,6 +140,18 @@ def is_fp8_supported_gpu():
     return (major == 8 and minor == 9) or (major >= 9)
 
 
+def is_ada_architecture_gpu():
+    if not torch.cuda.is_available():
+        return False
+    try:
+        gpu_name = torch.cuda.get_device_name(0).upper()
+        ada_keywords = ["RTX 40", "RTX40", "4090", "4080", "4070", "4060"]
+        return any(keyword in gpu_name for keyword in ada_keywords)
+    except Exception as e:
+        logger.warning(f"Failed to get GPU name: {e}")
+        return False
+
+
 global_runner = None
 current_config = None
 cur_dit_quant_scheme = None
@@ -506,7 +518,11 @@ def auto_configure(enable_auto_config, resolution):
         quant_type = "int8"
 
     attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
-    quant_op_priority = ["sgl", "vllm", "q8f"]
+
+    if is_ada_architecture_gpu():
+        quant_op_priority = ["q8f", "vllm", "sgl"]
+    else:
+        quant_op_priority = ["sgl", "vllm", "q8f"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -736,6 +752,30 @@ def main():
         .warning { color: #ff6b6b; font-weight: bold; }
         .advanced-options { background: #f9f9ff; border-radius: 10px; padding: 15px; }
         .tab-button { font-size: 16px; padding: 10px 20px; }
+        .auto-config-title {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            text-align: center;
+            margin: 0 !important;
+            padding: 8px;
+            border: 2px solid #4ecdc4;
+            border-radius: 8px;
+            background-color: #f0f8ff;
+        }
+        .auto-config-checkbox {
+            border: 2px solid #ff6b6b !important;
+            border-radius: 8px !important;
+            padding: 10px !important;
+            background: linear-gradient(135deg, #fff5f5, #f0fff0) !important;
+            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.2) !important;
+        }
+        .auto-config-checkbox label {
+            font-size: 16px !important;
+            font-weight: bold !important;
+            color: #2c3e50 !important;
+        }
     """,
     ) as demo:
         gr.Markdown(f"# 🎬 {model_cls} Video Generator")
@@ -800,11 +840,14 @@ def main():
                                     )
 
                                 with gr.Column():
-                                    enable_auto_config = gr.Checkbox(
-                                        label="Auto-configure Inference Options",
-                                        value=False,
-                                        info="Automatically optimize GPU settings to match the current resolution. After changing the resolution, please re-check this option to prevent potential performance degradation or runtime errors.",
-                                    )
+                                    with gr.Group():
+                                        gr.Markdown("### 🚀 **Smart Configuration Recommendation**", elem_classes=["auto-config-title"])
+                                        enable_auto_config = gr.Checkbox(
+                                            label="🎯 **Auto-configure Inference Options**",
+                                            value=False,
+                                            info="💡 **Automatically optimize GPU settings to match the current resolution. After changing the resolution, please re-check this option to prevent potential performance degradation or runtime errors.**",
+                                            elem_classes=["auto-config-checkbox"],
+                                        )
                                 with gr.Column(scale=9):
                                     seed = gr.Slider(
                                         label="Random Seed",

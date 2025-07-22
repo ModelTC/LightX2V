@@ -143,8 +143,9 @@ class WanRunner(DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
         }
         if self.config.get("tiny_vae", False):
+            tiny_vae_path = self.config.get("tiny_vae_path", os.path.join(self.config.model_path, "taew2_1.pth"))
             vae_decoder = WanVAE_tiny(
-                vae_pth=self.config.tiny_vae_path,
+                vae_pth=tiny_vae_path,
                 device=self.init_device,
             ).to("cuda")
         else:

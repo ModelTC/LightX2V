@@ -156,11 +156,13 @@ VAE (Variational Autoencoder) is a key component in video generation, and optimi
 use_tiling_vae = True          # Enable VAE chunked inference
 ```
 
-#### [Lightweight VAE](https://github.com/madebyollin/taehv/blob/main/taew2_1.pth)
+#### Lightweight VAE
+
+You can download it here: https://github.com/madebyollin/taehv/blob/main/taew2_1.pth
 
 ```python
 # VAE optimization configuration
-use_tiny_vae = True            # Use lightweight VAE
+tiny_vae = True            # Use lightweight VAE
 ```
 
 **VAE Optimization Effects**:

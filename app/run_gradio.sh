@@ -18,7 +18,7 @@ lightx2v_path=/path/to/lightx2v
 # Model path configuration
 # Image-to-video model path (for i2v tasks)
 # Example: /path/to/Wan2.1-I2V-14B-720P-Lightx2v
-i2v_model_path=/path/to/Wan2.1-I2V-14B-720P-Lightx2v-Step-Distill
+i2v_model_path=/Wan_0718/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/
 
 # Text-to-video model path (for t2v tasks)
 # Example: /path/to/Wan2.1-T2V-1.3B
@@ -222,7 +222,7 @@ fi
 echo "🎬 Starting Gradio demo..."
 echo "📱 Please access in browser: http://$server_name:$server_port"
 echo "⏹️  Press Ctrl+C to stop service"
-echo "🔄 First startup may take several minutes to load model..."
+echo "🔄 First startup may take several minutes to load resources..."
 echo "=========================================="
 
 # Start Python demo

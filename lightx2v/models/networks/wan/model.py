@@ -41,6 +41,7 @@ class WanModel:
             self.dit_quantized_ckpt = self.config.get("dit_quantized_ckpt", os.path.join(model_path, dit_quant_scheme))
         else:
             self.dit_quantized_ckpt = None
+        self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
         self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
         if self.dit_quantized:
             assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
