@@ -142,7 +142,7 @@ class IFNet(nn.Module):
         fastmode=True,
         ensemble=False,
     ):
-        if training == False:
+        if not training:
             channel = x.shape[1] // 2
             img0 = x[:, :channel]
             img1 = x[:, channel:]
