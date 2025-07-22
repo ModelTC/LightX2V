@@ -50,11 +50,11 @@ class DefaultRunner(BaseRunner):
             self.init_device = torch.device("cuda")
 
     def load_vfi_model(self):
-        if self.config.get("vfi", None) == "rife":
+        if self.config["video_frame_interpolation"].get("algo", None) == "rife":
             from lightx2v.models.vfi.rife.rife_comfyui_wrapper import RIFEWrapper
 
             logger.info("Loading RIFE model...")
-            return RIFEWrapper()
+            return RIFEWrapper(self.config["video_frame_interpolation"]["model_path"])
         else:
             raise ValueError(f"Unsupported VFI model: {self.config['vfi']}")
 
@@ -64,7 +64,7 @@ class DefaultRunner(BaseRunner):
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
-        self.vfi_model = self.load_vfi_model()
+        self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def check_sub_servers(self, task_type):
         urls = self.config.get("sub_servers", {}).get(task_type, [])
@@ -218,9 +218,9 @@ class DefaultRunner(BaseRunner):
         images = self.run_vae_decoder(latents, generator)
         images = vae_to_comfyui_image(images)
 
-        if self.vfi_model is not None and self.config.get("video_fps", None) is not None:
+        if "video_frame_interpolation" in self.config:
+            assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
             logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {self.config.get('video_fps', 16)}")
-
             images = self.vfi_model.interpolate_frames(
                 images,
                 source_fps=self.config.get("fps", 16),

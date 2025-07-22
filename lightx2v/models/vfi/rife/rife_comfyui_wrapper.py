@@ -13,21 +13,7 @@ class RIFEWrapper:
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    def __init__(self, model_dir: str = "train_log", device: Optional[torch.device] = None):
-        """
-        Initialize RIFE wrapper
-
-        Args:
-            model_dir: Directory containing trained model files
-            device: Torch device (cuda/cpu). If None, will auto-detect
-        """
-
-        if os.path.isabs(model_dir):
-            model_dir = model_dir
-        else:
-            model_dir = os.path.join(self.BASE_DIR, model_dir)
-        logger.info(f"Loading RIFE model from {model_dir}")
-
+    def __init__(self, model_path, device: Optional[torch.device] = None):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Setup torch for optimal performance
@@ -41,7 +27,7 @@ class RIFEWrapper:
 
         self.model = Model()
         with ProfilingContext("Load RIFE model"):
-            self.model.load_model(model_dir, -1)
+            self.model.load_model(model_path, -1)
             self.model.eval()
             self.model.device()
 
