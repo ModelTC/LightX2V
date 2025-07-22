@@ -795,3 +795,10 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
             return x.add_(self.prev_remaining_blocks_residual_even)
         else:
             return x.add_(self.prev_remaining_blocks_residual_odd)
+
+    def clear(self):
+        self.prev_first_block_residual_even = None
+        self.prev_remaining_blocks_residual_even = None
+        self.prev_first_block_residual_odd = None
+        self.prev_remaining_blocks_residual_odd = None
+        torch.cuda.empty_cache()
