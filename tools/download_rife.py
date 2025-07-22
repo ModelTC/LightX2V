@@ -6,6 +6,7 @@ import sys
 import requests
 import zipfile
 import shutil
+import argparse
 from pathlib import Path
 
 
@@ -53,9 +54,17 @@ def find_flownet_pkl(extract_dir):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Download RIFE model to specified directory")
+    parser.add_argument("target_directory", help="Target directory path")
+
+    args = parser.parse_args()
+
+    target_dir = Path(args.target_directory)
+    if not target_dir.is_absolute():
+        target_dir = Path.cwd() / target_dir
+
     base_dir = get_base_dir()
     temp_dir = base_dir / "_temp"
-    target_dir = base_dir / "lightx2v" / "models" / "vfi" / "rife" / "train_log"
 
     # Create temporary directory
     temp_dir.mkdir(exist_ok=True)

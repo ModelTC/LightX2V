@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Video Frame Interpolation Example Script for WAN T2V
+# This script demonstrates how to use RIFE frame interpolation with LightX2V
+# VFI is enabled through configuration file, not command line parameters
+
 # set path and first
 lightx2v_path=
 model_path=
@@ -22,14 +26,13 @@ if [ -z "${model_path}" ]; then
 fi
 
 export TOKENIZERS_PARALLELISM=false
-
 export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
-
 export ENABLE_PROFILING_DEBUG=true
 export ENABLE_GRAPH_MODE=false
 export DTYPE=BF16  # remove this can get high quality video
 
-
+# Run inference with VFI enabled through config file
+# The wan_t2v.json config contains video_frame_interpolation settings
 python -m lightx2v.infer \
 --model_cls wan2.1 \
 --task t2v \

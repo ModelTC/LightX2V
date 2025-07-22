@@ -1,5 +1,7 @@
 # 视频帧插值 (VFI)
 
+> **重要说明**: 视频帧插值功能通过配置文件启用，而不是通过命令行参数。请在配置 JSON 文件中添加 `video_frame_interpolation` 配置块来启用此功能。
+
 ## 概述
 
 视频帧插值（VFI）是一种在现有帧之间生成中间帧的技术，用于提高帧率并创建更流畅的视频播放效果。LightX2V 集成了 RIFE（Real-Time Intermediate Flow Estimation）模型，提供高质量的帧插值能力。
@@ -20,7 +22,12 @@ RIFE 是一种最先进的视频帧插值方法，使用光流估计来生成中
 首先，使用提供的脚本下载 RIFE 模型权重：
 
 ```bash
-python tools/download_rife.py
+python tools/download_rife.py <目标目录>
+```
+
+例如，下载到指定位置：
+```bash
+python tools/download_rife.py /path/to/rife/train_log
 ```
 
 此脚本将：
@@ -28,48 +35,59 @@ python tools/download_rife.py
 - 提取并将模型文件放置在正确的目录中
 - 清理临时文件
 
-### 模型位置
-
-RIFE 模型将安装到：
-```
-lightx2v/models/vfi/rife/train_log/flownet.pkl
-```
-
 ## 使用方法
 
-### 命令行界面
+### 配置文件设置
 
-通过添加 `--vfi rife` 和 `--video_fps` 参数来启用 RIFE 帧插值：
+视频帧插值功能通过配置文件启用。在你的配置 JSON 文件中添加 `video_frame_interpolation` 配置块：
+
+```json
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "fps": 16,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 32,
+        "model_path": "/path/to/rife/train_log"
+    }
+}
+```
+
+### 命令行使用
+
+使用包含 VFI 配置的配置文件运行推理：
 
 ```bash
 python lightx2v/infer.py \
     --model_cls wan2.1 \
     --task t2v \
     --model_path /path/to/model \
-    --config_json /path/to/config.json \
+    --config_json ./configs/video_frame_interpolation/wan_t2v.json \
     --prompt "美丽的海上日落" \
-    --save_video_path ./output.mp4 \
-    --vfi rife \
-    --video_fps 32
+    --save_video_path ./output.mp4
 ```
 
-### 参数说明
+### 配置参数说明
 
-- `--vfi rife`: 启用 RIFE 帧插值
-- `--video_fps`: 输出视频的目标帧率
+在 `video_frame_interpolation` 配置块中：
 
-### 配置设置
+- `algo`: 帧插值算法，目前支持 "rife"
+- `target_fps`: 输出视频的目标帧率
+- `model_path`: RIFE 模型路径，通常为 "train_log"
 
-当在配置中指定时，VFI 模型会自动加载。您也可以通过编程方式设置：
+其他相关配置：
+- `fps`: 源视频帧率（默认 16）
 
-```python
-config = {
-    "vfi": "rife",
-    "fps": 16,        # 源帧率
-    "video_fps": 32,  # 目标帧率
-    # ... 其他配置选项
-}
-```
+### 配置优先级
+
+系统会自动处理视频帧率配置，优先级如下：
+1. `video_frame_interpolation.target_fps` - 如果启用视频帧插值，使用此帧率作为输出帧率
+2. `fps`（默认 16）- 如果未启用视频帧插值，使用此帧率；同时总是用作源帧率
+
+**注意**: 系统不再使用 `video_fps` 配置项，统一使用 `video_frame_interpolation.target_fps` 来控制输出视频的帧率。
 
 ## 工作原理
 
@@ -87,35 +105,73 @@ config = {
 - **处理**: 自动填充和分辨率处理
 - **内存优化**: 高效的 GPU 内存管理
 
-## 示例
+## 示例配置
 
 ### 基础帧率翻倍
 
+创建配置文件 `wan_t2v_vfi_32fps.json`：
+
+```json
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "seed": 42,
+    "sample_guide_scale": 6,
+    "enable_cfg": true,
+    "fps": 16,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 32,
+        "model_path": "/path/to/rife/train_log"
+    }
+}
+```
+
+运行命令：
 ```bash
-# 生成 16 FPS 视频并插值到 32 FPS
 python lightx2v/infer.py \
     --model_cls wan2.1 \
     --task t2v \
     --model_path ./models/wan2.1 \
-    --config_json ./configs/wan2.1_t2v.json \
+    --config_json ./wan_t2v_vfi_32fps.json \
     --prompt "一只小猫在花园里玩耍" \
-    --vfi rife \
-    --video_fps 32
+    --save_video_path ./output_32fps.mp4
 ```
 
 ### 更高帧率增强
 
+创建配置文件 `wan_i2v_vfi_60fps.json`：
+
+```json
+{
+    "infer_steps": 30,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "seed": 42,
+    "sample_guide_scale": 6,
+    "enable_cfg": true,
+    "fps": 16,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 60,
+        "model_path": "/path/to/rife/train_log"
+    }
+}
+```
+
+运行命令：
 ```bash
-# 生成 16 FPS 视频并插值到 60 FPS
 python lightx2v/infer.py \
     --model_cls wan2.1 \
     --task i2v \
     --model_path ./models/wan2.1 \
-    --config_json ./configs/wan2.1_i2v.json \
+    --config_json ./wan_i2v_vfi_60fps.json \
     --image_path ./input.jpg \
     --prompt "平滑的相机运动" \
-    --vfi rife \
-    --video_fps 60
+    --save_video_path ./output_60fps.mp4
 ```
 
 ## 性能考虑
@@ -163,15 +219,22 @@ python lightx2v/infer.py \
 
 #### 解决方案
 
-```bash
-# 对于内存问题，使用较低分辨率
---resolution 480
+通过修改配置文件来解决问题：
 
-# 对于质量问题，使用适度插值
---video_fps 24  # 而不是 60
+```json
+{
+    // 内存问题解决：使用较低分辨率
+    "target_height": 480,
+    "target_width": 832,
 
-# 对于性能问题，启用卸载
---cpu_offload
+    // 质量问题解决：使用适中的插值
+    "video_frame_interpolation": {
+        "target_fps": 24  // 而不是 60
+    },
+
+    // 性能问题解决：启用卸载
+    "cpu_offload": true
+}
 ```
 
 ## 技术实现
@@ -179,15 +242,6 @@ python lightx2v/infer.py \
 LightX2V 中的 RIFE 集成包括：
 
 - **RIFEWrapper**: 与 ComfyUI 兼容的 RIFE 模型包装器
-- **自动模型加载**: 与推理流水线无缝集成
+- **自动模型加载**: 与推理管道的无缝集成
 - **内存优化**: 高效的张量管理和 GPU 内存使用
 - **质量保持**: 在添加帧的同时保持原始视频质量
-
-## 未来增强
-
-LightX2V 中 VFI 的计划改进：
-
-- 支持额外的 VFI 模型
-- 基于运动分析的自适应插值
-- 生成过程中的实时预览
-- 批处理优化 

@@ -220,15 +220,19 @@ class DefaultRunner(BaseRunner):
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
-            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {self.config.get('video_fps', 16)}")
+            target_fps = self.config["video_frame_interpolation"]["target_fps"]
+            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {target_fps}")
             images = self.vfi_model.interpolate_frames(
                 images,
                 source_fps=self.config.get("fps", 16),
-                target_fps=self.config.get("video_fps", 16),
+                target_fps=target_fps,
             )
 
         if save_video:
-            fps = self.config.get("video_fps", None) or self.config.get("fps", 16)
+            if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
+                fps = self.config["video_frame_interpolation"]["target_fps"]
+            else:
+                fps = self.config.get("fps", 16)
             logger.info(f"Saving video to {self.config.save_video_path}")
             save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
 

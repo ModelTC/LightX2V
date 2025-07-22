@@ -1,5 +1,7 @@
 # Video Frame Interpolation (VFI)
 
+> **Important Note**: Video frame interpolation is enabled through configuration files, not command-line parameters. Please add a `video_frame_interpolation` configuration block to your JSON config file to enable this feature.
+
 ## Overview
 
 Video Frame Interpolation (VFI) is a technique that generates intermediate frames between existing frames to increase the frame rate and create smoother video playback. LightX2V integrates the RIFE (Real-Time Intermediate Flow Estimation) model to provide high-quality frame interpolation capabilities.
@@ -20,7 +22,12 @@ RIFE is a state-of-the-art video frame interpolation method that uses optical fl
 First, download the RIFE model weights using the provided script:
 
 ```bash
-python tools/download_rife.py
+python tools/download_rife.py <target_directory>
+```
+
+For example, to download to the location:
+```bash
+python tools/download_rife.py /path/to/rife/train_log
 ```
 
 This script will:
@@ -28,48 +35,58 @@ This script will:
 - Extract and place the model files in the correct directory
 - Clean up temporary files
 
-### Model Location
-
-The RIFE model will be installed to:
-```
-lightx2v/models/vfi/rife/train_log/flownet.pkl
-```
-
 ## Usage
+
+### Configuration File Setup
+
+Video frame interpolation is enabled through configuration files. Add a `video_frame_interpolation` configuration block to your JSON config file:
+
+```json
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "fps": 16,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 32,
+        "model_path": "/path/to/rife/train_log"
+    }
+}
+```
 
 ### Command Line Interface
 
-You can enable RIFE frame interpolation by adding the `--vfi rife` and `--video_fps` parameters:
+Run inference using a configuration file that includes VFI settings:
 
 ```bash
 python lightx2v/infer.py \
     --model_cls wan2.1 \
     --task t2v \
     --model_path /path/to/model \
-    --config_json /path/to/config.json \
+    --config_json ./configs/video_frame_interpolation/wan_t2v.json \
     --prompt "A beautiful sunset over the ocean" \
-    --save_video_path ./output.mp4 \
-    --vfi rife \
-    --video_fps 32
+    --save_video_path ./output.mp4
 ```
 
-### Parameters
+### Configuration Parameters
 
-- `--vfi rife`: Enable RIFE frame interpolation
-- `--video_fps`: Target frame rate for the output video
+In the `video_frame_interpolation` configuration block:
 
-### Configuration
+- `algo`: Frame interpolation algorithm, currently supports "rife"
+- `target_fps`: Target frame rate for the output video
+- `model_path`: RIFE model path, typically "/path/to/rife/train_log"
 
-The VFI model is automatically loaded when specified in the configuration. You can also set it programmatically:
+Other related configurations:
+- `fps`: Source video frame rate (default 16)
 
-```python
-config = {
-    "vfi": "rife",
-    "fps": 16,        # Source frame rate
-    "video_fps": 32,  # Target frame rate
-    # ... other config options
-}
-```
+### Configuration Priority
+
+The system automatically handles video frame rate configuration with the following priority:
+1. `video_frame_interpolation.target_fps` - If video frame interpolation is enabled, this frame rate is used as the output frame rate
+2. `fps` (default 16) - If video frame interpolation is not enabled, this frame rate is used; it's always used as the source frame rate
+
 
 ## How It Works
 
@@ -87,35 +104,73 @@ config = {
 - **Processing**: Automatic padding and resolution handling
 - **Memory Optimization**: Efficient GPU memory management
 
-## Examples
+## Example Configurations
 
 ### Basic Frame Rate Doubling
 
+Create configuration file `wan_t2v_vfi_32fps.json`:
+
+```json
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "seed": 42,
+    "sample_guide_scale": 6,
+    "enable_cfg": true,
+    "fps": 16,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 32,
+        "model_path": "/path/to/rife/train_log"
+    }
+}
+```
+
+Run command:
 ```bash
-# Generate 16 FPS video and interpolate to 32 FPS
 python lightx2v/infer.py \
     --model_cls wan2.1 \
     --task t2v \
     --model_path ./models/wan2.1 \
-    --config_json ./configs/wan2.1_t2v.json \
+    --config_json ./wan_t2v_vfi_32fps.json \
     --prompt "A cat playing in the garden" \
-    --vfi rife \
-    --video_fps 32
+    --save_video_path ./output_32fps.mp4
 ```
 
 ### Higher Frame Rate Enhancement
 
+Create configuration file `wan_i2v_vfi_60fps.json`:
+
+```json
+{
+    "infer_steps": 30,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "seed": 42,
+    "sample_guide_scale": 6,
+    "enable_cfg": true,
+    "fps": 16,
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 60,
+        "model_path": "/path/to/rife/train_log"
+    }
+}
+```
+
+Run command:
 ```bash
-# Generate 16 FPS video and interpolate to 60 FPS
 python lightx2v/infer.py \
     --model_cls wan2.1 \
     --task i2v \
     --model_path ./models/wan2.1 \
-    --config_json ./configs/wan2.1_i2v.json \
+    --config_json ./wan_i2v_vfi_60fps.json \
     --image_path ./input.jpg \
     --prompt "Smooth camera movement" \
-    --vfi rife \
-    --video_fps 60
+    --save_video_path ./output_60fps.mp4
 ```
 
 ## Performance Considerations
@@ -163,15 +218,22 @@ python lightx2v/infer.py \
 
 #### Solutions
 
-```bash
-# For memory issues, use lower resolution
---resolution 480
+Solve issues by modifying the configuration file:
 
-# For quality issues, use moderate interpolation
---video_fps 24  # instead of 60
+```json
+{
+    // For memory issues, use lower resolution
+    "target_height": 480,
+    "target_width": 832,
 
-# For performance issues, enable offloading
---cpu_offload
+    // For quality issues, use moderate interpolation
+    "video_frame_interpolation": {
+        "target_fps": 24  // instead of 60
+    },
+
+    // For performance issues, enable offloading
+    "cpu_offload": true
+}
 ```
 
 ## Technical Implementation
@@ -182,12 +244,3 @@ The RIFE integration in LightX2V includes:
 - **Automatic Model Loading**: Seamless integration with the inference pipeline
 - **Memory Optimization**: Efficient tensor management and GPU memory usage
 - **Quality Preservation**: Maintains original video quality while adding frames
-
-## Future Enhancements
-
-Planned improvements for VFI in LightX2V:
-
-- Support for additional VFI models
-- Adaptive interpolation based on motion analysis
-- Real-time preview during generation
-- Batch processing optimization 
