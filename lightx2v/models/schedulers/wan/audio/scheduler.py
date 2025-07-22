@@ -83,9 +83,6 @@ class EulerSchedulerTimestepFix(BaseScheduler):
         self.sigmas = self.sigmas.to("cpu")
 
     def prepare(self, image_encoder_output=None):
-        self.generator = torch.Generator(device=self.device)
-        self.generator.manual_seed(self.config.seed)
-
         self.prepare_latents(self.config.target_shape, dtype=torch.float32)
 
         if self.config.task in ["t2v"]:
@@ -113,6 +110,7 @@ class EulerSchedulerTimestepFix(BaseScheduler):
         self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
 
     def prepare_latents(self, target_shape, dtype=torch.float32):
+        self.generator = torch.Generator(device=self.device).manual_seed(self.config.seed)
         self.latents = (
             torch.randn(
                 target_shape[0],
