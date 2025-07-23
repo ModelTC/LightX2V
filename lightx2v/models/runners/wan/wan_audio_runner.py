@@ -17,6 +17,7 @@ from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 
 from lightx2v.models.networks.wan.audio_adapter import AudioAdapter, AudioAdapterPipe, rank0_load_state_dict_from_path
+from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
 
 from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerSchedulerTimestepFix, ConsistencyModelScheduler
@@ -279,14 +280,6 @@ def generate_unique_path(path):
         index += 1
         new_path = f"{root}-{index}{ext}"
     return new_path
-
-
-def save_to_video(gen_lvideo, out_path, target_fps):
-    gen_lvideo = rearrange(gen_lvideo, "B C T H W -> B T H W C")
-    gen_lvideo = (gen_lvideo[0].cpu().numpy() * 127.5 + 127.5).astype(np.uint8)
-    gen_lvideo = gen_lvideo[..., ::-1].copy()
-    generate_unique_path(out_path)
-    array_to_video(gen_lvideo, output_path=out_path, fps=target_fps, lossless=False, output_pix_fmt="yuv444p")
 
 
 def save_audio(
@@ -601,7 +594,8 @@ class WanAudioRunner(WanRunner):
         merge_audio = np.concatenate(cut_audio_list, axis=0).astype(np.float32)
         out_path = os.path.join("./", "video_merge.mp4")
         audio_file = os.path.join("./", "audio_merge.wav")
-        save_to_video(gen_lvideo, out_path, target_fps)
+        comfyui_images = vae_to_comfyui_image(gen_lvideo)
+        save_to_video(comfyui_images, out_path, target_fps)
         save_audio(merge_audio, audio_file, out_path, output_path=self.config.get("save_video_path", None))
         os.remove(out_path)
         os.remove(audio_file)
