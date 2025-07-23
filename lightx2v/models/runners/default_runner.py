@@ -240,4 +240,5 @@ class DefaultRunner(BaseRunner):
         torch.cuda.empty_cache()
         gc.collect()
 
-        return images
+        # Return (images, audio) - audio is None for default runner
+        return images, None
