@@ -56,7 +56,7 @@ class DefaultRunner(BaseRunner):
             logger.info("Loading RIFE model...")
             return RIFEWrapper(self.config["video_frame_interpolation"]["model_path"])
         else:
-            raise ValueError(f"Unsupported VFI model: {self.config['vfi']}")
+            raise ValueError(f"Unsupported VFI model: {self.config['video_frame_interpolation']['algo']}")
 
     @ProfilingContext("Load models")
     def load_model(self):

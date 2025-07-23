@@ -87,7 +87,6 @@ python lightx2v/infer.py \
 1. `video_frame_interpolation.target_fps` - 如果启用视频帧插值，使用此帧率作为输出帧率
 2. `fps`（默认 16）- 如果未启用视频帧插值，使用此帧率；同时总是用作源帧率
 
-**注意**: 系统不再使用 `video_fps` 配置项，统一使用 `video_frame_interpolation.target_fps` 来控制输出视频的帧率。
 
 ## 工作原理
 

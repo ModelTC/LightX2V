@@ -92,23 +92,6 @@ def main():
             print("Error: flownet.pkl file not found")
             return 1
 
-        # Clean up temporary files
-        print("Cleaning up temporary files...")
-        if zip_path.exists():
-            zip_path.unlink()
-            print(f"Deleted: {zip_path}")
-
-            # Delete extracted folders
-        for item in temp_dir.iterdir():
-            if item.is_dir():
-                shutil.rmtree(item)
-                print(f"Deleted directory: {item}")
-
-        # Delete the temp directory itself if empty
-        if temp_dir.exists() and not any(temp_dir.iterdir()):
-            temp_dir.rmdir()
-            print(f"Deleted temp directory: {temp_dir}")
-
         print("RIFE model download and installation completed!")
         return 0
 
@@ -116,11 +99,33 @@ def main():
         print(f"Error: {e}")
         return 1
     finally:
+        # Clean up temporary files
+        print("Cleaning up temporary files...")
+
+        # Delete zip file if exists
         if zip_path.exists():
             try:
                 zip_path.unlink()
+                print(f"Deleted: {zip_path}")
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"Error deleting zip file: {e}")
+
+        # Delete extracted folders
+        for item in temp_dir.iterdir():
+            if item.is_dir():
+                try:
+                    shutil.rmtree(item)
+                    print(f"Deleted directory: {item}")
+                except Exception as e:
+                    print(f"Error deleting directory {item}: {e}")
+
+        # Delete the temp directory itself if empty
+        if temp_dir.exists() and not any(temp_dir.iterdir()):
+            try:
+                temp_dir.rmdir()
+                print(f"Deleted temp directory: {temp_dir}")
+            except Exception as e:
+                print(f"Error deleting temp directory: {e}")
 
 
 if __name__ == "__main__":
