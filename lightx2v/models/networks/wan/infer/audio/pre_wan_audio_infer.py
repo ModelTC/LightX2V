@@ -24,8 +24,6 @@ class WanAudioPreInfer(WanPreInfer):
         self.text_len = config["text_len"]
 
     def infer(self, weights, inputs, positive):
-        ltnt_frames = self.scheduler.latents.size(1)
-
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"].unsqueeze(0)
         prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
 

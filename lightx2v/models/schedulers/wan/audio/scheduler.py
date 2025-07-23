@@ -34,7 +34,6 @@ class EulerSchedulerTimestepFix(BaseScheduler):
         self.infer_steps = self.config.infer_steps
         self.target_video_length = self.config.target_video_length
         self.sample_shift = self.config.sample_shift
-        self.shift = 1
         self.num_train_timesteps = 1000
         self.step_index = None
 
@@ -94,7 +93,6 @@ class EulerSchedulerTimestepFix(BaseScheduler):
 
 class ConsistencyModelScheduler(EulerSchedulerTimestepFix):
     def step_post(self):
-        logger.info(f"Step index: {self.step_index},  self.timestep: {self.timesteps[self.step_index]}")
         model_output = self.noise_pred.to(torch.float32)
         sample = self.latents.to(torch.float32)
         sigma = unsqueeze_to_ndim(self.sigmas[self.step_index], sample.ndim).to(sample.device, sample.dtype)

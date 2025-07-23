@@ -19,7 +19,7 @@ from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.networks.wan.audio_adapter import AudioAdapter, AudioAdapterPipe, rank0_load_state_dict_from_path
 
 from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
-from lightx2v.models.schedulers.wan.audio.scheduler import EulerSchedulerTimestepFix
+from lightx2v.models.schedulers.wan.audio.scheduler import EulerSchedulerTimestepFix, ConsistencyModelScheduler
 
 from loguru import logger
 import torch.distributed as dist
@@ -327,7 +327,7 @@ class WanAudioRunner(WanRunner):
         super().__init__(config)
 
     def init_scheduler(self):
-        scheduler = EulerSchedulerTimestepFix(self.config)
+        scheduler = ConsistencyModelScheduler(self.config)
         self.model.set_scheduler(scheduler)
 
     def load_audio_models(self):
@@ -538,7 +538,7 @@ class WanAudioRunner(WanRunner):
                 last_frames = gen_video_list[-1][:, :, -prev_frame_length:].clone().to(device)
 
                 last_frames = last_frames.cpu().detach().numpy()
-                last_frames = add_noise_to_frames(last_frames)
+                last_frames = add_noise_to_frames(last_frames)  # mean:-3.0 std:0.5
                 last_frames = add_mask_to_frames(last_frames, mask_rate=0.1)  # mask 0.10
                 last_frames = torch.from_numpy(last_frames).to(dtype=dtype, device=device)
 
@@ -583,7 +583,7 @@ class WanAudioRunner(WanRunner):
             latents = self.model.scheduler.latents
             generator = self.model.scheduler.generator
             gen_video = self.vae_decoder.decode(latents, generator=generator, config=self.config)
-            gen_video = torch.clamp(gen_video, -1, 1)
+            gen_video = torch.clamp(gen_video, -1, 1).to(torch.float)
             start_frame = 0 if idx == 0 else prev_frame_length
             start_audio_frame = 0 if idx == 0 else int((prev_frame_length + 1) * audio_sr / target_fps)
 
