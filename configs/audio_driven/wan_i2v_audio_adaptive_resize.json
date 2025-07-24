@@ -14,5 +14,6 @@
   "sample_shift": 5,
   "enable_cfg": false,
   "cpu_offload": false,
-  "adaptive_resize": true
+  "adaptive_resize": true,
+  "use_31_block": false
 }

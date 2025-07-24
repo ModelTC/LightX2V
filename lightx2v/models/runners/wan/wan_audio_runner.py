@@ -10,29 +10,18 @@ from dataclasses import dataclass
 
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.models.runners.wan.wan_runner import WanRunner
-from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
-from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.utils.profiler import ProfilingContext4Debug, ProfilingContext
-from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
-from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel, WanVideoIPHandler
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
-from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
-
 from lightx2v.models.networks.wan.audio_adapter import AudioAdapter, AudioAdapterPipe, rank0_load_state_dict_from_path
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
-
-from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
-from lightx2v.models.schedulers.wan.audio.scheduler import EulerSchedulerTimestepFix, ConsistencyModelScheduler
+from lightx2v.models.schedulers.wan.audio.scheduler import ConsistencyModelScheduler
 
 from loguru import logger
-import torch.distributed as dist
 from einops import rearrange
 import torchaudio as ta
 from transformers import AutoFeatureExtractor
 
-from torchvision.datasets.folder import IMG_EXTENSIONS
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
@@ -618,12 +607,6 @@ class WanAudioRunner(WanRunner):
 
         return base_model
 
-    def load_image_encoder(self):
-        """Load image encoder"""
-        clip_model_dir = self.config["model_path"] + "/image_encoder"
-        image_encoder = WanVideoIPHandler("CLIPModel", repo_or_path=clip_model_dir, require_grad=False, mode="eval", device=self.init_device, dtype=torch.float16)
-        return image_encoder
-
     def run_image_encoder(self, config, vae_model):
         """Run image encoder"""
 
@@ -638,7 +621,7 @@ class WanAudioRunner(WanRunner):
             cond_frms, tgt_h, tgt_w = adaptive_resize(ref_img)
             config.tgt_h = tgt_h
             config.tgt_w = tgt_w
-            clip_encoder_out = self.image_encoder.encode(cond_frms).squeeze(0).to(torch.bfloat16)
+            clip_encoder_out = self.image_encoder.visual([cond_frms], self.config).squeeze(0).to(torch.bfloat16)
 
             cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
             lat_h, lat_w = tgt_h // 8, tgt_w // 8
@@ -662,7 +645,7 @@ class WanAudioRunner(WanRunner):
 
             # Resize image to target size
             cond_frms = torch.nn.functional.interpolate(ref_img, size=(config.tgt_h, config.tgt_w), mode="bicubic")
-            clip_encoder_out = self.image_encoder.encode(cond_frms).squeeze(0).to(torch.bfloat16)
+            clip_encoder_out = self.image_encoder.visual([cond_frms], self.config).squeeze(0).to(torch.bfloat16)
 
             # Prepare for VAE encoding
             cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
