@@ -255,12 +255,14 @@ class AudioProcessor:
 class VideoGenerator:
     """Handles video generation for each segment"""
 
-    def __init__(self, model, vae_encoder, vae_decoder, config):
+    def __init__(self, model, vae_encoder, vae_decoder, config, progress_callback=None):
         self.model = model
         self.vae_encoder = vae_encoder
         self.vae_decoder = vae_decoder
         self.config = config
         self.frame_preprocessor = FramePreprocessor()
+        self.progress_callback = progress_callback
+        self.total_segments = 1
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
@@ -352,8 +354,9 @@ class VideoGenerator:
         inputs["previmg_encoder_output"] = {"prev_latents": prev_latents, "prev_mask": prev_mask}
 
         # Run inference loop
-        for step_index in range(self.model.scheduler.infer_steps):
-            logger.info(f"==> Segment {segment_idx}, Step {step_index}/{self.model.scheduler.infer_steps}")
+        total_steps = self.model.scheduler.infer_steps
+        for step_index in range(total_steps):
+            logger.info(f"==> Segment {segment_idx}, Step {step_index}/{total_steps}")
 
             with ProfilingContext4Debug("step_pre"):
                 self.model.scheduler.step_pre(step_index=step_index)
@@ -363,6 +366,10 @@ class VideoGenerator:
 
             with ProfilingContext4Debug("step_post"):
                 self.model.scheduler.step_post()
+
+            if self.progress_callback:
+                segment_progress = (segment_idx * total_steps + step_index + 1) / (self.total_segments * total_steps)
+                self.progress_callback(int(segment_progress * 100), 100)
 
         # Decode latents
         latents = self.model.scheduler.latents
@@ -377,7 +384,6 @@ class VideoGenerator:
 class WanAudioRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
-        self._is_initialized = False
         self._audio_adapter_pipe = None
         self._audio_processor = None
         self._video_generator = None
@@ -385,24 +391,14 @@ class WanAudioRunner(WanRunner):
 
     def initialize_once(self):
         """Initialize all models once for multiple runs"""
-        if self._is_initialized:
-            return
-
-        logger.info("Initializing models (one-time setup)...")
 
         # Initialize audio processor
         audio_sr = self.config.get("audio_sr", 16000)
         target_fps = self.config.get("target_fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
 
-        # Load audio feature extractor
-        self._audio_preprocess = AutoFeatureExtractor.from_pretrained(self.config["model_path"], subfolder="audio_encoder")
-
         # Initialize scheduler
         self.init_scheduler()
-
-        self._is_initialized = True
-        logger.info("Model initialization complete")
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
@@ -459,7 +455,7 @@ class WanAudioRunner(WanRunner):
 
         # Initialize video generator if needed
         if self._video_generator is None:
-            self._video_generator = VideoGenerator(self.model, self.vae_encoder, self.vae_decoder, self.config)
+            self._video_generator = VideoGenerator(self.model, self.vae_encoder, self.vae_decoder, self.config, self.progress_callback)
 
         # Prepare inputs
         with memory_efficient_inference():
@@ -480,6 +476,8 @@ class WanAudioRunner(WanRunner):
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, max_num_frames)
+
+        self._video_generator.total_segments = len(audio_segments)
 
         # Generate video segments
         gen_video_list = []
@@ -604,6 +602,9 @@ class WanAudioRunner(WanRunner):
                 lora_name = lora_wrapper.load_lora(lora_path)
                 lora_wrapper.apply_lora(lora_name, strength)
                 logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+
+        # XXX: trick
+        self._audio_preprocess = AutoFeatureExtractor.from_pretrained(self.config["model_path"], subfolder="audio_encoder")
 
         return base_model
 

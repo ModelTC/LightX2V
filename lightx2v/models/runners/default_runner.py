@@ -120,7 +120,7 @@ class DefaultRunner(BaseRunner):
                 self.model.scheduler.step_post()
 
             if self.progress_callback:
-                self.progress_callback(step_index + 1, total_steps)
+                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
