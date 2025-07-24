@@ -444,9 +444,7 @@ class CLIPModel:
     def visual(self, videos, args):
         if hasattr(args, "cpu_offload") and args.cpu_offload:
             self.to_cuda()
-        use_31_block = True
-        if hasattr(args, "use_31_block"):
-            use_31_block = args.use_31_block
+        use_31_block = getattr(args, "use_31_block", True)
         # preprocess
         size = (self.model.image_size,) * 2
         videos = torch.cat([F.interpolate(u, size=size, mode="bicubic", align_corners=False) for u in videos])
