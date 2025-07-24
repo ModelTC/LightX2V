@@ -17,6 +17,7 @@ from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
     WanSchedulerCustomCaching,
     WanSchedulerFirstBlock,
     WanSchedulerDualBlock,
+    WanSchedulerDynamicBlock,
 )
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
@@ -179,6 +180,8 @@ class WanRunner(DefaultRunner):
                 scheduler = WanSchedulerFirstBlock(self.config)
             elif self.config.feature_caching == "DualBlock":
                 scheduler = WanSchedulerDualBlock(self.config)
+            elif self.config.feature_caching == "DynamicBlock":
+                scheduler = WanSchedulerDynamicBlock(self.config)
             else:
                 raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
         self.model.set_scheduler(scheduler)

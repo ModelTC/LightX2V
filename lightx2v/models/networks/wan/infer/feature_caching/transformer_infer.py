@@ -943,3 +943,73 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         self.prev_front_blocks_residual_odd = None
         self.prev_middle_blocks_residual_odd = None
         torch.cuda.empty_cache()
+
+
+# 3. DynamicBlock
+class WanTransformerInferDynamicBlock(WanTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+        self.residual_diff_threshold = config.residual_diff_threshold
+
+        self.block_in_cache_even = {i: None for i in range(self.blocks_num)}
+        self.block_residual_cache_even = {i: None for i in range(self.blocks_num)}
+        self.block_in_cache_odd = {i: None for i in range(self.blocks_num)}
+        self.block_residual_cache_odd = {i: None for i in range(self.blocks_num)}
+
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        # 1. 每个block单独推理就行
+        for block_idx in range(self.blocks_num):
+            x = self.infer_block(weights.blocks[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx)
+
+        return x
+
+    def infer_block(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx):
+        ori_x = x.clone()
+
+        if self.infer_conditional:
+            # 1. 是否有输入缓存
+            if self.block_in_cache_even[block_idx] is not None:
+                # 2. 是否相似
+                should_calc = self.are_two_tensor_similar(self.block_in_cache_even[block_idx], x)
+                # 3. 使用缓存
+                if should_calc:
+                    x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                else:
+                    x += self.block_residual_cache_even[block_idx]
+
+            # 4. 正常计算，更新输入和残差缓存
+            else:
+                x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+
+            self.block_in_cache_even[block_idx] = ori_x
+            self.block_residual_cache_even[block_idx] = x - ori_x
+            del ori_x
+
+        else:
+            # 1. 是否有输入缓存
+            if self.block_in_cache_odd[block_idx] is not None:
+                # 2. 是否相似
+                should_calc = self.are_two_tensor_similar(self.block_in_cache_even[block_idx], x)
+                # 3. 使用缓存
+                if should_calc:
+                    x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                else:
+                    x += self.block_residual_cache_odd[block_idx]
+
+            # 4. 正常计算，更新输入和残差缓存
+            else:
+                x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+
+            self.block_in_cache_odd[block_idx] = ori_x
+            self.block_residual_cache_odd[block_idx] = x - ori_x
+            del ori_x
+
+        return x
+
+    def are_two_tensor_similar(self, t1, t2):
+        diff = 1.0
+        mean_diff = (t1 - t2).abs().mean()
+        mean_t1 = t1.abs().mean()
+        diff = (mean_diff / mean_t1).item()
+
+        return diff >= self.residual_diff_threshold
