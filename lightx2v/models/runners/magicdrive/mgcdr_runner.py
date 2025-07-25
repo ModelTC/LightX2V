@@ -428,11 +428,19 @@ class MagicDriverRunner(DefaultRunner):
                 if self.cond_inputs['x_mask'] is not None:
                     self.cond_inputs['x_mask'] = mask_t_upper
                 self.model.infer(self.cond_inputs)
+                if self.config["feature_caching"] == "Tea":
+                    self.model.scheduler.cnt += 1
+                    if self.model.scheduler.cnt >= self.model.scheduler.num_steps:
+                        self.model.scheduler.cnt = 0
             # import pdb; pdb.set_trace()
             with ProfilingContext4Debug("uncond infer"):
                 if self.uncond_inputs['x_mask'] is not None:
                     self.uncond_inputs['x_mask'] = mask_t_upper
                 self.model.infer(self.uncond_inputs)
+                if self.config["feature_caching"] == "Tea":
+                    self.model.scheduler.cnt += 1
+                    if self.model.scheduler.cnt >= self.model.scheduler.num_steps:
+                        self.model.scheduler.cnt = 0
             # import pdb; pdb.set_trace()
             v_pred = self.uncond_inputs['x'] + self.guidance_scale * (self.cond_inputs['x'] - self.uncond_inputs['x'])
             dt = self.timesteps[step_index] - self.timesteps[step_index + 1] if step_index < len(self.timesteps) - 1 else self.timesteps[step_index]
