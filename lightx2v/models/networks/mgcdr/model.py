@@ -34,7 +34,6 @@ class MagicDriveModel:
         self.device = device
         self._init_infer_class()
         self._init_weights()
-        self._init_infer()
         # self.set_scheduler()
         
     def _init_infer_class(self):
