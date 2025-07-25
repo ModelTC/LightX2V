@@ -24,6 +24,9 @@ from magicdrivedit.utils.misc import collate_bboxes_to_maxlen, move_to
 from magicdrivedit.datasets.carla import CARLAVariableDataset
 from magicdrivedit.schedulers.rf.rectified_flow import timestep_transform
 from loguru import logger
+from lightx2v.models.schedulers.mgcdr.feature_caching.scheduler import (
+    MagicDriverSchedulerTeaCaching,
+)
 
 
 @RUNNER_REGISTER("mgcdr")
@@ -104,9 +107,12 @@ class MagicDriverRunner(DefaultRunner):
         return text_encoder_output
     
     def init_scheduler(self):
-        scheduler = MagicDriverScheduler(self.config)
+        if self.config.feature_caching == "NoCaching":
+            scheduler = MagicDriverScheduler(self.config)
+        elif self.config.feature_caching == "Tea":
+            scheduler = MagicDriverSchedulerTeaCaching(self.config)
         self.model.set_scheduler(scheduler)
-    
+
     def run_vae_encoder(self, img):
         pass
     

@@ -1,0 +1,126 @@
+{
+    "task": "magicdrive",
+    "infer_steps": 30,
+    "seed": 12351,
+    "vae_path": "/kaiwu_vepfs/kaiwu/huangxinchi/drivescapedit/pretrained/CogVideoX-2b",
+    "t5_path": "/kaiwu_vepfs/kaiwu/huangxinchi/drivescapedit/pretrained/t5-v1_1-xxl",
+    "scene_description_file": ["/iag_ad_01/ad/xujin2/data/pap_pvb/caption_collect/zhiji.pkl"],
+    "bbox_embedder_cls": "magicdrivedit.models.magicdrive.embedder.ContinuousBBoxWithTextTempEmbedding",
+    "bbox_embedder_param": {
+      "after_proj": true,
+      "class_token_dim": 1152,
+      "embedder_num_freq": 4,
+      "enable_flash_attn": false,
+      "enable_layernorm_kernel": true,
+      "enable_xformers": true,
+      "minmax_normalize": false,
+      "mlp_ratio": 4.0,
+      "mode": "all-xyz",
+      "n_classes": 16,
+      "num_heads": 8,
+      "proj_dims": [
+        1152,
+        512,
+        512,
+        1152
+      ],
+      "qk_norm": true,
+      "sample_id": true,
+      "time_downsample_factor": 4.5,
+      "trainable_class_token": false,
+      "use_scale_shift_table": true,
+      "use_text_encoder_init": true
+    },
+    "cam_encoder_cls": "magicdrivedit.models.magicdrive.embedder.CamEmbedder",
+    "cam_encoder_param": {
+      "after_proj": true,
+      "input_dim": 3,
+      "num": 7
+    },
+    "caption_channels": 4096,
+    "class_dropout_prob": 0.1,
+    "control_depth": 13,
+    "control_skip_cross_view": true,
+    "control_skip_temporal": false,
+    "depth": 28,
+    "drop_path": 0.0,
+    "enable_flash_attn": true,
+    "enable_layernorm_kernel": true,
+    "enable_sequence_parallelism": false,
+    "enable_xformers": false,
+    "force_pad_h_for_sp_size": null,
+    "frame_embedder_cls": "magicdrivedit.models.magicdrive.embedder.CamEmbedderTemp",
+    "frame_embedder_param": {
+      "after_proj": true,
+      "enable_flash_attn": false,
+      "enable_layernorm_kernel": true,
+      "enable_xformers": true,
+      "input_dim": 3,
+      "mlp_ratio": 4.0,
+      "num": 4,
+      "num_heads": 8,
+      "qk_norm": true,
+      "time_downsample_factor": 4.5,
+      "use_scale_shift_table": true
+    },
+    "freeze_cond_embedder": false,
+    "freeze_old_embedder": false,
+    "freeze_old_params": false,
+    "freeze_temporal_blocks": false,
+    "freeze_x_embedder": false,
+    "freeze_y_embedder": true,
+    "hidden_size": 1152,
+    "in_channels": 16,
+    "input_size": [
+      null,
+      null,
+      null
+    ],
+    "input_sq_size": 512,
+    "map_embedder_cls": "magicdrivedit.models.magicdrive.embedder.HWBalanceMapControlEmbedding",
+    "map_embedder_downsample_rate": 4.5,
+    "map_embedder_param": {
+      "block_out_channels": [
+        16,
+        32,
+        96,
+        256
+      ],
+      "conditioning_size": [
+        3,
+        256,
+        512
+      ]
+    },
+    "micro_frame_size": 32,
+    "mlp_ratio": 4.0,
+    "model_max_length": 300,
+    "model_type": "MagicDriveSTDiT3",
+    "num_heads": 16,
+    "only_train_base_blocks": false,
+    "only_train_temp_blocks": false,
+    "patch_size": [
+      1,
+      2,
+      2
+    ],
+    "pred_sigma": false,
+    "qk_norm": true,
+    "qk_norm_trainable": false,
+    "sequence_parallelism_temporal": false,
+    "simulate_sp_size": [],
+    "transformers_version": "4.39.3",
+    "uncond_cam_in_dim": [
+      3,
+      7
+    ],
+    "use_st_cross_attn": false,
+    "use_x_control_embedder": true,
+    "with_temp_block": true,
+    "zero_and_train_embedder": null,
+    "feature_caching": "Tea",
+    "coefficients": [
+      [-5.26546336e+07, 8.65049823e+06, -5.15487026e+05, 1.36029509e+04, -1.51185786e+02, 6.31068061e-01]
+    ],
+    "teacache_thresh": 0.2
+  }

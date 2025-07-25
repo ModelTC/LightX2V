@@ -7,6 +7,9 @@ from lightx2v.models.networks.mgcdr.infer.post_infer import MagicDrivePostInfer
 from lightx2v.models.networks.mgcdr.weights.transformer_weights import MagicDriveTransformerWeight
 from lightx2v.models.networks.mgcdr.weights.pre_weights import MagicDrivePreWeights
 from lightx2v.models.networks.mgcdr.weights.post_weights import MagicDrivePostWeights
+from lightx2v.models.networks.mgcdr.infer.feature_caching.transformer_infer import (
+    MagicDriveTransformerInferTeaCaching,
+)
 
 
 # class ModelInputs(BaseModel):
@@ -55,11 +58,16 @@ class MagicDriveModel:
         self.post_weight.load(weight_dict)
         self.transformer_weights.load(weight_dict)
     
-    def _init_infer(self):
-        self.pre_infer = self.pre_infer_class(self.config)
-        self.post_infer = self.post_infer_class(self.config)
-        self.transformer_infer = self.transformer_infer_class(self.config)
-    
+    def _init_infer_class(self):
+        self.pre_infer_class = MagicDrivePreInfer
+        self.post_infer_class = MagicDrivePostInfer
+        if self.config["feature_caching"] == "NoCaching":
+            self.transformer_infer_class = MagicDriveTransformerInfer
+        elif self.config["feature_caching"] == "Tea":
+            self.transformer_infer_class = MagicDriveTransformerInferTeaCaching
+        else:
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
+
     def set_scheduler(self, scheduler: MagicDriverScheduler):
         self.scheduler = scheduler
         self.pre_infer.set_scheduler(scheduler)
