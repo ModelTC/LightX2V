@@ -63,7 +63,7 @@ class MagicDriveTransformerInferTeaCaching(MagicDriveTransformerInfer):
                 x += self.scheduler.previous_residual_even.cuda()
             else:
                 ori_x = x.clone()
-                x = super().infer(weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map, is_cfg)
+                x = super().infer(weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map)
                 self.scheduler.previous_residual_even = x - ori_x
                 if self.config["cpu_offload"]:
                     self.scheduler.previous_residual_even = self.scheduler.previous_residual_even.cpu()
@@ -76,7 +76,7 @@ class MagicDriveTransformerInferTeaCaching(MagicDriveTransformerInfer):
                 x += self.scheduler.previous_residual_odd.cuda()
             else:
                 ori_x = x.clone()
-                x = super().infer(weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map, is_cfg)
+                x = super().infer(weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map)
                 self.scheduler.previous_residual_odd = x - ori_x
                 if self.config["cpu_offload"]:
                     self.scheduler.previous_residual_odd = self.scheduler.previous_residual_odd.cpu()
