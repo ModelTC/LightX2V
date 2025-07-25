@@ -397,7 +397,7 @@ class WanAudioRunner(WanRunner):
         self._video_generator = None
         self._audio_preprocess = None
 
-    def initialize_once(self):
+    def initialize(self):
         """Initialize all models once for multiple runs"""
 
         # Initialize audio processor
@@ -459,7 +459,7 @@ class WanAudioRunner(WanRunner):
     def run_pipeline(self, save_video=True):
         """Optimized pipeline with modular components"""
         # Ensure models are initialized
-        self.initialize_once()
+        self.initialize()
 
         # Initialize video generator if needed
         if self._video_generator is None:
@@ -471,7 +471,12 @@ class WanAudioRunner(WanRunner):
                 self.config["prompt_enhanced"] = self.post_prompt_enhancer()
 
             self.inputs = self.prepare_inputs()
+            # Re-initialize scheduler after image encoding sets correct dimensions
+            self.init_scheduler()
             self.model.scheduler.prepare(self.inputs["image_encoder_output"])
+
+        # Re-create video generator with updated model/scheduler
+        self._video_generator = VideoGenerator(self.model, self.vae_encoder, self.vae_decoder, self.config, self.progress_callback)
 
         # Process audio
         audio_array = self._audio_processor.load_audio(self.config["audio_path"])
