@@ -8,7 +8,7 @@ class MagicDriveTransformerInferTeaCaching(MagicDriveTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
 
-    def infer(self, weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map, is_cfg):
+    def infer(self, weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map):
     
         modulated_inp = t_mlp
 
