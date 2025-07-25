@@ -34,6 +34,7 @@ class MagicDriveModel:
         self.device = device
         self._init_infer_class()
         self._init_weights()
+        self._init_infer()
         # self.set_scheduler()
         
     def _init_infer_class(self):
@@ -72,6 +73,11 @@ class MagicDriveModel:
         self.pre_infer.set_scheduler(scheduler)
         self.post_infer.set_scheduler(scheduler)
         self.transformer_infer.set_scheduler(scheduler)
+
+    def _init_infer(self):
+        self.pre_infer = self.pre_infer_class(self.config)
+        self.post_infer = self.post_infer_class(self.config)
+        self.transformer_infer = self.transformer_infer_class(self.config)
         
     @torch.no_grad()
     def infer(self, inputs: dict):
