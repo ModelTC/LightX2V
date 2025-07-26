@@ -1,16 +1,17 @@
 import gc
+
+from PIL import Image
+from loguru import logger
 import requests
 from requests.exceptions import RequestException
 import torch
 import torch.distributed as dist
-import torchvision.transforms.functional as TF
-from PIL import Image
-from lightx2v.utils.profiler import ProfilingContext4Debug, ProfilingContext
-from lightx2v.utils.utils import save_videos_grid, cache_video
-from lightx2v.utils.generate_task_id import generate_task_id
+
 from lightx2v.utils.envs import *
-from lightx2v.utils.service_utils import TensorTransporter, ImageTransporter
-from loguru import logger
+from lightx2v.utils.generate_task_id import generate_task_id
+from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
+from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
+
 from .base_runner import BaseRunner
 
 
@@ -32,6 +33,8 @@ class DefaultRunner(BaseRunner):
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
+        elif self.config.get("lazy_load", False):
+            assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
         self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "i2v":
@@ -48,12 +51,22 @@ class DefaultRunner(BaseRunner):
         else:
             self.init_device = torch.device("cuda")
 
+    def load_vfi_model(self):
+        if self.config["video_frame_interpolation"].get("algo", None) == "rife":
+            from lightx2v.models.vfi.rife.rife_comfyui_wrapper import RIFEWrapper
+
+            logger.info("Loading RIFE model...")
+            return RIFEWrapper(self.config["video_frame_interpolation"]["model_path"])
+        else:
+            raise ValueError(f"Unsupported VFI model: {self.config['video_frame_interpolation']['algo']}")
+
     @ProfilingContext("Load models")
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
+        self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def check_sub_servers(self, task_type):
         urls = self.config.get("sub_servers", {}).get(task_type, [])
@@ -109,7 +122,7 @@ class DefaultRunner(BaseRunner):
                 self.model.scheduler.step_post()
 
             if self.progress_callback:
-                self.progress_callback(step_index + 1, total_steps)
+                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
@@ -178,11 +191,6 @@ class DefaultRunner(BaseRunner):
             gc.collect()
         return images
 
-    @ProfilingContext("Save video")
-    def save_video(self, images):
-        if not self.config.parallel_attn_type or (self.config.parallel_attn_type and dist.get_rank() == 0):
-            self.save_video_func(images)
-
     def post_prompt_enhancer(self):
         while True:
             for url in self.config["sub_servers"]["prompt_enhancer"]:
@@ -210,12 +218,29 @@ class DefaultRunner(BaseRunner):
         latents, generator = self.run_dit()
 
         images = self.run_vae_decoder(latents, generator)
+        images = vae_to_comfyui_image(images)
+
+        if "video_frame_interpolation" in self.config:
+            assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
+            target_fps = self.config["video_frame_interpolation"]["target_fps"]
+            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {target_fps}")
+            images = self.vfi_model.interpolate_frames(
+                images,
+                source_fps=self.config.get("fps", 16),
+                target_fps=target_fps,
+            )
 
         if save_video:
-            self.save_video(images)
+            if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
+                fps = self.config["video_frame_interpolation"]["target_fps"]
+            else:
+                fps = self.config.get("fps", 16)
+            logger.info(f"Saving video to {self.config.save_video_path}")
+            save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
 
         del latents, generator
         torch.cuda.empty_cache()
         gc.collect()
 
-        return images
+        # Return (images, audio) - audio is None for default runner
+        return images, None

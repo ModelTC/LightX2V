@@ -10,11 +10,7 @@ import torchvision.transforms as T
 
 from lightx2v.attentions import attention
 from loguru import logger
-from lightx2v.models.input_encoders.hf.q_linear import VllmQuantLinearInt8, VllmQuantLinearFp8, TorchaoQuantLinearInt8
-from einops import rearrange
-from torch import Tensor
-from transformers import CLIPVisionModel
-
+from lightx2v.models.input_encoders.hf.q_linear import VllmQuantLinearInt8, VllmQuantLinearFp8, TorchaoQuantLinearInt8, Q8FQuantLinearInt8, Q8FQuantLinearFp8
 
 __all__ = [
     "XLMRobertaCLIP",
@@ -68,6 +64,10 @@ class SelfAttention(nn.Module):
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
+            elif quant_scheme == "int8-q8f":
+                linear_cls = Q8FQuantLinearInt8
+            elif quant_scheme == "fp8-q8f":
+                linear_cls = Q8FQuantLinearFp8
         else:
             linear_cls = nn.Linear
 
@@ -142,6 +142,10 @@ class AttentionBlock(nn.Module):
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
+            elif quant_scheme == "int8-q8f":
+                linear_cls = Q8FQuantLinearInt8
+            elif quant_scheme == "fp8-q8f":
+                linear_cls = Q8FQuantLinearFp8
         else:
             linear_cls = nn.Linear
 
@@ -440,14 +444,14 @@ class CLIPModel:
     def visual(self, videos, args):
         if hasattr(args, "cpu_offload") and args.cpu_offload:
             self.to_cuda()
+        use_31_block = getattr(args, "use_31_block", True)
         # preprocess
         size = (self.model.image_size,) * 2
-        videos = torch.cat([F.interpolate(u.transpose(0, 1), size=size, mode="bicubic", align_corners=False) for u in videos])
+        videos = torch.cat([F.interpolate(u, size=size, mode="bicubic", align_corners=False) for u in videos])
         videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
-
         # forward
         with torch.amp.autocast("cuda", dtype=self.dtype):
-            out = self.model.visual(videos, use_31_block=True)
+            out = self.model.visual(videos, use_31_block=use_31_block)
 
         if hasattr(args, "cpu_offload") and args.cpu_offload:
             self.to_cpu()
@@ -458,51 +462,3 @@ class CLIPModel:
 
     def to_cpu(self):
         self.model = self.model.cpu()
-
-
-class WanVideoIPHandler:
-    def __init__(self, model_name, repo_or_path, require_grad=False, mode="eval", device="cuda", dtype=torch.float16):
-        # image_processor = CLIPImageProcessor.from_pretrained(
-        #     repo_or_path, subfolder='image_processor')
-        """720P-I2V-diffusers config is
-            "size": {
-                "shortest_edge": 224
-            }
-        and 480P-I2V-diffusers config is
-          "size": {
-            "height": 224,
-            "width": 224
-        }
-        but Wan2.1 official use no_crop resize by default
-        so I don't use CLIPImageProcessor
-        """
-        image_encoder = CLIPVisionModel.from_pretrained(repo_or_path, torch_dtype=dtype)
-        logger.info(f"Using image encoder {model_name} from {repo_or_path}")
-        image_encoder.requires_grad_(require_grad)
-        if mode == "eval":
-            image_encoder.eval()
-        else:
-            image_encoder.train()
-        self.dtype = dtype
-        self.device = device
-        self.image_encoder = image_encoder.to(device=device, dtype=dtype)
-        self.size = (224, 224)
-        mean = [0.48145466, 0.4578275, 0.40821073]
-        std = [0.26862954, 0.26130258, 0.27577711]
-        self.normalize = T.Normalize(mean=mean, std=std)
-        # self.image_processor = image_processor
-
-    def encode(
-        self,
-        img_tensor: Tensor,
-    ):
-        if img_tensor.ndim == 5:  # B C T H W
-            # img_tensor = img_tensor[:, :, 0]
-            img_tensor = rearrange(img_tensor, "B C 1 H W -> B C H W")
-        img_tensor = torch.clamp(img_tensor.float() * 0.5 + 0.5, min=0.0, max=1.0).to(self.device)
-        img_tensor = F.interpolate(img_tensor, size=self.size, mode="bicubic", align_corners=False)
-        img_tensor = self.normalize(img_tensor).to(self.dtype)
-
-        image_embeds = self.image_encoder(pixel_values=img_tensor, output_hidden_states=True)
-
-        return image_embeds.hidden_states[-1]

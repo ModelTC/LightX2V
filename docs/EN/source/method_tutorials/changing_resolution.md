@@ -47,7 +47,7 @@ You can refer to the scripts [here](https://github.com/ModelTC/LightX2V/blob/mai
 }
 ```
 
-This means a total of 50 steps, with resolution at 0.75x original resolution from step 0 to 25, and original resolution from step 26 to the final step.
+This means a total of 50 steps, with resolution at 0.75x original resolution from step 1 to 25, and original resolution from step 26 to the final step.
 
 ### Example 2:
 ```
@@ -59,4 +59,8 @@ This means a total of 50 steps, with resolution at 0.75x original resolution fro
 }
 ```
 
-This means a total of 50 steps, with original resolution from step 0 to 10, 0.75x original resolution from step 11 to 35, and original resolution from step 36 to the final step.
+This means a total of 50 steps, with original resolution from step 1 to 10, 0.75x original resolution from step 11 to 35, and original resolution from step 36 to the final step.
+
+Generally, if `changing_resolution_steps` is [A, B, C], the denoising starts at step 1, and the total number of steps is X, then the inference process will be divided into four segments.
+
+Specifically, these segments are (0, A], (A, B], (B, C], and (C, X], where each segment is a left-open, right-closed interval.

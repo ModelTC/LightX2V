@@ -22,6 +22,18 @@ For the original model without step distillation, we can use the following solut
 4. [Model Quantization](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/quantization.html) to accelerate Linear layer inference.
 5. [Variable Resolution Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/changing_resolution.html) to reduce the resolution of intermediate inference steps.
 
+## 💡 Using Tiny VAE
+
+In some cases, the VAE component can be time-consuming. You can use a lightweight VAE for acceleration, which can also reduce some GPU memory usage.
+
+```python
+{
+    "use_tiny_vae": true,
+    "tiny_vae_path": "/path to taew2_1.pth"
+}
+```
+The taew2_1.pth weights can be downloaded from [here](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)
+
 ## ⚠️ Note
 
 Some acceleration solutions currently cannot be used together, and we are working to resolve this issue.

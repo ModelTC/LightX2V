@@ -156,12 +156,14 @@ VAE (变分自编码器) 是视频生成的关键组件，优化VAE可以显著�
 use_tiling_vae = True          # 启用VAE分块推理
 ```
 
-#### [轻量级VAE](https://github.com/madebyollin/taehv/blob/main/taew2_1.pth)
+#### 轻量级VAE
 
 ```python
 # VAE优化配置
-use_tiny_vae = True            # 使用轻量级VAE
+use_tiny_vae = True
+tiny_vae_path = "/path to taew2_1.pth"
 ```
+taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)下载
 
 **VAE优化效果**:
 - 标准VAE: 基准性能，100%质量保持

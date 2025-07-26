@@ -24,15 +24,11 @@ class WanAudioPreInfer(WanPreInfer):
         self.text_len = config["text_len"]
 
     def infer(self, weights, inputs, positive):
-        ltnt_frames = self.scheduler.latents.size(1)
-
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"].unsqueeze(0)
         prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
 
         hidden_states = self.scheduler.latents.unsqueeze(0)
-        # hidden_states = torch.cat([hidden_states[:, :ltnt_channel], prev_latents, prev_mask], dim=1)
-        # print(f"{prev_mask.shape}, {hidden_states.shape}, {prev_latents.shape},{prev_latents[:, :, :ltnt_frames].shape}")
-        hidden_states = torch.cat([hidden_states, prev_mask, prev_latents[:, :, :ltnt_frames]], dim=1)
+        hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=1)
         hidden_states = hidden_states.squeeze(0)
 
         x = [hidden_states]

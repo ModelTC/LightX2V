@@ -13,11 +13,6 @@ This document provides detailed instructions for deploying LightX2V locally on W
 - **Memory**: Recommended 16GB+ RAM
 - **Storage**: Strongly recommended to use SSD solid-state drives, mechanical hard drives will cause slow model loading
 
-#### Software Requirements
-- **Operating System**: Windows 10/11
-- **Python**: 3.12 or higher version
-- **CUDA**: 12.4 or higher version
-- **Dependencies**: Refer to LightX2V project's requirements_win.txt
 
 ## 🎯 Usage Methods
 
@@ -34,8 +29,8 @@ Refer to [Quick Start Guide](../getting_started/quickstart.md) to install enviro
 #### One-Click Gradio Startup (Recommended)
 
 **📦 Download Software Package**
-- [Baidu Cloud](https://pan.baidu.com/s/1ef3hEXyIuO0z6z9MoXe4nQ?pwd=7g4f)
-- [Quark Cloud](https://pan.quark.cn/s/36a0cdbde7d9)
+- [Baidu Cloud](https://pan.baidu.com/s/1lLb2LYl8kbmjluaM9-jCjg?pwd=ugd4)
+- [Quark Cloud](https://pan.quark.cn/s/d0b8be4bc619)
 
 **📁 Directory Structure**
 After extraction, ensure the directory structure is as follows:
@@ -93,7 +88,12 @@ Double-click to run the `start_lightx2v.bat` file, the script will:
 
 **💡 Usage Suggestion**: After opening the Gradio Web page, it's recommended to check "Auto-configure Inference Options", the system will automatically select appropriate optimization configurations for your machine. When reselecting resolution, you also need to re-check "Auto-configure Inference Options".
 
-**⚠️ Important Note**: On first run, the system will automatically extract the environment file `env.zip`, which may take several minutes. Please be patient. Subsequent launches will skip this step. You can also manually extract the `env.zip` file to the current directory to save time on first startup.
+![Gradio English Interface](../../../../assets/figs/portabl_windows/pic_gradio_en.png)
+
+**⚠️ Important Notes**:
+- **First Run**: The system will automatically extract the environment file `env.zip`, which may take several minutes. Please be patient. Subsequent launches will skip this step.
+- **Faster Startup**: You can also manually extract the `env.zip` file to the current directory to save time on first startup.
+- **Display Issues**: If the webpage opens blank or displays abnormally, please run `pip install --upgrade gradio` to upgrade the Gradio version.
 
 ### Method 3: Using ComfyUI Inference
 

@@ -4,6 +4,10 @@
 
 Lightx2v is a lightweight video inference and generation engine that provides a web interface based on Gradio, supporting both Image-to-Video and Text-to-Video generation modes.
 
+For Windows systems, we provide a convenient one-click deployment solution with automatic environment configuration and intelligent parameter optimization. Please refer to the [One-Click Gradio Startup (Recommended)](./deploy_local_windows.md/#one-click-gradio-startup-recommended) section for detailed instructions.
+
+![Gradio English Interface](../../../../assets/figs/portabl_windows/pic_gradio_en.png)
+
 ## 📁 File Structure
 
 ```
@@ -12,7 +16,7 @@ LightX2V/app/
 ├── gradio_demo_zh.py       # Chinese interface demo
 ├── run_gradio.sh          # Startup script
 ├── README.md              # Documentation
-├── saved_videos/          # Generated video save directory
+├── outputs/               # Generated video save directory
 └── inference_logs.log     # Inference logs
 ```
 
@@ -274,17 +278,20 @@ After enabling "Auto-configure Inference Options", the system will automatically
 
 **💡 Tip**: Generally, after enabling "Auto-configure Inference Options", the system will automatically optimize parameter settings based on your hardware configuration, and performance issues usually won't occur. If you encounter problems, please refer to the following solutions:
 
-1. **CUDA Memory Insufficient**
+1. **Gradio Webpage Opens Blank**
+   - Try upgrading gradio: `pip install --upgrade gradio`
+
+2. **CUDA Memory Insufficient**
    - Enable CPU offloading
    - Reduce resolution
    - Enable quantization options
 
-2. **System Memory Insufficient**
+3. **System Memory Insufficient**
    - Enable CPU offloading
    - Enable lazy loading option
    - Enable quantization options
 
-3. **Slow Generation Speed**
+4. **Slow Generation Speed**
    - Reduce inference steps
    - Enable auto-configuration
    - Use lightweight models
@@ -292,13 +299,13 @@ After enabling "Auto-configure Inference Options", the system will automatically
    - Use quantization operators
    - 💾 **Check if models are stored on SSD**
 
-4. **Slow Model Loading**
+5. **Slow Model Loading**
    - 💾 **Migrate models to SSD storage**
    - Enable lazy loading option
    - Check disk I/O performance
    - Consider using NVMe SSD
 
-5. **Poor Video Quality**
+6. **Poor Video Quality**
    - Increase inference steps
    - Increase CFG scale factor
    - Use 14B models

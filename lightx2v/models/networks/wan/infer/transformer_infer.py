@@ -105,7 +105,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return x
 
-    def _infer_with_lazy_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+    def _infer_with_lazy_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
         self.weights_stream_mgr.prefetch_weights_from_disk(weights.blocks)
 
         for block_idx in range(self.blocks_num):
@@ -343,12 +343,12 @@ class WanTransformerInfer(BaseTransformerInfer):
         v = weights.self_attn_v.apply(norm1_out).view(s, n, d)
 
         if not self.parallel_attention:
-            if self.config.get("audio_sr", False):
+            if "audio" in self.config.get("model_cls", ""):
                 freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
             else:
                 freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
         else:
-            if self.config.get("audio_sr", False):
+            if "audio" in self.config.get("model_cls", ""):
                 freqs_i = compute_freqs_audio_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs)
             else:
                 freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs)

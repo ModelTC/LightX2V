@@ -25,6 +25,7 @@ from safetensors import safe_open
 import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
 import lightx2v.attentions.distributed.ring.wrap as ring_dist_wrap
 from lightx2v.utils.envs import *
+from lightx2v.utils.utils import *
 from loguru import logger
 
 
@@ -37,13 +38,16 @@ class WanModel:
         self.model_path = model_path
         self.config = config
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-
         self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
+
         if self.dit_quantized:
             dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
-            self.dit_quantized_ckpt = self.config.get("dit_quantized_ckpt", os.path.join(model_path, dit_quant_scheme))
+            self.dit_quantized_ckpt = find_hf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
         else:
             self.dit_quantized_ckpt = None
+            assert not self.config.get("lazy_load", False)
+
+        self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
         self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
         if self.dit_quantized:
             assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
@@ -88,16 +92,8 @@ class WanModel:
             return {key: (f.get_tensor(key).to(torch.bfloat16) if use_bf16 or all(s not in key for s in skip_bf16) else f.get_tensor(key)).pin_memory().to(self.device) for key in f.keys()}
 
     def _load_ckpt(self, use_bf16, skip_bf16):
-        safetensors_pattern = os.path.join(self.model_path, "*.safetensors")
-        safetensors_files = glob.glob(safetensors_pattern)
-
-        if not safetensors_files:
-            original_pattern = os.path.join(self.model_path, "original", "*.safetensors")
-            safetensors_files = glob.glob(original_pattern)
-
-            if not safetensors_files:
-                raise FileNotFoundError(f"No .safetensors files found in directory: {self.model_path}")
-
+        safetensors_path = find_hf_model_path(self.config, "dit_original_ckpt", subdir="original")
+        safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         weight_dict = {}
         for file_path in safetensors_files:
             file_weights = self._load_safetensor_to_dict(file_path, use_bf16, skip_bf16)

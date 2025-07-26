@@ -28,8 +28,8 @@
 #### 一键启动Gradio（推荐）
 
 **📦 下载软件包**
-- [百度云](https://pan.baidu.com/s/1ef3hEXyIuO0z6z9MoXe4nQ?pwd=7g4f)
-- [夸克网盘](https://pan.quark.cn/s/36a0cdbde7d9)
+- [百度云](https://pan.baidu.com/s/1lLb2LYl8kbmjluaM9-jCjg?pwd=ugd4)
+- [夸克网盘](https://pan.quark.cn/s/d0b8be4bc619)
 
 **📁 目录结构**
 解压后，确保目录结构如下：
@@ -40,6 +40,7 @@
 ├── start_lightx2v.bat          # 一键启动脚本
 ├── lightx2v_config.txt         # 配置文件
 ├── LightX2V使用说明.txt         # LightX2V使用说明
+├── outputs/                    # 生成的视频保存目录
 └── models/                     # 模型存放目录
     ├── 说明.txt                       # 模型说明文档
     ├── Wan2.1-I2V-14B-480P-Lightx2v/  # 图像转视频模型（480P）
@@ -87,7 +88,12 @@ model_cls=wan2.1
 
 **💡 使用建议**: 当打开Gradio Web页面后，建议勾选"自动配置推理选项"，系统会自动选择合适的优化配置针对您的机器。当重新选择分辨率后，也需要重新勾选"自动配置推理选项"。
 
-**⚠️ 重要提示**: 首次运行时会自动解压环境文件 `env.zip`，此过程需要几分钟时间，请耐心等待。后续启动无需重复此步骤。您也可以手动解压 `env.zip` 文件到当前目录以节省首次启动时间。
+![Gradio中文界面](../../../../assets/figs/portabl_windows/pic_gradio_zh.png)
+
+**⚠️ 重要提示**:
+- **首次运行**: 系统会自动解压环境文件 `env.zip`，此过程需要几分钟时间，请耐心等待。后续启动无需重复此步骤。
+- **加速启动**: 您也可以手动解压 `env.zip` 文件到当前目录以节省首次启动时间。
+- **页面显示问题**: 如果网页打开空白或显示异常，请运行 `pip install --upgrade gradio` 升级Gradio版本。
 
 
 ### 方式三：使用ComfyUI推理

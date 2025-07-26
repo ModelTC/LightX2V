@@ -126,10 +126,10 @@ def cleanup_memory():
         pass
 
 
-def generate_unique_filename(base_dir="./saved_videos"):
-    os.makedirs(base_dir, exist_ok=True)
+def generate_unique_filename(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(base_dir, f"{model_cls}_{timestamp}.mp4")
+    return os.path.join(output_dir, f"{model_cls}_{timestamp}.mp4")
 
 
 def is_fp8_supported_gpu():
@@ -138,6 +138,18 @@ def is_fp8_supported_gpu():
     compute_capability = torch.cuda.get_device_capability(0)
     major, minor = compute_capability
     return (major == 8 and minor == 9) or (major >= 9)
+
+
+def is_ada_architecture_gpu():
+    if not torch.cuda.is_available():
+        return False
+    try:
+        gpu_name = torch.cuda.get_device_name(0).upper()
+        ada_keywords = ["RTX 40", "RTX40", "4090", "4080", "4070", "4060"]
+        return any(keyword in gpu_name for keyword in ada_keywords)
+    except Exception as e:
+        logger.warning(f"Failed to get GPU name: {e}")
+        return False
 
 
 global_runner = None
@@ -288,7 +300,7 @@ def run_inference(
                 ],
             ]
 
-    save_video_path = generate_unique_filename()
+    save_video_path = generate_unique_filename(output_dir)
 
     is_dit_quant = dit_quant_scheme != "bf16"
     is_t5_quant = t5_quant_scheme != "bf16"
@@ -341,6 +353,8 @@ def run_inference(
                 mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Sgl"
         elif quant_op == "q8f":
             mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Q8F"
+            t5_quant_scheme = f"{t5_quant_scheme}-q8f"
+            clip_quant_scheme = f"{clip_quant_scheme}-q8f"
 
         dit_quantized_ckpt = os.path.join(model_path, dit_quant_scheme)
         if os.path.exists(os.path.join(dit_quantized_ckpt, "config.json")):
@@ -387,7 +401,7 @@ def run_inference(
         "clip_quantized_ckpt": clip_quant_ckpt,
         "clip_quant_scheme": clip_quant_scheme,
         "use_tiling_vae": use_tiling_vae,
-        "tiny_vae": use_tiny_vae,
+        "use_tiny_vae": use_tiny_vae,
         "tiny_vae_path": (os.path.join(model_path, "taew2_1.pth") if use_tiny_vae else None),
         "lazy_load": lazy_load,
         "do_mm_calib": False,
@@ -506,7 +520,11 @@ def auto_configure(enable_auto_config, resolution):
         quant_type = "int8"
 
     attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
-    quant_op_priority = ["sgl", "vllm", "q8f"]
+
+    if is_ada_architecture_gpu():
+        quant_op_priority = ["q8f", "vllm", "sgl"]
+    else:
+        quant_op_priority = ["sgl", "vllm", "q8f"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -726,7 +744,7 @@ def auto_configure(enable_auto_config, resolution):
 
 def main():
     def toggle_image_input(task):
-        return gr.update(visible=(task == "Image to Video"))
+        return gr.update(visible=(task == "i2v"))
 
     with gr.Blocks(
         title="Lightx2v (Lightweight Video Inference and Generation Engine)",
@@ -736,6 +754,30 @@ def main():
         .warning { color: #ff6b6b; font-weight: bold; }
         .advanced-options { background: #f9f9ff; border-radius: 10px; padding: 15px; }
         .tab-button { font-size: 16px; padding: 10px 20px; }
+        .auto-config-title {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            text-align: center;
+            margin: 0 !important;
+            padding: 8px;
+            border: 2px solid #4ecdc4;
+            border-radius: 8px;
+            background-color: #f0f8ff;
+        }
+        .auto-config-checkbox {
+            border: 2px solid #ff6b6b !important;
+            border-radius: 8px !important;
+            padding: 10px !important;
+            background: linear-gradient(135deg, #fff5f5, #f0fff0) !important;
+            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.2) !important;
+        }
+        .auto-config-checkbox label {
+            font-size: 16px !important;
+            font-weight: bold !important;
+            color: #2c3e50 !important;
+        }
     """,
     ) as demo:
         gr.Markdown(f"# 🎬 {model_cls} Video Generator")
@@ -800,11 +842,14 @@ def main():
                                     )
 
                                 with gr.Column():
-                                    enable_auto_config = gr.Checkbox(
-                                        label="Auto-configure Inference Options",
-                                        value=False,
-                                        info="Automatically optimize GPU settings to match the current resolution. After changing the resolution, please re-check this option to prevent potential performance degradation or runtime errors.",
-                                    )
+                                    with gr.Group():
+                                        gr.Markdown("### 🚀 **Smart Configuration Recommendation**", elem_classes=["auto-config-title"])
+                                        enable_auto_config = gr.Checkbox(
+                                            label="🎯 **Auto-configure Inference Options**",
+                                            value=False,
+                                            info="💡 **Automatically optimize GPU settings to match the current resolution. After changing the resolution, please re-check this option to prevent potential performance degradation or runtime errors.**",
+                                            elem_classes=["auto-config-checkbox"],
+                                        )
                                 with gr.Column(scale=9):
                                     seed = gr.Slider(
                                         label="Random Seed",
@@ -820,15 +865,35 @@ def main():
 
                                 with gr.Column():
                                     # Set default inference steps based on model class
-                                    default_infer_steps = 4 if model_cls == "wan2.1_distill" else 40
-                                    infer_steps = gr.Slider(
-                                        label="Inference Steps",
-                                        minimum=1,
-                                        maximum=100,
-                                        step=1,
-                                        value=default_infer_steps,
-                                        info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
-                                    )
+                                    if model_cls == "wan2.1_distill":
+                                        infer_steps = gr.Slider(
+                                            label="Inference Steps",
+                                            minimum=4,
+                                            maximum=4,
+                                            step=1,
+                                            value=4,
+                                            interactive=False,
+                                            info="Inference steps fixed at 4 for optimal performance for distill model.",
+                                        )
+                                    elif model_cls == "wan2.1":
+                                        if task == "i2v":
+                                            infer_steps = gr.Slider(
+                                                label="Inference Steps",
+                                                minimum=1,
+                                                maximum=100,
+                                                step=1,
+                                                value=40,
+                                                info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
+                                            )
+                                        elif task == "t2v":
+                                            infer_steps = gr.Slider(
+                                                label="Inference Steps",
+                                                minimum=1,
+                                                maximum=100,
+                                                step=1,
+                                                value=50,
+                                                info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
+                                            )
 
                             # Set default CFG based on model class
                             default_enable_cfg = False if model_cls == "wan2.1_distill" else True
@@ -873,7 +938,7 @@ def main():
 
                         save_video_path = gr.Textbox(
                             label="Output Video Path",
-                            value=generate_unique_filename(),
+                            value=generate_unique_filename(output_dir),
                             info="Must include .mp4 extension. If left blank or using the default value, a unique filename will be automatically generated.",
                         )
                     with gr.Column(scale=6):
@@ -1154,7 +1219,7 @@ def main():
                 outputs=output_video,
             )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True)
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
 
 
 if __name__ == "__main__":
@@ -1171,12 +1236,14 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="Specify the task type. 'i2v' for image-to-video translation, 't2v' for text-to-video generation.")
     parser.add_argument("--server_port", type=int, default=7862, help="Server port")
     parser.add_argument("--server_name", type=str, default="0.0.0.0", help="Server ip")
+    parser.add_argument("--output_dir", type=str, default="./outputs", help="Output video save directory")
     args = parser.parse_args()
 
-    global model_path, model_cls, model_size
+    global model_path, model_cls, model_size, output_dir
     model_path = args.model_path
     model_cls = args.model_cls
     model_size = args.model_size
     task = args.task
+    output_dir = args.output_dir
 
     main()

@@ -36,6 +36,9 @@ REM Server configuration
 set server_name=127.0.0.1
 set server_port=8032
 
+REM Output directory configuration
+set output_dir=./outputs
+
 REM GPU configuration
 set gpu_id=0
 
@@ -91,6 +94,12 @@ if "%1"=="--model_cls" (
     shift
     goto :parse_args
 )
+if "%1"=="--output_dir" (
+    set output_dir=%2
+    shift
+    shift
+    goto :parse_args
+)
 if "%1"=="--help" (
     echo 🎬 LightX2V Gradio Windows Startup Script
     echo ==========================================
@@ -113,6 +122,8 @@ if "%1"=="--help" (
     echo                      Model class (default: wan2.1)
     echo                      wan2.1: Standard model variant
     echo                      wan2.1_distill: Distilled model variant for faster inference
+    echo   --output_dir OUTPUT_DIR
+    echo                      Output video save directory (default: ./saved_videos)
     echo   --help             Show this help message
     echo.
     echo 🚀 Usage examples:
@@ -123,6 +134,7 @@ if "%1"=="--help" (
     echo   %0 --task t2v --model_size 1.3b       # Use 1.3B model
     echo   %0 --task i2v --model_size 14b        # Use 14B model
     echo   %0 --task i2v --model_cls wan2.1_distill  # Use distilled model
+    echo   %0 --task i2v --output_dir ./custom_output  # Use custom output directory
     echo.
     echo 📝 Notes:
     echo   - Edit script to configure model paths before first use
@@ -224,6 +236,7 @@ echo 🤖 Model class: %model_cls%
 echo 🌏 Interface language: %lang%
 echo 🖥️  GPU device: %gpu_id%
 echo 🌐 Server address: %server_name%:%server_port%
+echo 📁 Output directory: %output_dir%
 echo ==========================================
 
 REM Display system resource information
@@ -253,7 +266,8 @@ python %demo_file% ^
     --task %task% ^
     --server_name %server_name% ^
     --server_port %server_port% ^
-    --model_size %model_size%
+    --model_size %model_size% ^
+    --output_dir "%output_dir%"
 
 REM Display final system resource usage
 echo.

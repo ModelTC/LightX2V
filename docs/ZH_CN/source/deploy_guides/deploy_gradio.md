@@ -4,6 +4,10 @@
 
 Lightx2v 是一个轻量级的视频推理和生成引擎，提供基于 Gradio 的 Web 界面，支持图像到视频（Image-to-Video）和文本到视频（Text-to-Video）两种生成模式。
 
+对于Windows系统，我们提供了便捷的一键部署方式，支持自动环境配置和智能参数优化。详细操作请参考[一键启动Gradio](./deploy_local_windows.md/#一键启动gradio推荐)章节。
+
+![Gradio中文界面](../../../../assets/figs/portabl_windows/pic_gradio_zh.png)
+
 ## 📁 文件结构
 
 ```
@@ -12,7 +16,7 @@ LightX2V/app/
 ├── gradio_demo_zh.py       # 中文界面演示
 ├── run_gradio.sh          # 启动脚本
 ├── README.md              # 说明文档
-├── saved_videos/          # 生成视频保存目录
+├── outputs/               # 生成视频保存目录
 └── inference_logs.log     # 推理日志
 ```
 
@@ -274,17 +278,20 @@ python gradio_demo_zh.py ^
 
 **💡 提示**: 一般情况下，启用"自动配置推理选项"后，系统会根据您的硬件配置自动优化参数设置，通常不会出现性能问题。如果遇到问题，请参考以下解决方案：
 
-1. **CUDA内存不足**
+1. **Gradio网页打开空白**
+   - 尝试升级gradio `pip install --upgrade gradio`
+
+2. **CUDA内存不足**
    - 启用CPU卸载
    - 降低分辨率
    - 启用量化选项
 
-2. **系统内存不足**
+3. **系统内存不足**
    - 启用CPU卸载
    - 启用延迟加载选项
    - 启用量化选项
 
-3. **生成速度慢**
+4. **生成速度慢**
    - 减少推理步数
    - 启用自动配置
    - 使用轻量级模型
@@ -292,13 +299,13 @@ python gradio_demo_zh.py ^
    - 使用量化算子
    - 💾 **检查模型是否存放在SSD上**
 
-4. **模型加载缓慢**
+5. **模型加载缓慢**
    - 💾 **将模型迁移到SSD存储**
    - 启用延迟加载选项
    - 检查磁盘I/O性能
    - 考虑使用NVMe SSD
 
-5. **视频质量不佳**
+6. **视频质量不佳**
    - 增加推理步数
    - 提高CFG缩放因子
    - 使用14B模型
