@@ -13,5 +13,5 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "feature_caching": "FirstBlock",
-    "residual_diff_threshold": 0.01
+    "residual_diff_threshold": 0.02
 }
