@@ -13,5 +13,6 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "feature_caching": "DynamicBlock",
-    "residual_diff_threshold": 0.003
+    "residual_diff_threshold": 0.003,
+    "downsample_factor": 2
 }
