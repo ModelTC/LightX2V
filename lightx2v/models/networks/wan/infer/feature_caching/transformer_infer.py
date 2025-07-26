@@ -5,7 +5,6 @@ import numpy as np
 import gc
 
 
-# 1. TeaCaching
 class WanTransformerInferTeaCaching(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
@@ -684,14 +683,10 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
         torch.cuda.empty_cache()
 
 
-# 1. FirstBlock
 class WanTransformerInferFirstBlock(WanTransformerInfer):
-    # 1.1 初始化
     def __init__(self, config):
-        # 1.1 初始化
         super().__init__(config)
 
-        # 1.2 本方法: 阈值，29个block的缓存
         self.residual_diff_threshold = config.residual_diff_threshold
         self.prev_first_block_residual_even = None
         self.prev_remaining_blocks_residual_even = None
@@ -699,40 +694,31 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
         self.prev_remaining_blocks_residual_odd = None
         self.downsample_factor = self.config.downsample_factor
 
-    # 1.2 推理
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        # 1.1 推理FirstBlock
-        # 1.1.1 并进行判断，判断之后缓存，这样永远只需要缓存一个张量，节约显存
         ori_x = x.clone()
         x = super().infer_block(weights.blocks[0], grid_sizes, embed, x, embed0, seq_lens, freqs, context)
         x_residual = x - ori_x
         del ori_x
 
-        # 1.1 条件推理
         if self.infer_conditional:
-            # 1.2 更新决策数组
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records
             if index <= self.scheduler.infer_steps - 1:
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records[index] = should_calc
 
-            # 1.3 29个Block完全计算 | 缓存复用
             if caching_records[index]:
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
 
-        # 1.2 非条件推理
         else:
-            # 1.2 更新决策数组
             index = self.scheduler.step_index
             caching_records_2 = self.scheduler.caching_records_2
             if index <= self.scheduler.infer_steps - 1:
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records_2[index] = should_calc
 
-            # 1.3 29个Block完全计算 | 缓存复用
             if caching_records_2[index]:
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
@@ -766,10 +752,8 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
         return diff >= self.residual_diff_threshold
 
     def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        # 1.1. 初始输入
         ori_x = x.clone()
 
-        # 1.2 29个blocks推理
         for block_idx in range(1, self.blocks_num):
             x = super().infer_block(
                 weights.blocks[block_idx],
@@ -782,14 +766,12 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
                 context,
             )
 
-        # 1.3 记录残差缓存
         if self.infer_conditional:
             self.prev_remaining_blocks_residual_even = x - ori_x
         else:
             self.prev_remaining_blocks_residual_odd = x - ori_x
         del ori_x
 
-        # 1.4 返回x
         return x
 
     def infer_using_cache(self, x):
@@ -806,14 +788,10 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
         torch.cuda.empty_cache()
 
 
-# 2. DualBlock
 class WanTransformerInferDualBlock(WanTransformerInfer):
-    # 2.1 初始化
     def __init__(self, config):
-        # 2.1 初始化
         super().__init__(config)
 
-        # 2.2 本方法: 阈值，29个block的缓存
         self.residual_diff_threshold = config.residual_diff_threshold
         self.prev_front_blocks_residual_even = None
         self.prev_middle_blocks_residual_even = None
@@ -821,9 +799,7 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         self.prev_middle_blocks_residual_odd = None
         self.downsample_factor = self.config.downsample_factor
 
-    # 2.2 推理
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        # 1. 推理[0,4]个blocks
         ori_x = x.clone()
         for block_idx in range(0, 5):
             x = super().infer_block(
@@ -839,36 +815,30 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         x_residual = x - ori_x
         del ori_x
 
-        # 2. 决策
         if self.infer_conditional:
-            # 2.2 更新决策数组
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records
             if index <= self.scheduler.infer_steps - 1:
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records[index] = should_calc
 
-            # 2.3 [5,24] 个Block完全计算 | 缓存复用
             if caching_records[index]:
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
 
         else:
-            # 2.2 更新决策数组
             index = self.scheduler.step_index
             caching_records_2 = self.scheduler.caching_records_2
             if index <= self.scheduler.infer_steps - 1:
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records_2[index] = should_calc
 
-            # 2.3 [5,24] 个Block完全计算 | 缓存复用
             if caching_records_2[index]:
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
 
-        # 3. [25, 29]完全计算
         for block_idx in range(self.blocks_num - 5, self.blocks_num):
             x = super().infer_block(
                 weights.blocks[block_idx],
@@ -909,10 +879,8 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         return diff >= self.residual_diff_threshold
 
     def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        # 1.1. 初始输入
         ori_x = x.clone()
 
-        # 1.2 29个blocks推理
         for block_idx in range(5, self.blocks_num - 5):
             x = super().infer_block(
                 weights.blocks[block_idx],
@@ -925,14 +893,12 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
                 context,
             )
 
-        # 1.3 记录残差缓存
         if self.infer_conditional:
             self.prev_middle_blocks_residual_even = x - ori_x
         else:
             self.prev_middle_blocks_residual_odd = x - ori_x
         del ori_x
 
-        # 1.4 返回x
         return x
 
     def infer_using_cache(self, x):
@@ -949,7 +915,6 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         torch.cuda.empty_cache()
 
 
-# 3. DynamicBlock
 class WanTransformerInferDynamicBlock(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
@@ -962,7 +927,6 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
         self.block_residual_cache_odd = {i: None for i in range(self.blocks_num)}
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        # 1. 每个block单独推理就行
         for block_idx in range(self.blocks_num):
             x = self.infer_block(weights.blocks[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx)
 
@@ -972,17 +936,13 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
         ori_x = x.clone()
 
         if self.infer_conditional:
-            # 1. 是否有输入缓存
             if self.block_in_cache_even[block_idx] is not None:
-                # 2. 是否相似
                 should_calc = self.are_two_tensor_similar(self.block_in_cache_even[block_idx], x)
-                # 3. 使用缓存
                 if should_calc:
                     x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
                 else:
                     x += self.block_residual_cache_even[block_idx]
 
-            # 4. 正常计算，更新输入和残差缓存
             else:
                 x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
 
@@ -991,17 +951,13 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
             del ori_x
 
         else:
-            # 1. 是否有输入缓存
             if self.block_in_cache_odd[block_idx] is not None:
-                # 2. 是否相似
                 should_calc = self.are_two_tensor_similar(self.block_in_cache_odd[block_idx], x)
-                # 3. 使用缓存
                 if should_calc:
                     x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
                 else:
                     x += self.block_residual_cache_odd[block_idx]
 
-            # 4. 正常计算，更新输入和残差缓存
             else:
                 x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
 
