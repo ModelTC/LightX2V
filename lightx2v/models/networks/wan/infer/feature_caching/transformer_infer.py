@@ -989,7 +989,7 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
             # 1. 是否有输入缓存
             if self.block_in_cache_odd[block_idx] is not None:
                 # 2. 是否相似
-                should_calc = self.are_two_tensor_similar(self.block_in_cache_even[block_idx], x)
+                should_calc = self.are_two_tensor_similar(self.block_in_cache_odd[block_idx], x)
                 # 3. 使用缓存
                 if should_calc:
                     x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
