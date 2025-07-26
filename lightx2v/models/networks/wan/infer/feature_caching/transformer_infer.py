@@ -817,6 +817,7 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         self.prev_middle_blocks_residual_even = None
         self.prev_front_blocks_residual_odd = None
         self.prev_middle_blocks_residual_odd = None
+        self.downsample_factor = self.config.downsample_factor
 
     # 2.2 推理
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
@@ -885,22 +886,23 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
 
     def calculate_should_calc(self, x_residual):
         diff = 1.0
+        x_residual_downsampled = x_residual[..., :: self.downsample_factor]
         if self.infer_conditional:
             if self.prev_front_blocks_residual_even is not None:
                 t1 = self.prev_front_blocks_residual_even
-                t2 = x_residual
+                t2 = x_residual_downsampled
                 mean_diff = (t1 - t2).abs().mean()
                 mean_t1 = t1.abs().mean()
                 diff = (mean_diff / mean_t1).item()
-            self.prev_front_blocks_residual_even = x_residual
+            self.prev_front_blocks_residual_even = x_residual_downsampled
         else:
             if self.prev_front_blocks_residual_odd is not None:
                 t1 = self.prev_front_blocks_residual_odd
-                t2 = x_residual
+                t2 = x_residual_downsampled
                 mean_diff = (t1 - t2).abs().mean()
                 mean_t1 = t1.abs().mean()
                 diff = (mean_diff / mean_t1).item()
-            self.prev_front_blocks_residual_odd = x_residual
+            self.prev_front_blocks_residual_odd = x_residual_downsampled
 
         return diff >= self.residual_diff_threshold
 

@@ -13,5 +13,6 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "feature_caching": "DualBlock",
-    "residual_diff_threshold": 0.03
+    "residual_diff_threshold": 0.03,
+    "downsample_factor": 2
 }
