@@ -17,6 +17,7 @@ from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
     WanSchedulerCustomCaching,
 )
 from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.utils import *
 from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.model import WanModel
@@ -58,28 +59,24 @@ class WanRunner(DefaultRunner):
                 clip_quant_scheme = self.config.get("clip_quant_scheme", None)
                 assert clip_quant_scheme is not None
                 tmp_clip_quant_scheme = clip_quant_scheme.split("-")[0]
-                clip_quantized_ckpt = self.config.get(
-                    "clip_quantized_ckpt",
-                    os.path.join(
-                        os.path.join(self.config.model_path, tmp_clip_quant_scheme),
-                        f"clip-{tmp_clip_quant_scheme}.pth",
-                    ),
-                )
+                clip_model_name = f"clip-{tmp_clip_quant_scheme}.pth"
+                clip_quantized_ckpt = find_torch_model_path(self.config, "clip_quantized_ckpt", clip_model_name, tmp_clip_quant_scheme)
+                clip_original_ckpt = None
             else:
                 clip_quantized_ckpt = None
                 clip_quant_scheme = None
+                clip_model_name = "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
+                clip_original_ckpt = find_torch_model_path(self.config, "clip_original_ckpt", clip_model_name, "original")
 
             image_encoder = CLIPModel(
                 dtype=torch.float16,
                 device=self.init_device,
-                checkpoint_path=os.path.join(
-                    self.config.model_path,
-                    "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
-                ),
+                checkpoint_path=clip_original_ckpt,
                 clip_quantized=clip_quantized,
                 clip_quantized_ckpt=clip_quantized_ckpt,
                 quant_scheme=clip_quant_scheme,
             )
+
         return image_encoder
 
     def load_text_encoder(self):
@@ -94,24 +91,22 @@ class WanRunner(DefaultRunner):
         t5_quantized = self.config.get("t5_quantized", False)
         if t5_quantized:
             t5_quant_scheme = self.config.get("t5_quant_scheme", None)
-            tmp_t5_quant_scheme = t5_quant_scheme.split("-")[0]
             assert t5_quant_scheme is not None
-            t5_quantized_ckpt = self.config.get(
-                "t5_quantized_ckpt",
-                os.path.join(
-                    os.path.join(self.config.model_path, tmp_t5_quant_scheme),
-                    f"models_t5_umt5-xxl-enc-{tmp_t5_quant_scheme}.pth",
-                ),
-            )
+            tmp_t5_quant_scheme = t5_quant_scheme.split("-")[0]
+            t5_model_name = f"models_t5_umt5-xxl-enc-{tmp_t5_quant_scheme}.pth"
+            t5_quantized_ckpt = find_torch_model_path(self.config, "t5_quantized_ckpt", t5_model_name, tmp_t5_quant_scheme)
+            t5_original_ckpt = None
         else:
             t5_quant_scheme = None
             t5_quantized_ckpt = None
+            t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
+            t5_original_ckpt = find_torch_model_path(self.config, "t5_original_ckpt", t5_model_name, "original")
 
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
             device=t5_device,
-            checkpoint_path=os.path.join(self.config.model_path, "models_t5_umt5-xxl-enc-bf16.pth"),
+            checkpoint_path=t5_original_ckpt,
             tokenizer_path=os.path.join(self.config.model_path, "google/umt5-xxl"),
             shard_fn=None,
             cpu_offload=t5_offload,
@@ -125,7 +120,7 @@ class WanRunner(DefaultRunner):
 
     def load_vae_encoder(self):
         vae_config = {
-            "vae_pth": os.path.join(self.config.model_path, "Wan2.1_VAE.pth"),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth", "original"),
             "device": self.init_device,
             "parallel": self.config.parallel_vae,
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -137,13 +132,13 @@ class WanRunner(DefaultRunner):
 
     def load_vae_decoder(self):
         vae_config = {
-            "vae_pth": os.path.join(self.config.model_path, "Wan2.1_VAE.pth"),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth", "original"),
             "device": self.init_device,
             "parallel": self.config.parallel_vae,
             "use_tiling": self.config.get("use_tiling_vae", False),
         }
         if self.config.get("use_tiny_vae", False):
-            tiny_vae_path = self.config.get("tiny_vae_path", os.path.join(self.config.model_path, "taew2_1.pth"))
+            tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth", "original")
             vae_decoder = WanVAE_tiny(
                 vae_pth=tiny_vae_path,
                 device=self.init_device,
@@ -216,7 +211,10 @@ class WanRunner(DefaultRunner):
             self.config.lat_h, self.config.lat_w = lat_h, lat_w
             vae_encode_out_list = []
             for i in range(len(self.config["resolution_rate"])):
-                lat_h, lat_w = int(self.config.lat_h * self.config.resolution_rate[i]) // 2 * 2, int(self.config.lat_w * self.config.resolution_rate[i]) // 2 * 2
+                lat_h, lat_w = (
+                    int(self.config.lat_h * self.config.resolution_rate[i]) // 2 * 2,
+                    int(self.config.lat_w * self.config.resolution_rate[i]) // 2 * 2,
+                )
                 vae_encode_out_list.append(self.get_vae_encoder_output(img, lat_h, lat_w))
             vae_encode_out_list.append(self.get_vae_encoder_output(img, self.config.lat_h, self.config.lat_w))
             return vae_encode_out_list

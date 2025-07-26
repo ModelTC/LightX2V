@@ -33,6 +33,8 @@ class DefaultRunner(BaseRunner):
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
+        elif self.config.get("lazy_load", False):
+            assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
         self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "i2v":

@@ -105,7 +105,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return x
 
-    def _infer_with_lazy_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+    def _infer_with_lazy_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
         self.weights_stream_mgr.prefetch_weights_from_disk(weights.blocks)
 
         for block_idx in range(self.blocks_num):

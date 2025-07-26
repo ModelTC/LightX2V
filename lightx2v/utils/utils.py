@@ -1,15 +1,15 @@
 import os
 import random
 import subprocess
-from typing import Optional
-
-from einops import rearrange
+import glob
 import imageio
 import imageio_ffmpeg as ffmpeg
-from loguru import logger
 import numpy as np
 import torch
 import torchvision
+from typing import Optional
+from einops import rearrange
+from loguru import logger
 
 
 def seed_all(seed):
@@ -154,12 +154,14 @@ def save_to_video(
 
     if method == "imageio":
         # Convert to uint8
-        frames = (images * 255).cpu().numpy().astype(np.uint8)
+        # frames = (images * 255).cpu().numpy().astype(np.uint8)
+        frames = (images * 255).to(torch.uint8).cpu().numpy()
         imageio.mimsave(output_path, frames, fps=fps)  # type: ignore
 
     elif method == "ffmpeg":
         # Convert to numpy and scale to [0, 255]
-        frames = (images * 255).cpu().numpy().clip(0, 255).astype(np.uint8)
+        # frames = (images * 255).cpu().numpy().clip(0, 255).astype(np.uint8)
+        frames = (images * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
 
         # Convert RGB to BGR for OpenCV/FFmpeg
         frames = frames[..., ::-1].copy()
@@ -252,3 +254,36 @@ def save_to_video(
 
     else:
         raise ValueError(f"Unknown save method: {method}")
+
+
+def find_torch_model_path(config, ckpt_config_key=None, filename=None, subdir=None):
+    if ckpt_config_key and config.get(ckpt_config_key, None) is not None:
+        return config.get(ckpt_config_key)
+
+    paths_to_check = [
+        os.path.join(config.model_path, filename),
+    ]
+    if subdir:
+        paths_to_check.append(os.path.join(config.model_path, subdir, filename))
+    for path in paths_to_check:
+        if os.path.exists(path):
+            logger.info(f"Found PyTorch model checkpoint: {path}")
+            return path
+    raise FileNotFoundError(f"PyTorch model file '{filename}' not found.\nPlease download the model from https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
+
+
+def find_hf_model_path(config, ckpt_config_key=None, subdir=None):
+    if ckpt_config_key and config.get(ckpt_config_key, None) is not None:
+        return config.get(ckpt_config_key)
+
+    paths_to_check = [config.model_path]
+    if subdir:
+        paths_to_check.append(os.path.join(config.model_path, subdir))
+
+    for path in paths_to_check:
+        safetensors_pattern = os.path.join(path, "*.safetensors")
+        safetensors_files = glob.glob(safetensors_pattern)
+        if safetensors_files:
+            logger.info(f"Found Hugging Face model files in: {path}")
+            return path
+    raise FileNotFoundError(f"No Hugging Face model files (.safetensors) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
