@@ -1013,3 +1013,11 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
         diff = (mean_diff / mean_t1).item()
 
         return diff >= self.residual_diff_threshold
+
+    def clear(self):
+        for i in range(self.blocks_num):
+            self.block_in_cache_even[i] = None
+            self.block_residual_cache_even[i] = None
+            self.block_in_cache_odd[i] = None
+            self.block_residual_cache_odd[i] = None
+        torch.cuda.empty_cache()
