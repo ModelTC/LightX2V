@@ -5,7 +5,20 @@ import numpy as np
 import gc
 
 
-class WanTransformerInferTeaCaching(WanTransformerInfer):
+class WanTransformerInferCaching(WanTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+        self.must_calc_steps = []
+        if self.config.get("changing_resolution", False):
+            self.must_calc_steps = self.config["changing_resolution_steps"]
+
+    def must_calc(self, step_index):
+        if step_index in self.must_calc_steps:
+            return True
+        return False
+
+
+class WanTransformerInferTeaCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
         self.cnt = 0
@@ -87,7 +100,7 @@ class WanTransformerInferTeaCaching(WanTransformerInfer):
                 should_calc = self.calculate_should_calc(embed, embed0)
                 self.scheduler.caching_records[index] = should_calc
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -99,7 +112,7 @@ class WanTransformerInferTeaCaching(WanTransformerInfer):
                 should_calc = self.calculate_should_calc(embed, embed0)
                 self.scheduler.caching_records_2[index] = should_calc
 
-            if caching_records_2[index]:
+            if caching_records_2[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -169,7 +182,7 @@ class WanTransformerInferTeaCaching(WanTransformerInfer):
         torch.cuda.empty_cache()
 
 
-class WanTransformerInferTaylorCaching(WanTransformerInfer, BaseTaylorCachingTransformerInfer):
+class WanTransformerInferTaylorCaching(WanTransformerInferCaching, BaseTaylorCachingTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
 
@@ -199,7 +212,7 @@ class WanTransformerInferTaylorCaching(WanTransformerInfer, BaseTaylorCachingTra
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
@@ -208,7 +221,7 @@ class WanTransformerInferTaylorCaching(WanTransformerInfer, BaseTaylorCachingTra
             index = self.scheduler.step_index
             caching_records_2 = self.scheduler.caching_records_2
 
-            if caching_records_2[index]:
+            if caching_records_2[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
@@ -305,7 +318,7 @@ class WanTransformerInferTaylorCaching(WanTransformerInfer, BaseTaylorCachingTra
         torch.cuda.empty_cache()
 
 
-class WanTransformerInferAdaCaching(WanTransformerInfer):
+class WanTransformerInferAdaCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
 
@@ -322,7 +335,7 @@ class WanTransformerInferAdaCaching(WanTransformerInfer):
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
 
                 # 1. calculate the skipped step length
@@ -338,7 +351,7 @@ class WanTransformerInferAdaCaching(WanTransformerInfer):
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records_2
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
 
                 # 1. calculate the skipped step length
@@ -518,7 +531,7 @@ class AdaArgs:
         self.spatial_dim = 1536
 
 
-class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTransformerInfer):
+class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCachingTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         self.cnt = 0
@@ -605,7 +618,7 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
                 should_calc = self.calculate_should_calc(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
                 self.scheduler.caching_records[index] = should_calc
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -617,7 +630,7 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
                 should_calc = self.calculate_should_calc(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
                 self.scheduler.caching_records_2[index] = should_calc
 
-            if caching_records_2[index]:
+            if caching_records_2[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -683,7 +696,7 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
         torch.cuda.empty_cache()
 
 
-class WanTransformerInferFirstBlock(WanTransformerInfer):
+class WanTransformerInferFirstBlock(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
 
@@ -707,7 +720,7 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records[index] = should_calc
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -719,7 +732,7 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records_2[index] = should_calc
 
-            if caching_records_2[index]:
+            if caching_records_2[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -788,7 +801,7 @@ class WanTransformerInferFirstBlock(WanTransformerInfer):
         torch.cuda.empty_cache()
 
 
-class WanTransformerInferDualBlock(WanTransformerInfer):
+class WanTransformerInferDualBlock(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
 
@@ -822,7 +835,7 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records[index] = should_calc
 
-            if caching_records[index]:
+            if caching_records[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -834,7 +847,7 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
                 should_calc = self.calculate_should_calc(x_residual)
                 self.scheduler.caching_records_2[index] = should_calc
 
-            if caching_records_2[index]:
+            if caching_records_2[index] or self.must_calc(index):
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
@@ -915,7 +928,7 @@ class WanTransformerInferDualBlock(WanTransformerInfer):
         torch.cuda.empty_cache()
 
 
-class WanTransformerInferDynamicBlock(WanTransformerInfer):
+class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
         self.residual_diff_threshold = config.residual_diff_threshold
@@ -938,7 +951,7 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
         if self.infer_conditional:
             if self.block_in_cache_even[block_idx] is not None:
                 should_calc = self.are_two_tensor_similar(self.block_in_cache_even[block_idx], x)
-                if should_calc:
+                if should_calc or self.must_calc(block_idx):
                     x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
                 else:
                     x += self.block_residual_cache_even[block_idx]
@@ -953,7 +966,7 @@ class WanTransformerInferDynamicBlock(WanTransformerInfer):
         else:
             if self.block_in_cache_odd[block_idx] is not None:
                 should_calc = self.are_two_tensor_similar(self.block_in_cache_odd[block_idx], x)
-                if should_calc:
+                if should_calc or self.must_calc(block_idx):
                     x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
                 else:
                     x += self.block_residual_cache_odd[block_idx]

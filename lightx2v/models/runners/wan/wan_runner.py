@@ -8,16 +8,11 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
-    WanScheduler4ChangingResolution,
+    WanScheduler4ChangingResolutionInterface,
 )
 from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
-    WanSchedulerTeaCaching,
+    WanSchedulerCaching,
     WanSchedulerTaylorCaching,
-    WanSchedulerAdaCaching,
-    WanSchedulerCustomCaching,
-    WanSchedulerFirstBlock,
-    WanSchedulerDualBlock,
-    WanSchedulerDynamicBlock,
 )
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.utils import *
@@ -159,27 +154,19 @@ class WanRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
-        if self.config.get("changing_resolution", False):
-            scheduler = WanScheduler4ChangingResolution(self.config)
+        if self.config.feature_caching == "NoCaching":
+            scheduler_class = WanScheduler
+        elif self.config.feature_caching == "TaylorSeer":
+            scheduler_class = WanSchedulerTaylorCaching
+        elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock"]:
+            scheduler_class = WanSchedulerCaching
         else:
-            if self.config.feature_caching == "NoCaching":
-                scheduler = WanScheduler(self.config)
-            elif self.config.feature_caching == "Tea":
-                scheduler = WanSchedulerTeaCaching(self.config)
-            elif self.config.feature_caching == "TaylorSeer":
-                scheduler = WanSchedulerTaylorCaching(self.config)
-            elif self.config.feature_caching == "Ada":
-                scheduler = WanSchedulerAdaCaching(self.config)
-            elif self.config.feature_caching == "Custom":
-                scheduler = WanSchedulerCustomCaching(self.config)
-            elif self.config.feature_caching == "FirstBlock":
-                scheduler = WanSchedulerFirstBlock(self.config)
-            elif self.config.feature_caching == "DualBlock":
-                scheduler = WanSchedulerDualBlock(self.config)
-            elif self.config.feature_caching == "DynamicBlock":
-                scheduler = WanSchedulerDynamicBlock(self.config)
-            else:
-                raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+
+        if self.config.get("changing_resolution", False):
+            scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
+        else:
+            scheduler = scheduler_class(self.config)
         self.model.set_scheduler(scheduler)
 
     def run_text_encoder(self, text, img):

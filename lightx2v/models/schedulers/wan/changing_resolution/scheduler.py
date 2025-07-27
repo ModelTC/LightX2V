@@ -2,9 +2,18 @@ import torch
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 
 
-class WanScheduler4ChangingResolution(WanScheduler):
+class WanScheduler4ChangingResolutionInterface:
+    def __new__(cls, father_scheduler, config):
+        class NewClass(WanScheduler4ChangingResolution, father_scheduler):
+            def __init__(self, config):
+                father_scheduler.__init__(self, config)
+                WanScheduler4ChangingResolution.__init__(self, config)
+
+        return NewClass(config)
+
+
+class WanScheduler4ChangingResolution:
     def __init__(self, config):
-        super().__init__(config)
         if "resolution_rate" not in config:
             config["resolution_rate"] = [0.75]
         if "changing_resolution_steps" not in config:
