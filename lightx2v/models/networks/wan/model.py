@@ -17,6 +17,9 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
     WanTransformerInferTaylorCaching,
     WanTransformerInferAdaCaching,
     WanTransformerInferCustomCaching,
+    WanTransformerInferFirstBlock,
+    WanTransformerInferDualBlock,
+    WanTransformerInferDynamicBlock,
 )
 from safetensors import safe_open
 import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
@@ -75,6 +78,12 @@ class WanModel:
             self.transformer_infer_class = WanTransformerInferAdaCaching
         elif self.config["feature_caching"] == "Custom":
             self.transformer_infer_class = WanTransformerInferCustomCaching
+        elif self.config["feature_caching"] == "FirstBlock":
+            self.transformer_infer_class = WanTransformerInferFirstBlock
+        elif self.config["feature_caching"] == "DualBlock":
+            self.transformer_infer_class = WanTransformerInferDualBlock
+        elif self.config["feature_caching"] == "DynamicBlock":
+            self.transformer_infer_class = WanTransformerInferDynamicBlock
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 
@@ -192,7 +201,7 @@ class WanModel:
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
 
@@ -213,7 +222,7 @@ class WanModel:
 
             self.scheduler.noise_pred = noise_pred_uncond + self.config.sample_guide_scale * (self.scheduler.noise_pred - noise_pred_uncond)
 
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.pre_weight.to_cpu()
                 self.post_weight.to_cpu()
 

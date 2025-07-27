@@ -5,8 +5,8 @@ from lightx2v.utils.envs import *
 class BaseScheduler:
     def __init__(self, config):
         self.config = config
-        self.step_index = 0
         self.latents = None
+        self.step_index = 0
         self.infer_steps = config.infer_steps
         self.caching_records = [True] * config.infer_steps
         self.flag_df = False

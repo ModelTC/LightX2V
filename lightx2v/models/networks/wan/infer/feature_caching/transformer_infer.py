@@ -5,7 +5,6 @@ import numpy as np
 import gc
 
 
-# 1. TeaCaching
 class WanTransformerInferTeaCaching(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
@@ -681,4 +680,307 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
         self.previous_e0_even = None
         self.previous_e0_odd = None
 
+        torch.cuda.empty_cache()
+
+
+class WanTransformerInferFirstBlock(WanTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.residual_diff_threshold = config.residual_diff_threshold
+        self.prev_first_block_residual_even = None
+        self.prev_remaining_blocks_residual_even = None
+        self.prev_first_block_residual_odd = None
+        self.prev_remaining_blocks_residual_odd = None
+        self.downsample_factor = self.config.downsample_factor
+
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        ori_x = x.clone()
+        x = super().infer_block(weights.blocks[0], grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+        x_residual = x - ori_x
+        del ori_x
+
+        if self.infer_conditional:
+            index = self.scheduler.step_index
+            caching_records = self.scheduler.caching_records
+            if index <= self.scheduler.infer_steps - 1:
+                should_calc = self.calculate_should_calc(x_residual)
+                self.scheduler.caching_records[index] = should_calc
+
+            if caching_records[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(x)
+
+        else:
+            index = self.scheduler.step_index
+            caching_records_2 = self.scheduler.caching_records_2
+            if index <= self.scheduler.infer_steps - 1:
+                should_calc = self.calculate_should_calc(x_residual)
+                self.scheduler.caching_records_2[index] = should_calc
+
+            if caching_records_2[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(x)
+
+        if self.config.enable_cfg:
+            self.switch_status()
+
+        return x
+
+    def calculate_should_calc(self, x_residual):
+        diff = 1.0
+        x_residual_downsampled = x_residual[..., :: self.downsample_factor]
+        if self.infer_conditional:
+            if self.prev_first_block_residual_even is not None:
+                t1 = self.prev_first_block_residual_even
+                t2 = x_residual_downsampled
+                mean_diff = (t1 - t2).abs().mean()
+                mean_t1 = t1.abs().mean()
+                diff = (mean_diff / mean_t1).item()
+            self.prev_first_block_residual_even = x_residual_downsampled
+        else:
+            if self.prev_first_block_residual_odd is not None:
+                t1 = self.prev_first_block_residual_odd
+                t2 = x_residual_downsampled
+                mean_diff = (t1 - t2).abs().mean()
+                mean_t1 = t1.abs().mean()
+                diff = (mean_diff / mean_t1).item()
+            self.prev_first_block_residual_odd = x_residual_downsampled
+
+        return diff >= self.residual_diff_threshold
+
+    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        ori_x = x.clone()
+
+        for block_idx in range(1, self.blocks_num):
+            x = super().infer_block(
+                weights.blocks[block_idx],
+                grid_sizes,
+                embed,
+                x,
+                embed0,
+                seq_lens,
+                freqs,
+                context,
+            )
+
+        if self.infer_conditional:
+            self.prev_remaining_blocks_residual_even = x - ori_x
+        else:
+            self.prev_remaining_blocks_residual_odd = x - ori_x
+        del ori_x
+
+        return x
+
+    def infer_using_cache(self, x):
+        if self.infer_conditional:
+            return x.add_(self.prev_remaining_blocks_residual_even)
+        else:
+            return x.add_(self.prev_remaining_blocks_residual_odd)
+
+    def clear(self):
+        self.prev_first_block_residual_even = None
+        self.prev_remaining_blocks_residual_even = None
+        self.prev_first_block_residual_odd = None
+        self.prev_remaining_blocks_residual_odd = None
+        torch.cuda.empty_cache()
+
+
+class WanTransformerInferDualBlock(WanTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.residual_diff_threshold = config.residual_diff_threshold
+        self.prev_front_blocks_residual_even = None
+        self.prev_middle_blocks_residual_even = None
+        self.prev_front_blocks_residual_odd = None
+        self.prev_middle_blocks_residual_odd = None
+        self.downsample_factor = self.config.downsample_factor
+
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        ori_x = x.clone()
+        for block_idx in range(0, 5):
+            x = super().infer_block(
+                weights.blocks[block_idx],
+                grid_sizes,
+                embed,
+                x,
+                embed0,
+                seq_lens,
+                freqs,
+                context,
+            )
+        x_residual = x - ori_x
+        del ori_x
+
+        if self.infer_conditional:
+            index = self.scheduler.step_index
+            caching_records = self.scheduler.caching_records
+            if index <= self.scheduler.infer_steps - 1:
+                should_calc = self.calculate_should_calc(x_residual)
+                self.scheduler.caching_records[index] = should_calc
+
+            if caching_records[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(x)
+
+        else:
+            index = self.scheduler.step_index
+            caching_records_2 = self.scheduler.caching_records_2
+            if index <= self.scheduler.infer_steps - 1:
+                should_calc = self.calculate_should_calc(x_residual)
+                self.scheduler.caching_records_2[index] = should_calc
+
+            if caching_records_2[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(x)
+
+        for block_idx in range(self.blocks_num - 5, self.blocks_num):
+            x = super().infer_block(
+                weights.blocks[block_idx],
+                grid_sizes,
+                embed,
+                x,
+                embed0,
+                seq_lens,
+                freqs,
+                context,
+            )
+
+        if self.config.enable_cfg:
+            self.switch_status()
+
+        return x
+
+    def calculate_should_calc(self, x_residual):
+        diff = 1.0
+        x_residual_downsampled = x_residual[..., :: self.downsample_factor]
+        if self.infer_conditional:
+            if self.prev_front_blocks_residual_even is not None:
+                t1 = self.prev_front_blocks_residual_even
+                t2 = x_residual_downsampled
+                mean_diff = (t1 - t2).abs().mean()
+                mean_t1 = t1.abs().mean()
+                diff = (mean_diff / mean_t1).item()
+            self.prev_front_blocks_residual_even = x_residual_downsampled
+        else:
+            if self.prev_front_blocks_residual_odd is not None:
+                t1 = self.prev_front_blocks_residual_odd
+                t2 = x_residual_downsampled
+                mean_diff = (t1 - t2).abs().mean()
+                mean_t1 = t1.abs().mean()
+                diff = (mean_diff / mean_t1).item()
+            self.prev_front_blocks_residual_odd = x_residual_downsampled
+
+        return diff >= self.residual_diff_threshold
+
+    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        ori_x = x.clone()
+
+        for block_idx in range(5, self.blocks_num - 5):
+            x = super().infer_block(
+                weights.blocks[block_idx],
+                grid_sizes,
+                embed,
+                x,
+                embed0,
+                seq_lens,
+                freqs,
+                context,
+            )
+
+        if self.infer_conditional:
+            self.prev_middle_blocks_residual_even = x - ori_x
+        else:
+            self.prev_middle_blocks_residual_odd = x - ori_x
+        del ori_x
+
+        return x
+
+    def infer_using_cache(self, x):
+        if self.infer_conditional:
+            return x.add_(self.prev_middle_blocks_residual_even)
+        else:
+            return x.add_(self.prev_middle_blocks_residual_odd)
+
+    def clear(self):
+        self.prev_front_blocks_residual_even = None
+        self.prev_middle_blocks_residual_even = None
+        self.prev_front_blocks_residual_odd = None
+        self.prev_middle_blocks_residual_odd = None
+        torch.cuda.empty_cache()
+
+
+class WanTransformerInferDynamicBlock(WanTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+        self.residual_diff_threshold = config.residual_diff_threshold
+        self.downsample_factor = self.config.downsample_factor
+
+        self.block_in_cache_even = {i: None for i in range(self.blocks_num)}
+        self.block_residual_cache_even = {i: None for i in range(self.blocks_num)}
+        self.block_in_cache_odd = {i: None for i in range(self.blocks_num)}
+        self.block_residual_cache_odd = {i: None for i in range(self.blocks_num)}
+
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        for block_idx in range(self.blocks_num):
+            x = self.infer_block(weights.blocks[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx)
+
+        return x
+
+    def infer_block(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx):
+        ori_x = x.clone()
+
+        if self.infer_conditional:
+            if self.block_in_cache_even[block_idx] is not None:
+                should_calc = self.are_two_tensor_similar(self.block_in_cache_even[block_idx], x)
+                if should_calc:
+                    x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                else:
+                    x += self.block_residual_cache_even[block_idx]
+
+            else:
+                x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+
+            self.block_in_cache_even[block_idx] = ori_x
+            self.block_residual_cache_even[block_idx] = x - ori_x
+            del ori_x
+
+        else:
+            if self.block_in_cache_odd[block_idx] is not None:
+                should_calc = self.are_two_tensor_similar(self.block_in_cache_odd[block_idx], x)
+                if should_calc:
+                    x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                else:
+                    x += self.block_residual_cache_odd[block_idx]
+
+            else:
+                x = super().infer_block(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+
+            self.block_in_cache_odd[block_idx] = ori_x
+            self.block_residual_cache_odd[block_idx] = x - ori_x
+            del ori_x
+
+        return x
+
+    def are_two_tensor_similar(self, t1, t2):
+        diff = 1.0
+        t1_downsampled = t1[..., :: self.downsample_factor]
+        t2_downsampled = t2[..., :: self.downsample_factor]
+        mean_diff = (t1_downsampled - t2_downsampled).abs().mean()
+        mean_t1 = t1_downsampled.abs().mean()
+        diff = (mean_diff / mean_t1).item()
+
+        return diff >= self.residual_diff_threshold
+
+    def clear(self):
+        for i in range(self.blocks_num):
+            self.block_in_cache_even[i] = None
+            self.block_residual_cache_even[i] = None
+            self.block_in_cache_odd[i] = None
+            self.block_residual_cache_odd[i] = None
         torch.cuda.empty_cache()
