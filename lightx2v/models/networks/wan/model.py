@@ -43,16 +43,16 @@ class WanModel:
         if self.dit_quantized:
             dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
             self.dit_quantized_ckpt = find_hf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
+            quant_config_path = os.path.join(self.dit_quantized_ckpt, "config.json")
+            if os.path.exists(quant_config_path):
+                with open(quant_config_path, "r") as f:
+                    quant_model_config = json.load(f)
+                self.config.update(quant_model_config)
         else:
             self.dit_quantized_ckpt = None
             assert not self.config.get("lazy_load", False)
 
         self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
-        quant_config_path = os.path.join(self.config.dit_quantized_ckpt, "config.json")
-        if os.path.exists(quant_config_path):
-            with open(quant_config_path, "r") as f:
-                quant_model_config = json.load(f)
-            self.config.update(quant_model_config)
 
         self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
         if self.dit_quantized:
