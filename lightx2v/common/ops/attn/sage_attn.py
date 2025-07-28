@@ -1,7 +1,7 @@
 import torch
 from .template import AttnWeightTemplate
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-
+from loguru import logger
 
 if torch.cuda.get_device_capability(0) == (8, 9):
     try:

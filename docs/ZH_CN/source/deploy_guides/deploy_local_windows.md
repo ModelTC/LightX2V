@@ -28,8 +28,8 @@
 #### 一键启动Gradio（推荐）
 
 **📦 下载软件包**
-- [百度云](https://pan.baidu.com/s/1lLb2LYl8kbmjluaM9-jCjg?pwd=ugd4)
-- [夸克网盘](https://pan.quark.cn/s/d0b8be4bc619)
+- [百度云](https://pan.baidu.com/s/14bMAbOuFFSj8yzt4Zdmyqw)
+- [夸克网盘](https://pan.quark.cn/s/97b4ad6bc76c)
 
 **📁 目录结构**
 解压后，确保目录结构如下：

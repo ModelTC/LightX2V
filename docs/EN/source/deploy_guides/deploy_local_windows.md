@@ -29,8 +29,8 @@ Refer to [Quick Start Guide](../getting_started/quickstart.md) to install enviro
 #### One-Click Gradio Startup (Recommended)
 
 **📦 Download Software Package**
-- [Baidu Cloud](https://pan.baidu.com/s/1lLb2LYl8kbmjluaM9-jCjg?pwd=ugd4)
-- [Quark Cloud](https://pan.quark.cn/s/d0b8be4bc619)
+- [Baidu Cloud](https://pan.baidu.com/s/14bMAbOuFFSj8yzt4Zdmyqw)
+- [Quark Cloud](https://pan.quark.cn/s/97b4ad6bc76c)
 
 **📁 Directory Structure**
 After extraction, ensure the directory structure is as follows:
