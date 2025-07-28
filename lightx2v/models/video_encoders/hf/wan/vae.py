@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from einops import rearrange
 from loguru import logger
+from lightx2v.utils.profiler import ProfilingContext
 
 __all__ = [
     "WanVAE",
@@ -682,32 +683,35 @@ class WanVAE_(nn.Module):
         return dec
 
     def encode(self, x, scale):
-        self.clear_cache()
+        with ProfilingContext("clear cache"):
+            self.clear_cache()
         ## cache
-        t = x.shape[2]
-        iter_ = 1 + (t - 1) // 4
-        ## 对encode输入的x，按时间拆分为1、4、4、4....
-        for i in range(iter_):
-            self._enc_conv_idx = [0]
-            if i == 0:
-                out = self.encoder(
-                    x[:, :, :1, :, :],
-                    feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx,
-                )
+        with ProfilingContext("vae encode"):
+            t = x.shape[2]
+            iter_ = 1 + (t - 1) // 4
+            ## 对encode输入的x，按时间拆分为1、4、4、4....
+            for i in range(iter_):
+                self._enc_conv_idx = [0]
+                if i == 0:
+                    out = self.encoder(
+                        x[:, :, :1, :, :],
+                        feat_cache=self._enc_feat_map,
+                        feat_idx=self._enc_conv_idx,
+                    )
+                else:
+                    out_ = self.encoder(
+                        x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
+                        feat_cache=self._enc_feat_map,
+                        feat_idx=self._enc_conv_idx,
+                    )
+                    out = torch.cat([out, out_], 2)
+            mu, log_var = self.conv1(out).chunk(2, dim=1)
+            if isinstance(scale[0], torch.Tensor):
+                mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(1, self.z_dim, 1, 1, 1)
             else:
-                out_ = self.encoder(
-                    x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
-                    feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx,
-                )
-                out = torch.cat([out, out_], 2)
-        mu, log_var = self.conv1(out).chunk(2, dim=1)
-        if isinstance(scale[0], torch.Tensor):
-            mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(1, self.z_dim, 1, 1, 1)
-        else:
-            mu = (mu - scale[0]) * scale[1]
-        self.clear_cache()
+                mu = (mu - scale[0]) * scale[1]
+        with ProfilingContext("clear cache"):
+            self.clear_cache()
         return mu
 
     def decode(self, z, scale):

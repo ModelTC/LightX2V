@@ -6,7 +6,7 @@ model_path='/data/nvme0/yongyang/models/x2v_models/wan/Wan2.1-I2V-14B-480P'
 
 # check section
 if [ -z "${CUDA_VISIBLE_DEVICES}" ]; then
-    cuda_devices=0,1,2,3,4,5,6,7
+    cuda_devices=2,4,6,7
     echo "Warn: CUDA_VISIBLE_DEVICES is not set, using default value: ${cuda_devices}, change at shell script or set env variable."
     export CUDA_VISIBLE_DEVICES=${cuda_devices}
 fi
@@ -33,8 +33,8 @@ export CUDA_LAUNCH_BLOCKING=1
 # export NCCL_P2P_DISABLE=1
 # export OMP_NUM_THREADS=1
 
-# nsys profile -o 4gpu_i2v_offload_compile_without_all2all_offload_prefetch_first \
-torchrun --nproc_per_node=8 -m lightx2v.infer \
+nsys profile -o torchrun_debug_4 \
+torchrun --nproc_per_node=4 -m lightx2v.infer \
 --model_cls wan2.1 \
 --task i2v \
 --model_path $model_path \

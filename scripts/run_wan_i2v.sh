@@ -29,7 +29,7 @@ export ENABLE_PROFILING_DEBUG=true
 export ENABLE_GRAPH_MODE=false
 
 # nsys profile -o 1gpu_offload \
-python -m lightx2v.infer \
+python3 -m lightx2v.infer \
 --model_cls wan2.1 \
 --task i2v \
 --model_path $model_path \

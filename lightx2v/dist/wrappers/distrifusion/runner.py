@@ -1,4 +1,5 @@
 from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.dist.wrappers.distrifusion.model import DistriFusionWanModelWrapper
 
 
 class DistriFusionWanRunnerWrapper:

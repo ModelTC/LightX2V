@@ -57,6 +57,7 @@ class WanTransformerInfer:
 
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        import pdb; pdb.set_trace()
         return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
 
     def _infer_with_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):

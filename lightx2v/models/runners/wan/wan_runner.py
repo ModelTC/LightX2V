@@ -166,18 +166,25 @@ class WanRunner(DefaultRunner):
         msk = msk.transpose(1, 2)[0]
         if self.config.get("lazy_load", False):
             self.vae_encoder = self.load_vae_encoder()
-        vae_encode_out = self.vae_encoder.encode(
-            [
+        
+        with ProfilingContext("get videos"):
+            videos = [
                 torch.concat(
                     [
-                        torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                        torch.zeros(3, self.config.target_video_length - 1, h, w),
+                        torch.nn.functional.interpolate(img[None].cuda(), size=(h, w), mode="bicubic").transpose(0, 1),
+                        torch.zeros(3, self.config.target_video_length - 1, h, w, device="cuda"),
                     ],
                     dim=1,
                 ).cuda()
-            ],
-            self.config,
-        )[0]
+            ]
+        with ProfilingContext("vae_encode_out"):
+            torch.cuda.nvtx.range_push(f"vae_encode_out")
+            vae_encode_out = self.vae_encoder.encode(
+                videos,
+                self.config,
+            )[0]
+            torch.cuda.nvtx.range_pop()
+        exit()
         if self.config.get("lazy_load", False):
             del self.vae_encoder
             torch.cuda.empty_cache()
