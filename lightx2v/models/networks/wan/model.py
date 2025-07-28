@@ -2,6 +2,7 @@ import os
 import torch
 import glob
 import json
+from lightx2v.attentions.common.radial_attn import MaskMap
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
@@ -201,6 +202,11 @@ class WanModel:
 
     @torch.no_grad()
     def infer(self, inputs):
+        if self.transformer_infer.mask_map is None:
+            _, c, h, w = self.scheduler.latents.shape
+            video_token_num = c * (h // 2) * (w // 2)
+            self.transformer_infer.mask_map = MaskMap(video_token_num, c)
+
         if self.config.get("cpu_offload", False):
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()

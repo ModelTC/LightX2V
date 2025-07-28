@@ -3,7 +3,7 @@
     "target_video_length": 81,
     "target_height": 480,
     "target_width": 832,
-    "self_attn_1_type": "radial_attn",
+    "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
     "seed": 42,
