@@ -66,4 +66,4 @@
 
 ### ∇NABLA: Neighborhood Adaptive Block-Level Attention
 
-[paper](https://github.com/gen-ai-team/Wan2.1-NABLA)
+[paper](https://arxiv.org/abs/2507.13546v1) [code](https://github.com/gen-ai-team/Wan2.1-NABLA)
