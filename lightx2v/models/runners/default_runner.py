@@ -235,8 +235,10 @@ class DefaultRunner(BaseRunner):
                 fps = self.config["video_frame_interpolation"]["target_fps"]
             else:
                 fps = self.config.get("fps", 16)
-            logger.info(f"Saving video to {self.config.save_video_path}")
-            save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
+
+            if not self.config.get("parallel_attn_type", None) or dist.get_rank() == 0:
+                logger.info(f"Saving video to {self.config.save_video_path}")
+                save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
 
         del latents, generator
         torch.cuda.empty_cache()

@@ -8,7 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
 
-from lightx2v.attentions import attention
+# from lightx2v.attentions import attention
+from lightx2v.common.ops.attn import TorchSDPAWeight
 from loguru import logger
 from lightx2v.models.input_encoders.hf.q_linear import VllmQuantLinearInt8, VllmQuantLinearFp8, TorchaoQuantLinearInt8, Q8FQuantLinearInt8, Q8FQuantLinearFp8
 
@@ -84,7 +85,7 @@ class SelfAttention(nn.Module):
         q, k, v = self.to_qkv(x).view(b, s, 3, n, d).unbind(2)
 
         # compute attention
-        x = attention(q=q, k=k, v=v, attention_type="torch_sdpa")
+        x = TorchSDPAWeight().apply(q=q, k=k, v=v)
         x = x.reshape(b, s, c)
 
         # output

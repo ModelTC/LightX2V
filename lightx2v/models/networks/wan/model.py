@@ -2,7 +2,7 @@ import os
 import torch
 import glob
 import json
-from lightx2v.attentions.common.radial_attn import MaskMap
+from lightx2v.common.ops.attn import MaskMap
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
@@ -22,9 +22,8 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
     WanTransformerInferDualBlock,
     WanTransformerInferDynamicBlock,
 )
+from lightx2v.models.networks.wan.infer.dist_infer.transformer_infer import WanTransformerDistInfer
 from safetensors import safe_open
-import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
-import lightx2v.attentions.distributed.ring.wrap as ring_dist_wrap
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 from loguru import logger
@@ -58,35 +57,30 @@ class WanModel:
         self._init_weights()
         self._init_infer()
 
-        if config["parallel_attn_type"]:
-            if config["parallel_attn_type"] == "ulysses":
-                ulysses_dist_wrap.parallelize_wan(self)
-            elif config["parallel_attn_type"] == "ring":
-                ring_dist_wrap.parallelize_wan(self)
-            else:
-                raise Exception(f"Unsuppotred parallel_attn_type")
-
     def _init_infer_class(self):
         self.pre_infer_class = WanPreInfer
         self.post_infer_class = WanPostInfer
-        if self.config["feature_caching"] == "NoCaching":
-            self.transformer_infer_class = WanTransformerInfer
-        elif self.config["feature_caching"] == "Tea":
-            self.transformer_infer_class = WanTransformerInferTeaCaching
-        elif self.config["feature_caching"] == "TaylorSeer":
-            self.transformer_infer_class = WanTransformerInferTaylorCaching
-        elif self.config["feature_caching"] == "Ada":
-            self.transformer_infer_class = WanTransformerInferAdaCaching
-        elif self.config["feature_caching"] == "Custom":
-            self.transformer_infer_class = WanTransformerInferCustomCaching
-        elif self.config["feature_caching"] == "FirstBlock":
-            self.transformer_infer_class = WanTransformerInferFirstBlock
-        elif self.config["feature_caching"] == "DualBlock":
-            self.transformer_infer_class = WanTransformerInferDualBlock
-        elif self.config["feature_caching"] == "DynamicBlock":
-            self.transformer_infer_class = WanTransformerInferDynamicBlock
+        if self.config.get("parallel_attn_type", None):
+            self.transformer_infer_class = WanTransformerDistInfer
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
+            if self.config["feature_caching"] == "NoCaching":
+                self.transformer_infer_class = WanTransformerInfer
+            elif self.config["feature_caching"] == "Tea":
+                self.transformer_infer_class = WanTransformerInferTeaCaching
+            elif self.config["feature_caching"] == "TaylorSeer":
+                self.transformer_infer_class = WanTransformerInferTaylorCaching
+            elif self.config["feature_caching"] == "Ada":
+                self.transformer_infer_class = WanTransformerInferAdaCaching
+            elif self.config["feature_caching"] == "Custom":
+                self.transformer_infer_class = WanTransformerInferCustomCaching
+            elif self.config["feature_caching"] == "FirstBlock":
+                self.transformer_infer_class = WanTransformerInferFirstBlock
+            elif self.config["feature_caching"] == "DualBlock":
+                self.transformer_infer_class = WanTransformerInferDualBlock
+            elif self.config["feature_caching"] == "DynamicBlock":
+                self.transformer_infer_class = WanTransformerInferDynamicBlock
+            else:
+                raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 
     def _load_safetensor_to_dict(self, file_path, use_bf16, skip_bf16):
         with safe_open(file_path, framework="pt") as f:

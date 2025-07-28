@@ -190,6 +190,10 @@ class WanSelfAttention(WeightModule):
             self.self_attn_1.load(sparge_ckpt)
         else:
             self.add_module("self_attn_1", ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]())
+
+        if self.config.get("parallel_attn_type", None):
+            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config["parallel_attn_type"]]())
+
         if self.quant_method in ["advanced_ptq"]:
             self.add_module(
                 "smooth_norm1_weight",

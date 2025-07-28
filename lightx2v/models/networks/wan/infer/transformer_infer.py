@@ -318,6 +318,13 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
+    def compute_freqs(self, q, grid_sizes, freqs):
+        if "audio" in self.config.get("model_cls", ""):
+            freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
+        else:
+            freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
+        return freqs_i
+
     def infer_self_attn(self, weights, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
         if hasattr(weights, "smooth_norm1_weight"):
             norm1_weight = (1 + scale_msa.squeeze(0)) * weights.smooth_norm1_weight.tensor
@@ -342,16 +349,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         k = weights.self_attn_norm_k.apply(weights.self_attn_k.apply(norm1_out)).view(s, n, d)
         v = weights.self_attn_v.apply(norm1_out).view(s, n, d)
 
-        if not self.parallel_attention:
-            if "audio" in self.config.get("model_cls", ""):
-                freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
-            else:
-                freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
-        else:
-            if "audio" in self.config.get("model_cls", ""):
-                freqs_i = compute_freqs_audio_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs)
-            else:
-                freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs)
+        freqs_i = self.compute_freqs(q, grid_sizes, freqs)
 
         freqs_i = self.zero_temporal_component_in_3DRoPE(seq_lens, freqs_i)
 
@@ -365,7 +363,16 @@ class WanTransformerInfer(BaseTransformerInfer):
             del freqs_i, norm1_out, norm1_weight, norm1_bias
             torch.cuda.empty_cache()
 
-        if not self.parallel_attention:
+        if self.config.get("parallel_attn_type", None):
+            attn_out = weights.self_attn_1_parallel.apply(
+                q=q,
+                k=k,
+                v=v,
+                img_qkv_len=q.shape[0],
+                cu_seqlens_qkv=cu_seqlens_q,
+                attention_module=weights.self_attn_1,
+            )
+        else:
             attn_out = weights.self_attn_1.apply(
                 q=q,
                 k=k,
@@ -376,15 +383,6 @@ class WanTransformerInfer(BaseTransformerInfer):
                 max_seqlen_kv=k.size(0),
                 model_cls=self.config["model_cls"],
                 mask_map=self.mask_map,
-            )
-        else:
-            attn_out = self.parallel_attention(
-                attention_type=self.attention_type,
-                q=q,
-                k=k,
-                v=v,
-                img_qkv_len=q.shape[0],
-                cu_seqlens_qkv=cu_seqlens_q,
             )
 
         y = weights.self_attn_o.apply(attn_out)

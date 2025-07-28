@@ -1,4 +1,6 @@
 import torch
+from .template import AttnWeightTemplate
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 try:
     import flashinfer
@@ -13,6 +15,42 @@ except ImportError:
 ###  Code from radial-attention
 ###  https://github.com/mit-han-lab/ç/blob/main/radial_attn/attn_mask.py#L150
 ###
+
+
+@ATTN_WEIGHT_REGISTER("radial_attn")
+class RadialAttnWeight(AttnWeightTemplate):
+    def __init__(self):
+        self.config = {}
+
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        mask_map=None,
+        sparsity_type="radial",
+        block_size=128,
+        decay_factor=1,
+        model_cls="wan",
+    ):
+        assert len(q.shape) == 3
+
+        x = radial_attn(
+            q,
+            k,
+            v,
+            mask_map=mask_map,
+            sparsity_type=sparsity_type,
+            block_size=block_size,
+            model_cls=model_cls[:3],  # Use first 3 characters to match "wan", "wan2", etc.
+            decay_factor=decay_factor,
+        )
+        x = x.view(max_seqlen_q, -1)
+        return x
 
 
 def radial_attn(

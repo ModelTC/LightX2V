@@ -13,8 +13,6 @@ from lightx2v.models.networks.hunyuan.infer.feature_caching.transformer_infer im
     HunyuanTransformerInferAdaCaching,
     HunyuanTransformerInferCustomCaching,
 )
-import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
-import lightx2v.attentions.distributed.ring.wrap as ring_dist_wrap
 from lightx2v.utils.envs import *
 from loguru import logger
 from safetensors import safe_open
@@ -40,14 +38,6 @@ class HunyuanModel:
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
-
-        if config["parallel_attn_type"]:
-            if config["parallel_attn_type"] == "ulysses":
-                ulysses_dist_wrap.parallelize_hunyuan(self)
-            elif config["parallel_attn_type"] == "ring":
-                ring_dist_wrap.parallelize_hunyuan(self)
-            else:
-                raise Exception(f"Unsuppotred parallel_attn_type")
 
         if self.config["cpu_offload"]:
             self.to_cpu()

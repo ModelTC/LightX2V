@@ -1,6 +1,6 @@
 import os
 import torch
-from lightx2v.attentions.common.radial_attn import MaskMap
+from lightx2v.common.ops.attn.radial_attn import MaskMap
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
