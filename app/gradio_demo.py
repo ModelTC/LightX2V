@@ -210,8 +210,9 @@ def get_quantization_options(model_path):
             choices.append(int8_type)
 
         # If no subdirectories but original file exists, add original type
-        if not choices and has_original_file:
-            choices.append(original_type)
+        if has_original_file:
+            if not choices or "original" not in choices:
+                choices.append(original_type)
 
         # If no options at all, use default value
         if not choices:

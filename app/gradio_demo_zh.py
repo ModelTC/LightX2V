@@ -212,8 +212,9 @@ def get_quantization_options(model_path):
             choices.append(int8_type)
 
         # 如果没有子目录但有原始文件，添加原始类型
-        if not choices and has_original_file:
-            choices.append(original_type)
+        if has_original_file:
+            if not choices or "original" not in choices:
+                choices.append(original_type)
 
         # 如果没有任何选项，使用默认值
         if not choices:

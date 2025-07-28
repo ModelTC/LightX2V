@@ -18,7 +18,7 @@ lightx2v_path=/data/video_gen/LightX2V
 # Model path configuration
 # Image-to-video model path (for i2v tasks)
 # Example: /path/to/Wan2.1-I2V-14B-720P-Lightx2v
-i2v_model_path=/wan_0726/wan_test/fp8
+i2v_model_path=/path/to/Wan2.1-I2V-14B-480P-Lightx2v
 
 # Text-to-video model path (for t2v tasks)
 # Example: /path/to/Wan2.1-T2V-1.3B
