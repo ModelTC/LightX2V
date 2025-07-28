@@ -48,6 +48,12 @@ class WanModel:
             assert not self.config.get("lazy_load", False)
 
         self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
+        quant_config_path = os.path.join(self.config.dit_quantized_ckpt, "config.json")
+        if os.path.exists(quant_config_path):
+            with open(quant_config_path, "r") as f:
+                quant_model_config = json.load(f)
+            self.config.update(quant_model_config)
+
         self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
         if self.dit_quantized:
             assert self.weight_auto_quant or self.dit_quantized_ckpt is not None

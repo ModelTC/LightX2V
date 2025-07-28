@@ -37,7 +37,11 @@ def set_config(args):
         with open(os.path.join(config.model_path, "config.json"), "r") as f:
             model_config = json.load(f)
         config.update(model_config)
-
+    elif os.path.exists(os.path.join(config.model_path, "original", "config.json")):
+        with open(os.path.join(config.model_path, "original", "config.json"), "r") as f:
+            model_config = json.load(f)
+        config.update(model_config)
+    # load quantized config
     if config.get("dit_quantized_ckpt", None) is not None:
         config_path = os.path.join(config.dit_quantized_ckpt, "config.json")
         if os.path.exists(config_path):
