@@ -169,9 +169,6 @@ LightX2V supports custom quantization kernels that can be extended in the follow
 
 1. **Hardware Requirements**: FP8 quantization requires FP8-supported GPUs (such as H100, RTX 40 series)
 2. **Precision Impact**: Quantization will bring certain precision loss, which needs to be weighed based on application scenarios
-3. **Model Compatibility**: Ensure quantized models are compatible with inference code versions
-4. **Memory Management**: Pay attention to memory usage when loading quantized models
-5. **Quantization Calibration**: It is recommended to use representative datasets for quantization calibration to achieve optimal results
 
 ## 📚 Related Resources
 
