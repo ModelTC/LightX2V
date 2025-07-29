@@ -11,6 +11,7 @@ from loguru import logger
 import importlib.util
 import psutil
 import random
+import glob
 
 logger.add(
     "inference_logs.log",
@@ -22,6 +23,40 @@ logger.add(
 )
 
 MAX_NUMPY_SEED = 2**32 - 1
+
+
+def find_hf_model_path(model_path, subdir=["original", "fp8", "int8"]):
+    paths_to_check = [model_path]
+    if isinstance(subdir, list):
+        for sub in subdir:
+            paths_to_check.append(os.path.join(model_path, sub))
+    else:
+        paths_to_check.append(os.path.join(model_path, subdir))
+
+    for path in paths_to_check:
+        safetensors_pattern = os.path.join(path, "*.safetensors")
+        safetensors_files = glob.glob(safetensors_pattern)
+        if safetensors_files:
+            logger.info(f"Found Hugging Face model files in: {path}")
+            return path
+    raise FileNotFoundError(f"No Hugging Face model files (.safetensors) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
+
+
+def find_torch_model_path(model_path, filename=None, subdir=["original", "fp8", "int8"]):
+    paths_to_check = [
+        os.path.join(model_path, filename),
+    ]
+    if isinstance(subdir, list):
+        for sub in subdir:
+            paths_to_check.append(os.path.join(model_path, sub, filename))
+    else:
+        paths_to_check.append(os.path.join(model_path, subdir, filename))
+    print(paths_to_check)
+    for path in paths_to_check:
+        if os.path.exists(path):
+            logger.info(f"Found PyTorch model checkpoint: {path}")
+            return path
+    raise FileNotFoundError(f"PyTorch model file '{filename}' not found.\nPlease download the model from https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
 
 
 def generate_random_seed():
@@ -152,6 +187,51 @@ def is_ada_architecture_gpu():
         return False
 
 
+def get_quantization_options(model_path):
+    """Get quantization options dynamically based on model_path"""
+    import os
+
+    # Check subdirectories
+    subdirs = ["original", "fp8", "int8"]
+    has_subdirs = {subdir: os.path.exists(os.path.join(model_path, subdir)) for subdir in subdirs}
+
+    # Check original files in root directory
+    t5_bf16_exists = os.path.exists(os.path.join(model_path, "models_t5_umt5-xxl-enc-bf16.pth"))
+    clip_fp16_exists = os.path.exists(os.path.join(model_path, "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"))
+
+    # Generate options
+    def get_choices(has_subdirs, original_type, fp8_type, int8_type, fallback_type, has_original_file=False):
+        choices = []
+        if has_subdirs["original"]:
+            choices.append(original_type)
+        if has_subdirs["fp8"]:
+            choices.append(fp8_type)
+        if has_subdirs["int8"]:
+            choices.append(int8_type)
+
+        # If no subdirectories but original file exists, add original type
+        if has_original_file:
+            if not choices or "original" not in choices:
+                choices.append(original_type)
+
+        # If no options at all, use default value
+        if not choices:
+            choices = [fallback_type]
+
+        return choices, choices[0]
+
+    # DIT options
+    dit_choices, dit_default = get_choices(has_subdirs, "bf16", "fp8", "int8", "bf16")
+
+    # T5 options - check if original file exists
+    t5_choices, t5_default = get_choices(has_subdirs, "bf16", "fp8", "int8", "bf16", t5_bf16_exists)
+
+    # CLIP options - check if original file exists
+    clip_choices, clip_default = get_choices(has_subdirs, "fp16", "fp8", "int8", "fp16", clip_fp16_exists)
+
+    return {"dit_choices": dit_choices, "dit_default": dit_default, "t5_choices": t5_choices, "t5_default": t5_default, "clip_choices": clip_choices, "clip_default": clip_default}
+
+
 global_runner = None
 current_config = None
 cur_dit_quant_scheme = None
@@ -222,6 +302,8 @@ def run_inference(
     if os.path.exists(os.path.join(model_path, "config.json")):
         with open(os.path.join(model_path, "config.json"), "r") as f:
             model_config = json.load(f)
+    else:
+        model_config = {}
 
     if task == "t2v":
         if model_size == "1.3b":
@@ -305,17 +387,23 @@ def run_inference(
     is_dit_quant = dit_quant_scheme != "bf16"
     is_t5_quant = t5_quant_scheme != "bf16"
     if is_t5_quant:
-        t5_path = os.path.join(model_path, t5_quant_scheme)
-        t5_quant_ckpt = os.path.join(t5_path, f"models_t5_umt5-xxl-enc-{t5_quant_scheme}.pth")
+        t5_model_name = f"models_t5_umt5-xxl-enc-{t5_quant_scheme}.pth"
+        t5_quant_ckpt = find_torch_model_path(model_path, t5_model_name, t5_quant_scheme)
+        t5_original_ckpt = None
     else:
         t5_quant_ckpt = None
+        t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
+        t5_original_ckpt = find_torch_model_path(model_path, t5_model_name, "original")
 
     is_clip_quant = clip_quant_scheme != "fp16"
     if is_clip_quant:
-        clip_path = os.path.join(model_path, clip_quant_scheme)
-        clip_quant_ckpt = os.path.join(clip_path, f"clip-{clip_quant_scheme}.pth")
+        clip_model_name = f"clip-{clip_quant_scheme}.pth"
+        clip_quant_ckpt = find_torch_model_path(model_path, clip_model_name, clip_quant_scheme)
+        clip_original_ckpt = None
     else:
         clip_quant_ckpt = None
+        clip_model_name = "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
+        clip_original_ckpt = find_torch_model_path(model_path, clip_model_name, "original")
 
     needs_reinit = (
         lazy_load
@@ -356,7 +444,7 @@ def run_inference(
             t5_quant_scheme = f"{t5_quant_scheme}-q8f"
             clip_quant_scheme = f"{clip_quant_scheme}-q8f"
 
-        dit_quantized_ckpt = os.path.join(model_path, dit_quant_scheme)
+        dit_quantized_ckpt = find_hf_model_path(model_path, dit_quant_scheme)
         if os.path.exists(os.path.join(dit_quantized_ckpt, "config.json")):
             with open(os.path.join(dit_quantized_ckpt, "config.json"), "r") as f:
                 quant_model_config = json.load(f)
@@ -394,15 +482,18 @@ def run_inference(
         "teacache_thresh": teacache_thresh,
         "t5_cpu_offload": t5_cpu_offload,
         "unload_modules": unload_modules,
+        "t5_original_ckpt": t5_original_ckpt,
         "t5_quantized": is_t5_quant,
         "t5_quantized_ckpt": t5_quant_ckpt,
         "t5_quant_scheme": t5_quant_scheme,
+        "clip_original_ckpt": clip_original_ckpt,
         "clip_quantized": is_clip_quant,
         "clip_quantized_ckpt": clip_quant_ckpt,
         "clip_quant_scheme": clip_quant_scheme,
+        "vae_path": find_torch_model_path(model_path, "Wan2.1_VAE.pth"),
         "use_tiling_vae": use_tiling_vae,
         "use_tiny_vae": use_tiny_vae,
-        "tiny_vae_path": (os.path.join(model_path, "taew2_1.pth") if use_tiny_vae else None),
+        "tiny_vae_path": (find_torch_model_path(model_path, "taew2_1.pth") if use_tiny_vae else None),
         "lazy_load": lazy_load,
         "do_mm_calib": False,
         "parallel_attn_type": None,
@@ -743,9 +834,6 @@ def auto_configure(enable_auto_config, resolution):
 
 
 def main():
-    def toggle_image_input(task):
-        return gr.update(visible=(task == "i2v"))
-
     with gr.Blocks(
         title="Lightx2v (Lightweight Video Inference and Generation Engine)",
         css="""
@@ -814,7 +902,7 @@ def main():
                                         lines=3,
                                         placeholder="What you don't want to appear in the video...",
                                         max_lines=5,
-                                        value="镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                                        value="Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards",
                                     )
                                 with gr.Column():
                                     resolution = gr.Dropdown(
@@ -1045,22 +1133,25 @@ def main():
                             info="Select the quantization matrix multiplication operator to accelerate inference",
                             interactive=True,
                         )
+                        # Get dynamic quantization options
+                        quant_options = get_quantization_options(model_path)
+
                         dit_quant_scheme = gr.Dropdown(
                             label="Dit",
-                            choices=["fp8", "int8", "bf16"],
-                            value="bf16",
+                            choices=quant_options["dit_choices"],
+                            value=quant_options["dit_default"],
                             info="Quantization precision for the Dit model",
                         )
                         t5_quant_scheme = gr.Dropdown(
                             label="T5 Encoder",
-                            choices=["fp8", "int8", "bf16"],
-                            value="bf16",
+                            choices=quant_options["t5_choices"],
+                            value=quant_options["t5_default"],
                             info="Quantization precision for the T5 Encoder model",
                         )
                         clip_quant_scheme = gr.Dropdown(
                             label="Clip Encoder",
-                            choices=["fp8", "int8", "fp16"],
-                            value="fp16",
+                            choices=quant_options["clip_choices"],
+                            value=quant_options["clip_default"],
                             info="Quantization precision for the Clip Encoder",
                         )
                         precision_mode = gr.Dropdown(

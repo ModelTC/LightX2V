@@ -28,8 +28,8 @@
 #### 一键启动Gradio（推荐）
 
 **📦 下载软件包**
-- [百度云](https://pan.baidu.com/s/1lLb2LYl8kbmjluaM9-jCjg?pwd=ugd4)
-- [夸克网盘](https://pan.quark.cn/s/d0b8be4bc619)
+- [百度云](https://pan.baidu.com/s/14bMAbOuFFSj8yzt4Zdmyqw)
+- [夸克网盘](https://pan.quark.cn/s/97b4ad6bc76c)
 
 **📁 目录结构**
 解压后，确保目录结构如下：
@@ -51,6 +51,20 @@
     ├── Wan2.1-T2V-14B-Lightx2v/       # 文本转视频模型（14B参数）
     └── Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/      # 文本转视频模型（4步蒸馏）
 ```
+
+**📥 下载模型**:
+
+可参考[模型结构文档](./model_structure.md)下载完整模型（包含量化和非量化版本）或仅下载量化/非量化版本。
+
+**下载选项说明**：
+
+- **完整模型**：下载包含量化和非量化版本的完整模型时，在`Gradio` Web前端的高级选项中可以自由选择DIT/T5/CLIP的量化精度。
+
+- **仅非量化版本**：仅下载非量化版本时，在`Gradio` Web前端中，`DIT/T5/CLIP`的量化精度只能选择bf16/fp16。如需使用量化版本的模型，请手动下载量化权重到Gradio启动的`i2v_model_path`或者`t2v_model_path`目录下。
+
+- **仅量化版本**：仅下载量化版本时，在`Gradio` Web前端中，`DIT/T5/CLIP`的量化精度只能选择fp8或int8（取决于您下载的权重）。如需使用非量化版本的模型，请手动下载非量化权重到Gradio启动的`i2v_model_path`或者`t2v_model_path`目录下。
+
+- **注意**：无论是下载了完整模型还是部分模型，`i2v_model_path` 和 `t2v_model_path` 参数的值都应该是一级目录的路径。例如：`Wan2.1-I2V-14B-480P-Lightx2v/`，而不是 `Wan2.1-I2V-14B-480P-Lightx2v/int8`。
 
 **📋 配置参数**
 
@@ -74,6 +88,12 @@ model_size=14b
 
 # 模型类别 (wan2.1: 标准模型, wan2.1_distill: 蒸馏模型)
 model_cls=wan2.1
+
+# 图像转视频模型路径
+i2v_model_path=models/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v
+
+# 文本转视频模型路径
+t2v_model_path=models/Wan2.1-T2V-1.3B-Lightx2v
 ```
 
 **⚠️ 重要提示**: 如果使用蒸馏模型（模型名称包含StepDistill-CfgDistil字段），请将`model_cls`设置为`wan2.1_distill`

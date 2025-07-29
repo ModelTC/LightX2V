@@ -4,6 +4,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 import torch.distributed as dist
 from .utils.ring_comm import RingComm
 import torch.nn.functional as F
+from loguru import logger
 
 try:
     import flash_attn

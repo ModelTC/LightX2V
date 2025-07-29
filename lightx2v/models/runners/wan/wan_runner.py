@@ -94,18 +94,20 @@ class WanRunner(DefaultRunner):
             t5_model_name = f"models_t5_umt5-xxl-enc-{tmp_t5_quant_scheme}.pth"
             t5_quantized_ckpt = find_torch_model_path(self.config, "t5_quantized_ckpt", t5_model_name, tmp_t5_quant_scheme)
             t5_original_ckpt = None
+            tokenizer_path = os.path.join(os.path.dirname(t5_quantized_ckpt), "google/umt5-xxl")
         else:
             t5_quant_scheme = None
             t5_quantized_ckpt = None
             t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
             t5_original_ckpt = find_torch_model_path(self.config, "t5_original_ckpt", t5_model_name, "original")
+            tokenizer_path = os.path.join(os.path.dirname(t5_original_ckpt), "google/umt5-xxl")
 
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
             device=t5_device,
             checkpoint_path=t5_original_ckpt,
-            tokenizer_path=os.path.join(self.config.model_path, "google/umt5-xxl"),
+            tokenizer_path=tokenizer_path,
             shard_fn=None,
             cpu_offload=t5_offload,
             offload_granularity=self.config.get("t5_offload_granularity", "model"),
@@ -118,7 +120,7 @@ class WanRunner(DefaultRunner):
 
     def load_vae_encoder(self):
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth", "original"),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
             "device": self.init_device,
             "parallel": self.config.parallel_vae,
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -130,13 +132,13 @@ class WanRunner(DefaultRunner):
 
     def load_vae_decoder(self):
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth", "original"),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
             "device": self.init_device,
             "parallel": self.config.parallel_vae,
             "use_tiling": self.config.get("use_tiling_vae", False),
         }
         if self.config.get("use_tiny_vae", False):
-            tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth", "original")
+            tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth")
             vae_decoder = WanVAE_tiny(
                 vae_pth=tiny_vae_path,
                 device=self.init_device,

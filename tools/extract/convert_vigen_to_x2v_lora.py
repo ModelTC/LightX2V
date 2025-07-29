@@ -43,6 +43,8 @@ proj_map = {
     "to_k": "k",
     "to_v": "v",
     "to_out": "o",
+    "add_k_proj": "k_img",
+    "add_v_proj": "v_img",
 }
 lora_map = {
     "lora_A": "lora_down",

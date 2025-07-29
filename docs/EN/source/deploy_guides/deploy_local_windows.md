@@ -29,8 +29,8 @@ Refer to [Quick Start Guide](../getting_started/quickstart.md) to install enviro
 #### One-Click Gradio Startup (Recommended)
 
 **📦 Download Software Package**
-- [Baidu Cloud](https://pan.baidu.com/s/1lLb2LYl8kbmjluaM9-jCjg?pwd=ugd4)
-- [Quark Cloud](https://pan.quark.cn/s/d0b8be4bc619)
+- [Baidu Cloud](https://pan.baidu.com/s/14bMAbOuFFSj8yzt4Zdmyqw)
+- [Quark Cloud](https://pan.quark.cn/s/97b4ad6bc76c)
 
 **📁 Directory Structure**
 After extraction, ensure the directory structure is as follows:
@@ -41,6 +41,7 @@ After extraction, ensure the directory structure is as follows:
 ├── start_lightx2v.bat          # One-click startup script
 ├── lightx2v_config.txt         # Configuration file
 ├── LightX2V使用说明.txt         # LightX2V usage instructions
+├── outputs/                    # Generated video save directory
 └── models/                     # Model storage directory
     ├── 说明.txt                       # Model documentation
     ├── Wan2.1-I2V-14B-480P-Lightx2v/  # Image-to-video model (480P)
@@ -51,6 +52,20 @@ After extraction, ensure the directory structure is as follows:
     ├── Wan2.1-T2V-14B-Lightx2v/       # Text-to-video model (14B parameters)
     └── Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/      # Text-to-video model (4-step distillation)
 ```
+
+**📥 Model Download**:
+
+Refer to the [Model Structure Documentation](./model_structure.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
+
+**Download Options**:
+
+- **Complete Model**: When downloading complete models with both quantized and non-quantized versions, you can freely choose the quantization precision for DIT/T5/CLIP in the advanced options of the `Gradio` Web frontend.
+
+- **Non-quantized Version Only**: When downloading only non-quantized versions, in the `Gradio` Web frontend, the quantization precision for `DIT/T5/CLIP` can only be set to bf16/fp16. If you need to use quantized versions of models, please manually download quantized weights to the `i2v_model_path` or `t2v_model_path` directory where Gradio is started.
+
+- **Quantized Version Only**: When downloading only quantized versions, in the `Gradio` Web frontend, the quantization precision for `DIT/T5/CLIP` can only be set to fp8 or int8 (depending on the weights you downloaded). If you need to use non-quantized versions of models, please manually download non-quantized weights to the `i2v_model_path` or `t2v_model_path` directory where Gradio is started.
+
+- **Note**: Whether you download complete models or partial models, the values for `i2v_model_path` and `t2v_model_path` parameters should be the first-level directory paths. For example: `Wan2.1-I2V-14B-480P-Lightx2v/`, not `Wan2.1-I2V-14B-480P-Lightx2v/int8`.
 
 **📋 Configuration Parameters**
 
@@ -74,6 +89,12 @@ model_size=14b
 
 # Model class (wan2.1: standard model, wan2.1_distill: distilled model)
 model_cls=wan2.1
+
+# Image-to-video model path
+i2v_model_path=models/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v
+
+# Text-to-video model path
+t2v_model_path=models/Wan2.1-T2V-1.3B-Lightx2v
 ```
 
 **⚠️ Important Note**: If using distilled models (model names containing StepDistill-CfgDistil field), please set `model_cls` to `wan2.1_distill`

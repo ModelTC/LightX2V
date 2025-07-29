@@ -14,11 +14,11 @@
 
 # Lightx2v project root directory path
 # Example: /home/user/lightx2v or /data/video_gen/lightx2v
-lightx2v_path=/path/to/lightx2v
+lightx2v_path=/data/video_gen/LightX2V
 # Model path configuration
 # Image-to-video model path (for i2v tasks)
 # Example: /path/to/Wan2.1-I2V-14B-720P-Lightx2v
-i2v_model_path=/path/to/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/
+i2v_model_path=/path/to/Wan2.1-I2V-14B-480P-Lightx2v
 
 # Text-to-video model path (for t2v tasks)
 # Example: /path/to/Wan2.1-T2V-1.3B
