@@ -152,6 +152,10 @@ LightX2V-ComfyUI的插件使用的是，[ComfyUI-Lightx2vWrapper](https://github
 | 3090Ti    | I2V        | 24G        | 6.1G        | 7.1G          |
 | 3080Ti    | I2V        | 12G        | 6.1G        | 7.1G          |
 | 3060Ti    | I2V        | 8G         | 6.1G        | 7.1G          |
+| 4070Ti Super    | I2V        | 16G         | 6.1G        | 7.1G          |
+| 4070    | I2V        | 12G         | 6.1G        | 7.1G          |
+| 4060    | I2V        | 8G         | 6.1G        | 7.1G          |
+
 
 
 #### 环境打包和使用参考
