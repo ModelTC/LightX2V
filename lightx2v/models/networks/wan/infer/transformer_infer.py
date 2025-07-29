@@ -46,22 +46,25 @@ class WanTransformerInfer(BaseTransformerInfer):
                     self.infer_func = self._infer_with_phases_offload
                 else:
                     self.infer_func = self._infer_with_phases_lazy_offload
+            elif offload_granularity == "model":
+                self.infer_func = self._infer_without_offload
 
-            if not self.config.get("lazy_load", False):
-                self.weights_stream_mgr = WeightAsyncStreamManager(
-                    blocks_num=self.blocks_num,
-                    offload_ratio=offload_ratio,
-                    phases_num=self.phases_num,
-                )
-            else:
-                self.weights_stream_mgr = LazyWeightAsyncStreamManager(
-                    blocks_num=self.blocks_num,
-                    offload_ratio=offload_ratio,
-                    phases_num=self.phases_num,
-                    num_disk_workers=self.config.get("num_disk_workers", 2),
-                    max_memory=self.config.get("max_memory", 2),
-                    offload_gra=offload_granularity,
-                )
+            if offload_granularity != "model":
+                if not self.config.get("lazy_load", False):
+                    self.weights_stream_mgr = WeightAsyncStreamManager(
+                        blocks_num=self.blocks_num,
+                        offload_ratio=offload_ratio,
+                        phases_num=self.phases_num,
+                    )
+                else:
+                    self.weights_stream_mgr = LazyWeightAsyncStreamManager(
+                        blocks_num=self.blocks_num,
+                        offload_ratio=offload_ratio,
+                        phases_num=self.phases_num,
+                        num_disk_workers=self.config.get("num_disk_workers", 2),
+                        max_memory=self.config.get("max_memory", 2),
+                        offload_gra=offload_granularity,
+                    )
         else:
             self.infer_func = self._infer_without_offload
 

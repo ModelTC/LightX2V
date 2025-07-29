@@ -40,8 +40,9 @@ def main():
             "wan2.1_causvid",
             "wan2.1_skyreels_v2_df",
             "wan2.1_audio",
+            "wan2.2_moe",
         ],
-        default="hunyuan",
+        default="wan2.1",
     )
     parser.add_argument("--task", type=str, choices=["t2v", "i2v"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)

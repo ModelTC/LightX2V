@@ -37,6 +37,10 @@ def set_config(args):
         with open(os.path.join(config.model_path, "config.json"), "r") as f:
             model_config = json.load(f)
         config.update(model_config)
+    elif os.path.exists(os.path.join(config.model_path, "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
+        with open(os.path.join(config.model_path, "low_noise_model", "config.json"), "r") as f:
+            model_config = json.load(f)
+        config.update(model_config)
     elif os.path.exists(os.path.join(config.model_path, "original", "config.json")):
         with open(os.path.join(config.model_path, "original", "config.json"), "r") as f:
             model_config = json.load(f)
