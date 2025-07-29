@@ -287,3 +287,31 @@ def find_hf_model_path(config, ckpt_config_key=None, subdir=None):
             logger.info(f"Found Hugging Face model files in: {path}")
             return path
     raise FileNotFoundError(f"No Hugging Face model files (.safetensors) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
+
+
+def find_gguf_model_path(config, ckpt_config_key=None, subdir=None):
+    gguf_path = config.get(ckpt_config_key, None)
+    if gguf_path is None:
+        raise ValueError(f"GGUF path not found in config with key '{ckpt_config_key}'")
+    if not isinstance(gguf_path, str) or not gguf_path.endswith(".gguf"):
+        raise ValueError(f"GGUF path must be a string ending with '.gguf', got: {gguf_path}")
+    if os.sep in gguf_path or (os.altsep and os.altsep in gguf_path):
+        if os.path.exists(gguf_path):
+            logger.info(f"Found GGUF model file in: {gguf_path}")
+            return os.path.abspath(gguf_path)
+        else:
+            raise FileNotFoundError(f"GGUF file not found at path: {gguf_path}")
+    else:
+        # It's just a filename, search in predefined paths
+        paths_to_check = [config.model_path]
+        if subdir:
+            paths_to_check.append(os.path.join(config.model_path, subdir))
+
+        for path in paths_to_check:
+            gguf_file_path = os.path.join(path, gguf_path)
+            gguf_file = glob.glob(gguf_file_path)
+            if gguf_file:
+                logger.info(f"Found GGUF model file in: {gguf_file_path}")
+                return gguf_file_path
+
+    raise FileNotFoundError(f"No GGUF model files (.gguf) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")

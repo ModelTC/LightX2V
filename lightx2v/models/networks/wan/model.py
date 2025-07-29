@@ -28,6 +28,11 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 from loguru import logger
 
+try:
+    import gguf
+except ImportError:
+    gguf = None
+
 
 class WanModel:
     pre_weight_class = WanPreWeights
@@ -42,6 +47,9 @@ class WanModel:
 
         if self.dit_quantized:
             dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
+            if dit_quant_scheme == "gguf":
+                self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
+                self.config.use_gguf = True
             self.dit_quantized_ckpt = find_hf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
         else:
             self.dit_quantized_ckpt = None
@@ -143,6 +151,13 @@ class WanModel:
 
         return pre_post_weight_dict
 
+    def _load_gguf_ckpt(self):
+        gguf_path = self.dit_quantized_ckpt
+        logger.info(f"Loading gguf-quant dit model from {gguf_path}")
+        reader = gguf.GGUFReader(gguf_path)
+        for tensor in reader.tensors:
+            pass
+
     def _init_weights(self, weight_dict=None):
         use_bf16 = GET_DTYPE() == "BF16"
         # Some layers run with float32 to achieve high accuracy
@@ -157,6 +172,8 @@ class WanModel:
         if weight_dict is None:
             if not self.dit_quantized or self.weight_auto_quant:
                 self.original_weight_dict = self._load_ckpt(use_bf16, skip_bf16)
+            elif self.get("use_gguf", False):
+                self.original_weight_dict = self._load_gguf_ckpt()
             else:
                 if not self.config.get("lazy_load", False):
                     self.original_weight_dict = self._load_quant_ckpt(use_bf16, skip_bf16)
