@@ -152,7 +152,7 @@ class DefaultRunner(BaseRunner):
     def _run_input_encoder_local_i2v(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = Image.open(self.config["image_path"]).convert("RGB")
-        clip_encoder_out = self.run_image_encoder(img)
+        clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
         text_encoder_output = self.run_text_encoder(prompt, img)
         torch.cuda.empty_cache()

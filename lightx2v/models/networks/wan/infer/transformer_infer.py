@@ -46,22 +46,25 @@ class WanTransformerInfer(BaseTransformerInfer):
                     self.infer_func = self._infer_with_phases_offload
                 else:
                     self.infer_func = self._infer_with_phases_lazy_offload
+            elif offload_granularity == "model":
+                self.infer_func = self._infer_without_offload
 
-            if not self.config.get("lazy_load", False):
-                self.weights_stream_mgr = WeightAsyncStreamManager(
-                    blocks_num=self.blocks_num,
-                    offload_ratio=offload_ratio,
-                    phases_num=self.phases_num,
-                )
-            else:
-                self.weights_stream_mgr = LazyWeightAsyncStreamManager(
-                    blocks_num=self.blocks_num,
-                    offload_ratio=offload_ratio,
-                    phases_num=self.phases_num,
-                    num_disk_workers=self.config.get("num_disk_workers", 2),
-                    max_memory=self.config.get("max_memory", 2),
-                    offload_gra=offload_granularity,
-                )
+            if offload_granularity != "model":
+                if not self.config.get("lazy_load", False):
+                    self.weights_stream_mgr = WeightAsyncStreamManager(
+                        blocks_num=self.blocks_num,
+                        offload_ratio=offload_ratio,
+                        phases_num=self.phases_num,
+                    )
+                else:
+                    self.weights_stream_mgr = LazyWeightAsyncStreamManager(
+                        blocks_num=self.blocks_num,
+                        offload_ratio=offload_ratio,
+                        phases_num=self.phases_num,
+                        num_disk_workers=self.config.get("num_disk_workers", 2),
+                        max_memory=self.config.get("max_memory", 2),
+                        offload_gra=offload_granularity,
+                    )
         else:
             self.infer_func = self._infer_without_offload
 
@@ -400,7 +403,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             x.add_(y_out * gate_msa.squeeze(0))
 
         norm3_out = weights.norm3.apply(x)
-        if self.task == "i2v":
+        if self.task == "i2v" and self.config.get("use_image_encoder", True):
             context_img = context[:257]
             context = context[257:]
         else:
@@ -408,7 +411,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if GET_DTYPE() != "BF16":
             context = context.to(torch.bfloat16)
-            if self.task == "i2v":
+            if self.task == "i2v" and self.config.get("use_image_encoder", True):
                 context_img = context_img.to(torch.bfloat16)
 
         n, d = self.num_heads, self.head_dim
@@ -431,7 +434,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             model_cls=self.config["model_cls"],
         )
 
-        if self.task == "i2v" and context_img is not None:
+        if self.task == "i2v" and self.config.get("use_image_encoder", True) and context_img is not None:
             k_img = weights.cross_attn_norm_k_img.apply(weights.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = weights.cross_attn_v_img.apply(context_img).view(-1, n, d)
 

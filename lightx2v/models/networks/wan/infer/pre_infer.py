@@ -43,7 +43,8 @@ class WanPreInfer:
             context = inputs["text_encoder_output"]["context_null"]
 
         if self.task == "i2v":
-            clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
+            if self.config.get("use_image_encoder", True):
+                clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
 
             if self.config.get("changing_resolution", False):
                 image_encoder = inputs["image_encoder_output"]["vae_encode_out"][self.scheduler.changing_resolution_index]
@@ -103,7 +104,7 @@ class WanPreInfer:
             del out, stacked
             torch.cuda.empty_cache()
 
-        if self.task == "i2v":
+        if self.task == "i2v" and self.config.get("use_image_encoder", True):
             context_clip = weights.proj_0.apply(clip_fea)
             if self.clean_cuda_cache:
                 del clip_fea
@@ -116,7 +117,8 @@ class WanPreInfer:
             context_clip = weights.proj_4.apply(context_clip)
             context = torch.concat([context_clip, context], dim=0)
         if self.clean_cuda_cache:
-            del context_clip
+            if self.config.get("use_image_encoder", True):
+                del context_clip
             torch.cuda.empty_cache()
         return (
             embed,

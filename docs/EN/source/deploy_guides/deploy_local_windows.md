@@ -152,7 +152,9 @@ The plugin used by LightX2V-ComfyUI is [ComfyUI-Lightx2vWrapper](https://github.
 | 3090Ti     | I2V         | 24G           | 6.1G                 | 7.1G                 |
 | 3080Ti     | I2V         | 12G           | 6.1G                 | 7.1G                 |
 | 3060Ti     | I2V         | 8G            | 6.1G                 | 7.1G                 |
-
+| 4070Ti Super    | I2V        | 16G         | 6.1G        | 7.1G          |
+| 4070    | I2V        | 12G         | 6.1G        | 7.1G          |
+| 4060    | I2V        | 8G         | 6.1G        | 7.1G          |
 
 #### Environment Packaging and Usage Reference
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI)

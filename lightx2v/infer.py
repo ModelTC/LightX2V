@@ -10,7 +10,7 @@ from lightx2v.utils.set_config import set_config
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner
-from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.models.runners.wan.wan_runner import WanRunner, Wan22MoeRunner
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner
 from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner
 from lightx2v.models.runners.wan.wan_audio_runner import WanAudioRunner
@@ -42,7 +42,7 @@ def init_runner(config):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model_cls", type=str, required=True, choices=["wan2.1", "hunyuan", "wan2.1_distill", "wan2.1_causvid", "wan2.1_skyreels_v2_df", "cogvideox", "wan2.1_audio"], default="wan2.1"
+        "--model_cls", type=str, required=True, choices=["wan2.1", "hunyuan", "wan2.1_distill", "wan2.1_causvid", "wan2.1_skyreels_v2_df", "cogvideox", "wan2.1_audio", "wan2.2_moe"], default="wan2.1"
     )
 
     parser.add_argument("--task", type=str, choices=["t2v", "i2v"], default="t2v")

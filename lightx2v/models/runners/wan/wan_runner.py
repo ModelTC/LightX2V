@@ -18,7 +18,7 @@ from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.utils import *
 from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
-from lightx2v.models.networks.wan.model import WanModel
+from lightx2v.models.networks.wan.model import WanModel, Wan22MoeModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
@@ -50,7 +50,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config.task == "i2v":
+        if self.config.task == "i2v" and self.config.get("use_image_encoder", True):
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -293,3 +293,69 @@ class WanRunner(DefaultRunner):
             normalize=True,
             value_range=(-1, 1),
         )
+
+
+class MultiModelStruct:
+    def __init__(self, model_list, config, boundary=0.875, num_train_timesteps=1000):
+        self.model = model_list  # [high_noise_model, low_noise_model]
+        assert len(self.model) == 2, "MultiModelStruct only supports 2 models now."
+        self.config = config
+        self.boundary = boundary
+        self.boundary_timestep = self.boundary * num_train_timesteps
+        self.cur_model_index = -1
+        logger.info(f"boundary: {self.boundary}, boundary_timestep: {self.boundary_timestep}")
+
+    def set_scheduler(self, shared_scheduler):
+        self.scheduler = shared_scheduler
+        for model in self.model:
+            model.set_scheduler(shared_scheduler)
+
+    def infer(self, inputs):
+        self.get_current_model_index()
+        self.model[self.cur_model_index].infer(inputs)
+
+    def get_current_model_index(self):
+        if self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep:
+            logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
+            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[0]
+            if self.cur_model_index == -1:
+                self.to_cuda(model_index=0)
+            elif self.cur_model_index == 1:  # 1 -> 0
+                self.offload_cpu(model_index=1)
+                self.to_cuda(model_index=0)
+            self.cur_model_index = 0
+        else:
+            logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
+            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[1]
+            if self.cur_model_index == -1:
+                self.to_cuda(model_index=1)
+            elif self.cur_model_index == 0:  # 0 -> 1
+                self.offload_cpu(model_index=0)
+                self.to_cuda(model_index=1)
+            self.cur_model_index = 1
+
+    def offload_cpu(self, model_index):
+        self.model[model_index].to_cpu()
+
+    def to_cuda(self, model_index):
+        self.model[model_index].to_cuda()
+
+
+@RUNNER_REGISTER("wan2.2_moe")
+class Wan22MoeRunner(WanRunner):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def load_transformer(self):
+        # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
+        high_noise_model = Wan22MoeModel(
+            os.path.join(self.config.model_path, "high_noise_model"),
+            self.config,
+            self.init_device,
+        )
+        low_noise_model = Wan22MoeModel(
+            os.path.join(self.config.model_path, "low_noise_model"),
+            self.config,
+            self.init_device,
+        )
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config.boundary)

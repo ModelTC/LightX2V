@@ -39,7 +39,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"]("time_projection.1.weight", "time_projection.1.bias"),
         )
 
-        if config.task == "i2v":
+        if config.task == "i2v" and config.get("use_image_encoder", True):
             self.add_module(
                 "proj_0",
                 LN_WEIGHT_REGISTER["Default"]("img_emb.proj.0.weight", "img_emb.proj.0.bias"),

@@ -286,7 +286,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())
 
-        if self.config.task == "i2v":
+        if self.config.task == "i2v" and self.config.get("use_image_encoder", True):
             self.add_module(
                 "cross_attn_k_img",
                 MM_WEIGHT_REGISTER[self.mm_type](

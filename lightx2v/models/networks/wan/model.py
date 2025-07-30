@@ -243,7 +243,7 @@ class WanModel:
             x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
             noise_pred_uncond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
 
-            self.scheduler.noise_pred = noise_pred_uncond + self.config.sample_guide_scale * (self.scheduler.noise_pred - noise_pred_uncond)
+            self.scheduler.noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (self.scheduler.noise_pred - noise_pred_uncond)
 
             if self.config.get("cpu_offload", False):
                 self.pre_weight.to_cpu()
@@ -252,3 +252,28 @@ class WanModel:
                 if self.clean_cuda_cache:
                     del x, embed, pre_infer_out, noise_pred_uncond, grid_sizes
                     torch.cuda.empty_cache()
+
+
+class Wan22MoeModel(WanModel):
+    def _load_ckpt(self, use_bf16, skip_bf16):
+        safetensors_files = glob.glob(os.path.join(self.model_path, "*.safetensors"))
+        weight_dict = {}
+        for file_path in safetensors_files:
+            file_weights = self._load_safetensor_to_dict(file_path, use_bf16, skip_bf16)
+            weight_dict.update(file_weights)
+        return weight_dict
+
+    @torch.no_grad()
+    def infer(self, inputs):
+        embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, positive=True)
+        x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
+        noise_pred_cond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
+
+        self.scheduler.noise_pred = noise_pred_cond
+
+        if self.config["enable_cfg"]:
+            embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, positive=False)
+            x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
+            noise_pred_uncond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
+
+            self.scheduler.noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (self.scheduler.noise_pred - noise_pred_uncond)
