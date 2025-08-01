@@ -46,6 +46,20 @@ class MagicDriveTransformerAttnBlock(WeightModule):
             'attn_naive',
             ATTN_WEIGHT_REGISTER['naive']()
         )
+        
+        self.add_module(
+            'sp_attn',
+            ATTN_WEIGHT_REGISTER['sp_flash_attn2_base']()
+        )
+        self.add_module(
+            'sp_attn_xformers',
+            ATTN_WEIGHT_REGISTER['sp_xformers']()
+        )
+        self.add_module(
+            'sp_attn_naive',
+            ATTN_WEIGHT_REGISTER['sp_naive']()
+        )
+        
         self.register_parameter(
             'rope_freqs',
             TENSOR_REGISTER['Default'](f'rope.freqs')

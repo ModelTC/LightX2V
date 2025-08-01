@@ -23,6 +23,7 @@ from magicdrivedit.utils.inference_utils import apply_mask_strategy, edit_pos, c
 from magicdrivedit.utils.misc import collate_bboxes_to_maxlen, move_to
 from magicdrivedit.datasets.carla import CARLAVariableDataset
 from magicdrivedit.schedulers.rf.rectified_flow import timestep_transform
+from lightx2v.models.networks.mgcdr.infer.parallel.coordinator import SequenceParallelCoordinator
 from loguru import logger
 
 
@@ -45,6 +46,9 @@ class MagicDriverRunner(DefaultRunner):
     
     def run_image_encoder(self):
         pass
+    
+    def set_coordinator(self, coordinator: SequenceParallelCoordinator):
+        self.coordinator = coordinator
         
     def init_modules(self):
         self.model = self.load_transformer()

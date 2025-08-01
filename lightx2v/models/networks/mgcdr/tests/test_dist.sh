@@ -4,5 +4,5 @@ export DTYPE='BF16'
 
 source /kaiwu_vepfs/kaiwu/huangxinchi/metavdt/bin/activate
 
-export CUDA_VISIBLE_DEVICES=4
-torchrun --nproc_per_node=1 --master_port=25641 test.py
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+torchrun --nproc_per_node=4 test_dist.py

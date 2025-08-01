@@ -671,9 +671,6 @@ class MagicDrivePreInfer:
         
         x = x_b
         
-        x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
-        c = rearrange(c, "B T S C -> B (T S) C", T=T, S=S)
-        
         if x_mask is not None:
             x_mask = repeat(x_mask, "b ... -> (b NC) ...", NC=NC)
             

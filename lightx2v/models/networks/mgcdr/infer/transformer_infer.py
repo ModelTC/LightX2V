@@ -1,3 +1,4 @@
+from lightx2v.models.networks.mgcdr.infer.parallel import coordinator
 import torch
 import xformers.ops
 from einops import repeat, rearrange
@@ -5,6 +6,8 @@ import torch.nn.functional as F
 from lightx2v.models.schedulers.mgcdr.scheduler import MagicDriverScheduler
 from lightx2v.models.networks.mgcdr.weights.transformer_weights import MagicDriveTransformerWeight, MagicDriveTransformerAttnBlock
 from lightx2v.models.networks.mgcdr.infer.funcs import construct_attn_input_from_map
+from lightx2v.models.networks.mgcdr.infer.parallel.coordinator import SequenceParallelCoordinator
+from loguru import logger
 
 
 class MagicDriveTransformerInfer:
@@ -17,6 +20,9 @@ class MagicDriveTransformerInfer:
         self.hidden_size = config['hidden_size']
         self.head_dim = self.hidden_size // self.num_heads
         self.scale = self.head_dim**-0.5
+        
+    def set_coordinator(self, coordinator: SequenceParallelCoordinator):
+        self.coordinator = coordinator
         
     def set_scheduler(self, scheduler: MagicDriverScheduler):
         self.scheduler = scheduler
@@ -85,15 +91,32 @@ class MagicDriveTransformerInfer:
         if rope:
             q = weights.rotary_emb.rotate_queries_or_keys(q)
             k = weights.rotary_emb.rotate_queries_or_keys(k)
-
+        
+        if torch.distributed.get_rank() == 0:
+            import pdb; pdb.set_trace()
+        
         if temporal:
-            x = weights.attn_naive.apply(
-                q, k, v, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal
+            if self.coordinator.is_seq_parallel():
+                # logger.info(f"97")
+                x = weights.sp_attn_naive.apply(
+                    q, k, v, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal, sp_group=self.coordinator.seq_group
             )
+                # logger.info(f"101")
+            else:
+                x = weights.attn_naive.apply(
+                    q, k, v, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal
+                )
         else:
-            x = weights.attn.apply(
-                q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal
-            )
+            if self.coordinator.is_seq_parallel():
+                # logger.info(f"108")
+                x = weights.sp_attn.apply(
+                    q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal, sp_group=self.coordinator.seq_group
+                )
+                # logger.info(f"112")
+            else:
+                x = weights.attn.apply(
+                    q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal
+                )
         
         x_output_shape = (B, N, C)
         
@@ -132,9 +155,19 @@ class MagicDriveTransformerInfer:
         #     q, k, v, p=0.0, attn_bias=attn_bias, scale=self.scale
         # )
         # attn_bias = xformers.ops.fmha.attn_bias.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        x = weights.attn_xformers.apply(
-            q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, attn_bias=attn_bias
+        if torch.distributed.get_rank() == 0:
+            import pdb; pdb.set_trace()
+
+        if self.coordinator.is_seq_parallel():
+            # logger.info(f"156")
+            x = weights.sp_attn_xformers.apply(
+            q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, attn_bias=attn_bias, sp_group=self.coordinator.seq_group
         )
+            # logger.info(f"160")
+        else:
+            x = weights.attn_xformers.apply(
+                q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, attn_bias=attn_bias
+            )
         
         x = x.view(B, -1, C)
         # x = self.proj(x)
@@ -164,9 +197,19 @@ class MagicDriveTransformerInfer:
         # q = weights.rotary_emb.rotate_queries_or_keys(q)
         # k = weights.rotary_emb.rotate_queries_or_keys(k)
         
-        x = weights.attn.apply(
-            q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal
-        )
+        if torch.distributed.get_rank() == 0:
+            import pdb; pdb.set_trace()
+        
+        if self.coordinator.is_seq_parallel():
+            # logger.info(f"195")
+            x = weights.sp_attn.apply(
+                q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal, sp_group=self.coordinator.seq_group
+            )
+            # logger.info(f"199")
+        else:
+            x = weights.attn.apply(
+                q, k, v, dropout_p=weights.attn_drop, softmax_scale=weights.softmax_scale, is_causal=weights.is_causal
+            )
         
         x_output_shape = (B, N, C)
         x = x.reshape(x_output_shape)
@@ -176,7 +219,6 @@ class MagicDriveTransformerInfer:
         return x
 
     def infer_block(self, weights: MagicDriveTransformerAttnBlock, x, y, t, mask, x_mask, t0, T, S, NC, mv_order_map, skip_cross_view, rope, temporal, is_control_block):
-        # import pdb; pdb.set_trace()
         B, N, C = x.shape
         assert (N == T * S) and (B % NC == 0)
         b = B // NC
@@ -201,12 +243,16 @@ class MagicDriveTransformerInfer:
         if temporal:
             x_m = rearrange(x_m, "B (T S) C -> (B S) T C", T=T, S=S)
             x_m = self._infer_self_attn(weights, x_m, rope=rope, temporal=temporal)
+            if torch.distributed.get_rank() == 0:
+                import pdb; pdb.set_trace()
             x_m = rearrange(x_m, "(B S) T C -> B (T S) C", T=T, S=S)
         else:
             x_m = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S)
             x_m = self._infer_self_attn(weights, x_m, rope=rope, temporal=temporal)
+            if torch.distributed.get_rank() == 0:
+                import pdb; pdb.set_trace()
             x_m = rearrange(x_m, "(B T) S C -> B (T S) C", T=T, S=S)
-                
+
         # modulate (attention)
         x_m_s = gate_msa * x_m
         if x_mask is not None:
@@ -328,6 +374,12 @@ class MagicDriveTransformerInfer:
             return x
         
     def infer(self, weights: MagicDriveTransformerWeight, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map):
+        # import pdb; pdb.set_trace()
+        if self.coordinator.is_seq_parallel():
+            S = S // self.coordinator.get_seq_parallel_size()
+        x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
+        c = rearrange(c, "B T S C -> B (T S) C", T=T, S=S)
+
         for block_idx in range(0, self.control_blocks_num):
             # import pdb; pdb.set_trace()
             x = self.infer_block(

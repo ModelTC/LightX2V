@@ -72,9 +72,9 @@ def main():
     post_infer = MagicDrivePostInfer(config)
     post_weights.load(model_state_dict)
     
-    x = run(z, t, _model_args, pre_weights, pre_infer, transformer_weights, transfomer_infer, post_weights, post_infer)
+    # x = run(z, t, _model_args, pre_weights, pre_infer, transformer_weights, transfomer_infer, post_weights, post_infer)
     
-    # x_sp = run_sp(z, t, _model_args, pre_weights, pre_infer, transformer_weights, transfomer_infer, post_weights, post_infer)
+    x_sp = run_sp(z, t, _model_args, pre_weights, pre_infer, transformer_weights, transfomer_infer, post_weights, post_infer)
     
     if dist.get_rank() == 1:
         import pdb; pdb.set_trace()

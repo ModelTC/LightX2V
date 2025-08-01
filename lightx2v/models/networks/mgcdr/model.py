@@ -7,6 +7,7 @@ from lightx2v.models.networks.mgcdr.infer.post_infer import MagicDrivePostInfer
 from lightx2v.models.networks.mgcdr.weights.transformer_weights import MagicDriveTransformerWeight
 from lightx2v.models.networks.mgcdr.weights.pre_weights import MagicDrivePreWeights
 from lightx2v.models.networks.mgcdr.weights.post_weights import MagicDrivePostWeights
+from lightx2v.models.networks.mgcdr.infer.parallel.coordinator import SequenceParallelCoordinator
 
 
 # class ModelInputs(BaseModel):
@@ -32,6 +33,7 @@ class MagicDriveModel:
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+        self.parallel_coordinator = SequenceParallelCoordinator(self.config)
         # self.set_scheduler()
         
     def _init_infer_class(self):
@@ -59,6 +61,8 @@ class MagicDriveModel:
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
+        
+        self.set_coordinator(self.parallel_coordinator)
     
     def set_scheduler(self, scheduler: MagicDriverScheduler):
         self.scheduler = scheduler
@@ -66,11 +70,16 @@ class MagicDriveModel:
         self.post_infer.set_scheduler(scheduler)
         self.transformer_infer.set_scheduler(scheduler)
         
+    def set_coordinator(self, coordinator: SequenceParallelCoordinator):
+        self.transformer_infer.set_coordinator(coordinator)
+        
     @torch.no_grad()
     def infer(self, inputs: dict):
         # import pdb; pdb.set_trace()
         x, y, c, t, t_mlp, y_lens, x_mask, t0, t0_mlp, T, H, W, S, NC, Tx, Hx, Wx, mv_order_map  = self.pre_infer.infer(self.pre_weight, **inputs)
+        
         x = self.transformer_infer.infer(self.transformer_weights, x, y, c, t_mlp, y_lens, x_mask, t0_mlp, T, S, NC, mv_order_map)
+        
         x = self.post_infer.infer(self.post_weight, x, t, x_mask, t0, S, NC, T, H, W, Tx, Hx, Wx)
         inputs['x'] = x
         # return x
