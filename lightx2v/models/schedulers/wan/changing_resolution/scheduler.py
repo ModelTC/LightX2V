@@ -1,7 +1,5 @@
 import torch
 
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
-
 
 class WanScheduler4ChangingResolutionInterface:
     def __new__(cls, father_scheduler, config):

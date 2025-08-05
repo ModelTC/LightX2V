@@ -7,8 +7,7 @@ Merge a source model with LoRA weights to create a new model
 
 import argparse
 import os
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import torch
 from safetensors import safe_open

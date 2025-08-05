@@ -1,15 +1,9 @@
 import gc
 import math
-import os
-from typing import List, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 import torch
-from diffusers import (
-    FlowMatchEulerDiscreteScheduler as FlowMatchEulerDiscreteSchedulerBase,  # pyright: ignore
-)
-from diffusers.configuration_utils import register_to_config
-from loguru import logger
 from torch import Tensor
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler

@@ -9,7 +9,6 @@ from loguru import logger
 
 from lightx2v.server.api import ApiServer
 from lightx2v.server.service import DistributedInferenceService
-from lightx2v.server.utils import ProcessManager
 
 
 def create_signal_handler(inference_service: DistributedInferenceService):

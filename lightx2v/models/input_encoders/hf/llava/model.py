@@ -1,8 +1,4 @@
-import numpy as np
 import torch
-import torchvision.transforms as transforms
-from PIL import Image
-from loguru import logger
 from transformers import AutoTokenizer, CLIPImageProcessor, LlavaForConditionalGeneration
 
 

@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 import torch
-import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger

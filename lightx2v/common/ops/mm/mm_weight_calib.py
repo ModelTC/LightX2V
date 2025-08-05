@@ -1,6 +1,6 @@
 import torch
 
-from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
+from lightx2v.utils.quant_utils import FloatQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 from .mm_weight import MMWeight

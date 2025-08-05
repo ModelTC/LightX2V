@@ -2,7 +2,6 @@ import os
 from typing import List, Optional, Tuple
 
 import torch
-from loguru import logger
 from torch.nn import functional as F
 
 from lightx2v.utils.profiler import ProfilingContext

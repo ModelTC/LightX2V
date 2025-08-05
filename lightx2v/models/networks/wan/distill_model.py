@@ -1,11 +1,7 @@
-import glob
-import json
 import os
-import sys
 
 import torch
 from loguru import logger
-from safetensors import safe_open
 
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights

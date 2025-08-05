@@ -4,7 +4,7 @@ import signal
 import sys
 import threading
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 import psutil
 import torch

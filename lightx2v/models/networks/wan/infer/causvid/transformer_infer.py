@@ -5,7 +5,7 @@ import torch
 from lightx2v.utils.envs import *
 
 from ..transformer_infer import WanTransformerInfer
-from ..utils import apply_rotary_emb, compute_freqs, compute_freqs_causvid
+from ..utils import apply_rotary_emb, compute_freqs_causvid
 
 
 class WanTransformerInferCausVid(WanTransformerInfer):

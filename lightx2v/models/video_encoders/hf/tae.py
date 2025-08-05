@@ -1,4 +1,3 @@
-import gc
 import os
 from collections import namedtuple
 

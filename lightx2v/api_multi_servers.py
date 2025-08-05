@@ -5,9 +5,8 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
-import psutil
 import requests
 from loguru import logger
 

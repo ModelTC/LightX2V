@@ -1,7 +1,6 @@
 import math
-from typing import List, Optional, Tuple, Union
+from typing import Union
 
-import numpy as np
 import torch
 
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler

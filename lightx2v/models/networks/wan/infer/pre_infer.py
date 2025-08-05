@@ -1,5 +1,4 @@
 import torch
-from diffusers.models.embeddings import TimestepEmbedding
 
 from lightx2v.utils.envs import *
 

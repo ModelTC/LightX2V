@@ -2,7 +2,6 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-from loguru import logger
 
 
 class RingComm:

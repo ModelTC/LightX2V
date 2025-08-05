@@ -4,7 +4,7 @@ import torch
 from loguru import logger
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
+from lightx2v.utils.profiler import ProfilingContext
 
 sys_prompt = """
 Transform the short prompt into a detailed video-generation caption using this structure:

@@ -1,7 +1,7 @@
 from loguru import logger
 
 try:
-    import flash_attn
+    import flash_attn  # noqa: F401
     from flash_attn.flash_attn_interface import flash_attn_varlen_func
 except ImportError:
     logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")

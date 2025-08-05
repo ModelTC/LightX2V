@@ -2,7 +2,6 @@
 import logging
 
 import torch
-import torch.cuda.amp as amp
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
