@@ -13,8 +13,9 @@ except ImportError:
     logger.info("flash_attn_varlen_func_v3 not found, please install flash_attn3 first")
     flash_attn_varlen_func_v3 = None
 
-from .template import AttnWeightTemplate
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
 
 
 @ATTN_WEIGHT_REGISTER("flash_attn2")

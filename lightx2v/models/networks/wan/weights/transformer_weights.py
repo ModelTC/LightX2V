@@ -1,14 +1,16 @@
-import torch
 import os
+
+import torch
+from safetensors import safe_open
+
+from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
-    MM_WEIGHT_REGISTER,
+    ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
+    MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
     TENSOR_REGISTER,
-    ATTN_WEIGHT_REGISTER,
 )
-from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from safetensors import safe_open
 
 
 class WanTransformerWeights(WeightModule):

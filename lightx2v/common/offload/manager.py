@@ -1,10 +1,11 @@
-import torch
-import threading
-import queue
-import time
 import gc
-from loguru import logger
+import queue
+import threading
+import time
 from collections import OrderedDict
+
+import torch
+from loguru import logger
 
 
 class WeightAsyncStreamManager(object):

@@ -1,7 +1,6 @@
 import requests
 from loguru import logger
 
-
 url = "http://localhost:8000/v1/tasks/"
 
 message = {

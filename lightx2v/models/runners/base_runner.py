@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple, Optional, Union, List, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
+
 from lightx2v.utils.utils import save_videos_grid
 
 

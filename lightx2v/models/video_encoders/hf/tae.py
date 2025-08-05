@@ -1,10 +1,11 @@
+import gc
+import os
+from collections import namedtuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-from collections import namedtuple
-import gc
-import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32,expandable_segments:True"
 
@@ -266,6 +267,7 @@ class TAEHV(nn.Module):
 def main():
     """Run TAEHV roundtrip reconstruction on the given video paths."""
     import sys
+
     import cv2  # no highly esteemed deed is commemorated here
 
     class VideoTensorReader:

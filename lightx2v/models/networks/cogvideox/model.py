@@ -1,16 +1,17 @@
+import glob
+import json
+import math
+import os
+
 import torch
 from safetensors import safe_open
-import os
-import glob
-import math
-import json
 
-from lightx2v.models.networks.cogvideox.weights.pre_weights import CogvideoxPreWeights
-from lightx2v.models.networks.cogvideox.weights.post_weights import CogvideoxPostWeights
-from lightx2v.models.networks.cogvideox.weights.transformers_weights import CogvideoxTransformerWeights
+from lightx2v.models.networks.cogvideox.infer.post_infer import CogvideoxPostInfer
 from lightx2v.models.networks.cogvideox.infer.pre_infer import CogvideoxPreInfer
 from lightx2v.models.networks.cogvideox.infer.transformer_infer import CogvideoxTransformerInfer
-from lightx2v.models.networks.cogvideox.infer.post_infer import CogvideoxPostInfer
+from lightx2v.models.networks.cogvideox.weights.post_weights import CogvideoxPostWeights
+from lightx2v.models.networks.cogvideox.weights.pre_weights import CogvideoxPreWeights
+from lightx2v.models.networks.cogvideox.weights.transformers_weights import CogvideoxTransformerWeights
 
 
 class CogvideoxModel:

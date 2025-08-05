@@ -1,7 +1,9 @@
 import math
+from typing import List, Optional, Tuple, Union
+
 import numpy as np
 import torch
-from typing import List, Optional, Tuple, Union
+
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 
 

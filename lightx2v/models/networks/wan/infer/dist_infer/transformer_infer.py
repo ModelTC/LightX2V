@@ -1,7 +1,8 @@
 import torch
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 import torch.distributed as dist
 import torch.nn.functional as F
+
+from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.utils import pad_freqs
 
 

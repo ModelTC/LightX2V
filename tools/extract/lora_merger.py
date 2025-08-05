@@ -6,11 +6,13 @@ Merge a source model with LoRA weights to create a new model
 """
 
 import argparse
-import torch
-from safetensors import safe_open, torch as st
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+import torch
+from safetensors import safe_open
+from safetensors import torch as st
 from tqdm import tqdm
 
 

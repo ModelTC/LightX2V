@@ -1,12 +1,15 @@
+from functools import partial
+
 import torch
-from .utils import compute_freqs, compute_freqs_audio, apply_rotary_emb, apply_rotary_emb_chunk
+
 from lightx2v.common.offload.manager import (
-    WeightAsyncStreamManager,
     LazyWeightAsyncStreamManager,
+    WeightAsyncStreamManager,
 )
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
-from functools import partial
+
+from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_audio
 
 
 class WanTransformerInfer(BaseTransformerInfer):

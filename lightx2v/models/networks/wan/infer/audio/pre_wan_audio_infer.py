@@ -1,8 +1,11 @@
-import torch
 import math
-from ..utils import rope_params, sinusoidal_embedding_1d
-from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
+
+import torch
 from loguru import logger
+
+from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
+
+from ..utils import rope_params, sinusoidal_embedding_1d
 
 
 class WanAudioPreInfer(WanPreInfer):

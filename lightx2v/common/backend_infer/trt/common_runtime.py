@@ -16,7 +16,7 @@
 #
 
 import ctypes
-from typing import Optional, List, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import tensorrt as trt

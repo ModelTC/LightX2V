@@ -1,17 +1,19 @@
-import os
-import sys
-import torch
 import glob
 import json
+import os
+import sys
+
+import torch
+from loguru import logger
 from safetensors import safe_open
+
 from lightx2v.models.networks.wan.model import WanModel
-from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
+from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanTransformerWeights,
 )
 from lightx2v.utils.envs import *
-from loguru import logger
 
 
 class WanDistillModel(WanModel):

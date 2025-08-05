@@ -1,13 +1,14 @@
+import glob
 import os
 import random
 import subprocess
-import glob
+from typing import Optional
+
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
 import torchvision
-from typing import Optional
 from einops import rearrange
 from loguru import logger
 

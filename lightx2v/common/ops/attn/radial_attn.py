@@ -1,6 +1,8 @@
 import torch
-from .template import AttnWeightTemplate
+
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
 
 try:
     import flashinfer

@@ -1,10 +1,12 @@
 import torch
-from .template import AttnWeightTemplate
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 import torch.distributed as dist
-from .utils.ring_comm import RingComm
 import torch.nn.functional as F
 from loguru import logger
+
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
+from .utils.ring_comm import RingComm
 
 try:
     import flash_attn

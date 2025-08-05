@@ -1,17 +1,17 @@
-import os
-import gradio as gr
 import argparse
-import json
-import torch
 import gc
-from easydict import EasyDict
-from datetime import datetime
-from loguru import logger
-
-import importlib.util
-import psutil
-import random
 import glob
+import importlib.util
+import json
+import os
+import random
+from datetime import datetime
+
+import gradio as gr
+import psutil
+import torch
+from easydict import EasyDict
+from loguru import logger
 
 logger.add(
     "inference_logs.log",

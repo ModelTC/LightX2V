@@ -4,11 +4,11 @@
 ###
 ###  ViGen-DiT Project Url: https://github.com/yl-1993/ViGen-DiT
 ###
-import torch
-import sys
 import os
-from safetensors.torch import save_file
-from safetensors.torch import load_file
+import sys
+
+import torch
+from safetensors.torch import load_file, save_file
 
 if len(sys.argv) != 3:
     print("用法: python convert_lora.py <输入文件> <输出文件.safetensors>")

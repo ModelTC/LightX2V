@@ -1,9 +1,10 @@
-import aiofiles
 import asyncio
-from PIL import Image
 import io
-from typing import Union
 from pathlib import Path
+from typing import Union
+
+import aiofiles
+from PIL import Image
 from loguru import logger
 
 

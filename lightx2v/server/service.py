@@ -9,12 +9,11 @@ import httpx
 import torch.multiprocessing as mp
 from loguru import logger
 
-from ..utils.set_config import set_config
 from ..infer import init_runner
-from .utils import ServiceStatus
-from .schema import TaskRequest, TaskResponse
+from ..utils.set_config import set_config
 from .distributed_utils import create_distributed_worker
-
+from .schema import TaskRequest, TaskResponse
+from .utils import ServiceStatus
 
 mp.set_start_method("spawn", force=True)
 

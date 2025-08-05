@@ -1,14 +1,15 @@
 import argparse
-from fastapi import FastAPI
-from pydantic import BaseModel
-from loguru import logger
-import uvicorn
 import json
 from typing import Optional
+
+import uvicorn
+from fastapi import FastAPI
+from loguru import logger
+from pydantic import BaseModel
 from vllm import LLM, SamplingParams
 
 from lightx2v.utils.profiler import ProfilingContext
-from lightx2v.utils.service_utils import TaskStatusMessage, BaseServiceStatus, ProcessManager
+from lightx2v.utils.service_utils import BaseServiceStatus, ProcessManager, TaskStatusMessage
 
 # =========================
 # FastAPI Related Code

@@ -1,8 +1,9 @@
 import json
 import os
+
+import torch.distributed as dist
 from easydict import EasyDict
 from loguru import logger
-import torch.distributed as dist
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
 

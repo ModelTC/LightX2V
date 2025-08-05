@@ -1,8 +1,10 @@
+import gc
 import math
+from typing import List, Optional, Union
+
 import numpy as np
 import torch
-import gc
-from typing import List, Optional, Union
+
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.utils import masks_like
 

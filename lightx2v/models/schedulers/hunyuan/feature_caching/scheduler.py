@@ -1,5 +1,6 @@
-from ..scheduler import HunyuanScheduler
 import torch
+
+from ..scheduler import HunyuanScheduler
 
 
 class HunyuanSchedulerTeaCaching(HunyuanScheduler):

@@ -3,10 +3,10 @@ from pathlib import Path
 from subprocess import Popen
 
 import numpy as np
-import torch
 import tensorrt as trt
-from cuda import cudart
+import torch
 import torch.nn as nn
+from cuda import cudart
 from loguru import logger
 
 from lightx2v.common.backend_infer.trt import common

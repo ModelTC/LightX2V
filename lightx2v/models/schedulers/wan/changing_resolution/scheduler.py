@@ -1,4 +1,5 @@
 import torch
+
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 
 
