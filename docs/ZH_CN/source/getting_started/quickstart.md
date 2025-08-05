@@ -27,11 +27,28 @@
 
 #### 1. 拉取镜像
 
-访问 LightX2V 的 [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags)，选择一个最新日期的 tag，比如 `25061301`：
+访问 LightX2V 的 [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags)，选择一个最新日期的 tag，比如 `25080104`：
 
 ```bash
 # 拉取最新版本的 LightX2V 镜像
-docker pull lightx2v/lightx2v:25061301
+docker pull lightx2v/lightx2v:25080104
+```
+
+如果需要使用`SageAttention`，可以使用带`-SageSmXX`后缀的镜像版本，`SageAttention`的使用需要针对GPU类型进行选择，其中：
+
+1. A100: -SageSm80
+2. RTX30系列: -SageSm86
+3. RTX40系列: -SageSm89
+4. H100: -SageSm90
+5. RTX50系列: -SageSm120
+
+比如要在4090或者H100上使用`SageAttention`，则拉取镜像命令为：
+
+```bash
+# 对于4090
+docker pull lightx2v/lightx2v:25080104-SageSm89
+# 对于H100
+docker pull lightx2v/lightx2v:25080104-SageSm90
 ```
 
 #### 2. 运行容器
@@ -42,10 +59,20 @@ docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --ent
 
 #### 3. 国内镜像源（可选）
 
-对于中国大陆地区，如果拉取镜像时网络不稳定，可以从[渡渡鸟](https://docker.aityp.com/r/docker.io/lightx2v/lightx2v)上拉取：
+对于中国大陆地区，如果拉取镜像时网络不稳定，可以从阿里云上拉取：
 
 ```bash
-docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/lightx2v/lightx2v:25061301
+# 修改[tag]为所需下载的镜像tag
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:[tag]
+
+# 比如下载 25080104
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080104
+
+# 比如下载 25080104-SageSm89
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080104-SageSm89
+
+# 比如下载 25080104-SageSm90
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080104-SageSm90
 ```
 
 ### 🐍 Conda 环境搭建

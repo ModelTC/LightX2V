@@ -11,6 +11,8 @@
     "sample_shift": 5,
     "enable_cfg": true,
     "cpu_offload": false,
-    "parallel_attn_type": "ulysses",
-    "parallel_vae": true
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses"
+    }
 }

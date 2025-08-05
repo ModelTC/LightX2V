@@ -1,6 +1,7 @@
 import torch
-from lightx2v.utils.registry_factory import TENSOR_REGISTER
+
 from lightx2v.utils.envs import *
+from lightx2v.utils.registry_factory import TENSOR_REGISTER
 
 
 @TENSOR_REGISTER("Default")

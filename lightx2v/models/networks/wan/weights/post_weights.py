@@ -1,9 +1,9 @@
+from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.utils.registry_factory import (
+    LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     TENSOR_REGISTER,
-    LN_WEIGHT_REGISTER,
 )
-from lightx2v.common.modules.weight_module import WeightModule
 
 
 class WanPostWeights(WeightModule):

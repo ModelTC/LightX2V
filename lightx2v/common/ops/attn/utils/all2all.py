@@ -4,7 +4,7 @@ import torch.distributed as dist
 
 
 @dynamo.disable
-def all2all_seq2head(input):
+def all2all_seq2head(input, group=None):
     """
     将输入张量从 [seq_len/N, heads, hidden_dims] 转换为 [seq_len, heads/N, hidden_dims] 的格式。
 
@@ -18,7 +18,7 @@ def all2all_seq2head(input):
     assert input.dim() == 3, f"input must be 3D tensor"
 
     # 获取当前进程的世界大小
-    world_size = dist.get_world_size()
+    world_size = dist.get_world_size(group=group)
 
     # 获取输入张量的形状
     shard_seq_len, heads, hidden_dims = input.shape
@@ -36,7 +36,7 @@ def all2all_seq2head(input):
     output = torch.empty_like(input_t)
 
     # 执行 all-to-all 操作，将输入张量的内容分发到所有进程
-    dist.all_to_all_single(output, input_t)
+    dist.all_to_all_single(output, input_t, group=group)
 
     # 重塑输出张量为 [seq_len, heads/N, hidden_dims] 形状
     output = output.reshape(seq_len, shard_heads, hidden_dims).contiguous()
@@ -45,7 +45,7 @@ def all2all_seq2head(input):
 
 
 @dynamo.disable
-def all2all_head2seq(input):
+def all2all_head2seq(input, group=None):
     """
     将输入张量从 [seq_len, heads/N, hidden_dims] 转换为 [seq_len/N, heads, hidden_dims] 的格式。
 
@@ -59,7 +59,7 @@ def all2all_head2seq(input):
     assert input.dim() == 3, f"input must be 3D tensor"
 
     # 获取当前进程的世界大小
-    world_size = dist.get_world_size()
+    world_size = dist.get_world_size(group=group)
 
     # 获取输入张量的形状
     seq_len, shard_heads, hidden_dims = input.shape
@@ -78,7 +78,7 @@ def all2all_head2seq(input):
     output = torch.empty_like(input_t)
 
     # 执行 all-to-all 操作，将输入张量的内容分发到所有进程
-    dist.all_to_all_single(output, input_t)
+    dist.all_to_all_single(output, input_t, group=group)
 
     # 重塑输出张量为 [heads, shard_seq_len, hidden_dims] 形状
     output = output.reshape(heads, shard_seq_len, hidden_dims)

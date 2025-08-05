@@ -1,7 +1,6 @@
 import requests
 from loguru import logger
 
-
 response = requests.get("http://localhost:8000/v1/service/status")
 logger.info(response.json())
 

@@ -1,8 +1,9 @@
-import torch
-from .template import AttnWeightTemplate
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from loguru import logger
 import torch.nn as nn
+from loguru import logger
+
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
 
 try:
     from spas_sage_attn.autotune import SparseAttentionMeansim

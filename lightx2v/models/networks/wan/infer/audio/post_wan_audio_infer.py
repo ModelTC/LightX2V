@@ -1,7 +1,7 @@
 import math
+
 import torch
-import torch.cuda.amp as amp
-from loguru import logger
+
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 
 

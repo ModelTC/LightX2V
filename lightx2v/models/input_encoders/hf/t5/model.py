@@ -1,16 +1,16 @@
 # Modified from transformers.models.t5.modeling_t5
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-import logging
 import math
 import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
+
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, TorchaoQuantLinearInt8, VllmQuantLinearFp8, VllmQuantLinearInt8
 
 from .tokenizer import HuggingfaceTokenizer
-from loguru import logger
-from lightx2v.models.input_encoders.hf.q_linear import VllmQuantLinearInt8, VllmQuantLinearFp8, TorchaoQuantLinearInt8, Q8FQuantLinearInt8, Q8FQuantLinearFp8
-
 
 __all__ = [
     "T5Model",

@@ -27,11 +27,28 @@ We strongly recommend using the Docker environment, which is the simplest and fa
 
 #### 1. Pull Image
 
-Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags) and select a tag with the latest date, such as `25061301`:
+Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags) and select a tag with the latest date, such as `25080104`:
 
 ```bash
 # Pull the latest version of LightX2V image
-docker pull lightx2v/lightx2v:25061301
+docker pull lightx2v/lightx2v:25080104
+```
+
+If you need to use `SageAttention`, you can use docker image versions with the `-SageSmXX` suffix. The use of `SageAttention` requires selection based on GPU type, where:
+
+1. A100: -SageSm80
+2. RTX30 series: -SageSm86
+3. RTX40 series: -SageSm89
+4. H100: -SageSm90
+5. RTX50 series: -SageSm120
+
+For example, to use `SageAttention` on 4090 or H100, the docker image pull command would be:
+
+```bash
+# For 4090
+docker pull lightx2v/lightx2v:25080104-SageSm89
+# For H100
+docker pull lightx2v/lightx2v:25080104-SageSm90
 ```
 
 #### 2. Run Container
@@ -42,10 +59,20 @@ docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings
 
 #### 3. Domestic Mirror Source (Optional)
 
-For users in mainland China, if the network is unstable when pulling images, you can pull from [Duduniao](https://docker.aityp.com/r/docker.io/lightx2v/lightx2v):
+For users in mainland China, if the network is unstable when pulling images, you can pull from Aliyun:
 
 ```bash
-docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/lightx2v/lightx2v:25061301
+# Replace [tag] with the desired image tag to download
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:[tag]
+
+# For example, download 25080104
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080104
+
+# For example, download 25080104-SageSm89
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080104-SageSm89
+
+# For example, download 25080104-SageSm90
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080104-SageSm90
 ```
 
 ### 🐍 Conda Environment Setup

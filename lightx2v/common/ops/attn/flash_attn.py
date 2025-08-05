@@ -1,7 +1,7 @@
 from loguru import logger
 
 try:
-    import flash_attn
+    import flash_attn  # noqa: F401
     from flash_attn.flash_attn_interface import flash_attn_varlen_func
 except ImportError:
     logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
@@ -13,8 +13,9 @@ except ImportError:
     logger.info("flash_attn_varlen_func_v3 not found, please install flash_attn3 first")
     flash_attn_varlen_func_v3 = None
 
-from .template import AttnWeightTemplate
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
 
 
 @ATTN_WEIGHT_REGISTER("flash_attn2")
@@ -71,5 +72,5 @@ class FlashAttn3Weight(AttnWeightTemplate):
             cu_seqlens_kv,
             max_seqlen_q,
             max_seqlen_kv,
-        )[0].reshape(max_seqlen_q, -1)
+        ).reshape(max_seqlen_q, -1)
         return x

@@ -1,14 +1,16 @@
-import torch
 import os
+
+import torch
+from safetensors import safe_open
+
+from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
-    MM_WEIGHT_REGISTER,
+    ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
+    MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
     TENSOR_REGISTER,
-    ATTN_WEIGHT_REGISTER,
 )
-from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from safetensors import safe_open
 
 
 class WanTransformerWeights(WeightModule):
@@ -191,8 +193,8 @@ class WanSelfAttention(WeightModule):
         else:
             self.add_module("self_attn_1", ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]())
 
-        if self.config.get("parallel_attn_type", None):
-            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config["parallel_attn_type"]]())
+        if self.config["seq_parallel"]:
+            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config.parallel.get("seq_p_attn_type", "ulysses")]())
 
         if self.quant_method in ["advanced_ptq"]:
             self.add_module(

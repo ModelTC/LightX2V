@@ -1,7 +1,9 @@
 import torch
-from .template import AttnWeightTemplate
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from loguru import logger
+
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
 
 if torch.cuda.get_device_capability(0) == (8, 9):
     try:
@@ -50,7 +52,7 @@ class SageAttn2Weight(AttnWeightTemplate):
             )
             x = torch.cat((x1, x2), dim=1)
             x = x.view(max_seqlen_q, -1)
-        elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df"]:
+        elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df", "wan2.1_audio"]:
             x = sageattn(
                 q.unsqueeze(0),
                 k.unsqueeze(0),
@@ -58,4 +60,6 @@ class SageAttn2Weight(AttnWeightTemplate):
                 tensor_layout="NHD",
             )
             x = x.view(max_seqlen_q, -1)
+        else:
+            raise NotImplementedError(f"Model class '{model_cls}' is not implemented in this attention implementation")
         return x

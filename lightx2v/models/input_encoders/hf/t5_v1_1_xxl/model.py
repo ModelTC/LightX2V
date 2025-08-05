@@ -1,5 +1,6 @@
-import torch
 import os
+
+import torch
 from transformers import T5EncoderModel, T5Tokenizer
 
 

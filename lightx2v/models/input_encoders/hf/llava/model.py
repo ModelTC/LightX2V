@@ -1,9 +1,5 @@
 import torch
-from PIL import Image
-import numpy as np
-import torchvision.transforms as transforms
-from transformers import LlavaForConditionalGeneration, CLIPImageProcessor, AutoTokenizer
-from loguru import logger
+from transformers import AutoTokenizer, CLIPImageProcessor, LlavaForConditionalGeneration
 
 
 def generate_crop_size_list(base_size=256, patch_size=32, max_ratio=4.0):

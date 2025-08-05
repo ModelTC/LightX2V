@@ -21,15 +21,12 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-from einops import rearrange
-
-from diffusers.utils import logging
 from diffusers.models.activations import get_activation
-from diffusers.models.attention_processor import SpatialNorm
-from diffusers.models.attention_processor import Attention
-from diffusers.models.normalization import AdaGroupNorm
-from diffusers.models.normalization import RMSNorm
+from diffusers.models.attention_processor import Attention, SpatialNorm
+from diffusers.models.normalization import AdaGroupNorm, RMSNorm
+from diffusers.utils import logging
+from einops import rearrange
+from torch import nn
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 

@@ -1,9 +1,11 @@
-import math
+import gc
+from typing import List, Optional, Union
+
 import numpy as np
 import torch
-import gc
-from typing import List, Optional, Tuple, Union
+
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v.utils.utils import masks_like
 
 
 class WanScheduler(BaseScheduler):
@@ -19,10 +21,11 @@ class WanScheduler(BaseScheduler):
         self.solver_order = 2
         self.noise_pred = None
         self.sample_guide_scale = self.config.sample_guide_scale
-
         self.caching_records_2 = [True] * self.config.infer_steps
 
     def prepare(self, image_encoder_output=None):
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+            self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
         self.generator = torch.Generator(device=self.device)
         self.generator.manual_seed(self.config.seed)
 
@@ -57,6 +60,12 @@ class WanScheduler(BaseScheduler):
             device=self.device,
             generator=self.generator,
         )
+        if self.config["model_cls"] == "wan2.2":
+            if self.config["task"] == "t2v":
+                self.mask = masks_like(self.latents, zero=False)
+            elif self.config["task"] == "i2v":
+                self.mask = masks_like(self.latents, zero=True)
+                self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents
 
     def set_timesteps(
         self,
@@ -354,3 +363,5 @@ class WanScheduler(BaseScheduler):
             self.lower_order_nums += 1
 
         self.latents = prev_sample
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+            self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents

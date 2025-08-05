@@ -1,5 +1,6 @@
-from lightx2v.utils.profiler import ProfilingContext4Debug
 from loguru import logger
+
+from lightx2v.utils.profiler import ProfilingContext4Debug
 
 
 class GraphRunner:

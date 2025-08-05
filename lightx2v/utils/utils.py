@@ -1,13 +1,14 @@
+import glob
 import os
 import random
 import subprocess
-import glob
+from typing import Optional
+
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
 import torchvision
-from typing import Optional
 from einops import rearrange
 from loguru import logger
 
@@ -322,3 +323,43 @@ def find_gguf_model_path(config, ckpt_config_key=None, subdir=None):
                 return gguf_file_path
 
     raise FileNotFoundError(f"No GGUF model files (.gguf) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
+
+
+def masks_like(tensor, zero=False, generator=None, p=0.2):
+    assert isinstance(tensor, torch.Tensor)
+    out = torch.ones_like(tensor)
+    if zero:
+        if generator is not None:
+            # 生成随机数判断是否需要修改
+            random_num = torch.rand(1, generator=generator, device=generator.device).item()
+            if random_num < p:
+                out[:, 0] = torch.zeros_like(out[:, 0])
+        else:
+            out[:, 0] = torch.zeros_like(out[:, 0])
+
+    return out
+
+
+def best_output_size(w, h, dw, dh, expected_area):
+    # float output size
+    ratio = w / h
+    ow = (expected_area * ratio) ** 0.5
+    oh = expected_area / ow
+
+    # process width first
+    ow1 = int(ow // dw * dw)
+    oh1 = int(expected_area / ow1 // dh * dh)
+    assert ow1 % dw == 0 and oh1 % dh == 0 and ow1 * oh1 <= expected_area
+    ratio1 = ow1 / oh1
+
+    # process height first
+    oh2 = int(oh // dh * dh)
+    ow2 = int(expected_area / oh2 // dw * dw)
+    assert oh2 % dh == 0 and ow2 % dw == 0 and ow2 * oh2 <= expected_area
+    ratio2 = ow2 / oh2
+
+    # compare ratios
+    if max(ratio / ratio1, ratio1 / ratio) < max(ratio / ratio2, ratio2 / ratio):
+        return ow1, oh1
+    else:
+        return ow2, oh2

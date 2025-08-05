@@ -16,12 +16,11 @@
 # Modified from diffusers==0.29.2
 #
 # ==============================================================================
-from typing import Dict, Optional, Tuple, Union
 from dataclasses import dataclass
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 
 try:
@@ -30,7 +29,6 @@ try:
 except ImportError:
     # Use this to be compatible with the original diffusers.
     from diffusers.loaders.single_file_model import FromOriginalModelMixin as FromOriginalVAEMixin
-from diffusers.utils.accelerate_utils import apply_forward_hook
 from diffusers.models.attention_processor import (
     ADDED_KV_ATTENTION_PROCESSORS,
     CROSS_ATTENTION_PROCESSORS,
@@ -41,7 +39,9 @@ from diffusers.models.attention_processor import (
 )
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
-from .vae import DecoderCausal3D, BaseOutput, DecoderOutput, DiagonalGaussianDistribution, EncoderCausal3D
+from diffusers.utils.accelerate_utils import apply_forward_hook
+
+from .vae import BaseOutput, DecoderCausal3D, DecoderOutput, DiagonalGaussianDistribution, EncoderCausal3D
 
 
 @dataclass

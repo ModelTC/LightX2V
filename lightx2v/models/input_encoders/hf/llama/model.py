@@ -1,6 +1,6 @@
 import torch
-from transformers import AutoModel, AutoTokenizer
 from loguru import logger
+from transformers import AutoModel, AutoTokenizer
 
 
 class TextEncoderHFLlamaModel:

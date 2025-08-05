@@ -1,19 +1,19 @@
 import os
+
 import numpy as np
 import torch
 import torchvision
-from PIL import Image
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.hunyuan.scheduler import HunyuanScheduler
-from lightx2v.models.schedulers.hunyuan.feature_caching.scheduler import HunyuanSchedulerTaylorCaching, HunyuanSchedulerTeaCaching, HunyuanSchedulerAdaCaching, HunyuanSchedulerCustomCaching
-from lightx2v.models.input_encoders.hf.llama.model import TextEncoderHFLlamaModel
+
 from lightx2v.models.input_encoders.hf.clip.model import TextEncoderHFClipModel
+from lightx2v.models.input_encoders.hf.llama.model import TextEncoderHFLlamaModel
 from lightx2v.models.input_encoders.hf.llava.model import TextEncoderHFLlavaModel
 from lightx2v.models.networks.hunyuan.model import HunyuanModel
+from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.schedulers.hunyuan.feature_caching.scheduler import HunyuanSchedulerAdaCaching, HunyuanSchedulerCustomCaching, HunyuanSchedulerTaylorCaching, HunyuanSchedulerTeaCaching
+from lightx2v.models.schedulers.hunyuan.scheduler import HunyuanScheduler
 from lightx2v.models.video_encoders.hf.autoencoder_kl_causal_3d.model import VideoEncoderKLCausal3DModel
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_videos_grid
-from lightx2v.utils.profiler import ProfilingContext
 
 
 @RUNNER_REGISTER("hunyuan")
@@ -137,8 +137,8 @@ class HunyuanRunner(DefaultRunner):
 
         return img_latents, kwargs
 
-    def get_encoder_output_i2v(self, clip_encoder_out, vae_encode_out, text_encoder_output, img):
-        image_encoder_output = {"img": img, "img_latents": vae_encode_out}
+    def get_encoder_output_i2v(self, clip_encoder_out, vae_encoder_out, text_encoder_output, img):
+        image_encoder_output = {"img": img, "img_latents": vae_encoder_out}
         return {"text_encoder_output": text_encoder_output, "image_encoder_output": image_encoder_output}
 
     def set_target_shape(self):

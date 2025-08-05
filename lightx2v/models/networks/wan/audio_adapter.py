@@ -3,17 +3,15 @@ try:
 except ModuleNotFoundError:
     flash_attn = None
 import math
+import os
+
+import safetensors
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from einops import rearrange
 from transformers import AutoModel
-from loguru import logger
-
-import os
-import safetensors
-from typing import List, Optional, Tuple, Union
 
 
 def load_safetensors(in_path: str):
@@ -370,13 +368,12 @@ class AudioAdapter(nn.Module):
 
 class AudioAdapterPipe:
     def __init__(
-        self, audio_adapter: AudioAdapter, audio_encoder_repo: str = "microsoft/wavlm-base-plus", dtype=torch.float32, device="cuda", generator=None, tgt_fps: int = 15, weight: float = 1.0
+        self, audio_adapter: AudioAdapter, audio_encoder_repo: str = "microsoft/wavlm-base-plus", dtype=torch.float32, device="cuda", tgt_fps: int = 15, weight: float = 1.0, cpu_offload: bool = False
     ) -> None:
         self.audio_adapter = audio_adapter
         self.dtype = dtype
-        self.device = device
-        self.generator = generator
         self.audio_encoder_dtype = torch.float16
+        self.cpu_offload = cpu_offload
         ##音频编码器
         self.audio_encoder = AutoModel.from_pretrained(audio_encoder_repo)
 
@@ -403,11 +400,14 @@ class AudioAdapterPipe:
         audio_length = int(50 / self.tgt_fps * video_frame)
 
         with torch.no_grad():
-            audio_input_feat = audio_input_feat.to(self.device, self.audio_encoder_dtype)
             try:
-                audio_feat = self.audio_encoder(audio_input_feat, return_dict=True).last_hidden_state
+                if self.cpu_offload:
+                    self.audio_encoder = self.audio_encoder.to("cuda")
+                audio_feat = self.audio_encoder(audio_input_feat.to(self.audio_encoder_dtype), return_dict=True).last_hidden_state
+                if self.cpu_offload:
+                    self.audio_encoder = self.audio_encoder.to("cpu")
             except Exception as err:
-                audio_feat = torch.rand(1, audio_length, self.audio_feature_dim).to(self.device)
+                audio_feat = torch.rand(1, audio_length, self.audio_feature_dim).to("cuda")
                 print(err)
             audio_feat = audio_feat.to(self.dtype)
             if dropout_cond is not None:

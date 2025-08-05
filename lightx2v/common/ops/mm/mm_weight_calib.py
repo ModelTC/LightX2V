@@ -1,7 +1,9 @@
 import torch
-from .mm_weight import MMWeight
+
+from lightx2v.utils.quant_utils import FloatQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
-from lightx2v.utils.quant_utils import IntegerQuantizer, FloatQuantizer
+
+from .mm_weight import MMWeight
 
 
 @MM_WEIGHT_REGISTER("Calib")

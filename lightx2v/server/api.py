@@ -1,20 +1,22 @@
 import asyncio
-from fastapi import FastAPI, UploadFile, HTTPException, Form, File, APIRouter
+import gc
+import threading
+import uuid
+from pathlib import Path
+from typing import Optional
+
+import torch
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from loguru import logger
-import threading
-import gc
-import torch
-from pathlib import Path
-import uuid
-from typing import Optional
+
 from .schema import (
-    TaskRequest,
-    TaskResponse,
     ServiceStatusResponse,
     StopTaskResponse,
+    TaskRequest,
+    TaskResponse,
 )
-from .service import FileService, DistributedInferenceService, VideoGenerationService
+from .service import DistributedInferenceService, FileService, VideoGenerationService
 from .utils import ServiceStatus
 
 

@@ -1,18 +1,17 @@
 # 并行推理
 
-LightX2V 支持分布式并行推理，能够利用多个 GPU 进行推理。DiT部分支持两种并行注意力机制：**Ulysses** 和 **Ring**，同时还支持 **VAE 并行推理**。并行推理，显著降低推理耗时和减轻每个GPU的显存开销。
+LightX2V 支持分布式并行推理，能够利用多个 GPU 进行推理。DiT部分支持两种并行注意力机制：**Ulysses** 和 **Ring**，同时还支持 **Cfg 并行推理**。并行推理，显著降低推理耗时和减轻每个GPU的显存开销。
 
 ## DiT 并行配置
-
-DiT 并行是通过 `parallel_attn_type` 参数控制的,支持两种并行注意力机制：
 
 ### 1. Ulysses 并行
 
 **配置方式：**
 ```json
-{
-    "parallel_attn_type": "ulysses"
-}
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses"
+    }
 ```
 
 ### 2. Ring 并行
@@ -20,30 +19,31 @@ DiT 并行是通过 `parallel_attn_type` 参数控制的,支持两种并行注�
 
 **配置方式：**
 ```json
-{
-    "parallel_attn_type": "ring"
-}
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ring"
+    }
 ```
 
+## Cfg 并行配置
 
-## VAE 并行配置
-
-VAE 并行是通过 `parallel_vae` 参数控制：
-
+**配置方式：**
 ```json
-{
-    "parallel_vae": true
-}
+    "parallel": {
+        "cfg_p_size": 2
+    }
 ```
 
-**配置说明：**
-- `parallel_vae: true`：启用 VAE 并行推理（推荐设置）
-- `parallel_vae: false`：禁用 VAE 并行，使用单 GPU 处理
+## 混合并行配置
 
-**使用建议：**
-- 在多 GPU 环境下，建议始终启用 VAE 并行
-- VAE 并行可与任何注意力并行方式（Ulysses/Ring）组合使用
-- 对于内存受限的场景，VAE 并行可显著减少内存使用
+**配置方式：**
+```json
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses",
+        "cfg_p_size": 2
+    }
+```
 
 
 ## 使用方式
