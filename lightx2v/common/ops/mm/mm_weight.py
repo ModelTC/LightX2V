@@ -30,6 +30,11 @@ try:
 except ModuleNotFoundError:
     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
+try:
+    import gguf
+except ImportError:
+    gguf = None
+
 
 class MMWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
@@ -657,6 +662,23 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             output_tensor = output_tensor + self.bias
 
         return output_tensor
+
+
+class MMWeightGGUFTemplate(MMWeightQuantTemplate):
+    TORCH_COMPATIBLE_QTYPES = (None, gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16)
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+
+    def dequantize_func(self):
+        # TODO: implement dequantize_func
+        pass
+
+
+@MM_WEIGHT_REGISTER("W-gguf-Q4_K_S")
+class MMWeightGGUFTemplate(MMWeightGGUFTemplate):
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
 
 
 if __name__ == "__main__":

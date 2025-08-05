@@ -54,3 +54,24 @@ class WanStepDistillScheduler(WanScheduler):
             sigma = self.sigmas[self.step_index + 1].item()
             noisy_image_or_video = self.add_noise(noisy_image_or_video, torch.randn_like(noisy_image_or_video), self.sigmas[self.step_index + 1].item())
         self.latents = noisy_image_or_video.to(self.latents.dtype)
+
+
+class Wan22StepDistillScheduler(WanStepDistillScheduler):
+    def __init__(self, config):
+        super().__init__(config)
+        self.boundary_step_index = config.boundary_step_index
+
+    def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
+        super().set_denoising_timesteps(device)
+        self.sigma_boundary = self.sigmas[self.boundary_step_index].item()
+
+    def step_post(self):
+        flow_pred = self.noise_pred.to(torch.float32)
+        sigma = self.sigmas[self.step_index].item()
+        noisy_image_or_video = self.latents.to(torch.float32) - sigma * flow_pred
+        if self.step_index < self.boundary_step_index:
+            noisy_image_or_video = noisy_image_or_video / self.sigma_boundary
+        if self.step_index < self.infer_steps - 1:
+            sigma = self.sigmas[self.step_index + 1].item()
+            noisy_image_or_video = self.add_noise(noisy_image_or_video, torch.randn_like(noisy_image_or_video), self.sigmas[self.step_index + 1].item())
+        self.latents = noisy_image_or_video.to(self.latents.dtype)

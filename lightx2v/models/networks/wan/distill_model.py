@@ -4,7 +4,7 @@ import torch
 import glob
 import json
 from safetensors import safe_open
-from lightx2v.models.networks.wan.model import WanModel
+from lightx2v.models.networks.wan.model import WanModel, Wan22MoeModel
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
@@ -23,14 +23,27 @@ class WanDistillModel(WanModel):
         super().__init__(model_path, config, device)
 
     def _load_ckpt(self, use_bf16, skip_bf16):
-        # For the old t2v distill model: https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill
-        ckpt_path = os.path.join(self.model_path, "distill_model.pt")
+        if self.config.get("enable_dynamic_cfg", False):
+            ckpt_path = os.path.join(self.model_path, "distill_cfg_models", "distill_model.safetensors")
+        else:
+            ckpt_path = os.path.join(self.model_path, "distill_models", "distill_model.safetensors")
         if os.path.exists(ckpt_path):
             logger.info(f"Loading weights from {ckpt_path}")
-            weight_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-            weight_dict = {
-                key: (weight_dict[key].to(torch.bfloat16) if use_bf16 or all(s not in key for s in skip_bf16) else weight_dict[key]).pin_memory().to(self.device) for key in weight_dict.keys()
-            }
-            return weight_dict
+            return self._load_safetensor_to_dict(ckpt_path, use_bf16, skip_bf16)
 
         return super()._load_ckpt(use_bf16, skip_bf16)
+
+
+class Wan22MoeDistillModel(WanDistillModel, Wan22MoeModel):
+    def __init__(self, model_path, config, device):
+        WanDistillModel.__init__(self, model_path, config, device)
+
+    def _load_ckpt(self, use_bf16, skip_bf16):
+        ckpt_path = os.path.join(self.model_path, "distill_model.safetensors")
+        if os.path.exists(ckpt_path):
+            logger.info(f"Loading weights from {ckpt_path}")
+            return self._load_safetensor_to_dict(ckpt_path, use_bf16, skip_bf16)
+
+    @torch.no_grad()
+    def infer(self, inputs):
+        return Wan22MoeModel.infer(self, inputs)

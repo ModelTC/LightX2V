@@ -41,6 +41,7 @@ def main():
             "wan2.1_skyreels_v2_df",
             "wan2.1_audio",
             "wan2.2_moe",
+            "wan2.2_moe_distill",
         ],
         default="wan2.1",
     )

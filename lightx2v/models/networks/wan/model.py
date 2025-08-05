@@ -162,6 +162,7 @@ class WanModel:
         logger.info(f"Loading gguf-quant dit model from {gguf_path}")
         reader = gguf.GGUFReader(gguf_path)
         for tensor in reader.tensors:
+            # TODO: implement _load_gguf_ckpt
             pass
 
     def _init_weights(self, weight_dict=None):
