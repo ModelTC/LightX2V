@@ -94,9 +94,9 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 if lora_config.get("name", "") == "high_noise_model":
                     lora_path = lora_config["path"]
                     strength = lora_config.get("strength", 1.0)
-                lora_name = high_lora_wrapper.load_lora(lora_path)
-                high_lora_wrapper.apply_lora(lora_name, strength)
-                logger.info(f"High noise model loaded LoRA: {lora_name} with strength: {strength}")
+                    lora_name = high_lora_wrapper.load_lora(lora_path)
+                    high_lora_wrapper.apply_lora(lora_name, strength)
+                    logger.info(f"High noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
             high_noise_model = Wan22MoeDistillModel(
                 os.path.join(self.config.model_path, "distill_models", "high_noise_model"),
@@ -115,9 +115,9 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 if lora_config.get("name", "") == "low_noise_model":
                     lora_path = lora_config["path"]
                     strength = lora_config.get("strength", 1.0)
-                lora_name = low_lora_wrapper.load_lora(lora_path)
-                low_lora_wrapper.apply_lora(lora_name, strength)
-                logger.info(f"Low noise model loaded LoRA: {lora_name} with strength: {strength}")
+                    lora_name = low_lora_wrapper.load_lora(lora_path)
+                    low_lora_wrapper.apply_lora(lora_name, strength)
+                    logger.info(f"Low noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
             low_noise_model = Wan22MoeDistillModel(
                 os.path.join(self.config.model_path, "distill_models", "low_noise_model"),

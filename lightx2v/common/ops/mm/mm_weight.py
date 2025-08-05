@@ -677,8 +677,8 @@ class MMWeightGGUFTemplate(MMWeightQuantTemplate):
         pass
 
 
-@MM_WEIGHT_REGISTER("W-gguf-Q4_K_S")
-class MMWeightGGUFTemplate(MMWeightGGUFTemplate):
+@MM_WEIGHT_REGISTER("W-gguf-Q4_K")
+class MMWeightGGUFQ4K(MMWeightGGUFTemplate):
     def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
         super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
 

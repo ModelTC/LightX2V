@@ -56,7 +56,8 @@ class WanModel:
             if dit_quant_scheme == "gguf":
                 self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
                 self.config.use_gguf = True
-            self.dit_quantized_ckpt = find_hf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
+            else:
+                self.dit_quantized_ckpt = find_hf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
             quant_config_path = os.path.join(self.dit_quantized_ckpt, "config.json")
             if os.path.exists(quant_config_path):
                 with open(quant_config_path, "r") as f:
@@ -185,7 +186,7 @@ class WanModel:
         if weight_dict is None:
             if not self.dit_quantized or self.weight_auto_quant:
                 self.original_weight_dict = self._load_ckpt(use_bf16, skip_bf16)
-            elif self.get("use_gguf", False):
+            elif self.config.get("use_gguf", False):
                 self.original_weight_dict = self._load_gguf_ckpt()
             else:
                 if not self.config.get("lazy_load", False):
