@@ -2,7 +2,8 @@ import os
 
 import torch
 from loguru import logger
-from lightx2v.models.networks.wan.model import WanModel, Wan22MoeModel
+
+from lightx2v.models.networks.wan.model import Wan22MoeModel, WanModel
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
