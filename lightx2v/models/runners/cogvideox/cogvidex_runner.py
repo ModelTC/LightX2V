@@ -1,14 +1,12 @@
-from diffusers.utils import export_to_video
 import imageio
 import numpy as np
 
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.models.input_encoders.hf.t5_v1_1_xxl.model import T5EncoderModel_v1_1_xxl
 from lightx2v.models.networks.cogvideox.model import CogvideoxModel
-from lightx2v.models.video_encoders.hf.cogvideox.model import CogvideoxVAE
+from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.cogvideox.scheduler import CogvideoxXDPMScheduler
+from lightx2v.models.video_encoders.hf.cogvideox.model import CogvideoxVAE
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
 @RUNNER_REGISTER("cogvideox")
@@ -49,7 +47,7 @@ class CogvideoxRunner(DefaultRunner):
         # TODO: implement vae encoder for Cogvideox
         raise NotImplementedError("I2V inference is not implemented for Cogvideox.")
 
-    def get_encoder_output_i2v(self, clip_encoder_out, vae_encode_out, text_encoder_output, img):
+    def get_encoder_output_i2v(self, clip_encoder_out, vae_encoder_out, text_encoder_output, img):
         # TODO: Implement image encoder for Cogvideox-I2V
         raise ValueError(f"Unsupported model class: {self.config['model_cls']}")
 

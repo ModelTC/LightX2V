@@ -1,5 +1,7 @@
 import math
+
 import torch
+
 from lightx2v.utils.envs import *
 
 
@@ -12,6 +14,7 @@ class WanPostInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, x, e, grid_sizes):
         if e.dim() == 2:
             modulation = weights.head_modulation.tensor  # 1, 2, dim
@@ -25,7 +28,7 @@ class WanPostInfer:
 
         if GET_DTYPE() != "BF16":
             x = x.float()
-        x.mul_(1 + e[1].squeeze(0)).add_(e[0].squeeze(0))
+        x.mul_(1 + e[1].squeeze()).add_(e[0].squeeze())
         if GET_DTYPE() != "BF16":
             x = x.to(torch.bfloat16)
 

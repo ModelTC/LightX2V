@@ -1,15 +1,16 @@
-import sys
-import psutil
-import signal
 import base64
+import io
+import signal
+import sys
+import threading
+from datetime import datetime
+from typing import Optional
+
+import psutil
+import torch
 from PIL import Image
 from loguru import logger
-from typing import Optional
-from datetime import datetime
 from pydantic import BaseModel
-import threading
-import torch
-import io
 
 
 class ProcessManager:

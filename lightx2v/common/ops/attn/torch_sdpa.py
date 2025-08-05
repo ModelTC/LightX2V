@@ -1,7 +1,9 @@
 import torch
 import torch.nn.functional as F
-from .template import AttnWeightTemplate
+
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
 
 
 @ATTN_WEIGHT_REGISTER("torch_sdpa")

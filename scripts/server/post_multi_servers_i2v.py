@@ -1,7 +1,6 @@
 from loguru import logger
 from post_multi_servers import get_available_urls, process_tasks_async
 
-
 if __name__ == "__main__":
     urls = [f"http://localhost:{port}" for port in range(8000, 8008)]
     img_prompts = {

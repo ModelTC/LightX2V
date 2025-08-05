@@ -1,16 +1,16 @@
 import gc
 
-from PIL import Image
-from loguru import logger
 import requests
-from requests.exceptions import RequestException
 import torch
 import torch.distributed as dist
+from PIL import Image
+from loguru import logger
+from requests.exceptions import RequestException
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
-from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import cache_video, save_to_video, vae_to_comfyui_image
 
 from .base_runner import BaseRunner
 
@@ -43,7 +43,7 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_t2v
 
     def set_init_device(self):
-        if self.config.parallel_attn_type:
+        if self.config.parallel:
             cur_rank = dist.get_rank()
             torch.cuda.set_device(cur_rank)
         if self.config.cpu_offload:
@@ -107,8 +107,9 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    def run(self):
-        total_steps = self.model.scheduler.infer_steps
+    def run(self, total_steps=None):
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
         for step_index in range(total_steps):
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
@@ -126,13 +127,10 @@ class DefaultRunner(BaseRunner):
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
-    def run_step(self, step_index=0):
-        self.init_scheduler()
+    def run_step(self):
         self.inputs = self.run_input_encoder()
-        self.model.scheduler.prepare(self.inputs["image_encoder_output"])
-        self.model.scheduler.step_pre(step_index=step_index)
-        self.model.infer(self.inputs)
-        self.model.scheduler.step_post()
+        self.set_target_shape()
+        self.run_dit(total_steps=1)
 
     def end_run(self):
         self.model.scheduler.clear()
@@ -171,12 +169,14 @@ class DefaultRunner(BaseRunner):
         }
 
     @ProfilingContext("Run DiT")
-    def _run_dit_local(self):
+    def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
         self.init_scheduler()
         self.model.scheduler.prepare(self.inputs["image_encoder_output"])
-        latents, generator = self.run()
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+            self.inputs["image_encoder_output"]["vae_encoder_out"] = None
+        latents, generator = self.run(total_steps)
         self.end_run()
         return latents, generator
 
@@ -212,13 +212,12 @@ class DefaultRunner(BaseRunner):
             self.config["prompt_enhanced"] = self.post_prompt_enhancer()
 
         self.inputs = self.run_input_encoder()
-
         self.set_target_shape()
-
         latents, generator = self.run_dit()
 
         images = self.run_vae_decoder(latents, generator)
-        images = vae_to_comfyui_image(images)
+        if self.config["model_cls"] != "wan2.2":
+            images = vae_to_comfyui_image(images)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
@@ -236,9 +235,13 @@ class DefaultRunner(BaseRunner):
             else:
                 fps = self.config.get("fps", 16)
 
-            if not self.config.get("parallel_attn_type", None) or dist.get_rank() == 0:
+            if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"Saving video to {self.config.save_video_path}")
-                save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
+
+                if self.config["model_cls"] != "wan2.2":
+                    save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
+                else:
+                    cache_video(tensor=images, save_file=self.config.save_video_path, fps=fps, nrow=1, normalize=True, value_range=(-1, 1))
 
         del latents, generator
         torch.cuda.empty_cache()

@@ -4,10 +4,10 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-
+from diffusers.models.attention_processor import SpatialNorm
 from diffusers.utils import BaseOutput, is_torch_version
 from diffusers.utils.torch_utils import randn_tensor
-from diffusers.models.attention_processor import SpatialNorm
+
 from .unet_causal_3d_blocks import (
     CausalConv3d,
     UNetMidBlockCausal3D,

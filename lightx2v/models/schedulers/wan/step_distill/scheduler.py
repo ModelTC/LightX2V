@@ -1,7 +1,8 @@
 import math
-import numpy as np
+from typing import Union
+
 import torch
-from typing import List, Optional, Tuple, Union
+
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 
 
@@ -52,7 +53,8 @@ class WanStepDistillScheduler(WanScheduler):
         noisy_image_or_video = self.latents.to(torch.float32) - sigma * flow_pred
         if self.step_index < self.infer_steps - 1:
             sigma = self.sigmas[self.step_index + 1].item()
-            noisy_image_or_video = self.add_noise(noisy_image_or_video, torch.randn_like(noisy_image_or_video), self.sigmas[self.step_index + 1].item())
+            noise = torch.randn(noisy_image_or_video.shape, dtype=torch.float32, device=self.device, generator=self.generator)
+            noisy_image_or_video = self.add_noise(noisy_image_or_video, noise=noise, sigma=self.sigmas[self.step_index + 1].item())
         self.latents = noisy_image_or_video.to(self.latents.dtype)
 
 

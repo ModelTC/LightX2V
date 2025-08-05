@@ -1,17 +1,16 @@
 # Modified from ``https://github.com/openai/CLIP'' and ``https://github.com/mlfoundations/open_clip''
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-import logging
 import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
+from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from loguru import logger
-from lightx2v.models.input_encoders.hf.q_linear import VllmQuantLinearInt8, VllmQuantLinearFp8, TorchaoQuantLinearInt8, Q8FQuantLinearInt8, Q8FQuantLinearFp8
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, TorchaoQuantLinearInt8, VllmQuantLinearFp8, VllmQuantLinearInt8
 
 __all__ = [
     "XLMRobertaCLIP",

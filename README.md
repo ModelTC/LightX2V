@@ -1,5 +1,5 @@
 <div align="center" style="font-family: charter;">
-  <h1>⚡️ LightX2V:<br> Lightweight Video Generation Inference Framework</h1>
+  <h1>⚡️ LightX2V:<br> Light Video Generation Inference Framework</h1>
 
 <img alt="logo" src="assets/img_lightx2v.png" width=75%></img>
 

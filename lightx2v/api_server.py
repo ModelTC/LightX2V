@@ -1,14 +1,14 @@
 import argparse
-import sys
-import signal
 import atexit
+import signal
+import sys
 from pathlib import Path
-from loguru import logger
+
 import uvicorn
+from loguru import logger
 
 from lightx2v.server.api import ApiServer
 from lightx2v.server.service import DistributedInferenceService
-from lightx2v.server.utils import ProcessManager
 
 
 def create_signal_handler(inference_service: DistributedInferenceService):

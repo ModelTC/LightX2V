@@ -1,6 +1,6 @@
 import torch
-from transformers import CLIPTextModel, AutoTokenizer
 from loguru import logger
+from transformers import AutoTokenizer, CLIPTextModel
 
 
 class TextEncoderHFClipModel:

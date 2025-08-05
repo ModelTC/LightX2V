@@ -2,10 +2,9 @@
 import logging
 
 import torch
-import torch.cuda.amp as amp
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
 from einops import rearrange
 from loguru import logger
 
@@ -852,13 +851,20 @@ class WanVAE:
             .to(device)
         )
 
+    def current_device(self):
+        return next(self.model.parameters()).device
+
     def to_cpu(self):
+        self.model.encoder = self.model.encoder.to("cpu")
+        self.model.decoder = self.model.decoder.to("cpu")
         self.model = self.model.to("cpu")
         self.mean = self.mean.cpu()
         self.inv_std = self.inv_std.cpu()
         self.scale = [self.mean, self.inv_std]
 
     def to_cuda(self):
+        self.model.encoder = self.model.encoder.to("cuda")
+        self.model.decoder = self.model.decoder.to("cuda")
         self.model = self.model.to("cuda")
         self.mean = self.mean.cuda()
         self.inv_std = self.inv_std.cuda()
@@ -872,9 +878,9 @@ class WanVAE:
             self.to_cuda()
 
         if self.use_tiling:
-            out = [self.model.tiled_encode(u.unsqueeze(0), self.scale).float().squeeze(0) for u in videos]
+            out = [self.model.tiled_encode(u.unsqueeze(0).to(self.current_device()), self.scale).float().squeeze(0) for u in videos]
         else:
-            out = [self.model.encode(u.unsqueeze(0), self.scale).float().squeeze(0) for u in videos]
+            out = [self.model.encode(u.unsqueeze(0).to(self.current_device()), self.scale).float().squeeze(0) for u in videos]
 
         if hasattr(args, "cpu_offload") and args.cpu_offload:
             self.to_cpu()

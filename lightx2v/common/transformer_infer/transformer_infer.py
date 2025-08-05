@@ -1,6 +1,5 @@
-from abc import ABC, abstractmethod
-import torch
 import math
+from abc import ABC, abstractmethod
 
 
 class BaseTransformerInfer(ABC):

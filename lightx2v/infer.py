@@ -1,38 +1,31 @@
 import argparse
-import torch
+
 import torch.distributed as dist
-import json
-
-from lightx2v.utils.envs import *
-from lightx2v.utils.utils import seed_all
-from lightx2v.utils.profiler import ProfilingContext
-from lightx2v.utils.set_config import set_config
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-
-from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner
-from lightx2v.models.runners.wan.wan_runner import WanRunner, Wan22MoeRunner
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner
-from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner
-from lightx2v.models.runners.wan.wan_audio_runner import WanAudioRunner
-from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner
-from lightx2v.models.runners.graph_runner import GraphRunner
-from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner
+from loguru import logger
 
 from lightx2v.common.ops import *
-from loguru import logger
+from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner  # noqa: F401
+from lightx2v.models.runners.graph_runner import GraphRunner
+from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_audio_runner import Wan22MoeAudioRunner, WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
+from lightx2v.utils.envs import *
+from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.set_config import print_config, set_config
+from lightx2v.utils.utils import seed_all
 
 
 def init_runner(config):
     seed_all(config.seed)
 
-    if config.parallel_attn_type:
-        if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
-
     if CHECK_ENABLE_GRAPH_MODE():
         default_runner = RUNNER_REGISTER[config.model_cls](config)
+        default_runner.init_modules()
         runner = GraphRunner(default_runner)
-        runner.runner.init_modules()
     else:
         runner = RUNNER_REGISTER[config.model_cls](config)
         runner.init_modules()
@@ -45,7 +38,7 @@ def main():
         "--model_cls",
         type=str,
         required=True,
-        choices=["wan2.1", "hunyuan", "wan2.1_distill", "wan2.1_causvid", "wan2.1_skyreels_v2_df", "cogvideox", "wan2.1_audio", "wan2.2_moe", "wan2.2_moe_distill"],
+        choices=["wan2.1", "hunyuan", "wan2.1_distill", "wan2.1_causvid", "wan2.1_skyreels_v2_df", "cogvideox", "wan2.1_audio", "wan2.2_moe", "wan2.2_moe_audio", "wan2.2", "wan2.2_moe_distill"],
         default="wan2.1",
     )
 
@@ -67,7 +60,7 @@ def main():
 
     with ProfilingContext("Total Cost"):
         config = set_config(args)
-        logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
+        print_config(config)
         runner = init_runner(config)
 
         runner.run_pipeline()

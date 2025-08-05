@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
-from ..tae import TAEHV
+
 from lightx2v.utils.memory_profiler import peak_memory_decorator
+
+from ..tae import TAEHV
 
 
 class DotDict(dict):

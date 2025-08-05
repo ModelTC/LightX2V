@@ -1,6 +1,6 @@
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, LN_WEIGHT_REGISTER
 from lightx2v.common.ops.mm.mm_weight import MMWeightTemplate
 from lightx2v.common.ops.norm.layer_norm_weight import LNWeightTemplate
+from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
 
 
 class CogvideoxTransformerWeights:

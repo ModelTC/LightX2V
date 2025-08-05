@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
-import os
-import sys
-import requests
-import zipfile
-import shutil
 import argparse
+import os
+import shutil
+import sys
+import zipfile
 from pathlib import Path
+
+import requests
 
 
 def get_base_dir():

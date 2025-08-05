@@ -1,12 +1,32 @@
 [tool.ruff]
-exclude = [".git", ".mypy_cache", ".ruff_cache", ".venv", "dist"]
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "dist",
+    "build",
+    "__pycache__",
+    "*.egg-info",
+    ".pytest_cache",
+    ".cluade",
+    ".cursor",
+    "lightx2v_kernel",
+]
 target-version = "py311"
 line-length = 200
 indent-width = 4
-lint.ignore =["F"]
 
 
-[tool.ruff.format]
-line-ending = "lf"
-quote-style = "double"
-indent-style = "space"
+[tool.ruff.lint]
+extend-select = ["I", "F401"]
+ignore = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+"**/lightx2v_kernel/*" = ["F401"]
+"**/{cookbook,docs}/*" = ["E402", "F401", "F811", "F841"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lightx2v"]
+case-sensitive = true

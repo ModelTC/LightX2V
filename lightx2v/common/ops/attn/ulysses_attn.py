@@ -1,8 +1,10 @@
 import torch
-from .template import AttnWeightTemplate
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 import torch.distributed as dist
-from .utils.all2all import all2all_seq2head, all2all_head2seq
+
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
+from .utils.all2all import all2all_head2seq, all2all_seq2head
 
 
 @ATTN_WEIGHT_REGISTER("ulysses")
@@ -10,7 +12,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(self, q, k, v, img_qkv_len, cu_seqlens_qkv, attention_module=None):
+    def apply(self, q, k, v, img_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 
@@ -26,8 +28,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             torch.Tensor: 计算得到的注意力结果
         """
         # 获取当前进程的排名和全局进程数
-        cur_rank = dist.get_rank()
-        world_size = dist.get_world_size()
+        world_size = dist.get_world_size(seq_p_group)
+        cur_rank = dist.get_rank(seq_p_group)
 
         # 获取序列长度和文本相关的长度
         seq_len = q.shape[0]
@@ -48,9 +50,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         txt_q, txt_k, txt_v = q[img_qkv_len:, :, :].contiguous(), k[img_qkv_len:, :, :].contiguous(), v[img_qkv_len:, :, :].contiguous()
 
         # 将图像的查询、键和值转换为头的格式
-        img_q = all2all_seq2head(img_q)
-        img_k = all2all_seq2head(img_k)
-        img_v = all2all_seq2head(img_v)
+        img_q = all2all_seq2head(img_q, group=seq_p_group)
+        img_k = all2all_seq2head(img_k, group=seq_p_group)
+        img_v = all2all_seq2head(img_v, group=seq_p_group)
         torch.cuda.synchronize()  # 确保CUDA操作完成
 
         # 处理文本的查询、键和值，选择当前进程的头
@@ -82,11 +84,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
 
         # 收集所有进程的文本注意力结果
         gathered_txt_attn = [torch.empty_like(txt_attn) for _ in range(world_size)]
-        dist.all_gather(gathered_txt_attn, txt_attn)
+        dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)
 
         # 处理图像注意力结果
         img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
-        img_attn = all2all_head2seq(img_attn)  # 将头的格式转换回序列格式
+        img_attn = all2all_head2seq(img_attn, group=seq_p_group)  # 将头的格式转换回序列格式
         img_attn = img_attn.reshape(shard_seqlen, -1)  # 重塑为 [shard_seqlen, -1] 形状
 
         torch.cuda.synchronize()  # 确保CUDA操作完成

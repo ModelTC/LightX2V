@@ -1,8 +1,11 @@
-from ..transformer_infer import WanTransformerInfer
-from lightx2v.common.transformer_infer.transformer_infer import BaseTaylorCachingTransformerInfer
-import torch
-import numpy as np
 import gc
+
+import numpy as np
+import torch
+
+from lightx2v.common.transformer_infer.transformer_infer import BaseTaylorCachingTransformerInfer
+
+from ..transformer_infer import WanTransformerInfer
 
 
 class WanTransformerInferCaching(WanTransformerInfer):

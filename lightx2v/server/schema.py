@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
 from ..utils.generate_task_id import generate_task_id
 
 

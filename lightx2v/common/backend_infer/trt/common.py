@@ -19,8 +19,9 @@ import argparse
 import os
 
 import tensorrt as trt
-from .common_runtime import *
 from loguru import logger
+
+from .common_runtime import *
 
 try:
     # Sometimes python does not understand FileNotFoundError

@@ -1,4 +1,5 @@
 import os
+
 import torch
 
 from lightx2v.models.video_encoders.hf.autoencoder_kl_causal_3d.autoencoder_kl_causal_3d import AutoencoderKLCausal3D

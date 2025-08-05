@@ -1,5 +1,5 @@
 import torch
-from diffusers.models.embeddings import get_timestep_embedding, get_3d_sincos_pos_embed
+from diffusers.models.embeddings import get_3d_sincos_pos_embed, get_timestep_embedding
 
 
 class CogvideoxPreInfer:

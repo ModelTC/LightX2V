@@ -1,7 +1,6 @@
 import os
 from typing import List, Optional, Tuple
 
-from loguru import logger
 import torch
 from torch.nn import functional as F
 

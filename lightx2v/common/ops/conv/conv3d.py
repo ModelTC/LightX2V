@@ -1,5 +1,7 @@
-import torch
 from abc import ABCMeta, abstractmethod
+
+import torch
+
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
 
 

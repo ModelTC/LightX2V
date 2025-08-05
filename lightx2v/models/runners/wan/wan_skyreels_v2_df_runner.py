@@ -1,16 +1,16 @@
-import os
 import gc
+import os
+
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from loguru import logger
+
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.df.skyreels_v2_df_scheduler import WanSkyreelsV2DFScheduler
-from lightx2v.utils.profiler import ProfilingContext4Debug, ProfilingContext
-from lightx2v.utils.profiler import ProfilingContext
-import torch.distributed as dist
-from loguru import logger
+from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
 @RUNNER_REGISTER("wan2.1_skyreels_v2_df")
@@ -36,9 +36,9 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
         config.lat_h = lat_h
         config.lat_w = lat_w
 
-        vae_encode_out = vae_model.encode([torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1).cuda()], config)[0]
-        vae_encode_out = vae_encode_out.to(torch.bfloat16)
-        return vae_encode_out
+        vae_encoder_out = vae_model.encode([torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1).cuda()], config)[0]
+        vae_encoder_out = vae_encoder_out.to(torch.bfloat16)
+        return vae_encoder_out
 
     def set_target_shape(self):
         if os.path.isfile(self.config.image_path):

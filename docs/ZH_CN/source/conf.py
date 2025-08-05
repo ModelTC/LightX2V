@@ -15,9 +15,8 @@ import os
 import sys
 from typing import List
 
-from sphinx.ext import autodoc
 import sphinxcontrib.redoc
-
+from sphinx.ext import autodoc
 
 logger = logging.getLogger(__name__)
 sys.path.append(os.path.abspath("../.."))

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple, Optional, Union, List, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
+
 from lightx2v.utils.utils import save_videos_grid
 
 
@@ -112,12 +113,12 @@ class BaseRunner(ABC):
         pass
 
     @abstractmethod
-    def get_encoder_output_i2v(self, clip_encoder_out: Any, vae_encode_out: Any, text_encoder_output: Any, img: Any) -> Dict[str, Any]:
+    def get_encoder_output_i2v(self, clip_encoder_out: Any, vae_encoder_out: Any, text_encoder_output: Any, img: Any) -> Dict[str, Any]:
         """Combine encoder outputs for i2v task
 
         Args:
             clip_encoder_out: CLIP encoder output
-            vae_encode_out: VAE encoder output
+            vae_encoder_out: VAE encoder output
             text_encoder_output: Text encoder output
             img: Original image
 
