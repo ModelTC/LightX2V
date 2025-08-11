@@ -8,12 +8,12 @@ from lightx2v.common.ops import *
 from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner  # noqa: F401
 from lightx2v.models.runners.graph_runner import GraphRunner
 from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner  # noqa: F401
+from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22MoeAudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
-from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -40,7 +40,20 @@ def main():
         "--model_cls",
         type=str,
         required=True,
-        choices=["wan2.1", "hunyuan", "wan2.1_distill", "wan2.1_causvid", "wan2.1_skyreels_v2_df", "cogvideox", "wan2.1_audio", "wan2.2_moe", "wan2.2_moe_audio", "wan2.2", "wan2.2_moe_distill", "qwen_image"],
+        choices=[
+            "wan2.1",
+            "hunyuan",
+            "wan2.1_distill",
+            "wan2.1_causvid",
+            "wan2.1_skyreels_v2_df",
+            "cogvideox",
+            "wan2.1_audio",
+            "wan2.2_moe",
+            "wan2.2_moe_audio",
+            "wan2.2",
+            "wan2.2_moe_distill",
+            "qwen_image",
+        ],
         default="wan2.1",
     )
 

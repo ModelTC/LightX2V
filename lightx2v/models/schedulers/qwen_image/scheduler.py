@@ -1,9 +1,10 @@
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
-import os
-import torch
-import numpy as np
 import json
+import os
+from typing import List, Optional, Union
+
+import numpy as np
+import torch
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
 
@@ -61,8 +62,7 @@ def retrieve_timesteps(
         accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
         if not accepts_timesteps:
             raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" timestep schedules. Please check whether you are using the correct scheduler."
+                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom timestep schedules. Please check whether you are using the correct scheduler."
             )
         scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
         timesteps = scheduler.timesteps
@@ -70,10 +70,7 @@ def retrieve_timesteps(
     elif sigmas is not None:
         accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
         if not accept_sigmas:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" sigmas schedules. Please check whether you are using the correct scheduler."
-            )
+            raise ValueError(f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom sigmas schedules. Please check whether you are using the correct scheduler.")
         scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
         timesteps = scheduler.timesteps
         num_inference_steps = len(timesteps)
@@ -83,27 +80,24 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-
 class QwenImageScheduler(BaseScheduler):
     def __init__(self, config):
         self.config = config
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            os.path.join(config.model_path, "scheduler")
-        )
+        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config.model_path, "scheduler"))
         with open(os.path.join(config.model_path, "scheduler", "scheduler_config.json"), "r") as f:
-            self.scheduler_config = json.load(f) 
+            self.scheduler_config = json.load(f)
         self.generator = torch.Generator(device="cuda").manual_seed(config.seed)
         self.device = torch.device("cuda")
         self.dtype = torch.bfloat16
         self.guidance_scale = 1.0
-    
+
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels_latents, height, width):
         latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
         latents = latents.permute(0, 2, 4, 1, 3, 5)
         latents = latents.reshape(batch_size, (height // 2) * (width // 2), num_channels_latents * 4)
         return latents
-    
+
     @staticmethod
     def _unpack_latents(latents, height, width, vae_scale_factor):
         batch_size, num_patches, channels = latents.shape
@@ -119,7 +113,7 @@ class QwenImageScheduler(BaseScheduler):
         latents = latents.reshape(batch_size, channels // (2 * 2), 1, height, width)
 
         return latents
-    
+
     @staticmethod
     def _prepare_latent_image_ids(batch_size, height, width, device, dtype):
         latent_image_ids = torch.zeros(height, width, 3)
@@ -128,25 +122,23 @@ class QwenImageScheduler(BaseScheduler):
 
         latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
 
-        latent_image_ids = latent_image_ids.reshape(
-            latent_image_id_height * latent_image_id_width, latent_image_id_channels
-        )
+        latent_image_ids = latent_image_ids.reshape(latent_image_id_height * latent_image_id_width, latent_image_id_channels)
 
         return latent_image_ids.to(device=device, dtype=dtype)
-    
+
     def prepare_latents(self):
-        shape = self.config.target_shape    
+        shape = self.config.target_shape
         width, height = self.config.aspect_ratios[self.config.aspect_ratio]
-        self.vae_scale_factor = self.config.vae_scale_factor if getattr(self, "vae", None) else 8    
+        self.vae_scale_factor = self.config.vae_scale_factor if getattr(self, "vae", None) else 8
         height = 2 * (int(height) // (self.vae_scale_factor * 2))
         width = 2 * (int(width) // (self.vae_scale_factor * 2))
         latents = randn_tensor(shape, generator=self.generator, device=self.device, dtype=self.dtype)
         latents = self._pack_latents(latents, self.config.batchsize, self.config.num_channels_latents, height, width)
         latent_image_ids = self._prepare_latent_image_ids(self.config.batchsize, height // 2, width // 2, self.device, self.dtype)
-        self.latents = latents 
+        self.latents = latents
         self.latent_image_ids = latent_image_ids
         self.noise_pred = None
-    
+
     def set_timesteps(self):
         sigmas = np.linspace(1.0, 1 / self.config.num_inference_steps, self.config.num_inference_steps)
         image_seq_len = self.latents.shape[1]
@@ -165,14 +157,14 @@ class QwenImageScheduler(BaseScheduler):
             sigmas=sigmas,
             mu=mu,
         )
-        
+
         self.timesteps = timesteps
         self.infer_steps = num_inference_steps
-        
+
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
         self.num_warmup_steps = num_warmup_steps
-    
+
     def prepare_guidance(self):
         # handle guidance
         if self.config.guidance_embeds:
@@ -181,20 +173,20 @@ class QwenImageScheduler(BaseScheduler):
         else:
             guidance = None
         self.guidance = guidance
-    
+
     def set_img_shapes(self):
         width, height = self.config.aspect_ratios[self.config.aspect_ratio]
         self.img_shapes = [(1, height // self.config.vae_scale_factor // 2, width // self.config.vae_scale_factor // 2)] * self.config.batchsize
 
     def prepare(self, image_encoder_output):
         self.prepare_latents()
-        self.prepare_guidance()        
+        self.prepare_guidance()
         self.set_img_shapes()
         self.set_timesteps()
-    
+
     def step_post(self):
         # compute the previous noisy sample x_t -> x_t-1
         t = self.timesteps[self.step_index]
         latents = self.scheduler.step(self.noise_pred, t, self.latents, return_dict=False)[0]
-        
+
         self.latents = latents
