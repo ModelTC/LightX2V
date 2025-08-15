@@ -105,27 +105,10 @@ class WanModel:
             self.transformer_infer_class = WanTransformerInferDualBlock
         elif self.config["feature_caching"] == "DynamicBlock":
             self.transformer_infer_class = WanTransformerInferDynamicBlock
+        elif self.config["feature_caching"] == "Mag":
+            self.transformer_infer_class = WanTransformerInferMagCaching
         else:
-            if self.config["feature_caching"] == "NoCaching":
-                self.transformer_infer_class = WanTransformerInfer
-            elif self.config["feature_caching"] == "Tea":
-                self.transformer_infer_class = WanTransformerInferTeaCaching
-            elif self.config["feature_caching"] == "TaylorSeer":
-                self.transformer_infer_class = WanTransformerInferTaylorCaching
-            elif self.config["feature_caching"] == "Ada":
-                self.transformer_infer_class = WanTransformerInferAdaCaching
-            elif self.config["feature_caching"] == "Custom":
-                self.transformer_infer_class = WanTransformerInferCustomCaching
-            elif self.config["feature_caching"] == "FirstBlock":
-                self.transformer_infer_class = WanTransformerInferFirstBlock
-            elif self.config["feature_caching"] == "DualBlock":
-                self.transformer_infer_class = WanTransformerInferDualBlock
-            elif self.config["feature_caching"] == "DynamicBlock":
-                self.transformer_infer_class = WanTransformerInferDynamicBlock
-            elif self.config["feature_caching"] == "Mag":
-                self.transformer_infer_class = WanTransformerInferMagCaching
-            else:
-                raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 
     def _should_load_weights(self):
         """Determine if current rank should load weights from disk."""
