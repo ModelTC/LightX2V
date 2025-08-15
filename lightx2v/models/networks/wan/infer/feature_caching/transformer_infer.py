@@ -1001,6 +1001,7 @@ class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
             self.block_residual_cache_odd[i] = None
         torch.cuda.empty_cache()
 
+
 class WanTransformerInferMagCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
@@ -1015,10 +1016,8 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         self.residual_cache = [None, None]
         self.mag_ratios = np.array(config.magcache_ratios)
         self.previous_residual = None
-        
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-
         skip_forward = False
         if self.cnt >= int(self.num_steps * self.retention_ratio):
             # conditional and unconditional in one list
@@ -1048,7 +1047,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
 
         self.cnt += 1
 
-        if self.cnt >= self.num_steps: # clear the history of current video and prepare for generating the next video.
+        if self.cnt >= self.num_steps:  # clear the history of current video and prepare for generating the next video.
             self.cnt = 0
             self.accumulated_ratio = [1.0, 1.0]
             self.accumulated_err = [0.0, 0.0]

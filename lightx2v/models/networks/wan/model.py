@@ -14,9 +14,9 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
     WanTransformerInferDualBlock,
     WanTransformerInferDynamicBlock,
     WanTransformerInferFirstBlock,
+    WanTransformerInferMagCaching,
     WanTransformerInferTaylorCaching,
     WanTransformerInferTeaCaching,
-    WanTransformerInferMagCaching,
 )
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
