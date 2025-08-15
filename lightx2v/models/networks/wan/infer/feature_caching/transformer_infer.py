@@ -43,6 +43,7 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
             self.cutoff_steps = self.config.infer_steps * 2 - 2
 
     # calculate should_calc
+    @torch.no_grad()
     def calculate_should_calc(self, embed, embed0):
         # 1. timestep embedding
         modulated_inp = embed0 if self.use_ret_steps else embed
@@ -95,30 +96,30 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
         # 3. return the judgement
         return should_calc
 
-    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+    def infer_main_blocks(self, weights, pre_infer_out):
         if self.infer_conditional:
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records
             if index <= self.scheduler.infer_steps - 1:
-                should_calc = self.calculate_should_calc(embed, embed0)
+                should_calc = self.calculate_should_calc(pre_infer_out.embed, pre_infer_out.embed0)
                 self.scheduler.caching_records[index] = should_calc
 
             if caching_records[index] or self.must_calc(index):
-                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                x = self.infer_calculating(weights, pre_infer_out)
             else:
-                x = self.infer_using_cache(x)
+                x = self.infer_using_cache(pre_infer_out.x)
 
         else:
             index = self.scheduler.step_index
             caching_records_2 = self.scheduler.caching_records_2
             if index <= self.scheduler.infer_steps - 1:
-                should_calc = self.calculate_should_calc(embed, embed0)
+                should_calc = self.calculate_should_calc(pre_infer_out.embed, pre_infer_out.embed0)
                 self.scheduler.caching_records_2[index] = should_calc
 
             if caching_records_2[index] or self.must_calc(index):
-                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                x = self.infer_calculating(weights, pre_infer_out)
             else:
-                x = self.infer_using_cache(x)
+                x = self.infer_using_cache(pre_infer_out.x)
 
         if self.config.enable_cfg:
             self.switch_status()
@@ -131,19 +132,10 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
 
         return x
 
-    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        ori_x = x.clone()
+    def infer_calculating(self, weights, pre_infer_out):
+        ori_x = pre_infer_out.x.clone()
 
-        x = super().infer(
-            weights,
-            grid_sizes,
-            embed,
-            x,
-            embed0,
-            seq_lens,
-            freqs,
-            context,
-        )
+        x = super().infer_main_blocks(weights, pre_infer_out)
         if self.infer_conditional:
             self.previous_residual_even = x - ori_x
             if self.config["cpu_offload"]:

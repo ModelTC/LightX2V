@@ -104,6 +104,10 @@ class WanTransformerInfer(BaseTransformerInfer):
 
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, pre_infer_out):
+        x = self.infer_main_blocks(weights, pre_infer_out)
+        return self.infer_post_blocks(weights, x, pre_infer_out.embed)
+
+    def infer_main_blocks(self, weights, pre_infer_out):
         x = self.infer_func(
             weights,
             pre_infer_out.grid_sizes,
@@ -115,9 +119,9 @@ class WanTransformerInfer(BaseTransformerInfer):
             pre_infer_out.context,
             pre_infer_out.audio_dit_blocks,
         )
-        return self._infer_post_blocks(weights, x, pre_infer_out.embed)
+        return x
 
-    def _infer_post_blocks(self, weights, x, e):
+    def infer_post_blocks(self, weights, x, e):
         if e.dim() == 2:
             modulation = weights.head_modulation.tensor  # 1, 2, dim
             e = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
