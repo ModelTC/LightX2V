@@ -191,7 +191,7 @@ class WanRunner(DefaultRunner):
             scheduler_class = WanScheduler
         elif self.config.feature_caching == "TaylorSeer":
             scheduler_class = WanSchedulerTaylorCaching
-        elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock"]:
+        elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock", "Mag"]:
             scheduler_class = WanSchedulerCaching
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")

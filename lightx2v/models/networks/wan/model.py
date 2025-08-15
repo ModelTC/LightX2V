@@ -16,6 +16,7 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
     WanTransformerInferFirstBlock,
     WanTransformerInferTaylorCaching,
     WanTransformerInferTeaCaching,
+    WanTransformerInferMagCaching,
 )
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
@@ -102,6 +103,8 @@ class WanModel:
                 self.transformer_infer_class = WanTransformerInferDualBlock
             elif self.config["feature_caching"] == "DynamicBlock":
                 self.transformer_infer_class = WanTransformerInferDynamicBlock
+            elif self.config["feature_caching"] == "Mag":
+                self.transformer_infer_class = WanTransformerInferMagCaching
             else:
                 raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 

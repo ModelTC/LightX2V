@@ -1000,3 +1000,98 @@ class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
             self.block_in_cache_odd[i] = None
             self.block_residual_cache_odd[i] = None
         torch.cuda.empty_cache()
+
+class WanTransformerInferMagCaching(WanTransformerInferCaching):
+    def __init__(self, config):
+        super().__init__(config)
+        self.cnt = 0
+        self.num_steps = config.infer_steps * 2
+        self.magcache_thresh = config.magcache_thresh
+        self.K = config.magcache_K
+        self.accumulated_err = [0.0, 0.0]
+        self.accumulated_steps = [0, 0]
+        self.accumulated_ratio = [1.0, 1.0]
+        self.retention_ratio = config.magcache_retention_ratio
+        self.residual_cache = [None, None]
+        self.mag_ratios = np.array(config.magcache_ratios)
+        self.previous_residual = None
+        
+
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+
+        skip_forward = False
+        if self.cnt >= int(self.num_steps * self.retention_ratio):
+            # conditional and unconditional in one list
+            cur_mag_ratio = self.mag_ratios[self.cnt]
+            # magnitude ratio between current step and the cached step
+            self.accumulated_ratio[self.cnt % 2] = self.accumulated_ratio[self.cnt % 2] * cur_mag_ratio
+            self.accumulated_steps[self.cnt % 2] += 1  # skip steps plus 1
+            # skip error of current steps
+            cur_skip_err = np.abs(1 - self.accumulated_ratio[self.cnt % 2])
+            # accumulated error of multiple steps
+            self.accumulated_err[self.cnt % 2] += cur_skip_err
+
+            if self.accumulated_err[self.cnt % 2] < self.magcache_thresh and self.accumulated_steps[self.cnt % 2] <= self.K:
+                skip_forward = True
+            else:
+                self.accumulated_err[self.cnt % 2] = 0
+                self.accumulated_steps[self.cnt % 2] = 0
+                self.accumulated_ratio[self.cnt % 2] = 1.0
+
+        if not skip_forward:
+            x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+        else:
+            x = self.infer_using_cache(x)
+
+        if self.config.enable_cfg:
+            self.switch_status()
+
+        self.cnt += 1
+
+        if self.cnt >= self.num_steps: # clear the history of current video and prepare for generating the next video.
+            self.cnt = 0
+            self.accumulated_ratio = [1.0, 1.0]
+            self.accumulated_err = [0.0, 0.0]
+            self.accumulated_steps = [0, 0]
+
+        if self.clean_cuda_cache:
+            del grid_sizes, embed, embed0, seq_lens, freqs, context
+            torch.cuda.empty_cache()
+
+        return x
+
+    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        ori_x = x.clone()
+
+        x = super().infer(
+            weights,
+            grid_sizes,
+            embed,
+            x,
+            embed0,
+            seq_lens,
+            freqs,
+            context,
+        )
+
+        previous_residual = x - ori_x
+        if self.config["cpu_offload"]:
+            previous_residual = previous_residual.cpu()
+
+        self.residual_cache[self.cnt % 2] = previous_residual
+
+        if self.config["cpu_offload"]:
+            ori_x = ori_x.to("cpu")
+            del ori_x
+            torch.cuda.empty_cache()
+            gc.collect()
+        return x
+
+    def infer_using_cache(self, x):
+        residual_x = self.residual_cache[self.cnt % 2]
+        x.add_(residual_x.cuda())
+        return x
+
+    def clear(self):
+        self.residual_cache = [None, None]
+        torch.cuda.empty_cache()
