@@ -1007,9 +1007,8 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         self.retention_ratio = config.magcache_retention_ratio
         self.residual_cache = [None, None]
         self.mag_ratios = np.array(config.magcache_ratios)
-        self.previous_residual = None
 
-    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+    def infer_main_blocks(self, weights, pre_infer_out):
         skip_forward = False
         if self.cnt >= int(self.num_steps * self.retention_ratio):
             # conditional and unconditional in one list
@@ -1030,9 +1029,9 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
                 self.accumulated_ratio[self.cnt % 2] = 1.0
 
         if not skip_forward:
-            x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            x = self.infer_calculating(weights, pre_infer_out)
         else:
-            x = self.infer_using_cache(x)
+            x = self.infer_using_cache(pre_infer_out.x)
 
         if self.config.enable_cfg:
             self.switch_status()
@@ -1046,24 +1045,14 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
             self.accumulated_steps = [0, 0]
 
         if self.clean_cuda_cache:
-            del grid_sizes, embed, embed0, seq_lens, freqs, context
             torch.cuda.empty_cache()
 
         return x
 
-    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        ori_x = x.clone()
+    def infer_calculating(self, weights, pre_infer_out):
+        ori_x = pre_infer_out.x.clone()
 
-        x = super().infer(
-            weights,
-            grid_sizes,
-            embed,
-            x,
-            embed0,
-            seq_lens,
-            freqs,
-            context,
-        )
+        x = super().infer_main_blocks(weights, pre_infer_out)
 
         previous_residual = x - ori_x
         if self.config["cpu_offload"]:
