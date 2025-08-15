@@ -19,8 +19,8 @@ class WanDistillModel(WanModel):
     post_weight_class = WanPostWeights
     transformer_weight_class = WanTransformerWeights
 
-    def __init__(self, model_path, config, device, seq_p_group=None):
-        super().__init__(model_path, config, device, seq_p_group)
+    def __init__(self, model_path, config, device):
+        super().__init__(model_path, config, device)
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         # For the old t2v distill model: https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill

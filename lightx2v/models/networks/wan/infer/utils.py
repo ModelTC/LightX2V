@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 
 from lightx2v.utils.envs import *
 
@@ -37,6 +38,52 @@ def compute_freqs_audio(c, grid_sizes, freqs):
     freqs_i[valid_token_length:, :, :f] = 0  ###for r2v # zero temporl component corresponding to ref embeddings
 
     return freqs_i
+
+
+def compute_freqs_dist(s, c, grid_sizes, freqs, seq_p_group):
+    world_size = dist.get_world_size(seq_p_group)
+    cur_rank = dist.get_rank(seq_p_group)
+    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+    f, h, w = grid_sizes[0]
+    seq_len = f * h * w
+    freqs_i = torch.cat(
+        [
+            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+        ],
+        dim=-1,
+    ).reshape(seq_len, 1, -1)
+
+    freqs_i = pad_freqs(freqs_i, s * world_size)
+    s_per_rank = s
+    freqs_i_rank = freqs_i[(cur_rank * s_per_rank) : ((cur_rank + 1) * s_per_rank), :, :]
+    return freqs_i_rank
+
+
+def compute_freqs_audio_dist(s, c, grid_sizes, freqs, seq_p_group):
+    world_size = dist.get_world_size(seq_p_group)
+    cur_rank = dist.get_rank(seq_p_group)
+    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+    f, h, w = grid_sizes[0]
+    valid_token_length = f * h * w
+    f = f + 1
+    seq_len = f * h * w
+    freqs_i = torch.cat(
+        [
+            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+        ],
+        dim=-1,
+    ).reshape(seq_len, 1, -1)
+
+    freqs_i[valid_token_length:, :, :f] = 0
+
+    freqs_i = pad_freqs(freqs_i, s * world_size)
+    s_per_rank = s
+    freqs_i_rank = freqs_i[(cur_rank * s_per_rank) : ((cur_rank + 1) * s_per_rank), :, :]
+    return freqs_i_rank
 
 
 def compute_freqs_causvid(c, grid_sizes, freqs, start_frame=0):

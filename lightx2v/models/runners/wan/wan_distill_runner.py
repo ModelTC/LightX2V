@@ -21,7 +21,6 @@ class WanDistillRunner(WanRunner):
                 self.config.model_path,
                 self.config,
                 self.init_device,
-                self.seq_p_group,
             )
             lora_wrapper = WanLoraWrapper(model)
             for lora_config in self.config.lora_configs:
@@ -91,7 +90,6 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 os.path.join(self.config.model_path, "high_noise_model"),
                 self.config,
                 self.init_device,
-                self.seq_p_group,
             )
             high_lora_wrapper = WanLoraWrapper(high_noise_model)
             for lora_config in self.config.lora_configs:
@@ -106,7 +104,6 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 os.path.join(self.config.model_path, "distill_models", "high_noise_model"),
                 self.config,
                 self.init_device,
-                self.seq_p_group,
             )
 
         if use_low_lora:

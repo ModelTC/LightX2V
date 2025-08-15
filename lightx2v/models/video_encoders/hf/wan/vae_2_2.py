@@ -256,6 +256,10 @@ class AttentionBlock(nn.Module):
 def patchify(x, patch_size):
     if patch_size == 1:
         return x
+
+    if x.dim() == 6:
+        x = x.squeeze(0)
+
     if x.dim() == 4:
         x = rearrange(x, "b c (h q) (w r) -> b (c r q) h w", q=patch_size, r=patch_size)
     elif x.dim() == 5:

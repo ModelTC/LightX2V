@@ -540,7 +540,6 @@ class T5EncoderModel:
         t5_quantized=False,
         t5_quantized_ckpt=None,
         quant_scheme=None,
-        seq_p_group=None,
     ):
         self.text_len = text_len
         self.dtype = dtype

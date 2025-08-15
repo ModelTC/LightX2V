@@ -418,13 +418,12 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 
 
 class CLIPModel:
-    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, seq_p_group=None):
+    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True):
         self.dtype = dtype
         self.device = device
         self.quantized = clip_quantized
         self.cpu_offload = cpu_offload
         self.use_31_block = use_31_block
-        self.seq_p_group = seq_p_group
 
         if self.quantized:
             self.checkpoint_path = clip_quantized_ckpt

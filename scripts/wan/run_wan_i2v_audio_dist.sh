@@ -13,6 +13,7 @@ export TORCH_CUDA_ARCH_LIST="9.0"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 export ENABLE_GRAPH_MODE=false
+export SENSITIVE_LAYER_DTYPE=None
 
 #for debugging
 #export TORCH_NCCL_BLOCKING_WAIT=1 #启用 NCCL 阻塞等待模式（否则 watchdog 会杀死卡顿的进程）

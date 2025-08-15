@@ -9,7 +9,7 @@ from lightx2v.common.offload.manager import (
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 
-from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_audio
+from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_audio, compute_freqs_audio_dist, compute_freqs_dist
 
 
 class WanTransformerInfer(BaseTransformerInfer):
@@ -33,7 +33,11 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
-        self.seq_p_group = None
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+
         if self.config.get("cpu_offload", False):
             if torch.cuda.get_device_capability(0) == (9, 0):
                 assert self.config["self_attn_1_type"] != "sage_attn2"
@@ -86,15 +90,56 @@ class WanTransformerInfer(BaseTransformerInfer):
         return cu_seqlens_q, cu_seqlens_k
 
     def compute_freqs(self, q, grid_sizes, freqs):
-        if "audio" in self.config.get("model_cls", ""):
-            freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
+        if self.config["seq_parallel"]:
+            if "audio" in self.config.get("model_cls", ""):
+                freqs_i = compute_freqs_audio_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
+            else:
+                freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
         else:
-            freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
+            if "audio" in self.config.get("model_cls", ""):
+                freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
+            else:
+                freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
         return freqs_i
 
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
-    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
-        return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks)
+    def infer(self, weights, pre_infer_out):
+        x = self.infer_func(
+            weights,
+            pre_infer_out.grid_sizes,
+            pre_infer_out.embed,
+            pre_infer_out.x,
+            pre_infer_out.embed0,
+            pre_infer_out.seq_lens,
+            pre_infer_out.freqs,
+            pre_infer_out.context,
+            pre_infer_out.audio_dit_blocks,
+        )
+        return self._infer_post_blocks(weights, x, pre_infer_out.embed)
+
+    def _infer_post_blocks(self, weights, x, e):
+        if e.dim() == 2:
+            modulation = weights.head_modulation.tensor  # 1, 2, dim
+            e = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
+        elif e.dim() == 3:  # For Diffustion forcing
+            modulation = weights.head_modulation.tensor.unsqueeze(2)  # 1, 2, seq, dim
+            e = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
+            e = [ei.squeeze(1) for ei in e]
+
+        x = weights.norm.apply(x)
+
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            x = x.to(self.sensitive_layer_dtype)
+        x.mul_(1 + e[1].squeeze()).add_(e[0].squeeze())
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            x = x.to(self.infer_dtype)
+
+        x = weights.head.apply(x)
+
+        if self.clean_cuda_cache:
+            del e
+            torch.cuda.empty_cache()
+        return x
 
     def _infer_without_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
         for block_idx in range(self.blocks_num):

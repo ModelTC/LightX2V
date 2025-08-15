@@ -759,7 +759,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device="cpu", seq_p_group=None, cpu_offload=False, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
@@ -795,7 +795,6 @@ class WanVAE:
         device="cuda",
         parallel=False,
         use_tiling=False,
-        seq_p_group=None,
         cpu_offload=False,
     ):
         self.dtype = dtype
@@ -845,7 +844,7 @@ class WanVAE:
         self.scale = [self.mean, self.inv_std]
 
         # init model
-        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, seq_p_group=seq_p_group, cpu_offload=cpu_offload).eval().requires_grad_(False).to(device)
+        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload).eval().requires_grad_(False).to(device)
 
     def current_device(self):
         return next(self.model.parameters()).device

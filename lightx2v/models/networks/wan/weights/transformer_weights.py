@@ -26,6 +26,11 @@ class WanTransformerWeights(WeightModule):
         self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
         self.add_module("blocks", self.blocks)
 
+        # post blocks weights
+        self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
+        self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
+        self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
+
     def clear(self):
         for block in self.blocks:
             for phase in block.compute_phases:

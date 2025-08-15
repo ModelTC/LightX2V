@@ -145,7 +145,12 @@ class PerceiverAttentionCA(nn.Module):
         batchsize = len(x)
         x = self.norm_kv(x)
         shift, scale, gate = (t_emb + self.shift_scale_gate).chunk(3, dim=1)
-        latents = self.norm_q(latents) * (1 + scale) + shift
+        norm_q = self.norm_q(latents)
+        if scale.shape[0] != norm_q.shape[0]:
+            scale = scale.transpose(0, 1)  # (1, 5070, 3072)
+            shift = shift.transpose(0, 1)
+            gate = gate.transpose(0, 1)
+        latents = norm_q * (1 + scale) + shift
         q = self.to_q(latents.to(GET_DTYPE()))
         k, v = self.to_kv(x).chunk(2, dim=-1)
         q = rearrange(q, "B L (H C) -> (B L) H C", H=self.heads)
@@ -222,16 +227,23 @@ class TimeEmbedding(nn.Module):
         self.act_fn = nn.SiLU()
         self.time_proj = nn.Linear(dim, time_proj_dim)
 
-    def forward(
-        self,
-        timestep: torch.Tensor,
-    ):
-        timestep = self.timesteps_proj(timestep)
-        time_embedder_dtype = next(iter(self.time_embedder.parameters())).dtype
-        timestep = timestep.to(time_embedder_dtype)
+    def forward(self, timestep: torch.Tensor):
+        # Project timestep
+        if timestep.dim() == 2:
+            timestep = self.timesteps_proj(timestep.squeeze(0)).unsqueeze(0)
+        else:
+            timestep = self.timesteps_proj(timestep)
+
+        # Match dtype with time_embedder (except int8)
+        target_dtype = next(self.time_embedder.parameters()).dtype
+        if timestep.dtype != target_dtype and target_dtype != torch.int8:
+            timestep = timestep.to(target_dtype)
+
+        # Time embedding projection
         temb = self.time_embedder(timestep)
         timestep_proj = self.time_proj(self.act_fn(temb))
-        return timestep_proj
+
+        return timestep_proj.squeeze(0) if timestep_proj.dim() == 3 else timestep_proj
 
 
 class AudioAdapter(nn.Module):

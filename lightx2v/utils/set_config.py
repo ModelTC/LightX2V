@@ -69,9 +69,6 @@ def set_config(args):
 
 def set_parallel_config(config):
     if config.parallel:
-        if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
-
         cfg_p_size = config.parallel.get("cfg_p_size", 1)
         seq_p_size = config.parallel.get("seq_p_size", 1)
         assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size * seq_p_size must be equal to world_size"
@@ -82,3 +79,13 @@ def set_parallel_config(config):
 
         if config.get("enable_cfg", False) and config.parallel and config.parallel.get("cfg_p_size", False) and config.parallel.cfg_p_size > 1:
             config["cfg_parallel"] = True
+
+
+def print_config(config):
+    config_to_print = config.copy()
+    config_to_print.pop("device_mesh", None)
+    if config.parallel:
+        if dist.get_rank() == 0:
+            logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4)}")
+    else:
+        logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4)}")

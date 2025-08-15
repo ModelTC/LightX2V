@@ -2,6 +2,7 @@ import torch
 
 from lightx2v.utils.envs import *
 
+from .module_io import WanPreInferModuleOutput
 from .utils import guidance_scale_embedding, rope_params, sinusoidal_embedding_1d
 
 
@@ -41,7 +42,7 @@ class WanPreInfer:
         else:
             timestep = self.scheduler.timesteps[self.scheduler.step_index]
             t = torch.stack([timestep])
-            if hasattr(self.scheduler, "mask"):
+            if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
                 t = (self.scheduler.mask[0][:, ::2, ::2] * t).flatten()
 
         if positive:
@@ -72,10 +73,6 @@ class WanPreInfer:
         grid_sizes = torch.tensor(x.shape[2:], dtype=torch.long).unsqueeze(0)
         x = x.flatten(2).transpose(1, 2).contiguous()
         seq_lens = torch.tensor(x.size(1), dtype=torch.long).cuda().unsqueeze(0)
-
-        # wan2.2_moe会对t做扩展，我们发现这里做不做影响不大，而且做了拓展会增加耗时，目前忠实原作代码，后续可以考虑去掉
-        if self.config["model_cls"] == "wan2.2_moe":
-            t = t.expand(seq_lens[0])
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
         if self.enable_dynamic_cfg:
@@ -132,8 +129,13 @@ class WanPreInfer:
             if self.config.get("use_image_encoder", True):
                 del context_clip
             torch.cuda.empty_cache()
-        return (
-            embed,
-            grid_sizes,
-            (x.squeeze(0), embed0.squeeze(0), seq_lens, self.freqs, context),
+
+        return WanPreInferModuleOutput(
+            embed=embed,
+            grid_sizes=grid_sizes,
+            x=x.squeeze(0),
+            embed0=embed0.squeeze(0),
+            seq_lens=seq_lens,
+            freqs=self.freqs,
+            context=context,
         )

@@ -60,12 +60,9 @@ class WanScheduler(BaseScheduler):
             device=self.device,
             generator=self.generator,
         )
-        if self.config["model_cls"] == "wan2.2":
-            if self.config["task"] == "t2v":
-                self.mask = masks_like(self.latents, zero=False)
-            elif self.config["task"] == "i2v":
-                self.mask = masks_like(self.latents, zero=True)
-                self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+            self.mask = masks_like(self.latents, zero=True)
+            self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents
 
     def set_timesteps(
         self,
