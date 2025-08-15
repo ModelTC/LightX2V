@@ -36,6 +36,16 @@ class WanTransformerWeights(WeightModule):
             for phase in block.compute_phases:
                 phase.clear()
 
+    def post_weights_to_cuda(self):
+        self.norm.to_cuda()
+        self.head.to_cuda()
+        self.head_modulation.to_cuda()
+
+    def post_weights_to_cpu(self):
+        self.norm.to_cpu()
+        self.head.to_cpu()
+        self.head_modulation.to_cpu()
+
 
 class WanTransformerAttentionBlock(WeightModule):
     def __init__(self, block_index, task, mm_type, config):

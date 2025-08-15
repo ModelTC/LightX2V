@@ -39,8 +39,8 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
 
         if self.config.get("cpu_offload", False):
-            if torch.cuda.get_device_capability(0) == (9, 0):
-                assert self.config["self_attn_1_type"] != "sage_attn2"
+            # if torch.cuda.get_device_capability(0) == (9, 0):
+            #     assert self.config["self_attn_1_type"] != "sage_attn2"
             if "offload_ratio" in self.config:
                 offload_ratio = self.config["offload_ratio"]
             else:

@@ -18,7 +18,7 @@ class WanAudioPostInfer(WanPostInfer):
         self.scheduler = scheduler
 
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
-    def infer(self, weights, x, pre_infer_out):
+    def infer(self, x, pre_infer_out):
         x = x[:, : pre_infer_out.valid_patch_length]
         x = self.unpatchify(x, pre_infer_out.grid_sizes)
 

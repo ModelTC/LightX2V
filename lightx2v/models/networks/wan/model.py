@@ -228,12 +228,10 @@ class WanModel:
 
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
-        self.post_weight = self.post_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config)
 
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
-        self.post_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
 
     def _load_weights_distribute(self, weight_dict, is_weight_loader):
@@ -306,12 +304,10 @@ class WanModel:
 
     def to_cpu(self):
         self.pre_weight.to_cpu()
-        self.post_weight.to_cpu()
         self.transformer_weights.to_cpu()
 
     def to_cuda(self):
         self.pre_weight.to_cuda()
-        self.post_weight.to_cuda()
         self.transformer_weights.to_cuda()
 
     @torch.no_grad()
@@ -321,7 +317,7 @@ class WanModel:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
-                self.post_weight.to_cuda()
+                self.transformer_weights.post_weights_to_cuda()
 
         if self.transformer_infer.mask_map is None:
             _, c, h, w = self.scheduler.latents.shape
@@ -359,7 +355,7 @@ class WanModel:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
-                self.post_weight.to_cpu()
+                self.transformer_weights.post_weights_to_cpu()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, positive=True):
@@ -373,7 +369,7 @@ class WanModel:
         if self.config["seq_parallel"]:
             x = self._seq_parallel_post_process(x)
 
-        noise_pred = self.post_infer.infer(self.post_weight, x, pre_infer_out)[0]
+        noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
 
         if self.clean_cuda_cache:
             del x, pre_infer_out
