@@ -464,7 +464,7 @@ class Wan22DenseRunner(WanRunner):
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
-        if self.config.task != ["i2v", "flf2v"]:
+        if self.config.task not in ["i2v", "flf2v"]:
             return None
         else:
             return Wan2_2_VAE(**vae_config)
