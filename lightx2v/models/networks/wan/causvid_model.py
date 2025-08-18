@@ -52,13 +52,13 @@ class WanCausVidModel(WanModel):
 
         if self.config["cpu_offload"]:
             self.pre_weight.to_cuda()
-            self.post_weight.to_cuda()
+            self.transformer_weights.post_weights_to_cuda()
 
         embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, kv_start=kv_start, kv_end=kv_end)
 
         x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out, kv_start, kv_end)
-        self.scheduler.noise_pred = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
+        self.scheduler.noise_pred = self.post_infer.infer(x, embed, grid_sizes)[0]
 
         if self.config["cpu_offload"]:
             self.pre_weight.to_cpu()
-            self.post_weight.to_cpu()
+            self.transformer_weights.post_weights_to_cpu()

@@ -3,6 +3,7 @@ from lightx2v.utils.registry_factory import (
     CONV3D_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
+    TENSOR_REGISTER,
 )
 
 
@@ -39,7 +40,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"]("time_projection.1.weight", "time_projection.1.bias"),
         )
 
-        if config.task == "i2v" and config.get("use_image_encoder", True):
+        if config.task in ["i2v", "flf2v"] and config.get("use_image_encoder", True):
             self.add_module(
                 "proj_0",
                 LN_WEIGHT_REGISTER["Default"]("img_emb.proj.0.weight", "img_emb.proj.0.bias"),
@@ -65,4 +66,10 @@ class WanPreWeights(WeightModule):
             self.add_module(
                 "cfg_cond_proj_2",
                 MM_WEIGHT_REGISTER["Default"]("guidance_embedding.linear_2.weight", "guidance_embedding.linear_2.bias"),
+            )
+
+        if config.task == "flf2v":
+            self.add_module(
+                "emb_pos",
+                TENSOR_REGISTER["Default"](f"img_emb.emb_pos"),
             )

@@ -39,7 +39,9 @@ class DefaultRunner(BaseRunner):
         self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
-        else:
+        elif self.config["task"] == "flf2v":
+            self.run_input_encoder = self._run_input_encoder_local_flf2v
+        elif self.config["task"] == "t2v":
             self.run_input_encoder = self._run_input_encoder_local_t2v
 
     def set_init_device(self):
@@ -164,6 +166,18 @@ class DefaultRunner(BaseRunner):
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
         }
+
+    @ProfilingContext("Run Encoders")
+    def _run_input_encoder_local_flf2v(self):
+        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
+        first_frame = Image.open(self.config["image_path"]).convert("RGB")
+        last_frame = Image.open(self.config["last_frame_path"]).convert("RGB")
+        clip_encoder_out = self.run_image_encoder(first_frame, last_frame) if self.config.get("use_image_encoder", True) else None
+        vae_encode_out = self.run_vae_encoder(first_frame, last_frame)
+        text_encoder_output = self.run_text_encoder(prompt, first_frame)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output)
 
     @ProfilingContext("Run DiT")
     def _run_dit_local(self, total_steps=None):

@@ -54,7 +54,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config.task == "i2v" and self.config.get("use_image_encoder", True):
+        if self.config.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -139,7 +139,7 @@ class WanRunner(DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
         }
-        if self.config.task != "i2v":
+        if self.config.task not in ["i2v", "flf2v"]:
             return None
         else:
             return WanVAE(**vae_config)
@@ -193,7 +193,7 @@ class WanRunner(DefaultRunner):
             scheduler = scheduler_class(self.config)
         self.model.set_scheduler(scheduler)
 
-    def run_text_encoder(self, text, img):
+    def run_text_encoder(self, text, img=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
         n_prompt = self.config.get("negative_prompt", "")
@@ -222,26 +222,32 @@ class WanRunner(DefaultRunner):
 
         return text_encoder_output
 
-    def run_image_encoder(self, img):
+    def run_image_encoder(self, first_frame, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.image_encoder = self.load_image_encoder()
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
-        clip_encoder_out = self.image_encoder.visual([img[None, :, :, :]]).squeeze(0).to(GET_DTYPE())
+        first_frame = TF.to_tensor(first_frame).sub_(0.5).div_(0.5).cuda()
+        if last_frame is None:
+            clip_encoder_out = self.image_encoder.visual([first_frame[None, :, :, :]]).squeeze(0).to(GET_DTYPE())
+        else:
+            last_frame = TF.to_tensor(last_frame).sub_(0.5).div_(0.5).cuda()
+            clip_encoder_out = self.image_encoder.visual([first_frame[:, None, :, :].transpose(0, 1), last_frame[:, None, :, :].transpose(0, 1)]).squeeze(0).to(GET_DTYPE())
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.image_encoder
             torch.cuda.empty_cache()
             gc.collect()
         return clip_encoder_out
 
-    def run_vae_encoder(self, img):
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
-        h, w = img.shape[1:]
+    def run_vae_encoder(self, first_frame, last_frame=None):
+        first_frame_size = first_frame.size
+        first_frame = TF.to_tensor(first_frame).sub_(0.5).div_(0.5).cuda()
+        h, w = first_frame.shape[1:]
         aspect_ratio = h / w
         max_area = self.config.target_height * self.config.target_width
         lat_h = round(np.sqrt(max_area * aspect_ratio) // self.config.vae_stride[1] // self.config.patch_size[1] * self.config.patch_size[1])
         lat_w = round(np.sqrt(max_area / aspect_ratio) // self.config.vae_stride[2] // self.config.patch_size[2] * self.config.patch_size[2])
 
         if self.config.get("changing_resolution", False):
+            assert last_frame is None
             self.config.lat_h, self.config.lat_w = lat_h, lat_w
             vae_encode_out_list = []
             for i in range(len(self.config["resolution_rate"])):
@@ -249,18 +255,27 @@ class WanRunner(DefaultRunner):
                     int(self.config.lat_h * self.config.resolution_rate[i]) // 2 * 2,
                     int(self.config.lat_w * self.config.resolution_rate[i]) // 2 * 2,
                 )
-                vae_encode_out_list.append(self.get_vae_encoder_output(img, lat_h, lat_w))
-            vae_encode_out_list.append(self.get_vae_encoder_output(img, self.config.lat_h, self.config.lat_w))
+                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, lat_h, lat_w))
+            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, self.config.lat_h, self.config.lat_w))
             return vae_encode_out_list
         else:
+            if last_frame is not None:
+                last_frame_size = last_frame.size
+                last_frame = TF.to_tensor(last_frame).sub_(0.5).div_(0.5).cuda()
+                if first_frame_size != last_frame_size:
+                    last_frame_resize_ratio = max(first_frame_size[0] / last_frame_size[0], first_frame_size[1] / last_frame_size[1])
+                    last_frame_size = [
+                        round(last_frame_size[0] * last_frame_resize_ratio),
+                        round(last_frame_size[1] * last_frame_resize_ratio),
+                    ]
+                    last_frame = TF.center_crop(last_frame, last_frame_size)
             self.config.lat_h, self.config.lat_w = lat_h, lat_w
-            vae_encoder_out = self.get_vae_encoder_output(img, lat_h, lat_w)
+            vae_encoder_out = self.get_vae_encoder_output(first_frame, lat_h, lat_w, last_frame)
             return vae_encoder_out
 
-    def get_vae_encoder_output(self, img, lat_h, lat_w):
+    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None):
         h = lat_h * self.config.vae_stride[1]
         w = lat_w * self.config.vae_stride[2]
-
         msk = torch.ones(
             1,
             self.config.target_video_length,
@@ -268,24 +283,38 @@ class WanRunner(DefaultRunner):
             lat_w,
             device=torch.device("cuda"),
         )
-        msk[:, 1:] = 0
+        if last_frame is not None:
+            msk[:, 1:-1] = 0
+        else:
+            msk[:, 1:] = 0
+
         msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
         msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
+
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_encoder = self.load_vae_encoder()
-        vae_encoder_out = self.vae_encoder.encode(
-            [
-                torch.concat(
-                    [
-                        torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                        torch.zeros(3, self.config.target_video_length - 1, h, w),
-                    ],
-                    dim=1,
-                ).cuda()
-            ],
-            self.config,
-        )[0]
+
+        if last_frame is not None:
+            vae_input = torch.concat(
+                [
+                    torch.nn.functional.interpolate(first_frame[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
+                    torch.zeros(3, self.config.target_video_length - 2, h, w),
+                    torch.nn.functional.interpolate(last_frame[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
+                ],
+                dim=1,
+            ).cuda()
+        else:
+            vae_input = torch.concat(
+                [
+                    torch.nn.functional.interpolate(first_frame[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
+                    torch.zeros(3, self.config.target_video_length - 1, h, w),
+                ],
+                dim=1,
+            ).cuda()
+
+        vae_encoder_out = self.vae_encoder.encode([vae_input], self.config)[0]
+
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
             torch.cuda.empty_cache()
@@ -293,7 +322,7 @@ class WanRunner(DefaultRunner):
         vae_encoder_out = torch.concat([msk, vae_encoder_out]).to(GET_DTYPE())
         return vae_encoder_out
 
-    def get_encoder_output_i2v(self, clip_encoder_out, vae_encoder_out, text_encoder_output, img):
+    def get_encoder_output_i2v(self, clip_encoder_out, vae_encoder_out, text_encoder_output, img=None):
         image_encoder_output = {
             "clip_encoder_out": clip_encoder_out,
             "vae_encoder_out": vae_encoder_out,
@@ -305,7 +334,7 @@ class WanRunner(DefaultRunner):
 
     def set_target_shape(self):
         num_channels_latents = self.config.get("num_channels_latents", 16)
-        if self.config.task == "i2v":
+        if self.config.task in ["i2v", "flf2v"]:
             self.config.target_shape = (
                 num_channels_latents,
                 (self.config.target_video_length - 1) // self.config.vae_stride[0] + 1,
@@ -435,7 +464,7 @@ class Wan22DenseRunner(WanRunner):
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
-        if self.config.task != "i2v":
+        if self.config.task != ["i2v", "flf2v"]:
             return None
         else:
             return Wan2_2_VAE(**vae_config)
