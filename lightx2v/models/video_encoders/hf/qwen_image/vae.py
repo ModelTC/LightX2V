@@ -1,9 +1,14 @@
 import json
 import os
 
-import torch  # type: ignore
-from diffusers import AutoencoderKLQwenImage
-from diffusers.image_processor import VaeImageProcessor
+import torch
+
+try:
+    from diffusers import AutoencoderKLQwenImage
+    from diffusers.image_processor import VaeImageProcessor
+except ImportError:
+    AutoencoderKLQwenImage = None
+    VaeImageProcessor = None
 
 
 class AutoencoderKLQwenImageVAE:

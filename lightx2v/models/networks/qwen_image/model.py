@@ -2,7 +2,11 @@ import json
 import os
 
 import torch
-from diffusers.models.transformers.transformer_qwenimage import QwenImageTransformer2DModel
+
+try:
+    from diffusers.models.transformers.transformer_qwenimage import QwenImageTransformer2DModel
+except ImportError:
+    QwenImageTransformer2DModel = None
 
 from .infer.post_infer import QwenImagePostInfer
 from .infer.pre_infer import QwenImagePreInfer
