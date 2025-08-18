@@ -10,6 +10,7 @@ class BaseScheduler:
         self.caching_records = [True] * config.infer_steps
         self.flag_df = False
         self.transformer_infer = None
+        self.infer_condition = True  # cfg status
 
     def step_pre(self, step_index):
         self.step_index = step_index

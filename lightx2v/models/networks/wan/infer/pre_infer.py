@@ -33,7 +33,7 @@ class WanPreInfer:
         self.scheduler = scheduler
 
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
-    def infer(self, weights, inputs, positive, kv_start=0, kv_end=0):
+    def infer(self, weights, inputs, kv_start=0, kv_end=0):
         x = self.scheduler.latents
 
         if self.scheduler.flag_df:
@@ -45,7 +45,7 @@ class WanPreInfer:
             if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
                 t = (self.scheduler.mask[0][:, ::2, ::2] * t).flatten()
 
-        if positive:
+        if self.scheduler.infer_condition:
             context = inputs["text_encoder_output"]["context"]
         else:
             context = inputs["text_encoder_output"]["context_null"]

@@ -53,29 +53,33 @@ class WanLoraWrapper:
     def _apply_lora_weights(self, weight_dict, lora_weights, alpha):
         lora_pairs = {}
         lora_diffs = {}
-        prefix = "diffusion_model."
 
-        def try_lora_pair(key, suffix_a, suffix_b, target_suffix):
+        def try_lora_pair(key, prefix, suffix_a, suffix_b, target_suffix):
             if key.endswith(suffix_a):
                 base_name = key[len(prefix) :].replace(suffix_a, target_suffix)
                 pair_key = key.replace(suffix_a, suffix_b)
                 if pair_key in lora_weights:
                     lora_pairs[base_name] = (key, pair_key)
 
-        def try_lora_diff(key, suffix, target_suffix):
+        def try_lora_diff(key, prefix, suffix, target_suffix):
             if key.endswith(suffix):
                 base_name = key[len(prefix) :].replace(suffix, target_suffix)
                 lora_diffs[base_name] = key
 
-        for key in lora_weights.keys():
-            if not key.startswith(prefix):
-                continue
+        prefixs = [
+            "",  # empty prefix
+            "diffusion_model.",
+        ]
+        for prefix in prefixs:
+            for key in lora_weights.keys():
+                if not key.startswith(prefix):
+                    continue
 
-            try_lora_pair(key, "lora_A.weight", "lora_B.weight", "weight")
-            try_lora_pair(key, "lora_down.weight", "lora_up.weight", "weight")
-            try_lora_diff(key, "diff", "weight")
-            try_lora_diff(key, "diff_b", "bias")
-            try_lora_diff(key, "diff_m", "modulation")
+                try_lora_pair(key, prefix, "lora_A.weight", "lora_B.weight", "weight")
+                try_lora_pair(key, prefix, "lora_down.weight", "lora_up.weight", "weight")
+                try_lora_diff(key, prefix, "diff", "weight")
+                try_lora_diff(key, prefix, "diff_b", "bias")
+                try_lora_diff(key, prefix, "diff_m", "modulation")
 
         applied_count = 0
         for name, param in weight_dict.items():

@@ -78,11 +78,6 @@ class WanTransformerInfer(BaseTransformerInfer):
         else:
             self.infer_func = self._infer_without_offload
 
-        self.infer_conditional = True
-
-    def switch_status(self):
-        self.infer_conditional = not self.infer_conditional
-
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
         cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)

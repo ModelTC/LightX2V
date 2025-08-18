@@ -35,7 +35,7 @@ class WanAudioPreInfer(WanPreInfer):
         else:
             self.sp_size = 1
 
-    def infer(self, weights, inputs, positive):
+    def infer(self, weights, inputs):
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"]
         if self.config.model_cls == "wan2.2_audio":
             hidden_states = self.scheduler.latents
@@ -71,7 +71,7 @@ class WanAudioPreInfer(WanPreInfer):
         audio_dit_blocks.append(inputs["audio_adapter_pipe"](**audio_model_input))
         # audio_dit_blocks = None##Debug Drop Audio
 
-        if positive:
+        if self.scheduler.infer_condition:
             context = inputs["text_encoder_output"]["context"]
         else:
             context = inputs["text_encoder_output"]["context_null"]
@@ -104,17 +104,34 @@ class WanAudioPreInfer(WanPreInfer):
         y = [weights.patch_embedding.apply(u.unsqueeze(0)) for u in y]
         # y_grid_sizes = torch.stack([torch.tensor(u.shape[2:], dtype=torch.long) for u in y])
         y = [u.flatten(2).transpose(1, 2).squeeze(0) for u in y]
+        ref_seq_lens = torch.tensor([u.size(0) for u in y], dtype=torch.long)
 
         x = [torch.cat([a, b], dim=0) for a, b in zip(x, y)]
         x = torch.stack(x, dim=0)
+        seq_len = x[0].size(0)
+
+        if self.config.model_cls == "wan2.2_audio":
+            bt = t.size(0)
+            ref_seq_len = ref_seq_lens[0].item()
+            t = torch.cat(
+                [
+                    t,
+                    torch.zeros(
+                        (1, ref_seq_len),
+                        dtype=t.dtype,
+                        device=t.device,
+                    ),
+                ],
+                dim=1,
+            )
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
-        # embed = weights.time_embedding_0.apply(embed)
         if self.sensitive_layer_dtype != self.infer_dtype:
             embed = weights.time_embedding_0.apply(embed.to(self.sensitive_layer_dtype))
         else:
             embed = weights.time_embedding_0.apply(embed)
         embed = torch.nn.functional.silu(embed)
+
         embed = weights.time_embedding_2.apply(embed)
         embed0 = torch.nn.functional.silu(embed)
         embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))

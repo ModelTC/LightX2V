@@ -332,9 +332,9 @@ class WanModel:
                 cfg_p_rank = dist.get_rank(cfg_p_group)
 
                 if cfg_p_rank == 0:
-                    noise_pred = self._infer_cond_uncond(inputs, positive=True)
+                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
                 else:
-                    noise_pred = self._infer_cond_uncond(inputs, positive=False)
+                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
 
                 noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
                 dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
@@ -342,13 +342,13 @@ class WanModel:
                 noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
             else:
                 # ==================== CFG Processing ====================
-                noise_pred_cond = self._infer_cond_uncond(inputs, positive=True)
-                noise_pred_uncond = self._infer_cond_uncond(inputs, positive=False)
+                noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
+                noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
 
             self.scheduler.noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
         else:
             # ==================== No CFG ====================
-            self.scheduler.noise_pred = self._infer_cond_uncond(inputs, positive=True)
+            self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
         if self.cpu_offload:
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
@@ -358,8 +358,10 @@ class WanModel:
                 self.transformer_weights.post_weights_to_cpu()
 
     @torch.no_grad()
-    def _infer_cond_uncond(self, inputs, positive=True):
-        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, positive=positive)
+    def _infer_cond_uncond(self, inputs, infer_condition=True):
+        self.scheduler.infer_condition = infer_condition
+
+        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
         if self.config["seq_parallel"]:
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
