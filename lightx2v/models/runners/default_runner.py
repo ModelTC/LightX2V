@@ -10,7 +10,7 @@ from requests.exceptions import RequestException
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
-from lightx2v.utils.utils import cache_video, save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
 
 from .base_runner import BaseRunner
 
@@ -227,8 +227,7 @@ class DefaultRunner(BaseRunner):
         latents, generator = self.run_dit()
 
         images = self.run_vae_decoder(latents, generator)
-        if self.config["model_cls"] != "wan2.2":
-            images = vae_to_comfyui_image(images)
+        images = vae_to_comfyui_image(images)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
@@ -249,10 +248,7 @@ class DefaultRunner(BaseRunner):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"🎬 Start to save video 🎬")
 
-                if self.config["model_cls"] != "wan2.2":
-                    save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
-                else:
-                    cache_video(tensor=images, save_file=self.config.save_video_path, fps=fps, nrow=1, normalize=True, value_range=(-1, 1))
+                save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")
                 logger.info(f"✅ Video saved successfully to: {self.config.save_video_path} ✅")
 
         del latents, generator
