@@ -12,13 +12,8 @@
     "sample_shift": 8,
     "enable_cfg": true,
     "cpu_offload": false,
-    "parallel": {
-        "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses",
-        "cfg_p_size": 2
-    },
     "feature_caching": "Mag",
-    "magcache_calibration": false,
+    "magcache_calibration": true,
     "magcache_K": 4,
     "magcache_thresh": 0.12,
     "magcache_retention_ratio": 0.2,

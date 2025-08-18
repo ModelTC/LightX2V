@@ -17,6 +17,7 @@
         "cfg_p_size": 2
     },
     "feature_caching": "Mag",
+    "magcache_calibration": false,
     "magcache_K": 6,
     "magcache_thresh": 0.24,
     "magcache_retention_ratio": 0.2,

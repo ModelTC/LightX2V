@@ -13,6 +13,7 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "feature_caching": "Mag",
+    "magcache_calibration": false,
     "magcache_K": 4,
     "magcache_thresh": 0.12,
     "magcache_retention_ratio": 0.2,
