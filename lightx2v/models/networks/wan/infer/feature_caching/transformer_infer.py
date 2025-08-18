@@ -995,12 +995,12 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         self.num_steps = config.infer_steps * 2
         self.magcache_thresh = config.magcache_thresh
         self.K = config.magcache_K
+        self.retention_ratio = config.magcache_retention_ratio
+        self.mag_ratios = np.array(config.magcache_ratios)
         self.accumulated_err = [0.0, 0.0]
         self.accumulated_steps = [0, 0]
         self.accumulated_ratio = [1.0, 1.0]
-        self.retention_ratio = config.magcache_retention_ratio
         self.residual_cache = [None, None]
-        self.mag_ratios = np.array(config.magcache_ratios)
 
     def infer_main_blocks(self, weights, pre_infer_out):
         skip_forward = False
@@ -1028,9 +1028,9 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
             x = self.infer_using_cache(pre_infer_out.x)
 
         if self.config.enable_cfg:
-            self.switch_status()
-
-        self.cnt += 1
+            self.cnt += 1
+        else:
+            self.cnt += 2
 
         if self.cnt >= self.num_steps:  # clear the history of current video and prepare for generating the next video.
             self.cnt = 0
