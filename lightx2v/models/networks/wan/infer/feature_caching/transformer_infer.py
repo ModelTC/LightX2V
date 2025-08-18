@@ -991,7 +991,6 @@ class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
 class WanTransformerInferMagCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.cnt = 0
         self.num_steps = config.infer_steps * 2
         self.magcache_thresh = config.magcache_thresh
         self.K = config.magcache_K
@@ -1004,36 +1003,32 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
 
     def infer_main_blocks(self, weights, pre_infer_out):
         skip_forward = False
-        if self.cnt >= int(self.num_steps * self.retention_ratio):
+        step_index = self.scheduler.step_index
+        cnt = step_index * 2 if self.scheduler.infer_condition else step_index * 2 + 1
+        if cnt >= int(self.num_steps * self.retention_ratio):
             # conditional and unconditional in one list
-            cur_mag_ratio = self.mag_ratios[self.cnt]
+            cur_mag_ratio = self.mag_ratios[cnt]
             # magnitude ratio between current step and the cached step
-            self.accumulated_ratio[self.cnt % 2] = self.accumulated_ratio[self.cnt % 2] * cur_mag_ratio
-            self.accumulated_steps[self.cnt % 2] += 1  # skip steps plus 1
+            self.accumulated_ratio[cnt % 2] = self.accumulated_ratio[cnt % 2] * cur_mag_ratio
+            self.accumulated_steps[cnt % 2] += 1  # skip steps plus 1
             # skip error of current steps
-            cur_skip_err = np.abs(1 - self.accumulated_ratio[self.cnt % 2])
+            cur_skip_err = np.abs(1 - self.accumulated_ratio[cnt % 2])
             # accumulated error of multiple steps
-            self.accumulated_err[self.cnt % 2] += cur_skip_err
+            self.accumulated_err[cnt % 2] += cur_skip_err
 
-            if self.accumulated_err[self.cnt % 2] < self.magcache_thresh and self.accumulated_steps[self.cnt % 2] <= self.K:
+            if self.accumulated_err[cnt % 2] < self.magcache_thresh and self.accumulated_steps[cnt % 2] <= self.K:
                 skip_forward = True
             else:
-                self.accumulated_err[self.cnt % 2] = 0
-                self.accumulated_steps[self.cnt % 2] = 0
-                self.accumulated_ratio[self.cnt % 2] = 1.0
+                self.accumulated_err[cnt % 2] = 0
+                self.accumulated_steps[cnt % 2] = 0
+                self.accumulated_ratio[cnt % 2] = 1.0
 
         if not skip_forward:
             x = self.infer_calculating(weights, pre_infer_out)
         else:
             x = self.infer_using_cache(pre_infer_out.x)
 
-        if self.config.enable_cfg:
-            self.cnt += 1
-        else:
-            self.cnt += 2
-
-        if self.cnt >= self.num_steps:  # clear the history of current video and prepare for generating the next video.
-            self.cnt = 0
+        if cnt >= self.num_steps:  # clear the history of current video and prepare for generating the next video.
             self.accumulated_ratio = [1.0, 1.0]
             self.accumulated_err = [0.0, 0.0]
             self.accumulated_steps = [0, 0]
@@ -1052,7 +1047,10 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         if self.config["cpu_offload"]:
             previous_residual = previous_residual.cpu()
 
-        self.residual_cache[self.cnt % 2] = previous_residual
+        if self.scheduler.infer_condition:
+            self.residual_cache[0] = previous_residual
+        else:
+            self.residual_cache[1] = previous_residual
 
         if self.config["cpu_offload"]:
             ori_x = ori_x.to("cpu")
@@ -1062,7 +1060,10 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         return x
 
     def infer_using_cache(self, x):
-        residual_x = self.residual_cache[self.cnt % 2]
+        if self.scheduler.infer_condition:
+            residual_x = self.residual_cache[0]
+        else:
+            residual_x = self.residual_cache[1]
         x.add_(residual_x.cuda())
         return x
 
