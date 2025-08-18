@@ -14,7 +14,6 @@ class WanPostInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, x, pre_infer_out):
         x = self.unpatchify(x, pre_infer_out.grid_sizes)
 

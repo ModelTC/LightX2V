@@ -32,7 +32,6 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         x = self.scheduler.latents
 

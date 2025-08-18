@@ -354,6 +354,7 @@ class WanModel:
                 self.pre_weight.to_cpu()
                 self.transformer_weights.post_weights_to_cpu()
 
+    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         self.scheduler.infer_condition = infer_condition

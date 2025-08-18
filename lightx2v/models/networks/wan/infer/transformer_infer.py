@@ -91,7 +91,6 @@ class WanTransformerInfer(BaseTransformerInfer):
             freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
         return freqs_i
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, pre_infer_out):
         x = self.infer_main_blocks(weights, pre_infer_out)
         return self.infer_post_blocks(weights, x, pre_infer_out.embed)
