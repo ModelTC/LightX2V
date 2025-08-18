@@ -1,6 +1,4 @@
-import gc
 import torch
-import numpy as np
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
@@ -11,19 +9,18 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.blocks = blocks
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-    
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
     def infer_block(self, block, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, joint_attention_kwargs):
-        
         # Get modulation parameters for both streams
         img_mod_params = block.img_mod(temb)  # [B, 6*dim]
         txt_mod_params = block.txt_mod(temb)  # [B, 6*dim]
-        
+
         # Split modulation parameters for norm1 and norm2
-        img_mod1, img_mod2 = img_mod_params.chunk(2, dim=-1)  # Each [B, 3*dim] 
-        txt_mod1, txt_mod2 = txt_mod_params.chunk(2, dim=-1)  # Each [B, 3*dim] 
+        img_mod1, img_mod2 = img_mod_params.chunk(2, dim=-1)  # Each [B, 3*dim]
+        txt_mod1, txt_mod2 = txt_mod_params.chunk(2, dim=-1)  # Each [B, 3*dim]
 
         # Process image stream - norm1 + modulation
         img_normed = block.img_norm1(hidden_states)
@@ -31,7 +28,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         # Process text stream - norm1 + modulation
         txt_normed = block.txt_norm1(encoder_hidden_states)
-        txt_modulated, txt_gate1 = block._modulate(txt_normed, txt_mod1) 
+        txt_modulated, txt_gate1 = block._modulate(txt_normed, txt_mod1)
 
         # Use QwenAttnProcessor2_0 for joint attention computation
         # This directly implements the DoubleStreamLayerMegatron logic:
@@ -74,7 +71,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             hidden_states = hidden_states.clip(-65504, 65504)
 
         return encoder_hidden_states, hidden_states
-        
+
     def infer_calculating(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs):
         for index_block, block in enumerate(self.blocks):
             encoder_hidden_states, hidden_states = self.infer_block(
@@ -84,14 +81,11 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 encoder_hidden_states_mask=encoder_hidden_states_mask,
                 temb=temb,
                 image_rotary_emb=image_rotary_emb,
-                joint_attention_kwargs=attention_kwargs
+                joint_attention_kwargs=attention_kwargs,
             )
         return encoder_hidden_states, hidden_states
-    
-    def infer(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, pre_infer_out, attention_kwargs):
-        _, temb, image_rotary_emb = pre_infer_out 
-        encoder_hidden_states, hidden_states = self.infer_calculating(
-            hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs
-        )
-        return encoder_hidden_states, hidden_states
 
+    def infer(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, pre_infer_out, attention_kwargs):
+        _, temb, image_rotary_emb = pre_infer_out
+        encoder_hidden_states, hidden_states = self.infer_calculating(hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs)
+        return encoder_hidden_states, hidden_states
