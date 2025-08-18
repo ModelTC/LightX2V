@@ -993,70 +993,50 @@ class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
 class WanTransformerInferMagCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.num_steps = config.infer_steps * 2
         self.magcache_thresh = config.magcache_thresh
         self.K = config.magcache_K
         self.retention_ratio = config.magcache_retention_ratio
         self.mag_ratios = np.array(config.magcache_ratios)
-        self.accumulated_err = [0.0, 0.0]
-        self.accumulated_steps = [0, 0]
-        self.accumulated_ratio = [1.0, 1.0]
-        self.residual_cache = [None, None]
+        # {True: cond_param, False: uncond_param}
+        self.accumulated_err = {True: 0.0, False: 0.0}
+        self.accumulated_steps = {True: 0, False: 0}
+        self.accumulated_ratio = {True: 1.0, False: 1.0}
+        self.residual_cache = {True: None, False: None}
         # calibration args
-        self.norm_ratio = []  # mean of magnitude ratio
-        self.norm_std = []  # std of magnitude ratio
-        self.cos_dis = []  # cosine distance of residual features
+        self.norm_ratio = [[1.0], [1.0]]  # mean of magnitude ratio
+        self.norm_std = [[0.0], [0.0]]  # std of magnitude ratio
+        self.cos_dis = [[0.0], [0.0]]  # cosine distance of residual features
 
     def infer_main_blocks(self, weights, pre_infer_out):
         skip_forward = False
         step_index = self.scheduler.step_index
-        cnt = step_index * 2 if self.scheduler.infer_condition else step_index * 2 + 1
+        infer_condition = self.scheduler.infer_condition
 
         if self.config.magcache_calibration:
             skip_forward = False
         else:
-            if cnt >= int(self.num_steps * self.retention_ratio):
+            if step_index >= int(self.config.infer_steps * self.retention_ratio):
                 # conditional and unconditional in one list
-                cur_mag_ratio = self.mag_ratios[cnt]
+                cur_mag_ratio = self.mag_ratios[0][step_index] if infer_condition else self.mag_ratios[1][step_index]
                 # magnitude ratio between current step and the cached step
-                self.accumulated_ratio[cnt % 2] = self.accumulated_ratio[cnt % 2] * cur_mag_ratio
-                self.accumulated_steps[cnt % 2] += 1  # skip steps plus 1
+                self.accumulated_ratio[infer_condition] = self.accumulated_ratio[infer_condition] * cur_mag_ratio
+                self.accumulated_steps[infer_condition] += 1  # skip steps plus 1
                 # skip error of current steps
-                cur_skip_err = np.abs(1 - self.accumulated_ratio[cnt % 2])
+                cur_skip_err = np.abs(1 - self.accumulated_ratio[infer_condition])
                 # accumulated error of multiple steps
-                self.accumulated_err[cnt % 2] += cur_skip_err
+                self.accumulated_err[infer_condition] += cur_skip_err
 
-                if self.accumulated_err[cnt % 2] < self.magcache_thresh and self.accumulated_steps[cnt % 2] <= self.K:
+                if self.accumulated_err[infer_condition] < self.magcache_thresh and self.accumulated_steps[infer_condition] <= self.K:
                     skip_forward = True
                 else:
-                    self.accumulated_err[cnt % 2] = 0
-                    self.accumulated_steps[cnt % 2] = 0
-                    self.accumulated_ratio[cnt % 2] = 1.0
+                    self.accumulated_err[infer_condition] = 0
+                    self.accumulated_steps[infer_condition] = 0
+                    self.accumulated_ratio[infer_condition] = 1.0
 
         if not skip_forward:
             x = self.infer_calculating(weights, pre_infer_out)
         else:
             x = self.infer_using_cache(pre_infer_out.x)
-
-        if cnt >= self.num_steps:  # clear the history of current video and prepare for generating the next video.
-            self.accumulated_ratio = [1.0, 1.0]
-            self.accumulated_err = [0.0, 0.0]
-            self.accumulated_steps = [0, 0]
-            if self.config.magcache_calibration:
-                print("norm ratio")
-                print(self.norm_ratio)
-                print("norm std")
-                print(self.norm_std)
-                print("cos_dis")
-                print(self.cos_dis)
-
-                def save_json(filename, obj_list):
-                    with open(filename + ".json", "w") as f:
-                        json.dump(obj_list, f)
-
-                save_json("wan2_1_mag_ratio", self.norm_ratio)
-                save_json("wan2_1_mag_std", self.norm_std)
-                save_json("wan2_1_cos_dis", self.cos_dis)
 
         if self.clean_cuda_cache:
             torch.cuda.empty_cache()
@@ -1065,7 +1045,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
 
     def infer_calculating(self, weights, pre_infer_out):
         step_index = self.scheduler.step_index
-        cnt = step_index * 2 if self.scheduler.infer_condition else step_index * 2 + 1
+        infer_condition = self.scheduler.infer_condition
 
         ori_x = pre_infer_out.x.clone()
 
@@ -1075,19 +1055,17 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         if self.config["cpu_offload"]:
             previous_residual = previous_residual.cpu()
 
-        if cnt >= 2:
-            norm_ratio = ((previous_residual.norm(dim=-1) / self.residual_cache[cnt % 2].norm(dim=-1)).mean()).item()
-            norm_std = (previous_residual.norm(dim=-1) / self.residual_cache[cnt % 2].norm(dim=-1)).std().item()
-            cos_dis = (1 - F.cosine_similarity(previous_residual, self.residual_cache[cnt % 2], dim=-1, eps=1e-8)).mean().item()
-            self.norm_ratio.append(round(norm_ratio, 5))
-            self.norm_std.append(round(norm_std, 5))
-            self.cos_dis.append(round(cos_dis, 5))
-            print(f"time: {cnt}, norm_ratio: {norm_ratio}, norm_std: {norm_std}, cos_dis: {cos_dis}")
+        if self.config.magcache_calibration and step_index >= 1:
+            norm_ratio = ((previous_residual.norm(dim=-1) / self.residual_cache[infer_condition].norm(dim=-1)).mean()).item()
+            norm_std = (previous_residual.norm(dim=-1) / self.residual_cache[infer_condition].norm(dim=-1)).std().item()
+            cos_dis = (1 - F.cosine_similarity(previous_residual, self.residual_cache[infer_condition], dim=-1, eps=1e-8)).mean().item()
+            _index = int(not infer_condition)
+            self.norm_ratio[_index].append(round(norm_ratio, 5))
+            self.norm_std[_index].append(round(norm_std, 5))
+            self.cos_dis[_index].append(round(cos_dis, 5))
+            print(f"time: {step_index}, infer_condition: {infer_condition}, norm_ratio: {norm_ratio}, norm_std: {norm_std}, cos_dis: {cos_dis}")
 
-        if self.scheduler.infer_condition:
-            self.residual_cache[0] = previous_residual
-        else:
-            self.residual_cache[1] = previous_residual
+        self.residual_cache[infer_condition] = previous_residual
 
         if self.config["cpu_offload"]:
             ori_x = ori_x.to("cpu")
@@ -1097,13 +1075,28 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         return x
 
     def infer_using_cache(self, x):
-        if self.scheduler.infer_condition:
-            residual_x = self.residual_cache[0]
-        else:
-            residual_x = self.residual_cache[1]
+        residual_x = self.residual_cache[self.scheduler.infer_condition]
         x.add_(residual_x.cuda())
         return x
 
     def clear(self):
-        self.residual_cache = [None, None]
+        self.accumulated_err = {True: 0.0, False: 0.0}
+        self.accumulated_steps = {True: 0, False: 0}
+        self.accumulated_ratio = {True: 1.0, False: 1.0}
+        self.residual_cache = {True: None, False: None}
+        if self.config.magcache_calibration:
+            print("norm ratio")
+            print(self.norm_ratio)
+            print("norm std")
+            print(self.norm_std)
+            print("cos_dis")
+            print(self.cos_dis)
+
+            def save_json(filename, obj_list):
+                with open(filename + ".json", "w") as f:
+                    json.dump(obj_list, f)
+
+            save_json("wan2_1_mag_ratio", self.norm_ratio)
+            save_json("wan2_1_mag_std", self.norm_std)
+            save_json("wan2_1_cos_dis", self.cos_dis)
         torch.cuda.empty_cache()
