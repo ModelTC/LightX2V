@@ -57,7 +57,8 @@ def main():
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "flf2v", "t2i"], default="t2v")
+
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "flf2v"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
