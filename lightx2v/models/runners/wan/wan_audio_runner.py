@@ -312,12 +312,12 @@ class VideoGenerator:
         _, nframe, height, width = self.model.scheduler.latents.shape
         if self.config.model_cls == "wan2.2_audio":
             if prev_video is not None:
-                prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config).to(dtype)
+                prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
             else:
                 prev_latents = None
             _, prev_mask = self._wan22_masks_like([self.model.scheduler.latents], zero=True, prev_length=prev_len)
         else:
-            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config)[0].to(dtype)
+            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype))[0].to(dtype)
 
             if prev_latents is not None:
                 prev_token_length = (prev_frame_length - 1) // 4 + 1

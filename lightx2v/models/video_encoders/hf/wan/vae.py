@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 
+from lightx2v.models.video_encoders.hf.wan.dist.distributed_env import DistributedEnv
+from lightx2v.models.video_encoders.hf.wan.dist.split_gather import gather_forward_split_backward, split_forward_gather_backward
 from lightx2v.utils.utils import load_weights
 
 __all__ = [
@@ -517,6 +519,7 @@ class WanVAE_(nn.Module):
         self.temperal_downsample = temperal_downsample
         self.temperal_upsample = temperal_downsample[::-1]
         self.spatial_compression_ratio = 2 ** len(self.temperal_downsample)
+        self.use_approximate_patch = False
 
         # The minimal tile height and width for spatial tiling to be used
         self.tile_sample_min_height = 256
@@ -546,6 +549,12 @@ class WanVAE_(nn.Module):
             self.temperal_upsample,
             dropout,
         )
+
+    def enable_approximate_patch(self):
+        self.use_approximate_patch = True
+
+    def disable_approximate_patch(self):
+        self.use_approximate_patch = False
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -682,6 +691,9 @@ class WanVAE_(nn.Module):
         return dec
 
     def encode(self, x, scale):
+        # if self.use_approximate_patch:
+        #     x = split_forward_gather_backward(None, x, 3)
+
         self.clear_cache()
         ## cache
         t = x.shape[2]
@@ -707,11 +719,17 @@ class WanVAE_(nn.Module):
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(1, self.z_dim, 1, 1, 1)
         else:
             mu = (mu - scale[0]) * scale[1]
+        # if self.use_approximate_patch:
+        #     mu = gather_forward_split_backward(None, mu, 3)
         self.clear_cache()
         return mu
 
     def decode(self, z, scale):
         self.clear_cache()
+        if self.use_approximate_patch:
+            print(111111111111111111)
+            z = split_forward_gather_backward(None, z, 3)
+
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
@@ -734,6 +752,10 @@ class WanVAE_(nn.Module):
                     feat_idx=self._conv_idx,
                 )
                 out = torch.cat([out, out_], 2)
+
+        if self.use_approximate_patch:
+            out = gather_forward_split_backward(None, out, 3)
+
         self.clear_cache()
         return out
 
@@ -845,6 +867,12 @@ class WanVAE:
 
         # init model
         self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload).eval().requires_grad_(False).to(device)
+        self.use_approximate_patch = False
+        if self.parallel and self.parallel.get("use_approximate_patch", False):
+            assert not self.use_tiling
+            DistributedEnv.initialize(None)
+            self.use_approximate_patch = True
+            self.model.enable_approximate_patch()
 
     def current_device(self):
         return next(self.model.parameters()).device
@@ -865,11 +893,11 @@ class WanVAE:
         self.inv_std = self.inv_std.cuda()
         self.scale = [self.mean, self.inv_std]
 
-    def encode(self, videos, args):
+    def encode(self, videos):
         """
         videos: A list of videos each with shape [C, T, H, W].
         """
-        if hasattr(args, "cpu_offload") and args.cpu_offload:
+        if self.cpu_offload:
             self.to_cuda()
 
         if self.use_tiling:
@@ -877,7 +905,7 @@ class WanVAE:
         else:
             out = [self.model.encode(u.unsqueeze(0).to(self.current_device()), self.scale).float().squeeze(0) for u in videos]
 
-        if hasattr(args, "cpu_offload") and args.cpu_offload:
+        if self.cpu_offload:
             self.to_cpu()
         return out
 
@@ -933,7 +961,7 @@ class WanVAE:
         if self.cpu_offload:
             self.to_cuda()
 
-        if self.parallel:
+        if self.parallel and not self.use_approximate_patch:
             world_size = dist.get_world_size()
             cur_rank = dist.get_rank()
             height, width = zs.shape[2], zs.shape[3]
