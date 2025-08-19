@@ -691,14 +691,10 @@ class WanVAE_(nn.Module):
         return dec
 
     def encode(self, x, scale):
-        # if self.use_approximate_patch:
-        #     x = split_forward_gather_backward(None, x, 3)
-
         self.clear_cache()
         ## cache
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
-        ## 对encode输入的x，按时间拆分为1、4、4、4....
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
@@ -719,15 +715,13 @@ class WanVAE_(nn.Module):
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(1, self.z_dim, 1, 1, 1)
         else:
             mu = (mu - scale[0]) * scale[1]
-        # if self.use_approximate_patch:
-        #     mu = gather_forward_split_backward(None, mu, 3)
+
         self.clear_cache()
         return mu
 
     def decode(self, z, scale):
         self.clear_cache()
         if self.use_approximate_patch:
-            print(111111111111111111)
             z = split_forward_gather_backward(None, z, 3)
 
         # z: [b,c,t,h,w]
