@@ -9,7 +9,7 @@ from lightx2v.common.offload.manager import (
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 
-from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_audio, compute_freqs_audio_dist, compute_freqs_dist
+from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_dist
 
 
 class WanTransformerInfer(BaseTransformerInfer):
@@ -86,15 +86,9 @@ class WanTransformerInfer(BaseTransformerInfer):
 
     def compute_freqs(self, q, grid_sizes, freqs):
         if self.config["seq_parallel"]:
-            if "audio" in self.config.get("model_cls", ""):
-                freqs_i = compute_freqs_audio_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
-            else:
-                freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
+            freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
         else:
-            if "audio" in self.config.get("model_cls", ""):
-                freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
-            else:
-                freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
+            freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
         return freqs_i
 
     def infer(self, weights, pre_infer_out):
@@ -539,10 +533,12 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         # Apply audio_dit if available
         if audio_dit_blocks is not None and hasattr(self, "block_idx"):
+            audio_grid_sizes = [row.clone() for row in grid_sizes]
+            audio_grid_sizes[0][0] -= 1
             for ipa_out in audio_dit_blocks:
                 if self.block_idx in ipa_out:
                     cur_modify = ipa_out[self.block_idx]
-                    x = cur_modify["modify_func"](x, grid_sizes, **cur_modify["kwargs"])
+                    x = cur_modify["modify_func"](x, audio_grid_sizes, **cur_modify["kwargs"])
 
         if self.clean_cuda_cache:
             del y, c_gate_msa
