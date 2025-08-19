@@ -157,9 +157,9 @@ class WanModel:
                 for k in f.keys():
                     if f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
                         if unified_dtype or all(s not in k for s in sensitive_layer):
-                            weight_dict[k] = f.get_tensor(k).pin_memory().to(GET_DTYPE()).to(self.device)
+                            weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).pin_memory().to(self.device)
                         else:
-                            weight_dict[k] = f.get_tensor(k).pin_memory().to(GET_SENSITIVE_DTYPE()).to(self.device)
+                            weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).pin_memory().to(self.device)
                     else:
                         weight_dict[k] = f.get_tensor(k).pin_memory().to(self.device)
 
