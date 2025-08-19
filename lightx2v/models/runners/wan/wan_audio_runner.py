@@ -100,7 +100,7 @@ SIZE_CONFIGS = {
     "832*480": (832, 480),
     "1024*1024": (1024, 1024),
     "544*960": (544, 960),
-    "960*544": (960 * 544),
+    "960*544": (960, 544),
     "576*576": (576, 576),
     "704*704": (704, 704),
     "960*960": (960, 960),
@@ -709,17 +709,17 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         logger.info(f"[wan_audio] adaptive_resize: {adaptive}, tgt_h: {config.tgt_h}, tgt_w: {config.tgt_w}, lat_h: {config.lat_h}, lat_w: {config.lat_w}")
 
-        cond_frms = isotropic_crop_resize(ref_img, size=(config.tgt_h, config.tgt_w)).transpose(0, 1)
-
-        # clip encoder
-        clip_encoder_out = self.image_encoder.visual([cond_frms]).squeeze(0).to(GET_DTYPE()) if self.config.get("use_image_encoder", True) else None
-        # vae encode
-        # cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = vae_model.encode(cond_frms.to(torch.float32), config)
-
         if self.config.model_cls == "wan2.2_audio":
+            cond_frms = isotropic_crop_resize(ref_img, size=(config.tgt_h, config.tgt_w)).transpose(0, 1)
+            vae_encoder_out = vae_model.encode(cond_frms.to(torch.float32))
             vae_encoder_out = vae_encoder_out.unsqueeze(0).to(GET_DTYPE())
         else:
+            cond_frms = isotropic_crop_resize(ref_img, size=(config.tgt_h, config.tgt_w))
+            # clip encoder
+            clip_encoder_out = self.image_encoder.visual([cond_frms]).squeeze(0).to(GET_DTYPE()) if self.config.get("use_image_encoder", True) else None
+            # vae encode
+            cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
+            vae_encoder_out = vae_model.encode(cond_frms.to(torch.float32))
             if isinstance(vae_encoder_out, list):
                 vae_encoder_out = torch.stack(vae_encoder_out, dim=0).to(GET_DTYPE())
 
