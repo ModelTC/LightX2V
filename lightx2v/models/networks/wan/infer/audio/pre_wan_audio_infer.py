@@ -40,7 +40,8 @@ class WanAudioPreInfer(WanPreInfer):
         if self.config.model_cls == "wan2.2_audio":
             hidden_states = self.scheduler.latents
             prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
-            hidden_states = (1.0 - prev_mask[0]) * prev_latents + prev_mask[0] * hidden_states
+            if prev_latents is not None:
+                hidden_states = (1.0 - prev_mask[0]) * prev_latents + prev_mask[0] * hidden_states
         else:
             prev_latents = prev_latents.unsqueeze(0)
             prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
@@ -83,15 +84,6 @@ class WanAudioPreInfer(WanPreInfer):
         num_channels, _, height, width = x[0].shape
         _, ref_num_channels, ref_num_frames, _, _ = ref_image_encoder.shape
 
-        if ref_num_channels != num_channels:
-            zero_padding = torch.zeros(
-                (batch_size, num_channels - ref_num_channels, ref_num_frames, height, width),
-                dtype=self.scheduler.latents.dtype,
-                device=self.scheduler.latents.device,
-            )
-            ref_image_encoder = torch.concat([ref_image_encoder, zero_padding], dim=1)
-        y = list(torch.unbind(ref_image_encoder, dim=0))  # 第一个batch维度变成list
-
         # embeddings
         x = [weights.patch_embedding.apply(u.unsqueeze(0)) for u in x]
         x_grid_sizes = torch.stack([torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
@@ -101,14 +93,27 @@ class WanAudioPreInfer(WanPreInfer):
         x = torch.cat([torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))], dim=1) for u in x])
         valid_patch_length = x[0].size(0)
 
+        if ref_num_channels != num_channels:
+            zero_padding = torch.zeros(
+                (batch_size, num_channels - ref_num_channels, ref_num_frames, height, width),
+                dtype=self.scheduler.latents.dtype,
+                device=self.scheduler.latents.device,
+            )
+            ref_image_encoder = torch.concat([ref_image_encoder, zero_padding], dim=1)
+        y = list(torch.unbind(ref_image_encoder, dim=0))  # 第一个batch维度变成list
+
         y = [weights.patch_embedding.apply(u.unsqueeze(0)) for u in y]
         # y_grid_sizes = torch.stack([torch.tensor(u.shape[2:], dtype=torch.long) for u in y])
         y = [u.flatten(2).transpose(1, 2).squeeze(0) for u in y]
-        ref_seq_lens = torch.tensor([u.size(0) for u in y], dtype=torch.long)
+        ref_seq_lens = torch.tensor([u.size(0) for u in y], dtype=torch.long).cuda()
 
         x = [torch.cat([a, b], dim=0) for a, b in zip(x, y)]
         x = torch.stack(x, dim=0)
-        seq_len = x[0].size(0)
+        seq_lens = seq_lens + ref_seq_lens
+
+        ####for r2v # zero temporl component corresponding to ref embeddings
+        self.freqs[x_grid_sizes[0][0] :, : x_grid_sizes[0][2]] = 0
+        x_grid_sizes[:, 0] += 1
 
         if self.config.model_cls == "wan2.2_audio":
             bt = t.size(0)

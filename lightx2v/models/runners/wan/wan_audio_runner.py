@@ -20,7 +20,7 @@ from lightx2v.models.networks.wan.audio_adapter import AudioAdapter, AudioAdapte
 from lightx2v.models.networks.wan.audio_model import Wan22MoeAudioModel, WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner
-from lightx2v.models.schedulers.wan.audio.scheduler import ConsistencyModelScheduler
+from lightx2v.models.schedulers.wan.audio.scheduler import EulerSchedulerTimestepFix
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
@@ -40,8 +40,10 @@ def memory_efficient_inference():
 
 
 def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
-    assert sp_size > 0 and (sp_size & (sp_size - 1)) == 0, "sp_size must be a power of 2"
+    def is_power_of_two(n):
+        return n > 0 and (n & (n - 1)) == 0
 
+    assert is_power_of_two(sp_size), "sp_size must be a power of 2"
     h_ratio, w_ratio = 1, 1
     while sp_size != 1:
         sp_size //= 2
@@ -91,29 +93,62 @@ def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
     return resized_frames
 
 
-def adaptive_resize(img):
-    bucket_config = {
-        0.667: (np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64), np.array([0.2, 0.5, 0.3])),
-        1.0: (np.array([[480, 480], [576, 576], [704, 704], [960, 960]], dtype=np.int64), np.array([0.1, 0.1, 0.5, 0.3])),
-        1.5: (np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64)[:, ::-1], np.array([0.2, 0.5, 0.3])),
-    }
-    ori_height = img.shape[-2]
-    ori_weight = img.shape[-1]
-    ori_ratio = ori_height / ori_weight
+SIZE_CONFIGS = {
+    "720*1280": (720, 1280),
+    "1280*720": (1280, 720),
+    "480*832": (480, 832),
+    "832*480": (832, 480),
+    "1024*1024": (1024, 1024),
+    "544*960": (544, 960),
+    "960*544": (960 * 544),
+    "576*576": (576, 576),
+    "704*704": (704, 704),
+    "960*960": (960, 960),
+    "704*1280": (704, 1280),
+    "1280*704": (1280, 704),
+}
+
+SUPPORTED_SIZES = {
+    "t2v-14B": ("720*1280", "1280*720", "480*832", "832*480"),
+    "t2v-1.3B": ("480*832", "832*480"),
+    "i2v-14B": ("720*1280", "1280*720", "480*832", "832*480"),
+    "flf2v-14B": ("720*1280", "1280*720", "480*832", "832*480"),
+    "t2i-14B": tuple(SIZE_CONFIGS.keys()),
+    "vace-1.3B": ("480*832", "832*480"),
+    "vace-14B": ("720*1280", "1280*720", "480*832", "832*480"),
+    "r2v-audio": ("720*1280", "1280*720", "480*832", "832*480", "544*960", "960*544", "576*576", "704*704", "960*960"),
+    "tr2v-audio": ("704*1280", "1280*704"),
+}
+
+DEFAULT_BUCKET_CONFIG = {
+    0.58: ((480, 832), (544, 960), (720, 1280)),
+    1.0: ((576, 576), (704, 704), (960, 960)),
+    1.7: ((832, 480), (960, 544), (1280, 720)),
+}
+
+
+def _get_bucket_config(target_resolutions=None):
+    if target_resolutions is None:
+        return DEFAULT_BUCKET_CONFIG
+
+    resolutions = sorted((SIZE_CONFIGS[key] for key in target_resolutions), key=lambda r: r[0] * r[1])
+    bucket_config = {}
+    for w, h in resolutions:
+        aspect = round(w / h, 2)
+        bucket_config.setdefault(aspect, []).append([w, h])
+    return bucket_config
+
+
+def get_adaptive_size(height, width, target_resolutions=None):
+    bucket_config = _get_bucket_config(target_resolutions)
+    ori_ratio = height / width
     aspect_ratios = np.array(np.array(list(bucket_config.keys())))
-    closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
-    closet_ratio = aspect_ratios[closet_aspect_idx]
-    if ori_ratio < 1.0:
-        target_h, target_w = 480, 832
-    elif ori_ratio == 1.0:
-        target_h, target_w = 480, 480
-    else:
-        target_h, target_w = 832, 480
-    for resolution in bucket_config[closet_ratio][0]:
-        if ori_height * ori_weight >= resolution[0] * resolution[1]:
+    closet_ratio = aspect_ratios[np.argmin(np.abs(aspect_ratios - ori_ratio))]
+    target_h, target_w = bucket_config[closet_ratio][0]
+    for resolution in bucket_config[closet_ratio]:
+        if height * width >= resolution[0] * resolution[1]:
             target_h, target_w = resolution
-    cropped_img = isotropic_crop_resize(img, (target_h, target_w))
-    return cropped_img, target_h, target_w
+    return target_h, target_w
 
 
 @dataclass
@@ -270,15 +305,21 @@ class VideoGenerator:
             last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
             last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
             prev_frames[:, :, :prev_frame_length] = last_frames
+            prev_len = (prev_frame_length - 1) // 4 + 1
+        else:
+            prev_len = 0
 
         _, nframe, height, width = self.model.scheduler.latents.shape
         if self.config.model_cls == "wan2.2_audio":
-            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config).to(dtype)
-            _, prev_mask = self._wan22_masks_like([self.model.scheduler.latents], zero=True, prev_length=prev_latents.shape[1])
+            if prev_video is not None:
+                prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config).to(dtype)
+            else:
+                prev_latents = None
+            _, prev_mask = self._wan22_masks_like([self.model.scheduler.latents], zero=True, prev_length=prev_len)
         else:
             prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config)[0].to(dtype)
 
-            if prev_video is not None:
+            if prev_latents is not None:
                 prev_token_length = (prev_frame_length - 1) // 4 + 1
                 prev_frame_len = max((prev_token_length - 1) * 4 + 1, 0)
             else:
@@ -289,9 +330,10 @@ class VideoGenerator:
             prev_mask[:, prev_frame_len:] = 0
             prev_mask = self._wan_mask_rearrange(prev_mask).unsqueeze(0)
 
-        if prev_latents.shape[-2:] != (height, width):
-            logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")
-            prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
+        if prev_latents is not None:
+            if prev_latents.shape[-2:] != (height, width):
+                logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")
+                prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
 
         return {"prev_latents": prev_latents, "prev_mask": prev_mask}
 
@@ -361,7 +403,8 @@ class VideoGenerator:
                 if self.config.model_cls == "wan2.2_audio":
                     prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
                     prev_latents = inputs["previmg_encoder_output"]["prev_latents"]
-                    self.model.scheduler.latents = (1.0 - prev_mask[0]) * prev_latents + prev_mask[0] * self.model.scheduler.latents
+                    if prev_latents is not None:
+                        self.model.scheduler.latents = (1.0 - prev_mask[0]) * prev_latents + prev_mask[0] * self.model.scheduler.latents
 
             if self.progress_callback:
                 segment_progress = (segment_idx * total_steps + step_index + 1) / (self.total_segments * total_steps)
@@ -398,7 +441,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
-        scheduler = ConsistencyModelScheduler(self.config)
+        # scheduler = ConsistencyModelScheduler(self.config)
+        scheduler = EulerSchedulerTimestepFix(self.config)
         self.model.set_scheduler(scheduler)
 
     def load_audio_adapter_lazy(self):
@@ -635,15 +679,18 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         adaptive = config.get("adaptive_resize", False)
 
+        h, w = ref_img.shape[2:]
         if adaptive:
             # Use adaptive_resize to modify aspect ratio
-            ref_img, h, w = adaptive_resize(ref_img)
+            if self.config.model_cls == "wan2.2_audio":
+                h, w = get_adaptive_size(h, w, SUPPORTED_SIZES["tr2v-audio"])
+            else:
+                h, w = get_adaptive_size(h, w, SUPPORTED_SIZES["r2v-audio"])
 
             patched_h = h // self.config.vae_stride[1] // self.config.patch_size[1]
             patched_w = w // self.config.vae_stride[2] // self.config.patch_size[2]
 
         else:
-            h, w = ref_img.shape[2:]
             aspect_ratio = h / w
             max_area = config.target_height * config.target_width
 
@@ -660,14 +707,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         logger.info(f"[wan_audio] adaptive_resize: {adaptive}, tgt_h: {config.tgt_h}, tgt_w: {config.tgt_w}, lat_h: {config.lat_h}, lat_w: {config.lat_w}")
 
-        cond_frms = torch.nn.functional.interpolate(ref_img, size=(config.tgt_h, config.tgt_w), mode="bicubic")
+        cond_frms = isotropic_crop_resize(ref_img, size=(config.tgt_h, config.tgt_w)).transpose(0, 1)
 
         # clip encoder
         clip_encoder_out = self.image_encoder.visual([cond_frms]).squeeze(0).to(GET_DTYPE()) if self.config.get("use_image_encoder", True) else None
-
         # vae encode
-        cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = vae_model.encode(cond_frms.to(torch.float), config)
+        # cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
+        vae_encoder_out = vae_model.encode(cond_frms.to(torch.float32), config)
 
         if self.config.model_cls == "wan2.2_audio":
             vae_encoder_out = vae_encoder_out.unsqueeze(0).to(GET_DTYPE())
