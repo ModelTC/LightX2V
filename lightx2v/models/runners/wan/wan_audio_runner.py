@@ -413,7 +413,8 @@ class VideoGenerator:
         # Decode latents
         latents = self.model.scheduler.latents
         generator = self.model.scheduler.generator
-        gen_video = self.vae_decoder.decode(latents, generator=generator, config=self.config)
+        with ProfilingContext("Run VAE Decoder"):
+            gen_video = self.vae_decoder.decode(latents, generator=generator, config=self.config)
         gen_video = torch.clamp(gen_video, -1, 1).to(torch.float)
 
         return gen_video
@@ -639,7 +640,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             if parent_dir and not os.path.exists(parent_dir):
                 os.makedirs(parent_dir, exist_ok=True)
 
-            subprocess.call(["/usr/bin/ffmpeg", "-y", "-i", video_path, "-i", audio_path, output_path])
+            with ProfilingContext("Run FFmpeg MP4 Encoder"):
+                subprocess.call(["/usr/bin/ffmpeg", "-y", "-i", video_path, "-i", audio_path, output_path])
 
             logger.info(f"Saved video with audio to: {output_path}")
 
