@@ -17,6 +17,7 @@
     "use_31_block": false,
     "adaptive_resize": true,
     "parallel": {
+        "vae_p_size": 4,
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"
     }
