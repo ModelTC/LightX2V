@@ -47,3 +47,4 @@ HuggingFace: https://huggingface.co/lightx2v
    变分辨率推理 <papers/changing_resolution.md>
    步数蒸馏 <papers/step_distill.md>
    自回归蒸馏 <papers/autoregressive_distill.md>
+   开源模型 <papers/models.md>
