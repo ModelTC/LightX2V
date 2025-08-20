@@ -177,7 +177,7 @@ class QwenImageScheduler(BaseScheduler):
             width, height = self.config.aspect_ratios[self.config.aspect_ratio]
             self.img_shapes = [(1, height // self.config.vae_scale_factor // 2, width // self.config.vae_scale_factor // 2)] * self.config.batchsize
         elif self.config.task == "i2i":
-            image_height, image_width = inputs["text_encoder_output"]["image_info"]
+            image_height, image_width = inputs["image_info"]
             self.img_shapes = [
                 [
                     (1, self.config.auto_hight // self.config.vae_scale_factor // 2, self.config.auto_width // self.config.vae_scale_factor // 2),

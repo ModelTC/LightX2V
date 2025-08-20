@@ -86,6 +86,7 @@ class QwenImageRunner(DefaultRunner):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         text_encoder_output = self.run_text_encoder(prompt, image)
         image_encoder_output = self.run_vae_encoder(image=text_encoder_output["preprocessed_image"])
+        image_encoder_output["image_info"] = text_encoder_output["image_info"]
         torch.cuda.empty_cache()
         gc.collect()
         return {
