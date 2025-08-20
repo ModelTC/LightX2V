@@ -53,6 +53,12 @@ class QwenImageTransformerModel:
     def infer(self, inputs):
         t = self.scheduler.timesteps[self.scheduler.step_index]
         latents = self.scheduler.latents
+        if self.config.task == "i2i":
+            image_latents = inputs["image_encoder_output"]["image_latents"]
+            latents_input = torch.cat([latents, image_latents], dim=1)
+        else:
+            latents_input = latents
+
         timestep = t.expand(latents.shape[0]).to(latents.dtype)
         img_shapes = self.scheduler.img_shapes
 
@@ -60,9 +66,8 @@ class QwenImageTransformerModel:
         prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
 
         txt_seq_lens = prompt_embeds_mask.sum(dim=1).tolist() if prompt_embeds_mask is not None else None
-
         hidden_states, encoder_hidden_states, encoder_hidden_states_mask, pre_infer_out = self.pre_infer.infer(
-            hidden_states=latents,
+            hidden_states=latents_input,
             timestep=timestep / 1000,
             guidance=self.scheduler.guidance,
             encoder_hidden_states_mask=prompt_embeds_mask,
@@ -81,5 +86,7 @@ class QwenImageTransformerModel:
         )
 
         noise_pred = self.post_infer.infer(hidden_states, pre_infer_out[1])
+        if self.config.task == "i2i":
+            noise_pred = noise_pred[:, : latents.size(1)]
 
         self.scheduler.noise_pred = noise_pred

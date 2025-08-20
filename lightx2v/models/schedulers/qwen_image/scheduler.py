@@ -129,10 +129,7 @@ class QwenImageScheduler(BaseScheduler):
 
     def prepare_latents(self):
         shape = self.config.target_shape
-        width, height = self.config.aspect_ratios[self.config.aspect_ratio]
-        self.vae_scale_factor = self.config.vae_scale_factor if getattr(self, "vae", None) else 8
-        height = 2 * (int(height) // (self.vae_scale_factor * 2))
-        width = 2 * (int(width) // (self.vae_scale_factor * 2))
+        width, height = shape[-1], shape[-2]
         latents = randn_tensor(shape, generator=self.generator, device=self.device, dtype=self.dtype)
         latents = self._pack_latents(latents, self.config.batchsize, self.config.num_channels_latents, height, width)
         latent_image_ids = self._prepare_latent_image_ids(self.config.batchsize, height // 2, width // 2, self.device, self.dtype)
@@ -175,14 +172,23 @@ class QwenImageScheduler(BaseScheduler):
             guidance = None
         self.guidance = guidance
 
-    def set_img_shapes(self):
-        width, height = self.config.aspect_ratios[self.config.aspect_ratio]
-        self.img_shapes = [(1, height // self.config.vae_scale_factor // 2, width // self.config.vae_scale_factor // 2)] * self.config.batchsize
+    def set_img_shapes(self, inputs):
+        if self.config.task == "t2i":
+            width, height = self.config.aspect_ratios[self.config.aspect_ratio]
+            self.img_shapes = [(1, height // self.config.vae_scale_factor // 2, width // self.config.vae_scale_factor // 2)] * self.config.batchsize
+        elif self.config.task == "i2i":
+            image_height, image_width = inputs["text_encoder_output"]["image_info"]
+            self.img_shapes = [
+                [
+                    (1, self.config.auto_hight // self.config.vae_scale_factor // 2, self.config.auto_width // self.config.vae_scale_factor // 2),
+                    (1, image_height // self.config.vae_scale_factor // 2, image_width // self.config.vae_scale_factor // 2),
+                ]
+            ]
 
-    def prepare(self, image_encoder_output):
+    def prepare(self, inputs):
         self.prepare_latents()
         self.prepare_guidance()
-        self.set_img_shapes()
+        self.set_img_shapes(inputs)
         self.set_timesteps()
 
     def step_post(self):
