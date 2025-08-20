@@ -273,10 +273,10 @@ class VideoGenerator:
 
         _, nframe, height, width = self.model.scheduler.latents.shape
         if self.config.model_cls == "wan2.2_audio":
-            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config).to(dtype)
+            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
             _, prev_mask = self._wan22_masks_like([self.model.scheduler.latents], zero=True, prev_length=prev_latents.shape[1])
         else:
-            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype), self.config)[0].to(dtype)
+            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype))[0].to(dtype)
 
             if prev_video is not None:
                 prev_token_length = (prev_frame_length - 1) // 4 + 1
@@ -370,7 +370,8 @@ class VideoGenerator:
         # Decode latents
         latents = self.model.scheduler.latents
         generator = self.model.scheduler.generator
-        gen_video = self.vae_decoder.decode(latents, generator=generator, config=self.config)
+        with ProfilingContext("Run VAE Decoder"):
+            gen_video = self.vae_decoder.decode(latents, generator=generator, config=self.config)
         gen_video = torch.clamp(gen_video, -1, 1).to(torch.float)
 
         return gen_video
@@ -667,7 +668,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         # vae encode
         cond_frms = rearrange(cond_frms, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = vae_model.encode(cond_frms.to(torch.float), config)
+        vae_encoder_out = vae_model.encode(cond_frms.to(torch.float))
 
         if self.config.model_cls == "wan2.2_audio":
             vae_encoder_out = vae_encoder_out.unsqueeze(0).to(GET_DTYPE())

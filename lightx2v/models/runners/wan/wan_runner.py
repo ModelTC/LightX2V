@@ -135,7 +135,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
             "device": vae_device,
-            "parallel": self.config.parallel and self.config.parallel.get("vae_p_size", False) and self.config.parallel.vae_p_size > 1,
+            "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
         }
@@ -155,7 +155,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
             "device": vae_device,
-            "parallel": self.config.parallel and self.config.parallel.get("vae_p_size", False) and self.config.parallel.vae_p_size > 1,
+            "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
         }
@@ -313,7 +313,7 @@ class WanRunner(DefaultRunner):
                 dim=1,
             ).cuda()
 
-        vae_encoder_out = self.vae_encoder.encode([vae_input], self.config)[0]
+        vae_encoder_out = self.vae_encoder.encode([vae_input])[0]
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
@@ -497,5 +497,5 @@ class Wan22DenseRunner(WanRunner):
         return vae_encoder_out
 
     def get_vae_encoder_output(self, img):
-        z = self.vae_encoder.encode(img, self.config)
+        z = self.vae_encoder.encode(img)
         return z

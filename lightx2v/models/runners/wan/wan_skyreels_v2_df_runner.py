@@ -37,7 +37,7 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
         config.lat_h = lat_h
         config.lat_w = lat_w
 
-        vae_encoder_out = vae_model.encode([torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1).cuda()], config)[0]
+        vae_encoder_out = vae_model.encode([torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1).cuda()])[0]
         vae_encoder_out = vae_encoder_out.to(GET_DTYPE())
         return vae_encoder_out
 
@@ -87,7 +87,7 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
         for i in range(n_iter):
             if output_video is not None:  # i !=0
                 prefix_video = output_video[:, :, -overlap_history:].to(self.model.scheduler.device)
-                prefix_video = self.vae_model.encode(prefix_video, self.config)[0]  # [(b, c, f, h, w)]
+                prefix_video = self.vae_model.encode(prefix_video)[0]  # [(b, c, f, h, w)]
                 if prefix_video.shape[1] % causal_block_size != 0:
                     truncate_len = prefix_video.shape[1] % causal_block_size
                     # the length of prefix video is truncated for the casual block size alignment.
