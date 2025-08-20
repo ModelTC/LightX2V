@@ -2,13 +2,13 @@ import math
 
 import torch
 
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import *
 
-from ..transformer_infer import WanTransformerInfer
 from ..utils import apply_rotary_emb, compute_freqs_causvid
 
 
-class WanTransformerInferCausVid(WanTransformerInfer):
+class WanTransformerInferCausVid(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         self.num_frames = config["num_frames"]

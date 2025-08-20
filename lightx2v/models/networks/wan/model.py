@@ -18,6 +18,9 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
     WanTransformerInferTaylorCaching,
     WanTransformerInferTeaCaching,
 )
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import (
+    WanOffloadTransformerInfer,
+)
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import (
@@ -64,7 +67,12 @@ class WanModel:
                 self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
                 self.config.use_gguf = True
             else:
-                self.dit_quantized_ckpt = find_hf_model_path(config, self.model_path, "dit_quantized_ckpt", subdir=dit_quant_scheme)
+                self.dit_quantized_ckpt = find_hf_model_path(
+                    config,
+                    self.model_path,
+                    "dit_quantized_ckpt",
+                    subdir=dit_quant_scheme,
+                )
             quant_config_path = os.path.join(self.dit_quantized_ckpt, "config.json")
             if os.path.exists(quant_config_path):
                 with open(quant_config_path, "r") as f:
@@ -90,7 +98,7 @@ class WanModel:
         self.post_infer_class = WanPostInfer
 
         if self.config["feature_caching"] == "NoCaching":
-            self.transformer_infer_class = WanTransformerInfer
+            self.transformer_infer_class = WanTransformerInfer if not self.cpu_offload else WanOffloadTransformerInfer
         elif self.config["feature_caching"] == "Tea":
             self.transformer_infer_class = WanTransformerInferTeaCaching
         elif self.config["feature_caching"] == "TaylorSeer":
@@ -158,7 +166,11 @@ class WanModel:
             with safe_open(safetensor_path, framework="pt") as f:
                 logger.info(f"Loading weights from {safetensor_path}")
                 for k in f.keys():
-                    if f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
+                    if f.get_tensor(k).dtype in [
+                        torch.float16,
+                        torch.bfloat16,
+                        torch.float,
+                    ]:
                         if unified_dtype or all(s not in k for s in sensitive_layer):
                             weight_dict[k] = f.get_tensor(k).pin_memory().to(GET_DTYPE()).to(self.device)
                         else:
@@ -176,7 +188,11 @@ class WanModel:
         safetensor_path = os.path.join(lazy_load_model_path, "non_block.safetensors")
         with safe_open(safetensor_path, framework="pt", device="cpu") as f:
             for k in f.keys():
-                if f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
+                if f.get_tensor(k).dtype in [
+                    torch.float16,
+                    torch.bfloat16,
+                    torch.float,
+                ]:
                     if unified_dtype or all(s not in k for s in sensitive_layer):
                         pre_post_weight_dict[k] = f.get_tensor(k).pin_memory().to(GET_DTYPE()).to(self.device)
                     else:

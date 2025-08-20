@@ -6,11 +6,10 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTaylorCachingTransformerInfer
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 
-from ..transformer_infer import WanTransformerInfer
 
-
-class WanTransformerInferCaching(WanTransformerInfer):
+class WanTransformerInferCaching(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         self.must_calc_steps = []

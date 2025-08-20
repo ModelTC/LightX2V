@@ -1,8 +1,9 @@
 import glob
 import os
 
-from lightx2v.models.networks.wan.infer.audio.post_wan_audio_infer import WanAudioPostInfer
-from lightx2v.models.networks.wan.infer.audio.pre_wan_audio_infer import WanAudioPreInfer
+from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
+from lightx2v.models.networks.wan.infer.audio.pre_infer import WanAudioPreInfer
+from lightx2v.models.networks.wan.infer.audio.transformer_infer import WanAudioTransformerInfer
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
@@ -23,6 +24,7 @@ class WanAudioModel(WanModel):
         super()._init_infer_class()
         self.pre_infer_class = WanAudioPreInfer
         self.post_infer_class = WanAudioPostInfer
+        self.transformer_infer_class = WanAudioTransformerInfer
 
 
 class Wan22MoeAudioModel(WanAudioModel):

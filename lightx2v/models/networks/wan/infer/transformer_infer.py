@@ -2,14 +2,10 @@ from functools import partial
 
 import torch
 
-from lightx2v.common.offload.manager import (
-    LazyWeightAsyncStreamManager,
-    WeightAsyncStreamManager,
-)
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 
-from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_audio, compute_freqs_audio_dist, compute_freqs_dist
+from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_dist
 
 
 class WanTransformerInfer(BaseTransformerInfer):
@@ -37,46 +33,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-
-        if self.config.get("cpu_offload", False):
-            # if torch.cuda.get_device_capability(0) == (9, 0):
-            #     assert self.config["self_attn_1_type"] != "sage_attn2"
-            if "offload_ratio" in self.config:
-                offload_ratio = self.config["offload_ratio"]
-            else:
-                offload_ratio = 1
-            offload_granularity = self.config.get("offload_granularity", "block")
-            if offload_granularity == "block":
-                if not self.config.get("lazy_load", False):
-                    self.infer_func = self._infer_with_offload
-                else:
-                    self.infer_func = self._infer_with_lazy_offload
-            elif offload_granularity == "phase":
-                if not self.config.get("lazy_load", False):
-                    self.infer_func = self._infer_with_phases_offload
-                else:
-                    self.infer_func = self._infer_with_phases_lazy_offload
-            elif offload_granularity == "model":
-                self.infer_func = self._infer_without_offload
-
-            if offload_granularity != "model":
-                if not self.config.get("lazy_load", False):
-                    self.weights_stream_mgr = WeightAsyncStreamManager(
-                        blocks_num=self.blocks_num,
-                        offload_ratio=offload_ratio,
-                        phases_num=self.phases_num,
-                    )
-                else:
-                    self.weights_stream_mgr = LazyWeightAsyncStreamManager(
-                        blocks_num=self.blocks_num,
-                        offload_ratio=offload_ratio,
-                        phases_num=self.phases_num,
-                        num_disk_workers=self.config.get("num_disk_workers", 2),
-                        max_memory=self.config.get("max_memory", 2),
-                        offload_gra=offload_granularity,
-                    )
-        else:
-            self.infer_func = self._infer_without_offload
+        self.infer_func = self.infer_without_offload
 
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
@@ -86,36 +43,20 @@ class WanTransformerInfer(BaseTransformerInfer):
 
     def compute_freqs(self, q, grid_sizes, freqs):
         if self.config["seq_parallel"]:
-            if "audio" in self.config.get("model_cls", ""):
-                freqs_i = compute_freqs_audio_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
-            else:
-                freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
+            freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
         else:
-            if "audio" in self.config.get("model_cls", ""):
-                freqs_i = compute_freqs_audio(q.size(2) // 2, grid_sizes, freqs)
-            else:
-                freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
+            freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
         return freqs_i
 
     def infer(self, weights, pre_infer_out):
         x = self.infer_main_blocks(weights, pre_infer_out)
-        return self.infer_post_blocks(weights, x, pre_infer_out.embed)
+        return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
     def infer_main_blocks(self, weights, pre_infer_out):
-        x = self.infer_func(
-            weights,
-            pre_infer_out.grid_sizes,
-            pre_infer_out.embed,
-            pre_infer_out.x,
-            pre_infer_out.embed0,
-            pre_infer_out.seq_lens,
-            pre_infer_out.freqs,
-            pre_infer_out.context,
-            pre_infer_out.audio_dit_blocks,
-        )
+        x = self.infer_func(weights, pre_infer_out.x, pre_infer_out)
         return x
 
-    def infer_post_blocks(self, weights, x, e):
+    def infer_non_blocks(self, weights, x, e):
         if e.dim() == 2:
             modulation = weights.head_modulation.tensor  # 1, 2, dim
             e = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
@@ -139,214 +80,29 @@ class WanTransformerInfer(BaseTransformerInfer):
             torch.cuda.empty_cache()
         return x
 
-    def _infer_without_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
+    def infer_without_offload(self, weights, x, pre_infer_out):
         for block_idx in range(self.blocks_num):
             self.block_idx = block_idx
-            x = self.infer_block(
-                weights.blocks[block_idx],
-                grid_sizes,
-                embed,
-                x,
-                embed0,
-                seq_lens,
-                freqs,
-                context,
-                audio_dit_blocks,
-            )
+            x = self.infer_block(weights.blocks[block_idx], x, pre_infer_out)
         return x
 
-    def _infer_with_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
-        for block_idx in range(self.blocks_num):
-            self.block_idx = block_idx
-            if block_idx == 0:
-                self.weights_stream_mgr.active_weights[0] = weights.blocks[0]
-                self.weights_stream_mgr.active_weights[0].to_cuda()
-
-            if block_idx < self.blocks_num - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, weights.blocks)
-
-            with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
-                x = self.infer_block(
-                    self.weights_stream_mgr.active_weights[0],
-                    grid_sizes,
-                    embed,
-                    x,
-                    embed0,
-                    seq_lens,
-                    freqs,
-                    context,
-                    audio_dit_blocks,
-                )
-            self.weights_stream_mgr.swap_weights()
-
-        return x
-
-    def _infer_with_lazy_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
-        self.weights_stream_mgr.prefetch_weights_from_disk(weights.blocks)
-
-        for block_idx in range(self.blocks_num):
-            if block_idx == 0:
-                block = self.weights_stream_mgr.pin_memory_buffer.get(block_idx)
-                block.to_cuda()
-                self.weights_stream_mgr.active_weights[0] = (block_idx, block)
-
-            if block_idx < self.blocks_num - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, weights.blocks)
-
-            with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
-                x = self.infer_block(
-                    self.weights_stream_mgr.active_weights[0][1],
-                    grid_sizes,
-                    embed,
-                    x,
-                    embed0,
-                    seq_lens,
-                    freqs,
-                    context,
-                    audio_dit_blocks,
-                )
-
-            self.weights_stream_mgr.swap_weights()
-
-            if block_idx == self.blocks_num - 1:
-                self.weights_stream_mgr.pin_memory_buffer.pop_front()
-
-            self.weights_stream_mgr._async_prefetch_block(weights.blocks)
-
-        if self.clean_cuda_cache:
-            del grid_sizes, embed, embed0, seq_lens, freqs, context
-            torch.cuda.empty_cache()
-
-        return x
-
-    def _infer_with_phases_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
-        for block_idx in range(weights.blocks_num):
-            self.block_idx = block_idx
-            for phase_idx in range(self.phases_num):
-                if block_idx == 0 and phase_idx == 0:
-                    phase = weights.blocks[block_idx].compute_phases[phase_idx]
-                    phase.to_cuda()
-                    self.weights_stream_mgr.active_weights[0] = (phase_idx, phase)
-
-                with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
-                    cur_phase_idx, cur_phase = self.weights_stream_mgr.active_weights[0]
-                    if cur_phase_idx == 0:
-                        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(cur_phase, embed0)
-
-                    elif cur_phase_idx == 1:
-                        y_out = self.infer_self_attn(
-                            cur_phase,
-                            grid_sizes,
-                            x,
-                            seq_lens,
-                            freqs,
-                            shift_msa,
-                            scale_msa,
-                        )
-                    elif cur_phase_idx == 2:
-                        x, attn_out = self.infer_cross_attn(cur_phase, x, context, y_out, gate_msa)
-                    elif cur_phase_idx == 3:
-                        y = self.infer_ffn(cur_phase, x, attn_out, c_shift_msa, c_scale_msa)
-                        x = self.post_process(x, y, c_gate_msa, grid_sizes, audio_dit_blocks)
-
-                is_last_phase = block_idx == weights.blocks_num - 1 and phase_idx == self.phases_num - 1
-                if not is_last_phase:
-                    next_block_idx = block_idx + 1 if phase_idx == self.phases_num - 1 else block_idx
-                    next_phase_idx = (phase_idx + 1) % self.phases_num
-                    self.weights_stream_mgr.prefetch_phase(next_block_idx, next_phase_idx, weights.blocks)
-
-                self.weights_stream_mgr.swap_phases()
-
-            if self.clean_cuda_cache:
-                del attn_out, y_out, y
-                torch.cuda.empty_cache()
-
-        if self.clean_cuda_cache:
-            del shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
-            del grid_sizes, embed, embed0, seq_lens, freqs, context
-            torch.cuda.empty_cache()
-
-        return x
-
-    def _infer_with_phases_lazy_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
-        self.weights_stream_mgr.prefetch_weights_from_disk(weights.blocks)
-
-        for block_idx in range(weights.blocks_num):
-            self.block_idx = block_idx
-            for phase_idx in range(self.weights_stream_mgr.phases_num):
-                if block_idx == 0 and phase_idx == 0:
-                    obj_key = (block_idx, phase_idx)
-                    phase = self.weights_stream_mgr.pin_memory_buffer.get(obj_key)
-                    phase.to_cuda()
-                    self.weights_stream_mgr.active_weights[0] = (obj_key, phase)
-
-                with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
-                    (
-                        (
-                            _,
-                            cur_phase_idx,
-                        ),
-                        cur_phase,
-                    ) = self.weights_stream_mgr.active_weights[0]
-
-                    if cur_phase_idx == 0:
-                        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(
-                            cur_phase,
-                            embed0,
-                        )
-                    elif cur_phase_idx == 1:
-                        y_out = self.infer_self_attn(
-                            cur_phase,
-                            grid_sizes,
-                            x,
-                            seq_lens,
-                            freqs,
-                            shift_msa,
-                            scale_msa,
-                        )
-                    elif cur_phase_idx == 2:
-                        x, attn_out = self.infer_cross_attn(cur_phase, x, context, y_out, gate_msa)
-                    elif cur_phase_idx == 3:
-                        y = self.infer_ffn(cur_phase, x, attn_out, c_shift_msa, c_scale_msa)
-                        x = self.post_process(x, y, c_gate_msa, grid_sizes, audio_dit_blocks)
-
-                if not (block_idx == weights.blocks_num - 1 and phase_idx == self.phases_num - 1):
-                    next_block_idx = block_idx + 1 if phase_idx == self.phases_num - 1 else block_idx
-                    next_phase_idx = (phase_idx + 1) % self.weights_stream_mgr.phases_num
-                    self.weights_stream_mgr.prefetch_phase(next_block_idx, next_phase_idx, weights.blocks)
-
-                self.weights_stream_mgr.swap_phases()
-
-            self.weights_stream_mgr._async_prefetch_block(weights.blocks)
-
-            if self.clean_cuda_cache:
-                del attn_out, y_out, y
-                torch.cuda.empty_cache()
-
-        if self.clean_cuda_cache:
-            del shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
-            del grid_sizes, embed, embed0, seq_lens, freqs, context
-            torch.cuda.empty_cache()
-
-        return x
-
-    def infer_block(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, audio_dit_blocks=None):
+    def infer_block(self, weights, x, pre_infer_out):
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(
             weights.compute_phases[0],
-            embed0,
+            pre_infer_out.embed0,
         )
         y_out = self.infer_self_attn(
             weights.compute_phases[1],
-            grid_sizes,
+            pre_infer_out.grid_sizes,
             x,
-            seq_lens,
-            freqs,
+            pre_infer_out.seq_lens,
+            pre_infer_out.freqs,
             shift_msa,
             scale_msa,
         )
-        x, attn_out = self.infer_cross_attn(weights.compute_phases[2], x, context, y_out, gate_msa)
+        x, attn_out = self.infer_cross_attn(weights.compute_phases[2], x, pre_infer_out.context, y_out, gate_msa)
         y = self.infer_ffn(weights.compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
-        x = self.post_process(x, y, c_gate_msa, grid_sizes, audio_dit_blocks)
+        x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         return x
 
     def infer_modulation(self, weights, embed0):
@@ -531,18 +287,11 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return y
 
-    def post_process(self, x, y, c_gate_msa, grid_sizes, audio_dit_blocks=None):
+    def post_process(self, x, y, c_gate_msa, pre_infer_out):
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y.to(self.sensitive_layer_dtype) * c_gate_msa.squeeze()
         else:
             x.add_(y * c_gate_msa.squeeze())
-
-        # Apply audio_dit if available
-        if audio_dit_blocks is not None and hasattr(self, "block_idx"):
-            for ipa_out in audio_dit_blocks:
-                if self.block_idx in ipa_out:
-                    cur_modify = ipa_out[self.block_idx]
-                    x = cur_modify["modify_func"](x, grid_sizes, **cur_modify["kwargs"])
 
         if self.clean_cuda_cache:
             del y, c_gate_msa
