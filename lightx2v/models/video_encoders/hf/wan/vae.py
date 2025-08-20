@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 
+from lightx2v.models.video_encoders.hf.wan.dist.distributed_env import DistributedEnv
+from lightx2v.models.video_encoders.hf.wan.dist.split_gather import gather_forward_split_backward, split_forward_gather_backward
 from lightx2v.utils.utils import load_weights
 
 __all__ = [
@@ -517,6 +519,7 @@ class WanVAE_(nn.Module):
         self.temperal_downsample = temperal_downsample
         self.temperal_upsample = temperal_downsample[::-1]
         self.spatial_compression_ratio = 2 ** len(self.temperal_downsample)
+        self.use_approximate_patch = False
 
         # The minimal tile height and width for spatial tiling to be used
         self.tile_sample_min_height = 256
@@ -546,6 +549,12 @@ class WanVAE_(nn.Module):
             self.temperal_upsample,
             dropout,
         )
+
+    def enable_approximate_patch(self):
+        self.use_approximate_patch = True
+
+    def disable_approximate_patch(self):
+        self.use_approximate_patch = False
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -629,6 +638,9 @@ class WanVAE_(nn.Module):
         return enc
 
     def tiled_decode(self, z, scale):
+        if self.use_approximate_patch:
+            z = split_forward_gather_backward(None, z, 3)
+
         if isinstance(scale[0], torch.Tensor):
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
         else:
@@ -678,6 +690,8 @@ class WanVAE_(nn.Module):
             result_rows.append(torch.cat(result_row, dim=-1))
 
         dec = torch.cat(result_rows, dim=3)[:, :, :, :sample_height, :sample_width]
+        if self.use_approximate_patch:
+            dec = gather_forward_split_backward(None, dec, 3)
 
         return dec
 
@@ -686,7 +700,6 @@ class WanVAE_(nn.Module):
         ## cache
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
-        ## 对encode输入的x，按时间拆分为1、4、4、4....
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
@@ -707,11 +720,15 @@ class WanVAE_(nn.Module):
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(1, self.z_dim, 1, 1, 1)
         else:
             mu = (mu - scale[0]) * scale[1]
+
         self.clear_cache()
         return mu
 
     def decode(self, z, scale):
         self.clear_cache()
+        if self.use_approximate_patch:
+            z = split_forward_gather_backward(None, z, 3)
+
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
@@ -734,6 +751,10 @@ class WanVAE_(nn.Module):
                     feat_idx=self._conv_idx,
                 )
                 out = torch.cat([out, out_], 2)
+
+        if self.use_approximate_patch:
+            out = gather_forward_split_backward(None, out, 3)
+
         self.clear_cache()
         return out
 
@@ -845,6 +866,12 @@ class WanVAE:
 
         # init model
         self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload).eval().requires_grad_(False).to(device)
+        self.use_approximate_patch = False
+        if self.parallel and self.parallel.get("use_patch_vae", False):
+            # assert not self.use_tiling
+            DistributedEnv.initialize(None)
+            self.use_approximate_patch = True
+            self.model.enable_approximate_patch()
 
     def current_device(self):
         return next(self.model.parameters()).device
@@ -865,11 +892,11 @@ class WanVAE:
         self.inv_std = self.inv_std.cuda()
         self.scale = [self.mean, self.inv_std]
 
-    def encode(self, videos, args):
+    def encode(self, videos):
         """
         videos: A list of videos each with shape [C, T, H, W].
         """
-        if hasattr(args, "cpu_offload") and args.cpu_offload:
+        if self.cpu_offload:
             self.to_cuda()
 
         if self.use_tiling:
@@ -877,7 +904,7 @@ class WanVAE:
         else:
             out = [self.model.encode(u.unsqueeze(0).to(self.current_device()), self.scale).float().squeeze(0) for u in videos]
 
-        if hasattr(args, "cpu_offload") and args.cpu_offload:
+        if self.cpu_offload:
             self.to_cpu()
         return out
 
@@ -902,7 +929,8 @@ class WanVAE:
             elif split_dim == 3:
                 zs = zs[:, :, :, cur_rank * splited_chunk_len - padding_size : (cur_rank + 1) * splited_chunk_len + padding_size].contiguous()
 
-        images = self.model.decode(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
+        decode_func = self.model.tiled_decode if self.use_tiling else self.model.decode
+        images = decode_func(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
 
         if cur_rank == 0:
             if split_dim == 2:
@@ -933,23 +961,21 @@ class WanVAE:
         if self.cpu_offload:
             self.to_cuda()
 
-        if self.parallel:
+        if self.parallel and not self.use_approximate_patch:
             world_size = dist.get_world_size()
             cur_rank = dist.get_rank()
             height, width = zs.shape[2], zs.shape[3]
+
             if width % world_size == 0:
-                split_dim = 3
-                images = self.decode_dist(zs, world_size, cur_rank, split_dim)
+                images = self.decode_dist(zs, world_size, cur_rank, split_dim=3)
             elif height % world_size == 0:
-                split_dim = 2
-                images = self.decode_dist(zs, world_size, cur_rank, split_dim)
+                images = self.decode_dist(zs, world_size, cur_rank, split_dim=2)
             else:
                 logger.info("Fall back to naive decode mode")
                 images = self.model.decode(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
-        elif self.use_tiling:
-            images = self.model.tiled_decode(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
         else:
-            images = self.model.decode(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
+            decode_func = self.model.tiled_decode if self.use_tiling else self.model.decode
+            images = decode_func(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
 
         if self.cpu_offload:
             images = images.cpu().float()

@@ -16,8 +16,10 @@
     "cpu_offload": false,
     "use_31_block": false,
     "adaptive_resize": true,
+    "use_tiling_vae": false,
     "parallel": {
         "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses"
+        "seq_p_attn_type": "ulysses",
+        "use_patch_vae": false
     }
 }
