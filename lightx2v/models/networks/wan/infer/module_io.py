@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List, Optional
 
 import torch
 
@@ -13,5 +13,7 @@ class WanPreInferModuleOutput:
     seq_lens: torch.Tensor
     freqs: torch.Tensor
     context: torch.Tensor
-    audio_dit_blocks: List = None
-    valid_patch_length: int = None
+    audio_dit_blocks: List[Any] = None
+    valid_patch_length: Optional[int] = None
+    hints: List[Any] = None
+    context_scale: float = 1.0

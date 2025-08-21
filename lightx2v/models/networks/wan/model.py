@@ -26,7 +26,6 @@ from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import (
     WanTransformerInfer,
 )
-from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanTransformerWeights,
@@ -42,7 +41,6 @@ except ImportError:
 
 class WanModel:
     pre_weight_class = WanPreWeights
-    post_weight_class = WanPostWeights
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device):
@@ -220,6 +218,8 @@ class WanModel:
             "time",
             "img_emb.proj.0",
             "img_emb.proj.4",
+            "before_proj",  # vace
+            "after_proj",  # vace
         }
 
         if weight_dict is None:
@@ -333,7 +333,7 @@ class WanModel:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
-                self.transformer_weights.post_weights_to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
 
         if self.transformer_infer.mask_map is None:
             _, c, h, w = self.scheduler.latents.shape
@@ -371,7 +371,7 @@ class WanModel:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
-                self.transformer_weights.post_weights_to_cpu()
+                self.transformer_weights.non_block_weights_to_cpu()
 
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     @torch.no_grad()

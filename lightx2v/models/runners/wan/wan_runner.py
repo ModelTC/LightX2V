@@ -139,7 +139,7 @@ class WanRunner(DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
         }
-        if self.config.task not in ["i2v", "flf2v"]:
+        if self.config.task not in ["i2v", "flf2v", "vace"]:
             return None
         else:
             return WanVAE(**vae_config)

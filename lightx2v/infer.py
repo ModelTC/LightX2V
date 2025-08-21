@@ -13,6 +13,7 @@ from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # n
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -45,6 +46,7 @@ def main():
             "wan2.1_distill",
             "wan2.1_causvid",
             "wan2.1_skyreels_v2_df",
+            "wan2.1_vace",
             "cogvideox",
             "wan2.1_audio",
             "wan2.2_moe",
@@ -57,7 +59,7 @@ def main():
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
@@ -68,6 +70,25 @@ def main():
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file for audio-to-video (a2v) task")
+
+    parser.add_argument(
+        "--src_ref_images",
+        type=str,
+        default=None,
+        help="The file list of the source reference images. Separated by ','. Default None.",
+    )
+    parser.add_argument(
+        "--src_video",
+        type=str,
+        default=None,
+        help="The file of the source video. Default None.",
+    )
+    parser.add_argument(
+        "--src_mask",
+        type=str,
+        default=None,
+        help="The file of the source mask. Default None.",
+    )
 
     parser.add_argument("--save_video_path", type=str, default="./output_lightx2v.mp4", help="The path to save video path/file")
     args = parser.parse_args()

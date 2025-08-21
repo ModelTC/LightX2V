@@ -24,6 +24,7 @@ class WanTransformerWeights(WeightModule):
         else:
             self.mm_type = config["mm_config"].get("mm_type", "Default") if config["mm_config"] else "Default"
         self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
+
         self.add_module("blocks", self.blocks)
 
         # post blocks weights
@@ -36,19 +37,19 @@ class WanTransformerWeights(WeightModule):
             for phase in block.compute_phases:
                 phase.clear()
 
-    def post_weights_to_cuda(self):
+    def non_block_weights_to_cuda(self):
         self.norm.to_cuda()
         self.head.to_cuda()
         self.head_modulation.to_cuda()
 
-    def post_weights_to_cpu(self):
+    def non_block_weights_to_cpu(self):
         self.norm.to_cpu()
         self.head.to_cpu()
         self.head_modulation.to_cpu()
 
 
 class WanTransformerAttentionBlock(WeightModule):
-    def __init__(self, block_index, task, mm_type, config):
+    def __init__(self, block_index, task, mm_type, config, block_prefix="blocks"):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -68,6 +69,7 @@ class WanTransformerAttentionBlock(WeightModule):
             [
                 WanModulation(
                     block_index,
+                    block_prefix,
                     task,
                     mm_type,
                     config,
@@ -76,6 +78,7 @@ class WanTransformerAttentionBlock(WeightModule):
                 ),
                 WanSelfAttention(
                     block_index,
+                    block_prefix,
                     task,
                     mm_type,
                     config,
@@ -84,6 +87,7 @@ class WanTransformerAttentionBlock(WeightModule):
                 ),
                 WanCrossAttention(
                     block_index,
+                    block_prefix,
                     task,
                     mm_type,
                     config,
@@ -92,6 +96,7 @@ class WanTransformerAttentionBlock(WeightModule):
                 ),
                 WanFFN(
                     block_index,
+                    block_prefix,
                     task,
                     mm_type,
                     config,
@@ -105,7 +110,7 @@ class WanTransformerAttentionBlock(WeightModule):
 
 
 class WanModulation(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -120,7 +125,7 @@ class WanModulation(WeightModule):
         self.add_module(
             "modulation",
             TENSOR_REGISTER["Default"](
-                f"blocks.{self.block_index}.modulation",
+                f"{block_prefix}.{self.block_index}.modulation",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -128,7 +133,7 @@ class WanModulation(WeightModule):
 
 
 class WanSelfAttention(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -148,8 +153,8 @@ class WanSelfAttention(WeightModule):
         self.add_module(
             "self_attn_q",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.self_attn.q.weight",
-                f"blocks.{self.block_index}.self_attn.q.bias",
+                f"{block_prefix}.{self.block_index}.self_attn.q.weight",
+                f"{block_prefix}.{self.block_index}.self_attn.q.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -157,8 +162,8 @@ class WanSelfAttention(WeightModule):
         self.add_module(
             "self_attn_k",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.self_attn.k.weight",
-                f"blocks.{self.block_index}.self_attn.k.bias",
+                f"{block_prefix}.{self.block_index}.self_attn.k.weight",
+                f"{block_prefix}.{self.block_index}.self_attn.k.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -166,8 +171,8 @@ class WanSelfAttention(WeightModule):
         self.add_module(
             "self_attn_v",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.self_attn.v.weight",
-                f"blocks.{self.block_index}.self_attn.v.bias",
+                f"{block_prefix}.{self.block_index}.self_attn.v.weight",
+                f"{block_prefix}.{self.block_index}.self_attn.v.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -175,8 +180,8 @@ class WanSelfAttention(WeightModule):
         self.add_module(
             "self_attn_o",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.self_attn.o.weight",
-                f"blocks.{self.block_index}.self_attn.o.bias",
+                f"{block_prefix}.{self.block_index}.self_attn.o.weight",
+                f"{block_prefix}.{self.block_index}.self_attn.o.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -184,7 +189,7 @@ class WanSelfAttention(WeightModule):
         self.add_module(
             "self_attn_norm_q",
             RMS_WEIGHT_REGISTER["sgl-kernel"](
-                f"blocks.{self.block_index}.self_attn.norm_q.weight",
+                f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -192,7 +197,7 @@ class WanSelfAttention(WeightModule):
         self.add_module(
             "self_attn_norm_k",
             RMS_WEIGHT_REGISTER["sgl-kernel"](
-                f"blocks.{self.block_index}.self_attn.norm_k.weight",
+                f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -201,7 +206,7 @@ class WanSelfAttention(WeightModule):
             assert self.config["sparge_ckpt"], "sparge_ckpt must be set when sparge is True"
             self.add_module(
                 "self_attn_1",
-                ATTN_WEIGHT_REGISTER["Sparge"](f"blocks.{self.block_index}"),
+                ATTN_WEIGHT_REGISTER["Sparge"](f"{block_prefix}.{self.block_index}"),
             )
             sparge_ckpt = torch.load(self.config["sparge_ckpt"])
             self.self_attn_1.load(sparge_ckpt)
@@ -215,7 +220,7 @@ class WanSelfAttention(WeightModule):
             self.add_module(
                 "smooth_norm1_weight",
                 TENSOR_REGISTER["Default"](
-                    f"blocks.{self.block_index}.affine_norm1.weight",
+                    f"{block_prefix}.{self.block_index}.affine_norm1.weight",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -223,7 +228,7 @@ class WanSelfAttention(WeightModule):
             self.add_module(
                 "smooth_norm1_bias",
                 TENSOR_REGISTER["Default"](
-                    f"blocks.{self.block_index}.affine_norm1.bias",
+                    f"{block_prefix}.{self.block_index}.affine_norm1.bias",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -231,7 +236,7 @@ class WanSelfAttention(WeightModule):
 
 
 class WanCrossAttention(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -243,8 +248,8 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "norm3",
             LN_WEIGHT_REGISTER["Default"](
-                f"blocks.{self.block_index}.norm3.weight",
-                f"blocks.{self.block_index}.norm3.bias",
+                f"{block_prefix}.{self.block_index}.norm3.weight",
+                f"{block_prefix}.{self.block_index}.norm3.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -252,8 +257,8 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "cross_attn_q",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.cross_attn.q.weight",
-                f"blocks.{self.block_index}.cross_attn.q.bias",
+                f"{block_prefix}.{self.block_index}.cross_attn.q.weight",
+                f"{block_prefix}.{self.block_index}.cross_attn.q.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -261,8 +266,8 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "cross_attn_k",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.cross_attn.k.weight",
-                f"blocks.{self.block_index}.cross_attn.k.bias",
+                f"{block_prefix}.{self.block_index}.cross_attn.k.weight",
+                f"{block_prefix}.{self.block_index}.cross_attn.k.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -270,8 +275,8 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "cross_attn_v",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.cross_attn.v.weight",
-                f"blocks.{self.block_index}.cross_attn.v.bias",
+                f"{block_prefix}.{self.block_index}.cross_attn.v.weight",
+                f"{block_prefix}.{self.block_index}.cross_attn.v.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -279,8 +284,8 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "cross_attn_o",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.cross_attn.o.weight",
-                f"blocks.{self.block_index}.cross_attn.o.bias",
+                f"{block_prefix}.{self.block_index}.cross_attn.o.weight",
+                f"{block_prefix}.{self.block_index}.cross_attn.o.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -288,7 +293,7 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "cross_attn_norm_q",
             RMS_WEIGHT_REGISTER["sgl-kernel"](
-                f"blocks.{self.block_index}.cross_attn.norm_q.weight",
+                f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -296,7 +301,7 @@ class WanCrossAttention(WeightModule):
         self.add_module(
             "cross_attn_norm_k",
             RMS_WEIGHT_REGISTER["sgl-kernel"](
-                f"blocks.{self.block_index}.cross_attn.norm_k.weight",
+                f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -307,8 +312,8 @@ class WanCrossAttention(WeightModule):
             self.add_module(
                 "cross_attn_k_img",
                 MM_WEIGHT_REGISTER[self.mm_type](
-                    f"blocks.{self.block_index}.cross_attn.k_img.weight",
-                    f"blocks.{self.block_index}.cross_attn.k_img.bias",
+                    f"{block_prefix}.{self.block_index}.cross_attn.k_img.weight",
+                    f"{block_prefix}.{self.block_index}.cross_attn.k_img.bias",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -316,8 +321,8 @@ class WanCrossAttention(WeightModule):
             self.add_module(
                 "cross_attn_v_img",
                 MM_WEIGHT_REGISTER[self.mm_type](
-                    f"blocks.{self.block_index}.cross_attn.v_img.weight",
-                    f"blocks.{self.block_index}.cross_attn.v_img.bias",
+                    f"{block_prefix}.{self.block_index}.cross_attn.v_img.weight",
+                    f"{block_prefix}.{self.block_index}.cross_attn.v_img.bias",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -325,7 +330,7 @@ class WanCrossAttention(WeightModule):
             self.add_module(
                 "cross_attn_norm_k_img",
                 RMS_WEIGHT_REGISTER["sgl-kernel"](
-                    f"blocks.{self.block_index}.cross_attn.norm_k_img.weight",
+                    f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -334,7 +339,7 @@ class WanCrossAttention(WeightModule):
 
 
 class WanFFN(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -352,8 +357,8 @@ class WanFFN(WeightModule):
         self.add_module(
             "ffn_0",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.ffn.0.weight",
-                f"blocks.{self.block_index}.ffn.0.bias",
+                f"{block_prefix}.{self.block_index}.ffn.0.weight",
+                f"{block_prefix}.{self.block_index}.ffn.0.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -361,8 +366,8 @@ class WanFFN(WeightModule):
         self.add_module(
             "ffn_2",
             MM_WEIGHT_REGISTER[self.mm_type](
-                f"blocks.{self.block_index}.ffn.2.weight",
-                f"blocks.{self.block_index}.ffn.2.bias",
+                f"{block_prefix}.{self.block_index}.ffn.2.weight",
+                f"{block_prefix}.{self.block_index}.ffn.2.bias",
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -372,7 +377,7 @@ class WanFFN(WeightModule):
             self.add_module(
                 "smooth_norm2_weight",
                 TENSOR_REGISTER["Default"](
-                    f"blocks.{self.block_index}.affine_norm3.weight",
+                    f"{block_prefix}.{self.block_index}.affine_norm3.weight",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -380,7 +385,7 @@ class WanFFN(WeightModule):
             self.add_module(
                 "smooth_norm2_bias",
                 TENSOR_REGISTER["Default"](
-                    f"blocks.{self.block_index}.affine_norm3.bias",
+                    f"{block_prefix}.{self.block_index}.affine_norm3.bias",
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
