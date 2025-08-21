@@ -164,6 +164,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=weights.self_attn_1,
                 seq_p_group=self.seq_p_group,
+                model_cls=self.config["model_cls"],
             )
         else:
             attn_out = weights.self_attn_1.apply(
