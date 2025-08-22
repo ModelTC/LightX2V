@@ -28,7 +28,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 else:
                     self.infer_func = self.infer_with_phases_lazy_offload
             elif offload_granularity == "model":
-                self.infer_func = self._infer_without_offload
+                self.infer_func = self.infer_without_offload
 
             if offload_granularity != "model":
                 if not self.config.get("lazy_load", False):
