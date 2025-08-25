@@ -27,7 +27,6 @@ class WanDiffusionWrapper(torch.nn.Module):
 
         self.seq_len = 15 * 880  # 32760  # [1, 15, 16, 60, 104]
 
-
     def _convert_flow_pred_to_x0(self, flow_pred: torch.Tensor, xt: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
         """
         Convert flow matching's prediction to x0 prediction.

@@ -19,7 +19,6 @@ from .attention import attention, flash_attention
 
 
 class WanRMSNorm(nn.Module):
-
     def __init__(self, dim, eps=1e-5):
         super().__init__()
         self.dim = dim
