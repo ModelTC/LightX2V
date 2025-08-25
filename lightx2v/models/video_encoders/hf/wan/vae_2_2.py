@@ -985,11 +985,11 @@ class Wan2_2_VAE:
         self.inv_std = self.inv_std.cuda()
         self.scale = [self.mean, self.inv_std]
 
-    def encode(self, videos, args):
-        if hasattr(args, "cpu_offload") and args.cpu_offload:
+    def encode(self, videos):
+        if self.cpu_offload:
             self.to_cuda()
         out = self.model.encode(videos.unsqueeze(0), self.scale).float().squeeze(0)
-        if hasattr(args, "cpu_offload") and args.cpu_offload:
+        if self.cpu_offload:
             self.to_cpu()
         return out
 
