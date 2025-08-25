@@ -26,10 +26,7 @@ class WanDiffusionWrapper(torch.nn.Module):
         self.scheduler.set_timesteps(1000, training=True)
 
         self.seq_len = 15 * 880  # 32760  # [1, 15, 16, 60, 104]
-        self.post_init()
 
-    def enable_gradient_checkpointing(self) -> None:
-        self.model.enable_gradient_checkpointing()
 
     def _convert_flow_pred_to_x0(self, flow_pred: torch.Tensor, xt: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
         """
