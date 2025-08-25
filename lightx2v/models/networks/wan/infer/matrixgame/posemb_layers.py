@@ -1,5 +1,6 @@
+from typing import List, Tuple, Union
+
 import torch
-from typing import Union, Tuple, List
 
 
 def _to_tuple(x, dim=2):
@@ -99,10 +100,7 @@ def reshape_for_broadcast(
                 x.shape[-2],
                 x.shape[-1],
             ), f"freqs_cis shape {freqs_cis[0].shape} does not match x shape {x.shape}"
-            shape = [
-                d if i == ndim - 2 or i == ndim - 1 else 1
-                for i, d in enumerate(x.shape)
-            ]
+            shape = [d if i == ndim - 2 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
         else:
             # assert freqs_cis[0].shape == (
             #     x.shape[1],
@@ -118,10 +116,7 @@ def reshape_for_broadcast(
                 x.shape[-2],
                 x.shape[-1],
             ), f"freqs_cis shape {freqs_cis.shape} does not match x shape {x.shape}"
-            shape = [
-                d if i == ndim - 2 or i == ndim - 1 else 1
-                for i, d in enumerate(x.shape)
-            ]
+            shape = [d if i == ndim - 2 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
         else:
             assert freqs_cis.shape == (
                 x.shape[1],
@@ -132,9 +127,7 @@ def reshape_for_broadcast(
 
 
 def rotate_half(x):
-    x_real, x_imag = (
-        x.float().reshape(*x.shape[:-1], -1, 2).unbind(-1)
-    )  # [B, S, H, D//2]
+    x_real, x_imag = x.float().reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
     return torch.stack([-x_imag, x_real], dim=-1).flatten(3)
 
 
@@ -171,22 +164,16 @@ def apply_rotary_emb(
         cos, sin = cos.to(xq.device), sin.to(xq.device)
         # real * cos - imag * sin
         # imag * cos + real * sin
-        xq_out = (xq.float() * cos[:, start_offset:start_offset + xq.shape[1], :, :] + rotate_half(xq.float()) * sin[:, start_offset:start_offset + xq.shape[1], :, :]).type_as(xq)
-        xk_out = (xk.float() * cos[:, start_offset:start_offset + xk.shape[1], :, :] + rotate_half(xk.float()) * sin[:, start_offset:start_offset + xk.shape[1], :, :]).type_as(xk)
+        xq_out = (xq.float() * cos[:, start_offset : start_offset + xq.shape[1], :, :] + rotate_half(xq.float()) * sin[:, start_offset : start_offset + xq.shape[1], :, :]).type_as(xq)
+        xk_out = (xk.float() * cos[:, start_offset : start_offset + xk.shape[1], :, :] + rotate_half(xk.float()) * sin[:, start_offset : start_offset + xk.shape[1], :, :]).type_as(xk)
     else:
         # view_as_complex will pack [..., D/2, 2](real) to [..., D/2](complex)
-        xq_ = torch.view_as_complex(
-            xq.float().reshape(*xq.shape[:-1], -1, 2)
-        )  # [B, S, H, D//2]
-        freqs_cis = reshape_for_broadcast(freqs_cis, xq_, head_first).to(
-            xq.device
-        )  # [S, D//2] --> [1, S, 1, D//2]
+        xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))  # [B, S, H, D//2]
+        freqs_cis = reshape_for_broadcast(freqs_cis, xq_, head_first).to(xq.device)  # [S, D//2] --> [1, S, 1, D//2]
         # (real, imag) * (cos, sin) = (real * cos - imag * sin, imag * cos + real * sin)
         # view_as_real will expand [..., D/2](complex) to [..., D/2, 2](real)
         xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3).type_as(xq)
-        xk_ = torch.view_as_complex(
-            xk.float().reshape(*xk.shape[:-1], -1, 2)
-        )  # [B, S, H, D//2]
+        xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))  # [B, S, H, D//2]
         xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3).type_as(xk)
 
     return xq_out, xk_out
@@ -220,25 +207,19 @@ def get_nd_rotary_pos_embed(
         pos_embed (torch.Tensor): [HW, D/2]
     """
 
-    grid = get_meshgrid_nd(
-        start, *args, dim=len(rope_dim_list)
-    )  # [3, W, H, D] / [2, W, H]
+    grid = get_meshgrid_nd(start, *args, dim=len(rope_dim_list))  # [3, W, H, D] / [2, W, H]
 
     if isinstance(theta_rescale_factor, int) or isinstance(theta_rescale_factor, float):
         theta_rescale_factor = [theta_rescale_factor] * len(rope_dim_list)
     elif isinstance(theta_rescale_factor, list) and len(theta_rescale_factor) == 1:
         theta_rescale_factor = [theta_rescale_factor[0]] * len(rope_dim_list)
-    assert len(theta_rescale_factor) == len(
-        rope_dim_list
-    ), "len(theta_rescale_factor) should equal to len(rope_dim_list)"
+    assert len(theta_rescale_factor) == len(rope_dim_list), "len(theta_rescale_factor) should equal to len(rope_dim_list)"
 
     if isinstance(interpolation_factor, int) or isinstance(interpolation_factor, float):
         interpolation_factor = [interpolation_factor] * len(rope_dim_list)
     elif isinstance(interpolation_factor, list) and len(interpolation_factor) == 1:
         interpolation_factor = [interpolation_factor[0]] * len(rope_dim_list)
-    assert len(interpolation_factor) == len(
-        rope_dim_list
-    ), "len(interpolation_factor) should equal to len(rope_dim_list)"
+    assert len(interpolation_factor) == len(rope_dim_list), "len(interpolation_factor) should equal to len(rope_dim_list)"
 
     # use 1/ndim of dimensions to encode grid_axis
     embs = []
@@ -298,9 +279,7 @@ def get_1d_rotary_pos_embed(
     if theta_rescale_factor != 1.0:
         theta *= theta_rescale_factor ** (dim / (dim - 2))
 
-    freqs = 1.0 / (
-        theta ** (torch.arange(0, dim, 2, device=torch.cuda.current_device())[: (dim // 2)].float() / dim)
-    )  # [D/2]
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=torch.cuda.current_device())[: (dim // 2)].float() / dim))  # [D/2]
     # assert interpolation_factor == 1.0, f"interpolation_factor: {interpolation_factor}"
     freqs = torch.outer(pos * interpolation_factor, freqs)  # [S, D/2]
     if use_real:
@@ -308,7 +287,5 @@ def get_1d_rotary_pos_embed(
         freqs_sin = freqs.sin().repeat_interleave(2, dim=1)  # [S, D]
         return freqs_cos, freqs_sin
     else:
-        freqs_cis = torch.polar(
-            torch.ones_like(freqs), freqs
-        )  # complex64     # [S, D/2]
+        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64     # [S, D/2]
         return freqs_cis

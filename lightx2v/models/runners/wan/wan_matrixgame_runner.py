@@ -1,17 +1,13 @@
 import gc
 
 import torch
-from loguru import logger
-
-from lightx2v.models.runners.wan.wan_runner import WanRunner
-from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext4Debug
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-
-from lightx2v.models.networks.wan.infer.matrixgame.wan_wrapper import WanDiffusionWrapper
-
 from safetensors.torch import load_file
 from torchvision.transforms import v2
+
+from lightx2v.models.networks.wan.infer.matrixgame.wan_wrapper import WanDiffusionWrapper
+from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.utils.envs import *
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
 @RUNNER_REGISTER("wan2.1_matrixgame")
@@ -30,13 +26,13 @@ class WanMatrixGameRunner(WanRunner):
         self.kv_cache_keyboard = None
 
         self.num_frame_per_block = config.get("num_frame_per_block", 1)
-        self.frame_process = v2.Compose([
-            v2.Resize(size=(352, 640), antialias=True),
-            v2.ToTensor(),
-            v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-        ])
-
-        
+        self.frame_process = v2.Compose(
+            [
+                v2.Resize(size=(352, 640), antialias=True),
+                v2.ToTensor(),
+                v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            ]
+        )
 
     def load_transformer(self):
         model = WanDiffusionWrapper(model_config=self.config.model_config_path, timestep_shift=self.config.timestep_shift)
@@ -66,12 +62,11 @@ class WanMatrixGameRunner(WanRunner):
         image = image.crop((left, top, right, bottom))
         return image
 
-
     def run_image_encoder(self, image):
         image = self._resizecrop(image, 352, 640)
         image = self.frame_process(image)[None, :, None, :, :].to(dtype=self.weight_dtype, device=self.device)
         clip_encoder_out = self.image_encoder.visual([image[None, :, :, :]]).squeeze(0).to(GET_DTYPE())
-        print('clip_encode_out', clip_encoder_out)
+        print("clip_encode_out", clip_encoder_out)
         return clip_encoder_out
 
     def init_scheduler(self):
@@ -79,8 +74,7 @@ class WanMatrixGameRunner(WanRunner):
         # self.model.scheduler.prepare(self.inputs["image_encoder_output"])
         # self.model.scheduler.clear()
 
-        self.denoising_step_list = torch.tensor(
-            self.config.denoising_step_list, dtype=torch.long)
+        self.denoising_step_list = torch.tensor(self.config.denoising_step_list, dtype=torch.long)
         if self.config.warp_denoising_step:
             timesteps = torch.cat((self.scheduler.timesteps.cpu(), torch.tensor([0], dtype=torch.float32)))
             self.denoising_step_list = timesteps[1000 - self.denoising_step_list]
@@ -89,7 +83,6 @@ class WanMatrixGameRunner(WanRunner):
         # self.model.scheduler.step_post()
 
     def prepare_inputs(self):
-        
         pass
 
     def run(self):
