@@ -153,7 +153,7 @@ class WanVaceRunner(WanRunner):
         self.config.target_shape = target_shape
 
     @ProfilingContext("Run VAE Decoder")
-    def _run_vae_decoder_local(self, latents, generator):
+    def run_vae_decoder(self, latents, generator):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
 

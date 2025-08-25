@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict
 
 import torch
@@ -6,7 +6,6 @@ import torch
 
 @dataclass
 class WanPreInferModuleOutput:
-    # wan base model
     embed: torch.Tensor
     grid_sizes: torch.Tensor
     x: torch.Tensor
@@ -14,6 +13,4 @@ class WanPreInferModuleOutput:
     seq_lens: torch.Tensor
     freqs: torch.Tensor
     context: torch.Tensor
-
-    # wan adapter model
-    adapter_output: Dict[str, Any] = None
+    adapter_output: Dict[str, Any] = field(default_factory=dict)
