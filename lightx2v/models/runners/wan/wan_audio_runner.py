@@ -512,7 +512,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def load_audio_adapter(self):
         audio_adapter = AudioAdapter(
-            attention_head_dim=5120 // self.config["num_heads"],
+            attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
             base_num_layers=self.config["num_layers"],
             interval=1,
