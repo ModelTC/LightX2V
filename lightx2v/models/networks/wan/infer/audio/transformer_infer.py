@@ -32,7 +32,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
             grid_sizes=pre_infer_out.grid_sizes,
             ca_block=self.audio_adapter.ca[self.block_idx],
             audio_encoder_output=pre_infer_out.adapter_output["audio_encoder_output"],
-            t_emb=pre_infer_out.adapter_output["t_emb"],
+            t_emb=self.scheduler.audio_adapter_t_emb,
             weight=1.0,
             seq_p_group=self.seq_p_group,
         )

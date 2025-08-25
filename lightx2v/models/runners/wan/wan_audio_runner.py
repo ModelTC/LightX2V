@@ -246,6 +246,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
         scheduler = ConsistencyModelScheduler(self.config)
+        scheduler.set_audio_adapter(self.audio_adapter)
         self.model.set_scheduler(scheduler)
 
     def read_audio_input(self):
@@ -292,12 +293,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def run_vae_encoder(self, img):
         img = rearrange(img, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float))
-        if self.config.model_cls == "wan2.2_audio":
-            vae_encoder_out = vae_encoder_out.unsqueeze(0).to(GET_DTYPE())
-        else:
-            if isinstance(vae_encoder_out, list):
-                vae_encoder_out = torch.stack(vae_encoder_out, dim=0).to(GET_DTYPE())
+        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float))[0]
         return vae_encoder_out
 
     @ProfilingContext("Run Encoders")
@@ -351,7 +347,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             frames_n = (nframe - 1) * 4 + 1
             prev_mask = torch.ones((1, frames_n, height, width), device=device, dtype=dtype)
             prev_mask[:, prev_frame_len:] = 0
-            prev_mask = self._wan_mask_rearrange(prev_mask).unsqueeze(0)
+            prev_mask = self._wan_mask_rearrange(prev_mask)
 
         if prev_latents.shape[-2:] != (height, width):
             logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")

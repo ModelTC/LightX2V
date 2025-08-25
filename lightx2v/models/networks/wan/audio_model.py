@@ -28,7 +28,6 @@ class WanAudioModel(WanModel):
 
     def set_audio_adapter(self, audio_adapter):
         self.audio_adapter = audio_adapter
-        self.pre_infer.set_audio_adapter(self.audio_adapter)
         self.transformer_infer.set_audio_adapter(self.audio_adapter)
 
 

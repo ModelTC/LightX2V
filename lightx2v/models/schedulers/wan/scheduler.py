@@ -320,6 +320,12 @@ class WanScheduler(BaseScheduler):
         x_t = x_t.to(x.dtype)
         return x_t
 
+    def step_pre(self, step_index):
+        super().step_pre(step_index)
+        self.timestep_input = torch.stack([self.timesteps[self.step_index]])
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+            self.timestep_input = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
+
     def step_post(self):
         model_output = self.noise_pred.to(torch.float32)
         timestep = self.timesteps[self.step_index]

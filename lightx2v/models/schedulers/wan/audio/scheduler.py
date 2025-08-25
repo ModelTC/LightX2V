@@ -12,10 +12,12 @@ class ConsistencyModelScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
 
+    def set_audio_adapter(self, audio_adapter):
+        self.audio_adapter = audio_adapter
+
     def step_pre(self, step_index):
-        self.step_index = step_index
-        if GET_DTYPE() == GET_SENSITIVE_DTYPE():
-            self.latents = self.latents.to(GET_DTYPE())
+        super().step_pre(step_index)
+        self.audio_adapter_t_emb = self.audio_adapter.time_embedding(self.timestep_input).unflatten(1, (3, -1))
 
     def prepare(self, image_encoder_output=None):
         self.prepare_latents(self.config.target_shape, dtype=torch.float32)

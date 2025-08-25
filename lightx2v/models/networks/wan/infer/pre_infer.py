@@ -34,15 +34,7 @@ class WanPreInfer:
 
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         x = self.scheduler.latents
-
-        if self.scheduler.flag_df:
-            t = self.scheduler.df_timesteps[self.scheduler.step_index].unsqueeze(0)
-            assert t.dim() == 2  # df推理模型timestep是二维
-        else:
-            timestep = self.scheduler.timesteps[self.scheduler.step_index]
-            t = torch.stack([timestep])
-            if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
-                t = (self.scheduler.mask[0][:, ::2, ::2] * t).flatten()
+        t = self.scheduler.timestep_input
 
         if self.scheduler.infer_condition:
             context = inputs["text_encoder_output"]["context"]
@@ -90,15 +82,6 @@ class WanPreInfer:
         embed0 = torch.nn.functional.silu(embed)
 
         embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
-
-        if self.scheduler.flag_df:
-            b, f = t.shape
-            assert b == len(x)  # batch_size == 1
-            embed = embed.view(b, f, 1, 1, self.dim)
-            embed0 = embed0.view(b, f, 1, 1, 6, self.dim)
-            embed = embed.repeat(1, 1, grid_sizes[0][1], grid_sizes[0][2], 1).flatten(1, 3)
-            embed0 = embed0.repeat(1, 1, grid_sizes[0][1], grid_sizes[0][2], 1, 1).flatten(1, 3)
-            embed0 = embed0.transpose(1, 2).contiguous()
 
         # text embeddings
         stacked = torch.stack([torch.cat([u, u.new_zeros(self.text_len - u.size(0), u.size(1))]) for u in context])
