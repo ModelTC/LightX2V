@@ -10,21 +10,27 @@ from loguru import logger
 
 class WeightAsyncStreamManager(object):
     def __init__(self, blocks_num, offload_ratio=1, phases_num=1):
-        self.active_weights = [None for _ in range(3)]
+        self.init(blocks_num, phases_num, offload_ratio)
         self.compute_stream = torch.cuda.Stream(priority=-1)
         self.cpu_load_stream = torch.cuda.Stream(priority=0)
         self.cuda_load_stream = torch.cuda.Stream(priority=0)
-        self.offload_block_num = int(offload_ratio * blocks_num)
+
+    def init(self, blocks_num, phases_num, offload_ratio):
+        if hasattr(self, "active_weights"):
+            del self.active_weights[:]
+        self.active_weights = [None for _ in range(3)]
+        self.blocks_num = blocks_num
         self.phases_num = phases_num
-        self.block_nums = blocks_num
-        self.offload_phases_num = blocks_num * phases_num * offload_ratio
+        self.offload_ratio = offload_ratio
+        self.offload_blocks_num = int(self.offload_ratio * self.blocks_num)
+        self.offload_phases_num = self.blocks_num * self.phases_num * self.offload_ratio
 
     def prefetch_weights(self, block_idx, blocks_weights):
         with torch.cuda.stream(self.cuda_load_stream):
             self.active_weights[2] = blocks_weights[block_idx]
             self.active_weights[2].to_cuda_async()
         with torch.cuda.stream(self.cpu_load_stream):
-            if block_idx < self.offload_block_num:
+            if block_idx < self.offload_blocks_num:
                 if self.active_weights[1] is not None:
                     self.active_weights[1].to_cpu_async()
 
@@ -130,7 +136,7 @@ class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):
         if next_block_idx < 0:
             next_block_idx = 0
 
-        if next_block_idx == self.block_nums:
+        if next_block_idx == self.blocks_num:
             return
 
         if self.offload_gra == "phase":
@@ -175,7 +181,7 @@ class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):
                 self.pin_memory_buffer.push(block_idx, block)
 
             block_idx += 1
-            if block_idx == self.block_nums:
+            if block_idx == self.blocks_num:
                 break
 
     def prefetch_weights_from_disk(self, blocks):
@@ -217,7 +223,7 @@ class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):
             self.active_weights[2] = (obj_key, block)
 
         with torch.cuda.stream(self.cpu_load_stream):
-            if block_idx < self.offload_block_num:
+            if block_idx < self.offload_blocks_num:
                 if self.active_weights[1] is not None:
                     old_key, old_block = self.active_weights[1]
                     if self.pin_memory_buffer.exists(old_key):

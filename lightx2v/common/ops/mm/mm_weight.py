@@ -95,6 +95,12 @@ class MMWeight(MMWeightTemplate):
         self.bias = weight_dict[self.bias_name] if self.bias_name is not None else None
         self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype) if self.bias is not None else None
 
+    def _calculate_size(self):
+        if self.bias is not None:
+            return self.weight.numel() * self.weight.element_size() + self.bias.numel() * self.bias.element_size()
+
+        return self.weight.numel() * self.weight.element_size()
+
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype

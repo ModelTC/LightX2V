@@ -9,8 +9,6 @@ from lightx2v.utils.registry_factory import (
 )
 
 
-# "vace_layers": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28],
-# {0: 0, 2: 1, 4: 2, 6: 3, 8: 4, 10: 5, 12: 6, 14: 7, 16: 8, 18: 9, 20: 10, 22: 11, 24: 12, 26: 13, 28: 14}
 class WanVaceTransformerWeights(WanTransformerWeights):
     def __init__(self, config):
         super().__init__(config)
@@ -44,7 +42,7 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
     def __init__(self, base_block_idx, block_index, task, mm_type, config, block_prefix):
         super().__init__(block_index, task, mm_type, config, block_prefix)
         if base_block_idx == 0:
-            self.add_module(
+            self.compute_phases[0].add_module(
                 "before_proj",
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.before_proj.weight",
@@ -53,7 +51,8 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
                     self.lazy_load_file,
                 ),
             )
-        self.add_module(
+
+        self.compute_phases[-1].add_module(
             "after_proj",
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.after_proj.weight",

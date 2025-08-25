@@ -14,7 +14,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.task = config.task
         self.attention_type = config.get("attention_type", "flash_attn2")
         self.blocks_num = config.num_layers
-        self.phases_num = 4
+        self.phases_num = 3
         self.num_heads = config.num_heads
         self.head_dim = config.dim // config.num_heads
         self.window_size = config.get("window_size", (-1, -1))
@@ -49,11 +49,11 @@ class WanTransformerInfer(BaseTransformerInfer):
         return freqs_i
 
     def infer(self, weights, pre_infer_out):
-        x = self.infer_main_blocks(weights, pre_infer_out)
+        x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
-    def infer_main_blocks(self, weights, pre_infer_out):
-        x = self.infer_func(weights, pre_infer_out.x, pre_infer_out)
+    def infer_main_blocks(self, blocks, pre_infer_out):
+        x = self.infer_func(blocks, pre_infer_out.x, pre_infer_out)
         return x
 
     def infer_non_blocks(self, weights, x, e):
@@ -80,19 +80,22 @@ class WanTransformerInfer(BaseTransformerInfer):
             torch.cuda.empty_cache()
         return x
 
-    def infer_without_offload(self, weights, x, pre_infer_out):
-        for block_idx in range(self.blocks_num):
+    def infer_without_offload(self, blocks, x, pre_infer_out):
+        for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-            x = self.infer_block(weights.blocks[block_idx], x, pre_infer_out)
+            x = self.infer_block(blocks[block_idx], x, pre_infer_out)
         return x
 
-    def infer_block(self, weights, x, pre_infer_out):
-        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(
-            weights.compute_phases[0],
+    def infer_block(self, block, x, pre_infer_out):
+        if hasattr(block.compute_phases[0], "before_proj"):
+            x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
+
+        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.pre_process(
+            block.compute_phases[0].modulation,
             pre_infer_out.embed0,
         )
         y_out = self.infer_self_attn(
-            weights.compute_phases[1],
+            block.compute_phases[0],
             pre_infer_out.grid_sizes,
             x,
             pre_infer_out.seq_lens,
@@ -100,18 +103,21 @@ class WanTransformerInfer(BaseTransformerInfer):
             shift_msa,
             scale_msa,
         )
-        x, attn_out = self.infer_cross_attn(weights.compute_phases[2], x, pre_infer_out.context, y_out, gate_msa)
-        y = self.infer_ffn(weights.compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
+        x, attn_out = self.infer_cross_attn(block.compute_phases[1], x, pre_infer_out.context, y_out, gate_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
+
+        if hasattr(block.compute_phases[2], "after_proj"):
+            pre_infer_out.adapter_output["hints"].append(block.compute_phases[2].after_proj.apply(x))
         return x
 
-    def infer_modulation(self, weights, embed0):
+    def pre_process(self, modulation, embed0):
         if embed0.dim() == 3 and embed0.shape[2] == 1:
-            modulation = weights.modulation.tensor.unsqueeze(2)
+            modulation = modulation.tensor.unsqueeze(2)
             embed0 = (modulation + embed0).chunk(6, dim=1)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = [ei.squeeze(1) for ei in embed0]
         else:
-            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (weights.modulation.tensor + embed0).chunk(6, dim=1)
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (modulation.tensor + embed0).chunk(6, dim=1)
 
         if self.clean_cuda_cache:
             del embed0
@@ -119,15 +125,15 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
-    def infer_self_attn(self, weights, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
-        if hasattr(weights, "smooth_norm1_weight"):
-            norm1_weight = (1 + scale_msa.squeeze()) * weights.smooth_norm1_weight.tensor
-            norm1_bias = shift_msa.squeeze() * weights.smooth_norm1_bias.tensor
+    def infer_self_attn(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
+        if hasattr(phase, "smooth_norm1_weight"):
+            norm1_weight = (1 + scale_msa.squeeze()) * phase.smooth_norm1_weight.tensor
+            norm1_bias = shift_msa.squeeze() * phase.smooth_norm1_bias.tensor
         else:
             norm1_weight = 1 + scale_msa.squeeze()
             norm1_bias = shift_msa.squeeze()
 
-        norm1_out = weights.norm1.apply(x)
+        norm1_out = phase.norm1.apply(x)
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.sensitive_layer_dtype)
@@ -139,9 +145,9 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
 
-        q = weights.self_attn_norm_q.apply(weights.self_attn_q.apply(norm1_out)).view(s, n, d)
-        k = weights.self_attn_norm_k.apply(weights.self_attn_k.apply(norm1_out)).view(s, n, d)
-        v = weights.self_attn_v.apply(norm1_out).view(s, n, d)
+        q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
+        k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
+        v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
 
         freqs_i = self.compute_freqs(q, grid_sizes, freqs)
 
@@ -156,18 +162,18 @@ class WanTransformerInfer(BaseTransformerInfer):
             torch.cuda.empty_cache()
 
         if self.config["seq_parallel"]:
-            attn_out = weights.self_attn_1_parallel.apply(
+            attn_out = phase.self_attn_1_parallel.apply(
                 q=q,
                 k=k,
                 v=v,
                 img_qkv_len=q.shape[0],
                 cu_seqlens_qkv=cu_seqlens_q,
-                attention_module=weights.self_attn_1,
+                attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
                 model_cls=self.config["model_cls"],
             )
         else:
-            attn_out = weights.self_attn_1.apply(
+            attn_out = phase.self_attn_1.apply(
                 q=q,
                 k=k,
                 v=v,
@@ -179,7 +185,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 mask_map=self.mask_map,
             )
 
-        y = weights.self_attn_o.apply(attn_out)
+        y = phase.self_attn_o.apply(attn_out)
 
         if self.clean_cuda_cache:
             del q, k, v, attn_out
@@ -187,13 +193,13 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return y
 
-    def infer_cross_attn(self, weights, x, context, y_out, gate_msa):
+    def infer_cross_attn(self, phase, x, context, y_out, gate_msa):
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y_out.to(self.sensitive_layer_dtype) * gate_msa.squeeze()
         else:
             x.add_(y_out * gate_msa.squeeze())
 
-        norm3_out = weights.norm3.apply(x)
+        norm3_out = phase.norm3.apply(x)
         if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
             context_img = context[:257]
             context = context[257:]
@@ -207,14 +213,14 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         n, d = self.num_heads, self.head_dim
 
-        q = weights.cross_attn_norm_q.apply(weights.cross_attn_q.apply(norm3_out)).view(-1, n, d)
-        k = weights.cross_attn_norm_k.apply(weights.cross_attn_k.apply(context)).view(-1, n, d)
-        v = weights.cross_attn_v.apply(context).view(-1, n, d)
+        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
+        k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
+        v = phase.cross_attn_v.apply(context).view(-1, n, d)
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
             q,
             k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
         )
-        attn_out = weights.cross_attn_1.apply(
+        attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
             v=v,
@@ -226,14 +232,14 @@ class WanTransformerInfer(BaseTransformerInfer):
         )
 
         if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
-            k_img = weights.cross_attn_norm_k_img.apply(weights.cross_attn_k_img.apply(context_img)).view(-1, n, d)
-            v_img = weights.cross_attn_v_img.apply(context_img).view(-1, n, d)
+            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
+            v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 
             cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
                 q,
                 k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
             )
-            img_attn_out = weights.cross_attn_2.apply(
+            img_attn_out = phase.cross_attn_2.apply(
                 q=q,
                 k=k_img,
                 v=v_img,
@@ -249,42 +255,42 @@ class WanTransformerInfer(BaseTransformerInfer):
                 del k_img, v_img, img_attn_out
                 torch.cuda.empty_cache()
 
-        attn_out = weights.cross_attn_o.apply(attn_out)
+        attn_out = phase.cross_attn_o.apply(attn_out)
 
         if self.clean_cuda_cache:
             del q, k, v, norm3_out, context, context_img
             torch.cuda.empty_cache()
         return x, attn_out
 
-    def infer_ffn(self, weights, x, attn_out, c_shift_msa, c_scale_msa):
+    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
         x.add_(attn_out)
 
         if self.clean_cuda_cache:
             del attn_out
             torch.cuda.empty_cache()
 
-        if hasattr(weights, "smooth_norm2_weight"):
-            norm2_weight = (1 + c_scale_msa.squeeze()) * weights.smooth_norm2_weight.tensor
-            norm2_bias = c_shift_msa.squeeze() * weights.smooth_norm2_bias.tensor
+        if hasattr(phase, "smooth_norm2_weight"):
+            norm2_weight = (1 + c_scale_msa.squeeze()) * phase.smooth_norm2_weight.tensor
+            norm2_bias = c_shift_msa.squeeze() * phase.smooth_norm2_bias.tensor
         else:
             norm2_weight = 1 + c_scale_msa.squeeze()
             norm2_bias = c_shift_msa.squeeze()
 
-        norm2_out = weights.norm2.apply(x)
+        norm2_out = phase.norm2.apply(x)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm2_out = norm2_out.to(self.sensitive_layer_dtype)
         norm2_out.mul_(norm2_weight).add_(norm2_bias)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm2_out = norm2_out.to(self.infer_dtype)
 
-        y = weights.ffn_0.apply(norm2_out)
+        y = phase.ffn_0.apply(norm2_out)
         if self.clean_cuda_cache:
             del norm2_out, x, norm2_weight, norm2_bias
             torch.cuda.empty_cache()
         y = torch.nn.functional.gelu(y, approximate="tanh")
         if self.clean_cuda_cache:
             torch.cuda.empty_cache()
-        y = weights.ffn_2.apply(y)
+        y = phase.ffn_2.apply(y)
 
         return y
 

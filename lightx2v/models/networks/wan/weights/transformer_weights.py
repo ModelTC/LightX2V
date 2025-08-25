@@ -27,7 +27,7 @@ class WanTransformerWeights(WeightModule):
 
         self.add_module("blocks", self.blocks)
 
-        # post blocks weights
+        # non blocks weights
         self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
@@ -67,15 +67,6 @@ class WanTransformerAttentionBlock(WeightModule):
 
         self.compute_phases = WeightModuleList(
             [
-                WanModulation(
-                    block_index,
-                    block_prefix,
-                    task,
-                    mm_type,
-                    config,
-                    self.lazy_load,
-                    self.lazy_load_file,
-                ),
                 WanSelfAttention(
                     block_index,
                     block_prefix,
@@ -109,7 +100,7 @@ class WanTransformerAttentionBlock(WeightModule):
         self.add_module("compute_phases", self.compute_phases)
 
 
-class WanModulation(WeightModule):
+class WanSelfAttention(WeightModule):
     def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
         super().__init__()
         self.block_index = block_index
@@ -130,20 +121,6 @@ class WanModulation(WeightModule):
                 self.lazy_load_file,
             ),
         )
-
-
-class WanSelfAttention(WeightModule):
-    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
-        super().__init__()
-        self.block_index = block_index
-        self.mm_type = mm_type
-        self.task = task
-        self.config = config
-        self.quant_method = config.get("quant_method", None)
-        self.sparge = config.get("sparge", False)
-
-        self.lazy_load = lazy_load
-        self.lazy_load_file = lazy_load_file
 
         self.add_module(
             "norm1",
