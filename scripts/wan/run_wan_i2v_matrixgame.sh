@@ -2,11 +2,14 @@
 
 # set path and first
 lightx2v_path=
-model_path=
+model_path=/data/nvme0/models/Matrix-Game-2.0
+model_ckpt_path=/data/nvme0/models/Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
 export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
+export matrix_game_config_path=${lightx2v_path}/configs/matrixgame/model_config.json
+export model_ckpt_path=${model_ckpt_path}
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
@@ -15,6 +18,4 @@ python -m lightx2v.infer \
 --image_path ${lightx2v_path}/assets/inputs/imgs/img_0.jpg \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/matrixgame/wan_i2v_matrixgame.json \
---prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside." \
---negative_prompt "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" \
 --save_video_path ${lightx2v_path}/save_results/output_lightx2v_wan_i2v_causvid.mp4

@@ -8,7 +8,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
 
 from ..utils import rope_params, sinusoidal_embedding_1d
-from .action_module import ActionModule, WanRMSNorm
+from .action_module import ActionModule
 from .attention import attention, flash_attention
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
@@ -16,6 +16,25 @@ from .attention import attention, flash_attention
 # change to default for other models
 # flex_attention = torch.compile(
 #     flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+
+
+class WanRMSNorm(nn.Module):
+
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        r"""
+        Args:
+            x(Tensor): Shape [B, L, C]
+        """
+        return self._norm(x.float()).type_as(x) * self.weight
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
 
 def rope_apply(x, grid_sizes, freqs):

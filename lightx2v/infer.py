@@ -14,6 +14,7 @@ from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # n
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrixgame_runner import WanMatrixGameRunner  # noqa: F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -49,6 +50,7 @@ def main():
             "wan2.1_vace",
             "cogvideox",
             "wan2.1_audio",
+            "wan2.1_matrixgame",
             "wan2.2_moe",
             "wan2.2",
             "wan2.2_moe_audio",
