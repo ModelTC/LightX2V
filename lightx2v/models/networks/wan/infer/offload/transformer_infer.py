@@ -77,6 +77,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
         self.weights_stream_mgr.prefetch_weights_from_disk(blocks)
 
         for block_idx in range(len(blocks)):
+            self.block_idx = block_idx
             if block_idx == 0:
                 block = self.weights_stream_mgr.pin_memory_buffer.get(block_idx)
                 block.to_cuda()
