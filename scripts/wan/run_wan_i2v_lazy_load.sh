@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/mtc/gushiqiao/llmc_workspace/LightX2V
-model_path=/data/nvme0/gushiqiao/models/Lightx2v_models/Wan2.1-I2V-14B-720P-Lightx2v
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
