@@ -957,7 +957,7 @@ class WanVAE:
 
         return images
 
-    def decode(self, zs, **args):
+    def decode(self, zs):
         if self.cpu_offload:
             self.to_cuda()
 
