@@ -1,17 +1,18 @@
 import gc
 
 import torch
+from loguru import logger
 from PIL import Image
 from einops import rearrange
 from safetensors.torch import load_file
 from torchvision.transforms import v2
-from tqdm import tqdm
 
 from lightx2v.models.input_encoders.hf.wanx_vae_src import CLIPModel, VAEDecoderWrapper, WanVAE
 from lightx2v.models.networks.wan.infer.matrixgame.conditions import Bench_actions_gta_drive, Bench_actions_templerun, Bench_actions_universal
 from lightx2v.models.networks.wan.infer.matrixgame.wan_wrapper import WanDiffusionWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.utils.envs import *
+from lightx2v.utils.profiler import ProfilingContext4Debug
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 model_ckpt_path_map = {
@@ -237,47 +238,50 @@ class WanMatrixGameRunner(WanRunner):
         if profile:
             diffusion_start = torch.cuda.Event(enable_timing=True)
             diffusion_end = torch.cuda.Event(enable_timing=True)
-        for current_num_frames in tqdm(all_num_frames):
+        for current_index, current_num_frames in enumerate(all_num_frames):
+            logger.info(f"========> block_idx: {current_index + 1} / {num_blocks}")
             noisy_input = noise[:, :, current_start_frame - num_input_frames : current_start_frame + current_num_frames - num_input_frames]
 
             # Step 3.1: Spatial denoising loop
             if profile:
                 torch.cuda.synchronize()
                 diffusion_start.record()
-            for index, current_timestep in enumerate(self.denoising_step_list):
-                # set current timestep
-                timestep = torch.ones([batch_size, current_num_frames], device=noise.device, dtype=torch.int64) * current_timestep
+            with ProfilingContext4Debug("🚀 infer_main"):
+                for index, current_timestep in enumerate(self.denoising_step_list):
+                    logger.info(f"=====> step_idx: {index + 1} / {len(self.denoising_step_list)}")
+                    # set current timestep
+                    timestep = torch.ones([batch_size, current_num_frames], device=noise.device, dtype=torch.int64) * current_timestep
 
-                if index < len(self.denoising_step_list) - 1:
-                    _, denoised_pred = self.model(
-                        noisy_image_or_video=noisy_input,
-                        conditional_dict=cond_current(conditional_dict, current_start_frame, self.num_frame_per_block, mode=mode),
-                        timestep=timestep,
-                        kv_cache=self.kv_cache1,
-                        kv_cache_mouse=self.kv_cache_mouse,
-                        kv_cache_keyboard=self.kv_cache_keyboard,
-                        crossattn_cache=self.crossattn_cache,
-                        current_start=current_start_frame * self.frame_seq_length,
-                    )
-                    next_timestep = self.denoising_step_list[index + 1]
-                    noisy_input = self.scheduler.add_noise(
-                        rearrange(denoised_pred, "b c f h w -> (b f) c h w"),  # .flatten(0, 1),
-                        torch.randn_like(rearrange(denoised_pred, "b c f h w -> (b f) c h w")),
-                        next_timestep * torch.ones([batch_size * current_num_frames], device=noise.device, dtype=torch.long),
-                    )
-                    noisy_input = rearrange(noisy_input, "(b f) c h w -> b c f h w", b=denoised_pred.shape[0])
-                else:
-                    # for getting real output
-                    _, denoised_pred = self.model(
-                        noisy_image_or_video=noisy_input,
-                        conditional_dict=cond_current(conditional_dict, current_start_frame, self.num_frame_per_block, mode=mode),
-                        timestep=timestep,
-                        kv_cache=self.kv_cache1,
-                        kv_cache_mouse=self.kv_cache_mouse,
-                        kv_cache_keyboard=self.kv_cache_keyboard,
-                        crossattn_cache=self.crossattn_cache,
-                        current_start=current_start_frame * self.frame_seq_length,
-                    )
+                    if index < len(self.denoising_step_list) - 1:
+                        _, denoised_pred = self.model(
+                            noisy_image_or_video=noisy_input,
+                            conditional_dict=cond_current(conditional_dict, current_start_frame, self.num_frame_per_block, mode=mode),
+                            timestep=timestep,
+                            kv_cache=self.kv_cache1,
+                            kv_cache_mouse=self.kv_cache_mouse,
+                            kv_cache_keyboard=self.kv_cache_keyboard,
+                            crossattn_cache=self.crossattn_cache,
+                            current_start=current_start_frame * self.frame_seq_length,
+                        )
+                        next_timestep = self.denoising_step_list[index + 1]
+                        noisy_input = self.scheduler.add_noise(
+                            rearrange(denoised_pred, "b c f h w -> (b f) c h w"),  # .flatten(0, 1),
+                            torch.randn_like(rearrange(denoised_pred, "b c f h w -> (b f) c h w")),
+                            next_timestep * torch.ones([batch_size * current_num_frames], device=noise.device, dtype=torch.long),
+                        )
+                        noisy_input = rearrange(noisy_input, "(b f) c h w -> b c f h w", b=denoised_pred.shape[0])
+                    else:
+                        # for getting real output
+                        _, denoised_pred = self.model(
+                            noisy_image_or_video=noisy_input,
+                            conditional_dict=cond_current(conditional_dict, current_start_frame, self.num_frame_per_block, mode=mode),
+                            timestep=timestep,
+                            kv_cache=self.kv_cache1,
+                            kv_cache_mouse=self.kv_cache_mouse,
+                            kv_cache_keyboard=self.kv_cache_keyboard,
+                            crossattn_cache=self.crossattn_cache,
+                            current_start=current_start_frame * self.frame_seq_length,
+                        )
 
             # Step 3.2: record the model's output
             output[:, :, current_start_frame : current_start_frame + current_num_frames] = denoised_pred
