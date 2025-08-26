@@ -414,7 +414,7 @@ def cond_current(conditional_dict, current_start_frame, num_frame_per_block, rep
 
     new_cond["cond_concat"] = conditional_dict["cond_concat"][:, :, current_start_frame : current_start_frame + num_frame_per_block]
     new_cond["visual_context"] = conditional_dict["visual_context"]
-    if replace != None:
+    if replace is not None:
         if current_start_frame == 0:
             last_frame_num = 1 + 4 * (num_frame_per_block - 1)
         else:

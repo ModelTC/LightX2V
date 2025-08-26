@@ -845,7 +845,7 @@ class CausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapte
         """
         # params
         if mouse_cond is not None or keyboard_cond is not None:
-            assert self.use_action_module == True
+            assert self.use_action_module
         device = self.patch_embedding.weight.device
         if self.freqs.device != device:
             self.freqs = self.freqs.to(device)
