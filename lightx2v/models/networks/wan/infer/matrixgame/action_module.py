@@ -12,7 +12,7 @@ try:
     import flash_attn_interface
 
     FLASH_ATTN_3_AVAILABLE = True
-except:
+except ModuleNotFoundError:
     from flash_attn import flash_attn_func
 
     FLASH_ATTN_3_AVAILABLE = False
@@ -188,7 +188,7 @@ class ActionModule(nn.Module):
         mouse_condition: B, N_frames, C1
         keyboard_condition: B, N_frames, C2
         """
-        assert use_rope_keyboard == True
+        assert use_rope_keyboard
 
         B, N_frames, C = keyboard_condition.shape
         assert tt * th * tw == x.shape[1]
@@ -198,7 +198,7 @@ class ActionModule(nn.Module):
         # Defined freqs_cis early so it's available for both mouse and keyboard
         freqs_cis = (self.freqs_cos, self.freqs_sin)
 
-        assert (N_feats == tt and ((is_causal and kv_cache_mouse == None) or not is_causal)) or (
+        assert (N_feats == tt and ((is_causal and kv_cache_mouse is None) or not is_causal)) or (
             (N_frames - 1) // self.vae_time_compression_ratio + 1 == start_frame + num_frame_per_block and is_causal
         )
 

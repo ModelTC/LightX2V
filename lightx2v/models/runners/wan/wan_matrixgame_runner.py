@@ -427,7 +427,7 @@ def cond_current(conditional_dict, current_start_frame, num_frame_per_block, rep
         new_cond["mouse_cond"] = conditional_dict["mouse_cond"][:, : 1 + 4 * (current_start_frame + num_frame_per_block - 1)]
     new_cond["keyboard_cond"] = conditional_dict["keyboard_cond"][:, : 1 + 4 * (current_start_frame + num_frame_per_block - 1)]
 
-    if replace != None:
+    if replace is not None:
         return new_cond, conditional_dict
     else:
         return new_cond

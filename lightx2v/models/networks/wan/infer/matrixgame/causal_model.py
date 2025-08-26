@@ -734,7 +734,7 @@ class CausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapte
         """
 
         if mouse_cond is not None or keyboard_cond is not None:
-            assert self.use_action_module == True
+            assert self.use_action_module
         # params
         device = self.patch_embedding.weight.device
         if self.freqs.device != device:
@@ -860,7 +860,7 @@ class CausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapte
                 local_attn_size=self.local_attn_size,
             )
         if self.block_mask_keyboard is None:
-            if self.use_rope_keyboard == False:
+            if not self.use_rope_keyboard:
                 self.block_mask_keyboard = self._prepare_blockwise_causal_attn_mask_keyboard(
                     device,
                     num_frames=x.shape[2],
@@ -976,7 +976,7 @@ class CausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapte
 
         # init output layer
         nn.init.zeros_(self.head.head.weight)
-        if self.use_action_module == True:
+        if self.use_action_module:
             for m in self.blocks:
                 try:
                     nn.init.zeros_(m.action_model.proj_mouse.weight)
@@ -985,5 +985,5 @@ class CausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapte
                     nn.init.zeros_(m.action_model.proj_keyboard.weight)
                     if m.action_model.proj_keyboard.bias is not None:
                         nn.init.zeros_(m.action_model.proj_keyboard.bias)
-                except:
+                except Exception:
                     pass
