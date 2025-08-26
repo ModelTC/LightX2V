@@ -7,7 +7,6 @@ from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
 
-from ..utils import rope_params, sinusoidal_embedding_1d
 from .action_module import ActionModule
 from .attention import attention, flash_attention
 
@@ -18,22 +17,27 @@ from .attention import attention, flash_attention
 #     flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
 
 
-class WanRMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-5):
-        super().__init__()
-        self.dim = dim
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
+def sinusoidal_embedding_1d(dim, position):
+    # preprocess
+    assert dim % 2 == 0
+    half = dim // 2
+    position = position.type(torch.float64)
 
-    def forward(self, x):
-        r"""
-        Args:
-            x(Tensor): Shape [B, L, C]
-        """
-        return self._norm(x.float()).type_as(x) * self.weight
+    # calculation
+    sinusoid = torch.outer(
+        position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
+    x = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
+    return x
 
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+
+def rope_params(max_seq_len, dim, theta=10000):
+    assert dim % 2 == 0
+    freqs = torch.outer(
+        torch.arange(max_seq_len),
+        1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float64).div(dim)),
+    )
+    freqs = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs
 
 
 def rope_apply(x, grid_sizes, freqs):
@@ -91,6 +95,24 @@ def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
         # append to collection
         output.append(x_i)
     return torch.stack(output).type_as(x)
+
+
+class WanRMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        r"""
+        Args:
+            x(Tensor): Shape [B, L, C]
+        """
+        return self._norm(x.float()).type_as(x) * self.weight
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
 
 class WanLayerNorm(nn.LayerNorm):
