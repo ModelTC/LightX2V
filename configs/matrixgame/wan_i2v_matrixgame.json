@@ -8,5 +8,6 @@
     "use_image_encoder": true,
     "num_output_frames": 150,
     "context_noise": 0,
-    "mode": "universal"
+    "mode": "universal",
+    "fps": 12
 }

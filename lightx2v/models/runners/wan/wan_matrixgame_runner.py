@@ -145,7 +145,7 @@ class WanMatrixGameRunner(WanRunner):
 
         self.run()
 
-        gen_video = []
+        gen_video = self.process_images_after_vae_decoder(save_video=save_video)
 
         self.end_run()
 
@@ -179,37 +179,11 @@ class WanMatrixGameRunner(WanRunner):
             videos = self.inference(noise=sampled_noise, conditional_dict=conditional_dict, return_latents=False, mode=mode, profile=False)
 
         videos_tensor = torch.cat(videos, dim=1)
-        videos = rearrange(videos_tensor, "B T C H W -> B T H W C")
-        videos = ((videos.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
-        video = np.ascontiguousarray(videos).astype(np.uint8)
-        out_video = []
-        frame_count = len(video)
-        frame_idx = 0
-        fps = 12
-        for frame in video:
-            out_video.append(frame / 255)
-            frame_idx += 1
-            print(f"Processing frame {frame_idx}/{frame_count}", end="\r")
-        from diffusers.utils import export_to_video
+        gen_video = rearrange(videos_tensor, "B T C H W -> B C T H W")
 
-        export_to_video(out_video, "./myoutput.mp4", fps=fps)
-        print("\nProcessing complete!")
+        self.gen_video = gen_video
 
-        # video = np.ascontiguousarray(videos)
-        # mouse_icon = 'assets/images/mouse.png'
-        # if mode != 'templerun':
-        #     config = (
-        #         keyboard_condition[0].float().cpu().numpy(),
-        #         mouse_condition[0].float().cpu().numpy()
-        #     )
-        # else:
-        #     config = (
-        #         keyboard_condition[0].float().cpu().numpy()
-        #     )
-        # process_video(video.astype(np.uint8), self.args.output_folder+f'/demo.mp4', config, mouse_icon, mouse_scale=0.1, process_icon=False, mode=mode)
-        # process_video(video.astype(np.uint8), self.args.output_folder+f'/demo_icon.mp4', config, mouse_icon, mouse_scale=0.1, process_icon=True, mode=mode)
-
-        return []
+        return gen_video
 
     def inference(
         self,
