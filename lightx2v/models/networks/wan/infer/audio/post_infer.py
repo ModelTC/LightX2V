@@ -11,6 +11,7 @@ class WanAudioPostInfer(WanPostInfer):
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, x, pre_infer_out):
         x = x[: pre_infer_out.seq_lens[0]]
+        pre_infer_out.grid_sizes[:, 0] -= 1
         x = self.unpatchify(x, pre_infer_out.grid_sizes)
 
         if self.clean_cuda_cache:

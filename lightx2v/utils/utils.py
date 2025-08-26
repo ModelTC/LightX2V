@@ -434,17 +434,16 @@ def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
     return distributed_weight_dict
 
 
-def masks_like(tensor, zero=False, generator=None, p=0.2):
+def masks_like(tensor, zero=False, generator=None, p=0.2, prev_len=1):
     assert isinstance(tensor, torch.Tensor)
     out = torch.ones_like(tensor)
     if zero:
         if generator is not None:
             random_num = torch.rand(1, generator=generator, device=generator.device).item()
             if random_num < p:
-                out[:, 0] = torch.zeros_like(out[:, 0])
+                out[:, :prev_len] = torch.zeros_like(out[:, :prev_len])
         else:
-            out[:, 0] = torch.zeros_like(out[:, 0])
-
+            out[:, :prev_len] = torch.zeros_like(out[:, :prev_len])
     return out
 
 

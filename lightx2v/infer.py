@@ -8,7 +8,7 @@ from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner  #
 from lightx2v.models.runners.graph_runner import GraphRunner
 from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_audio_runner import WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401

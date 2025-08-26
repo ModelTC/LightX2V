@@ -21,10 +21,11 @@ from lightx2v.models.networks.wan.audio_model import WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.audio.scheduler import ConsistencyModelScheduler
+from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import load_weights, save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import find_torch_model_path, load_weights, save_to_video, vae_to_comfyui_image
 
 
 def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
@@ -300,7 +301,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.vae_encoder = self.load_vae_encoder()
 
         img = rearrange(img, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float))[0]
+        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float))
+        if self.config.model_cls == "wan2.2_audio":
+            vae_encoder_out = vae_encoder_out.to(GET_DTYPE())
+        else:
+            if isinstance(vae_encoder_out, list):
+                vae_encoder_out = vae_encoder_out[0].to(GET_DTYPE())
+
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
             torch.cuda.empty_cache()
@@ -339,40 +346,42 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if prev_video is not None:
             # Extract and process last frames
             last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
-            last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
+            if self.config.model_cls != "wan2.2_audio":
+                last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
             prev_frames[:, :, :prev_frame_length] = last_frames
+            prev_len = (prev_frame_length - 1) // 4 + 1
+        else:
+            prev_len = 0
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_encoder = self.load_vae_encoder()
 
         _, nframe, height, width = self.model.scheduler.latents.shape
         if self.config.model_cls == "wan2.2_audio":
-            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
-            _, prev_mask = self._wan22_masks_like([self.model.scheduler.latents], zero=True, prev_length=prev_latents.shape[1])
+            if prev_video is not None:
+                prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
+            else:
+                prev_latents = None
+            prev_mask = self.model.scheduler.mask
         else:
             prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype))[0].to(dtype)
 
-            if prev_video is not None:
-                prev_token_length = (prev_frame_length - 1) // 4 + 1
-                prev_frame_len = max((prev_token_length - 1) * 4 + 1, 0)
-            else:
-                prev_frame_len = 0
-
             frames_n = (nframe - 1) * 4 + 1
             prev_mask = torch.ones((1, frames_n, height, width), device=device, dtype=dtype)
-            prev_mask[:, prev_frame_len:] = 0
-            prev_mask = self._wan_mask_rearrange(prev_mask)
+            prev_mask[:, prev_len:] = 0
+            prev_mask = self._wan_mask_rearrange(prev_mask).unsqueeze(0)
 
-        if prev_latents.shape[-2:] != (height, width):
-            logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")
-            prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
+        if prev_latents is not None:
+            if prev_latents.shape[-2:] != (height, width):
+                logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")
+                prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
             torch.cuda.empty_cache()
             gc.collect()
 
-        return {"prev_latents": prev_latents, "prev_mask": prev_mask}
+        return {"prev_latents": prev_latents, "prev_mask": prev_mask, "prev_len": prev_len}
 
     def _wan_mask_rearrange(self, mask: torch.Tensor) -> torch.Tensor:
         """Rearrange mask for WAN model"""
@@ -413,12 +422,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
 
         self.inputs["audio_encoder_output"] = audio_features
+        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=5)
 
         # Reset scheduler for non-first segments
         if segment_idx > 0:
-            self.model.scheduler.reset()
-
-        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=5)
+            self.model.scheduler.reset(self.inputs["previmg_encoder_output"])
 
     @ProfilingContext4Debug("End run segment")
     def end_run_segment(self):
@@ -600,3 +608,48 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         ret["target_shape"] = self.config.target_shape
         return ret
+
+
+@RUNNER_REGISTER("wan2.2_audio")
+class Wan22AudioRunner(WanAudioRunner):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def load_vae_decoder(self):
+        # offload config
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if vae_offload:
+            vae_device = torch.device("cpu")
+        else:
+            vae_device = torch.device("cuda")
+        vae_config = {
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.2_VAE.pth"),
+            "device": vae_device,
+            "cpu_offload": vae_offload,
+            "offload_cache": self.config.get("vae_offload_cache", False),
+        }
+        vae_decoder = Wan2_2_VAE(**vae_config)
+        return vae_decoder
+
+    def load_vae_encoder(self):
+        # offload config
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if vae_offload:
+            vae_device = torch.device("cpu")
+        else:
+            vae_device = torch.device("cuda")
+        vae_config = {
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.2_VAE.pth"),
+            "device": vae_device,
+            "cpu_offload": vae_offload,
+            "offload_cache": self.config.get("vae_offload_cache", False),
+        }
+        if self.config.task != "i2v":
+            return None
+        else:
+            return Wan2_2_VAE(**vae_config)
+
+    def load_vae(self):
+        vae_encoder = self.load_vae_encoder()
+        vae_decoder = self.load_vae_decoder()
+        return vae_encoder, vae_decoder

@@ -1,6 +1,6 @@
 {
     "infer_steps": 4,
-    "target_fps": 16,
+    "target_fps": 24,
     "video_duration": 12,
     "audio_sr": 16000,
     "target_video_length": 121,
@@ -20,9 +20,11 @@
     "offload_granularity": "model",
     "fps": 24,
     "use_image_encoder": false,
+    "adaptive_resize": true,
+    "use_31_block": false,
     "lora_configs": [
         {
-        "path": "/data/nvme0/models/wan_ti2v_5b_ref/20250812/model_ema.safetensors",
+        "path": "/mnt/aigc/rtxiang/pretrain/qianhai_weights/lora_model.safetensors",
         "strength": 0.125
         }
     ]
