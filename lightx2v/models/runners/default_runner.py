@@ -145,16 +145,16 @@ class DefaultRunner(BaseRunner):
         gc.collect()
 
     def read_image_input(self, img_path):
-        img = Image.open(img_path).convert("RGB")
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
-        return img
+        img_ori = Image.open(img_path).convert("RGB")
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        return img, img_ori
 
     @ProfilingContext("Run Encoders")
     def _run_input_encoder_local_i2v(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        img = self.read_image_input(self.config["image_path"])
+        img, img_ori = self.read_image_input(self.config["image_path"])
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
-        vae_encode_out = self.run_vae_encoder(img)
+        vae_encode_out = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
         text_encoder_output = self.run_text_encoder(prompt, img)
         torch.cuda.empty_cache()
         gc.collect()

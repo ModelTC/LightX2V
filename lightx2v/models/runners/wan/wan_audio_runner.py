@@ -14,19 +14,17 @@ from einops import rearrange
 from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
-from transformers import AutoFeatureExtractor
 
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
-from lightx2v.models.networks.wan.audio_model import Wan22MoeAudioModel, WanAudioModel
+from lightx2v.models.networks.wan.audio_model import WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
-from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner
+from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.audio.scheduler import ConsistencyModelScheduler
-from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import find_torch_model_path, load_weights, save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import load_weights, save_to_video, vae_to_comfyui_image
 
 
 def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
@@ -398,6 +396,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.cut_audio_list = []
         self.prev_video = None
 
+    @ProfilingContext4Debug("Init run segment")
     def init_run_segment(self, segment_idx):
         self.segment_idx = segment_idx
 
@@ -421,6 +420,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=5)
 
+    @ProfilingContext4Debug("End run segment")
     def end_run_segment(self):
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
 
@@ -446,6 +446,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         del self.gen_video
         torch.cuda.empty_cache()
 
+    @ProfilingContext4Debug("Process after vae decoder")
     def process_images_after_vae_decoder(self, save_video=True):
         # Merge results
         gen_lvideo = torch.cat(self.gen_video_list, dim=2).float()
@@ -599,89 +600,3 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         ret["target_shape"] = self.config.target_shape
         return ret
-
-
-@RUNNER_REGISTER("wan2.2_audio")
-class Wan22AudioRunner(WanAudioRunner):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def load_vae_decoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device("cuda")
-        vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-        }
-        vae_decoder = Wan2_2_VAE(**vae_config)
-        return vae_decoder
-
-    def load_vae_encoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device("cuda")
-        vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-        }
-        if self.config.task != "i2v":
-            return None
-        else:
-            return Wan2_2_VAE(**vae_config)
-
-    def load_vae(self):
-        vae_encoder = self.load_vae_encoder()
-        vae_decoder = self.load_vae_decoder()
-        return vae_encoder, vae_decoder
-
-
-@RUNNER_REGISTER("wan2.2_moe_audio")
-class Wan22MoeAudioRunner(WanAudioRunner):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def load_transformer(self):
-        # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
-        high_noise_model = Wan22MoeAudioModel(
-            os.path.join(self.config.model_path, "high_noise_model"),
-            self.config,
-            self.init_device,
-        )
-        low_noise_model = Wan22MoeAudioModel(
-            os.path.join(self.config.model_path, "low_noise_model"),
-            self.config,
-            self.init_device,
-        )
-
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
-
-            for lora_config in self.config.lora_configs:
-                lora_path = lora_config["path"]
-                strength = lora_config.get("strength", 1.0)
-                if lora_config.name == "high_noise_model":
-                    lora_wrapper = WanLoraWrapper(high_noise_model)
-                    lora_name = lora_wrapper.load_lora(lora_path)
-                    lora_wrapper.apply_lora(lora_name, strength)
-                    logger.info(f"{lora_config.name} Loaded LoRA: {lora_name} with strength: {strength}")
-
-                if lora_config.name == "low_noise_model":
-                    lora_wrapper = WanLoraWrapper(low_noise_model)
-                    lora_name = lora_wrapper.load_lora(lora_path)
-                    lora_wrapper.apply_lora(lora_name, strength)
-                    logger.info(f"{lora_config.name} Loaded LoRA: {lora_name} with strength: {strength}")
-        # XXX: trick
-        self._audio_preprocess = AutoFeatureExtractor.from_pretrained(self.config["model_path"], subfolder="audio_encoder")
-
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config.boundary)

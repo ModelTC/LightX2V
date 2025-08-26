@@ -430,6 +430,7 @@ class Wan22MoeRunner(WanRunner):
 class Wan22DenseRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
+        self.vae_encoder_need_img_original = True
 
     def load_vae_decoder(self):
         # offload config

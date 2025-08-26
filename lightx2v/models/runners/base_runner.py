@@ -11,6 +11,7 @@ class BaseRunner(ABC):
 
     def __init__(self, config):
         self.config = config
+        self.vae_encoder_need_img_original = False
 
     def load_transformer(self):
         """Load transformer model

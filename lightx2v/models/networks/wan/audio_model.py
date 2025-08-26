@@ -1,6 +1,3 @@
-import glob
-import os
-
 from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
 from lightx2v.models.networks.wan.infer.audio.pre_infer import WanAudioPreInfer
 from lightx2v.models.networks.wan.infer.audio.transformer_infer import WanAudioTransformerInfer
@@ -29,13 +26,3 @@ class WanAudioModel(WanModel):
     def set_audio_adapter(self, audio_adapter):
         self.audio_adapter = audio_adapter
         self.transformer_infer.set_audio_adapter(self.audio_adapter)
-
-
-class Wan22MoeAudioModel(WanAudioModel):
-    def _load_ckpt(self, unified_dtype, sensitive_layer):
-        safetensors_files = glob.glob(os.path.join(self.model_path, "*.safetensors"))
-        weight_dict = {}
-        for file_path in safetensors_files:
-            file_weights = self._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
-            weight_dict.update(file_weights)
-        return weight_dict
