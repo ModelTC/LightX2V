@@ -15,6 +15,12 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
+model_ckpt_path_map = {
+    "universal": "base_distilled_model/base_distill.safetensors",
+    "gta_drive": "gta_distilled_model/gta_keyboard2dim.safetensors",
+    "templerun": "templerun_distilled_model/templerun_7dim_onlykey.safetensors",
+}
+
 
 @RUNNER_REGISTER("wan2.1_matrixgame")
 class WanMatrixGameRunner(WanRunner):
@@ -42,7 +48,7 @@ class WanMatrixGameRunner(WanRunner):
 
     def load_transformer(self):
         model = WanDiffusionWrapper(model_config=os.environ["matrix_game_config_path"], timestep_shift=self.config.timestep_shift)
-        state_dict = load_file(os.environ["model_ckpt_path"])
+        state_dict = load_file(os.path.join(self.config.model_path, model_ckpt_path_map[self.config.get("mode", "universal")]))
         model.load_state_dict(state_dict)
 
         model = model.to(device=self.device, dtype=self.weight_dtype)
