@@ -1,9 +1,9 @@
 import gc
 
 import torch
-from loguru import logger
 from PIL import Image
 from einops import rearrange
+from loguru import logger
 from safetensors.torch import load_file
 from torchvision.transforms import v2
 
