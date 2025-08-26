@@ -22,7 +22,7 @@ class WanVAE_tiny(nn.Module):
 
     @peak_memory_decorator
     @torch.no_grad()
-    def decode(self, latents, generator=None, return_dict=None, config=None):
+    def decode(self, latents):
         latents = latents.unsqueeze(0)
         n, c, t, h, w = latents.shape
         # low-memory, set parallel=True for faster + higher memory

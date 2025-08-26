@@ -159,7 +159,7 @@ class WanVaceRunner(WanRunner):
         self.config.target_shape = target_shape
 
     @ProfilingContext("Run VAE Decoder")
-    def run_vae_decoder(self, latents, generator):
+    def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
 
@@ -169,7 +169,7 @@ class WanVaceRunner(WanRunner):
             if refs is not None:
                 latents = latents[:, len(refs) :, :, :]
 
-        images = self.vae_decoder.decode(latents, generator=generator, config=self.config)
+        images = self.vae_decoder.decode(latents)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder

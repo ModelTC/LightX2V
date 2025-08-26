@@ -5,7 +5,7 @@ import torch
 from .autoencoder_kl_causal_3d import AutoencoderKLCausal3D, DiagonalGaussianDistribution
 
 
-class VideoEncoderKLCausal3DModel:
+class HunyuanVAE:
     def __init__(self, model_path, dtype, device, config):
         self.model_path = model_path
         self.dtype = dtype
@@ -32,20 +32,20 @@ class VideoEncoderKLCausal3DModel:
     def to_cuda(self):
         self.model = self.model.to("cuda")
 
-    def decode(self, latents, generator, config):
-        if config.cpu_offload:
+    def decode(self, latents):
+        if self.config.cpu_offload:
             self.to_cuda()
         latents = latents / self.model.config.scaling_factor
         latents = latents.to(dtype=self.dtype, device=torch.device("cuda"))
         self.model.enable_tiling()
-        image = self.model.decode(latents, return_dict=False, generator=generator)[0]
+        image = self.model.decode(latents, return_dict=False)[0]
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.cpu().float()
-        if config.cpu_offload:
+        if self.config.cpu_offload:
             self.to_cpu()
         return image
 
-    def encode(self, x, config):
+    def encode(self, x):
         h = self.model.encoder(x)
         moments = self.model.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
@@ -54,4 +54,4 @@ class VideoEncoderKLCausal3DModel:
 
 if __name__ == "__main__":
     model_path = ""
-    vae_model = VideoEncoderKLCausal3DModel(model_path, dtype=torch.float16, device=torch.device("cuda"))
+    vae_model = HunyuanVAE(model_path, dtype=torch.float16, device=torch.device("cuda"))

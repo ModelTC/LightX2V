@@ -11,7 +11,7 @@ from lightx2v.models.networks.hunyuan.model import HunyuanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan.feature_caching.scheduler import HunyuanSchedulerAdaCaching, HunyuanSchedulerCustomCaching, HunyuanSchedulerTaylorCaching, HunyuanSchedulerTeaCaching
 from lightx2v.models.schedulers.hunyuan.scheduler import HunyuanScheduler
-from lightx2v.models.video_encoders.hf.autoencoder_kl_causal_3d.model import VideoEncoderKLCausal3DModel
+from lightx2v.models.video_encoders.hf.hunyuan.hunyuan_vae import HunyuanVAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_videos_grid
@@ -38,7 +38,7 @@ class HunyuanRunner(DefaultRunner):
         return text_encoders
 
     def load_vae(self):
-        vae_model = VideoEncoderKLCausal3DModel(self.config.model_path, dtype=torch.float16, device=self.init_device, config=self.config)
+        vae_model = HunyuanVAE(self.config.model_path, dtype=torch.float16, device=self.init_device, config=self.config)
         return vae_model, vae_model
 
     def init_scheduler(self):

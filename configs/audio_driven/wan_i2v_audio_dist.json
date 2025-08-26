@@ -18,7 +18,6 @@
     "adaptive_resize": true,
     "parallel": {
         "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses",
-        "use_patch_vae": false
+        "seq_p_attn_type": "ulysses"
     }
 }

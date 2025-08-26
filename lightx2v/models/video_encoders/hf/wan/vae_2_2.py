@@ -993,7 +993,7 @@ class Wan2_2_VAE:
             self.to_cpu()
         return out
 
-    def decode(self, zs, **args):
+    def decode(self, zs):
         if self.cpu_offload:
             self.to_cuda()
         images = self.model.decode(zs.unsqueeze(0), self.scale, offload_cache=self.offload_cache if self.cpu_offload else False).float().clamp_(-1, 1)
