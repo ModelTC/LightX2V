@@ -13,20 +13,16 @@
     "cpu_offload": true,
     "offload_granularity": "phase",
     "t5_offload_granularity": "block",
-    "dit_quantized_ckpt": "/path/to/dit_quant_model",
     "mm_config": {
         "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
     },
     "t5_cpu_offload": true,
     "t5_quantized": true,
-    "t5_quantized_ckpt": "/path/to/models_t5_umt5-xxl-enc-fp8.pth",
     "t5_quant_scheme": "fp8",
     "clip_quantized": true,
-    "clip_quantized_ckpt": "/path/to/clip-fp8.pth",
     "clip_quant_scheme": "fp8",
     "use_tiling_vae": true,
     "use_tiny_vae": true,
-    "tiny_vae_path": "/path/to/taew2_1.pth",
     "lazy_load": true,
     "rotary_chunk": true,
     "clean_cuda_cache": true

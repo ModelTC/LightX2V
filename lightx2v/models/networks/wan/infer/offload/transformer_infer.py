@@ -97,9 +97,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
 
         if self.clean_cuda_cache:
             del (
-                pre_infer_out.grid_sizes,
                 pre_infer_out.embed0,
-                pre_infer_out.seq_lens,
                 pre_infer_out.freqs,
                 pre_infer_out.context,
             )
@@ -235,9 +233,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             self.phase_params["c_gate_msa"],
         )
         del (
-            pre_infer_out.grid_sizes,
             pre_infer_out.embed0,
-            pre_infer_out.seq_lens,
             pre_infer_out.freqs,
             pre_infer_out.context,
         )

@@ -88,6 +88,8 @@ class WanVaceRunner(WanRunner):
         return src_video, src_mask, src_ref_images
 
     def run_vae_encoder(self, frames, ref_images, masks):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_encoder = self.load_vae_encoder()
         if ref_images is None:
             ref_images = [None] * len(frames)
         else:
@@ -115,6 +117,10 @@ class WanVaceRunner(WanRunner):
                 latent = torch.cat([*ref_latent, latent], dim=1)
             cat_latents.append(latent)
         self.latent_shape = list(cat_latents[0].shape)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_encoder
+            torch.cuda.empty_cache()
+            gc.collect()
         return self.get_vae_encoder_output(cat_latents, masks, ref_images)
 
     def get_vae_encoder_output(self, cat_latents, masks, ref_images):

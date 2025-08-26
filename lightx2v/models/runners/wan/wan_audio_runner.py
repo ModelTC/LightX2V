@@ -16,7 +16,7 @@ from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 from transformers import AutoFeatureExtractor
 
-from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter, rank0_load_state_dict_from_path
+from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import Wan22MoeAudioModel, WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
@@ -26,7 +26,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import find_torch_model_path, save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import find_torch_model_path, load_weights, save_to_video, vae_to_comfyui_image
 
 
 def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
@@ -238,14 +238,14 @@ class AudioProcessor:
 class WanAudioRunner(WanRunner):  # type:ignore
     def __init__(self, config):
         super().__init__(config)
-        self._audio_processor = None
-        self._video_generator = None
-        self._audio_preprocess = None
         self.frame_preprocessor = FramePreprocessor()
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
         scheduler = ConsistencyModelScheduler(self.config)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.audio_adapter = self.load_audio_adapter()
+            self.model.set_audio_adapter(self.audio_adapter)
         scheduler.set_audio_adapter(self.audio_adapter)
         self.model.set_scheduler(scheduler)
 
@@ -288,12 +288,25 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return ref_img
 
     def run_image_encoder(self, first_frame, last_frame=None):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.image_encoder = self.load_image_encoder()
         clip_encoder_out = self.image_encoder.visual([first_frame]).squeeze(0).to(GET_DTYPE()) if self.config.get("use_image_encoder", True) else None
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.image_encoder
+            torch.cuda.empty_cache()
+            gc.collect()
         return clip_encoder_out
 
     def run_vae_encoder(self, img):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_encoder = self.load_vae_encoder()
+
         img = rearrange(img, "1 C H W -> 1 C 1 H W")
         vae_encoder_out = self.vae_encoder.encode(img.to(torch.float))[0]
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_encoder
+            torch.cuda.empty_cache()
+            gc.collect()
         return vae_encoder_out
 
     @ProfilingContext("Run Encoders")
@@ -331,6 +344,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
             last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
             prev_frames[:, :, :prev_frame_length] = last_frames
 
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_encoder = self.load_vae_encoder()
+
         _, nframe, height, width = self.model.scheduler.latents.shape
         if self.config.model_cls == "wan2.2_audio":
             prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
@@ -352,6 +368,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if prev_latents.shape[-2:] != (height, width):
             logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")
             prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_encoder
+            torch.cuda.empty_cache()
+            gc.collect()
 
         return {"prev_latents": prev_latents, "prev_mask": prev_mask}
 
@@ -386,7 +407,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
         torch.manual_seed(self.config.seed)
         logger.info(f"Processing segment {segment_idx + 1}/{self.video_segment_num}, seed: {self.config.seed}")
 
-        audio_features = self.audio_encoder.infer(self.segment.audio_array).to(self.model.device)
+        if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
+            self.audio_encoder = self.load_audio_encoder()
+
+        audio_features = self.audio_encoder.infer(self.segment.audio_array)
         audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
 
         self.inputs["audio_encoder_output"] = audio_features
@@ -507,10 +531,17 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return base_model
 
     def load_audio_encoder(self):
-        model = SekoAudioEncoderModel(os.path.join(self.config["model_path"], "audio_encoder"), self.config["audio_sr"])
+        audio_encoder_path = os.path.join(self.config["model_path"], "audio_encoder")
+        audio_encoder_offload = self.config.get("audio_encoder_cpu_offload", self.config.get("cpu_offload", False))
+        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload)
         return model
 
     def load_audio_adapter(self):
+        audio_adapter_offload = self.config.get("audio_adapter_cpu_offload", self.config.get("cpu_offload", False))
+        if audio_adapter_offload:
+            device = torch.device("cpu")
+        else:
+            device = torch.device("cuda")
         audio_adapter = AudioAdapter(
             attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
@@ -522,7 +553,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
             mlp_dims=(1024, 1024, 32 * 1024),
             quantized=self.config.get("adapter_quantized", False),
             quant_scheme=self.config.get("adapter_quant_scheme", None),
+            cpu_offload=audio_adapter_offload,
         )
+        audio_adapter.to(device)
         if self.config.get("adapter_quantized", False):
             if self.config.get("adapter_quant_scheme", None) == "fp8":
                 model_name = "audio_adapter_fp8.safetensors"
@@ -532,7 +565,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
         else:
             model_name = "audio_adapter.safetensors"
-        rank0_load_state_dict_from_path(audio_adapter, os.path.join(self.config["model_path"], model_name), strict=False)
+
+        weights_dict = load_weights(os.path.join(self.config["model_path"], model_name), cpu_offload=audio_adapter_offload)
+        audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 
     @ProfilingContext("Load models")

@@ -1,7 +1,7 @@
 {
   "infer_steps": 4,
   "target_fps": 16,
-  "video_duration": 12,
+  "video_duration": 5,
   "audio_sr": 16000,
   "target_video_length": 81,
   "target_height": 720,
@@ -17,8 +17,10 @@
   "use_31_block": false,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "t5_cpu_offload": true,
   "offload_ratio_val": 1,
+  "t5_cpu_offload": true,
   "t5_offload_granularity": "block",
-  "use_tiling_vae": true
+  "use_tiling_vae": true,
+  "audio_encoder_cpu_offload": true,
+  "audio_adapter_cpu_offload": false
 }

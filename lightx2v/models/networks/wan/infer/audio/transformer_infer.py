@@ -28,7 +28,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)
 
         x = self.modify_hidden_states(
-            hidden_states=x,
+            hidden_states=x.to(self.infer_dtype),
             grid_sizes=pre_infer_out.grid_sizes,
             ca_block=self.audio_adapter.ca[self.block_idx],
             audio_encoder_output=pre_infer_out.adapter_output["audio_encoder_output"],
@@ -87,8 +87,11 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         k_lens = torch.tensor([self.num_tokens_x4] * (t1 - t0) * bs, device=device, dtype=torch.int32)
         assert q_lens.shape == k_lens.shape
         # ca_block:CrossAttention函数
+        if self.audio_adapter.cpu_offload:
+            ca_block.to("cuda")
         residual = ca_block(audio_encoder_output, hidden_states_aligned, t_emb, q_lens, k_lens) * weight
-
+        if self.audio_adapter.cpu_offload:
+            ca_block.to("cpu")
         residual = residual.to(ori_dtype)  # audio做了CrossAttention之后以Residual的方式注入
         if n_query_tokens == 0:
             residual = residual * 0.0

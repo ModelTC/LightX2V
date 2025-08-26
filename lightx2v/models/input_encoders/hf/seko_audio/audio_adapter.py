@@ -3,85 +3,14 @@ try:
 except ModuleNotFoundError:
     flash_attn = None
 import math
-import os
 
-import safetensors
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from einops import rearrange
-from loguru import logger
 
 from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
-
-
-def load_safetensors(in_path: str):
-    if os.path.isdir(in_path):
-        return load_safetensors_from_dir(in_path)
-    elif os.path.isfile(in_path):
-        return load_safetensors_from_path(in_path)
-    else:
-        raise ValueError(f"{in_path} does not exist")
-
-
-def load_safetensors_from_path(in_path: str):
-    tensors = {}
-    with safetensors.safe_open(in_path, framework="pt", device="cpu") as f:
-        for key in f.keys():
-            tensors[key] = f.get_tensor(key)
-    return tensors
-
-
-def load_safetensors_from_dir(in_dir: str):
-    tensors = {}
-    safetensors = os.listdir(in_dir)
-    safetensors = [f for f in safetensors if f.endswith(".safetensors")]
-    for f in safetensors:
-        tensors.update(load_safetensors_from_path(os.path.join(in_dir, f)))
-    return tensors
-
-
-def load_pt_safetensors(in_path: str):
-    ext = os.path.splitext(in_path)[-1]
-    if ext in (".pt", ".pth", ".tar"):
-        state_dict = torch.load(in_path, map_location="cpu", weights_only=True)
-    else:
-        state_dict = load_safetensors(in_path)
-    return state_dict
-
-
-def rank0_load_state_dict_from_path(model, in_path: str, strict: bool = True):
-    model = model.to("cuda")
-    # 确定当前进程是否是（负责加载权重）
-    is_leader = False
-    if dist.is_initialized():
-        current_rank = dist.get_rank()
-        if current_rank == 0:
-            is_leader = True
-    elif not dist.is_initialized() or dist.get_rank() == 0:
-        is_leader = True
-
-    if is_leader:
-        logger.info(f"Loading model state from {in_path}")
-        state_dict = load_pt_safetensors(in_path)
-        model.load_state_dict(state_dict, strict=strict)
-
-    # 将模型状态从领导者同步到组内所有其他进程
-    if dist.is_initialized():
-        dist.barrier(device_ids=[torch.cuda.current_device()])
-        src_global_rank = 0
-        for param in model.parameters():
-            dist.broadcast(param.data, src=src_global_rank)
-        for buffer in model.buffers():
-            dist.broadcast(buffer.data, src=src_global_rank)
-    elif dist.is_initialized():
-        dist.barrier(device_ids=[torch.cuda.current_device()])
-        for param in model.parameters():
-            dist.broadcast(param.data, src=0)
-        for buffer in model.buffers():
-            dist.broadcast(buffer.data, src=0)
 
 
 def linear_interpolation(features, output_len: int):
@@ -265,8 +194,10 @@ class AudioAdapter(nn.Module):
         projection_transformer_layers: int = 4,
         quantized: bool = False,
         quant_scheme: str = None,
+        cpu_offload: bool = False,
     ):
         super().__init__()
+        self.cpu_offload = cpu_offload
         self.audio_proj = AudioProjection(
             audio_feature_dim=audio_feature_dim,
             n_neighbors=(2, 2),
@@ -309,7 +240,11 @@ class AudioAdapter(nn.Module):
 
     @torch.no_grad()
     def forward_audio_proj(self, audio_feat, latent_frame):
+        if self.cpu_offload:
+            self.audio_proj.to("cuda")
         x = self.audio_proj(audio_feat, latent_frame)
         x = self.rearange_audio_features(x)
-        x = x + self.audio_pe
+        x = x + self.audio_pe.cuda()
+        if self.cpu_offload:
+            self.audio_proj.to("cpu")
         return x

@@ -17,7 +17,11 @@ class ConsistencyModelScheduler(WanScheduler):
 
     def step_pre(self, step_index):
         super().step_pre(step_index)
+        if self.audio_adapter.cpu_offload:
+            self.audio_adapter.time_embedding.to("cuda")
         self.audio_adapter_t_emb = self.audio_adapter.time_embedding(self.timestep_input).unflatten(1, (3, -1))
+        if self.audio_adapter.cpu_offload:
+            self.audio_adapter.time_embedding.to("cpu")
 
     def prepare(self, image_encoder_output=None):
         self.prepare_latents(self.config.target_shape, dtype=torch.float32)

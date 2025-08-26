@@ -106,7 +106,6 @@ class WanAudioPreInfer(WanPreInfer):
             context_clip = weights.proj_3.apply(context_clip)
             context_clip = weights.proj_4.apply(context_clip)
             if self.clean_cuda_cache:
-                del clip_fea
                 torch.cuda.empty_cache()
             context = torch.concat([context_clip, context], dim=0)
 

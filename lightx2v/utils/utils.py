@@ -7,6 +7,7 @@ from typing import Optional
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
+import safetensors
 import torch
 import torch.distributed as dist
 import torchvision
@@ -267,9 +268,9 @@ def find_torch_model_path(config, ckpt_config_key=None, filename=None, subdir=["
     ]
     if isinstance(subdir, list):
         for sub in subdir:
-            paths_to_check.append(os.path.join(config.model_path, sub, filename))
+            paths_to_check.insert(0, os.path.join(config.model_path, sub, filename))
     else:
-        paths_to_check.append(os.path.join(config.model_path, subdir, filename))
+        paths_to_check.insert(0, os.path.join(config.model_path, subdir, filename))
 
     for path in paths_to_check:
         if os.path.exists(path):
@@ -284,10 +285,9 @@ def find_hf_model_path(config, model_path, ckpt_config_key=None, subdir=["origin
     paths_to_check = [model_path]
     if isinstance(subdir, list):
         for sub in subdir:
-            paths_to_check.append(os.path.join(model_path, sub))
+            paths_to_check.insert(0, os.path.join(model_path, sub))
     else:
-        paths_to_check.append(os.path.join(model_path, subdir))
-
+        paths_to_check.insert(0, os.path.join(model_path, subdir))
     for path in paths_to_check:
         safetensors_pattern = os.path.join(path, "*.safetensors")
         safetensors_files = glob.glob(safetensors_pattern)
@@ -324,10 +324,45 @@ def find_gguf_model_path(config, ckpt_config_key=None, subdir=None):
     raise FileNotFoundError(f"No GGUF model files (.gguf) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
 
 
+def load_safetensors(in_path: str):
+    if os.path.isdir(in_path):
+        return load_safetensors_from_dir(in_path)
+    elif os.path.isfile(in_path):
+        return load_safetensors_from_path(in_path)
+    else:
+        raise ValueError(f"{in_path} does not exist")
+
+
+def load_safetensors_from_path(in_path: str):
+    tensors = {}
+    with safetensors.safe_open(in_path, framework="pt", device="cpu") as f:
+        for key in f.keys():
+            tensors[key] = f.get_tensor(key)
+    return tensors
+
+
+def load_safetensors_from_dir(in_dir: str):
+    tensors = {}
+    safetensors = os.listdir(in_dir)
+    safetensors = [f for f in safetensors if f.endswith(".safetensors")]
+    for f in safetensors:
+        tensors.update(load_safetensors_from_path(os.path.join(in_dir, f)))
+    return tensors
+
+
+def load_pt_safetensors(in_path: str):
+    ext = os.path.splitext(in_path)[-1]
+    if ext in (".pt", ".pth", ".tar"):
+        state_dict = torch.load(in_path, map_location="cpu", weights_only=True)
+    else:
+        state_dict = load_safetensors(in_path)
+    return state_dict
+
+
 def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
     if not dist.is_initialized():
         # Single GPU mode
-        cpu_weight_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path)
         for key in list(cpu_weight_dict.keys()):
             if remove_key and remove_key in key:
                 cpu_weight_dict.pop(key)
@@ -343,7 +378,7 @@ def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
     cpu_weight_dict = {}
     if is_weight_loader:
         logger.info(f"Loading weights from {checkpoint_path}")
-        cpu_weight_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path)
         for key in list(cpu_weight_dict.keys()):
             if remove_key and remove_key in key:
                 cpu_weight_dict.pop(key)

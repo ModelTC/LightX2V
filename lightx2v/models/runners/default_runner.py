@@ -140,7 +140,6 @@ class DefaultRunner(BaseRunner):
             if hasattr(self.model.transformer_weights, "clear"):
                 self.model.transformer_weights.clear()
             self.model.pre_weight.clear()
-            self.model.post_weight.clear()
             del self.model
         torch.cuda.empty_cache()
         gc.collect()

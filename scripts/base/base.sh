@@ -49,7 +49,7 @@ export ENABLE_GRAPH_MODE=true
 
 
 echo "==============================================================================="
-echo "LightX2V Environment Variables Summary:"
+echo "LightX2V Base Environment Variables Summary:"
 echo "-------------------------------------------------------------------------------"
 echo "lightx2v_path: ${lightx2v_path}"
 echo "model_path: ${model_path}"

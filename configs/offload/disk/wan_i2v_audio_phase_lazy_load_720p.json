@@ -1,7 +1,7 @@
 {
     "infer_steps": 4,
     "target_fps": 16,
-    "video_duration": 5,
+    "video_duration": 12,
     "audio_sr": 16000,
     "target_video_length": 81,
     "target_height": 720,
@@ -13,18 +13,24 @@
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,
+    "cpu_offload": true,
     "use_31_block": false,
     "adaptive_resize": true,
-    "parallel": {
-        "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses"
-    },
-    "cpu_offload": true,
-    "offload_granularity": "block",
-    "t5_cpu_offload": true,
-    "offload_ratio_val": 1,
+    "offload_granularity": "phase",
     "t5_offload_granularity": "block",
+    "mm_config": {
+        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
+    },
+    "t5_cpu_offload": true,
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8",
+    "clip_quantized": true,
+    "clip_quant_scheme": "fp8",
     "use_tiling_vae": true,
+    "use_tiny_vae": true,
+    "lazy_load": true,
+    "rotary_chunk": true,
+    "clean_cuda_cache": true,
     "audio_encoder_cpu_offload": true,
-    "audio_adapter_cpu_offload": false
+    "audio_adapter_cpu_offload": true
 }
