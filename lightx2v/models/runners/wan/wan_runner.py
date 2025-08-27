@@ -309,7 +309,7 @@ class WanRunner(DefaultRunner):
                 dim=1,
             ).cuda()
 
-        vae_encoder_out = self.vae_encoder.encode([vae_input])[0]
+        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0))
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
