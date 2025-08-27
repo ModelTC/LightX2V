@@ -301,8 +301,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.vae_encoder = self.load_vae_encoder()
 
         img = rearrange(img, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float))
-        vae_encoder_out = vae_encoder_out.to(GET_DTYPE())
+        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float)).to(GET_DTYPE())
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
