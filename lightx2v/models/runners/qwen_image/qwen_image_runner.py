@@ -60,8 +60,6 @@ class QwenImageRunner(DefaultRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        self.run_dit = self._run_dit_local
-        self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "t2i":
             self.run_input_encoder = self._run_input_encoder_local_t2i
         elif self.config["task"] == "i2i":
@@ -156,7 +154,7 @@ class QwenImageRunner(DefaultRunner):
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     @ProfilingContext("Run VAE Decoder")
-    def _run_vae_decoder_local(self, latents, generator):
+    def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae()
         images = self.vae.decode(latents)
@@ -174,7 +172,7 @@ class QwenImageRunner(DefaultRunner):
         self.set_target_shape()
         latents, generator = self.run_dit()
 
-        images = self.run_vae_decoder(latents, generator)
+        images = self.run_vae_decoder(latents)
         image = images[0]
         image.save(f"{self.config.save_video_path}")
 

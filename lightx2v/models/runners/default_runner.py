@@ -174,8 +174,8 @@ class DefaultRunner(BaseRunner):
     @ProfilingContext("Run Encoders")
     def _run_input_encoder_local_flf2v(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        first_frame = self.read_image_input(self.config["image_path"])
-        last_frame = self.read_image_input(self.config["last_frame_path"])
+        first_frame, _ = self.read_image_input(self.config["image_path"])
+        last_frame, _ = self.read_image_input(self.config["last_frame_path"])
         clip_encoder_out = self.run_image_encoder(first_frame, last_frame) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(first_frame, last_frame)
         text_encoder_output = self.run_text_encoder(prompt, first_frame)
@@ -222,13 +222,13 @@ class DefaultRunner(BaseRunner):
             # 2. main inference loop
             latents, generator = self.run_segment(total_steps=total_steps)
             # 3. vae decoder
-            self.gen_video = self.run_vae_decoder(latents, generator)
+            self.gen_video = self.run_vae_decoder(latents)
             # 4. default do nothing
             self.end_run_segment()
         self.end_run()
 
     @ProfilingContext("Run VAE Decoder")
-    def run_vae_decoder(self, latents, generator):
+    def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
         images = self.vae_decoder.decode(latents)

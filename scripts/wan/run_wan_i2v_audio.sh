@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/mtc/gushiqiao/llmc_workspace/LightX2V
-model_path=/data/nvme0/gushiqiao/models/Lightx2v_models/Wan2.1-R2V721-Audio-14B-720P
+lightx2v_path=
+model_path=
 
-
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
