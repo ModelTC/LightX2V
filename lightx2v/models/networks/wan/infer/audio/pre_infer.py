@@ -67,7 +67,6 @@ class WanAudioPreInfer(WanPreInfer):
 
         y = weights.patch_embedding.apply(y.unsqueeze(0))
         y = y.flatten(2).transpose(1, 2).contiguous()
-        ref_seq_lens = torch.tensor(y.size(1), dtype=torch.long).cuda().unsqueeze(0)
 
         x = torch.cat([x, y], dim=1).squeeze(0)
 
@@ -76,12 +75,11 @@ class WanAudioPreInfer(WanPreInfer):
         grid_sizes[:, 0] += 1
 
         if self.config.model_cls == "wan2.2_audio":
-            ref_seq_len = ref_seq_lens.item()
             t = torch.cat(
                 [
                     t,
                     torch.zeros(
-                        (1, ref_seq_len),
+                        (1, y.shape[1]),
                         dtype=t.dtype,
                         device=t.device,
                     ),
