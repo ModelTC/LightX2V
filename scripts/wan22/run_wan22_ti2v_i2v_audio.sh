@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=""
-model_path="/mnt/aigc/rtxiang/workspace/ViGen/SekoTalk/Wan2.2-r2v-5b-20000-distill/"
+lightx2v_path=
+model_path=
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -12,7 +12,6 @@ source ${lightx2v_path}/scripts/base/base.sh
 export ENABLE_GRAPH_MODE=false
 export SENSITIVE_LAYER_DTYPE=None
 
-#python -m debugpy --listen 0.0.0.0:15683 -m lightx2v.infer \
 python -m lightx2v.infer \
 --model_cls wan2.2_audio \
 --task i2v \
