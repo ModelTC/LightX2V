@@ -892,17 +892,17 @@ class WanVAE:
         self.inv_std = self.inv_std.cuda()
         self.scale = [self.mean, self.inv_std]
 
-    def encode(self, videos):
+    def encode(self, video):
         """
-        videos: A list of videos each with shape [C, T, H, W].
+        video: one video  with shape [1, C, T, H, W].
         """
         if self.cpu_offload:
             self.to_cuda()
 
         if self.use_tiling:
-            out = [self.model.tiled_encode(u.unsqueeze(0).to(self.current_device()), self.scale).float().squeeze(0) for u in videos]
+            out = self.model.tiled_encode(video, self.scale).float().squeeze(0)
         else:
-            out = [self.model.encode(u.unsqueeze(0).to(self.current_device()), self.scale).float().squeeze(0) for u in videos]
+            out = self.model.encode(video, self.scale).float().squeeze(0)
 
         if self.cpu_offload:
             self.to_cpu()

@@ -1,5 +1,3 @@
-import math
-
 import torch
 
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
@@ -31,33 +29,15 @@ class WanAudioPreInfer(WanPreInfer):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
-        if config.parallel:
-            self.sp_size = config.parallel.get("seq_p_size", 1)
-        else:
-            self.sp_size = 1
-
     def infer(self, weights, inputs):
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"]
-        if self.config.model_cls == "wan2.2_audio":
-            hidden_states = self.scheduler.latents
-        else:
-            prev_latents = prev_latents.unsqueeze(0)
+        hidden_states = self.scheduler.latents
+        if self.config.model_cls != "wan2.2_audio":
             prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
-            hidden_states = self.scheduler.latents.unsqueeze(0)
-            hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=1)
-            hidden_states = hidden_states.squeeze(0)
+            hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=0)
 
         x = hidden_states
-        t = torch.stack([self.scheduler.timesteps[self.scheduler.step_index]])
-
-        if self.config.model_cls == "wan2.2_audio":
-            _, lat_f, lat_h, lat_w = self.scheduler.latents.shape
-            F = (lat_f - 1) * self.config.vae_stride[0] + 1
-            max_seq_len = ((F - 1) // self.config.vae_stride[0] + 1) * lat_h * lat_w // (self.config.patch_size[1] * self.config.patch_size[2])
-            max_seq_len = int(math.ceil(max_seq_len / self.sp_size)) * self.sp_size
-            temp_ts = (self.scheduler.mask[0][:, ::2, ::2] * t).flatten()
-            temp_ts = torch.cat([temp_ts, temp_ts.new_ones(max_seq_len - temp_ts.size(0)) * t])
-            t = temp_ts.unsqueeze(0)
+        t = self.scheduler.timestep_input
 
         if self.scheduler.infer_condition:
             context = inputs["text_encoder_output"]["context"]
