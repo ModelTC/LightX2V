@@ -37,11 +37,24 @@ class ConsistencyModelScheduler(WanScheduler):
         if self.config.model_cls == "wan2.2_audio":
             _, lat_f, lat_h, lat_w = self.latents.shape
             F = (lat_f - 1) * self.config.vae_stride[0] + 1
-            max_seq_len = ((F - 1) // self.config.vae_stride[0] + 1) * lat_h * lat_w // (self.config.patch_size[1] * self.config.patch_size[2])
+            per_latent_token_len = lat_h * lat_w // (self.config.patch_size[1] * self.config.patch_size[2])
+            max_seq_len = ((F - 1) // self.config.vae_stride[0] + 1) * per_latent_token_len
             max_seq_len = int(math.ceil(max_seq_len / self.sp_size)) * self.sp_size
+
             temp_ts = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
-            temp_ts = torch.cat([temp_ts, temp_ts.new_ones(max_seq_len - temp_ts.size(0)) * self.timestep_input])
-            self.timestep_input = temp_ts.unsqueeze(0)
+            self.timestep_input = torch.cat([temp_ts, temp_ts.new_ones(max_seq_len - temp_ts.size(0)) * self.timestep_input]).unsqueeze(0)
+
+            self.timestep_input = torch.cat(
+                [
+                    self.timestep_input,
+                    torch.zeros(
+                        (1, per_latent_token_len),  # padding for reference frame latent
+                        dtype=self.timestep_input.dtype,
+                        device=self.timestep_input.device,
+                    ),
+                ],
+                dim=1,
+            )
 
     def prepare_latents(self, target_shape, dtype=torch.float32):
         self.generator = torch.Generator(device=self.device).manual_seed(self.config.seed)

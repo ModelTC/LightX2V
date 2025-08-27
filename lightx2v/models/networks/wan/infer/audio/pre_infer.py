@@ -67,25 +67,11 @@ class WanAudioPreInfer(WanPreInfer):
 
         y = weights.patch_embedding.apply(y.unsqueeze(0))
         y = y.flatten(2).transpose(1, 2).contiguous()
-
         x = torch.cat([x, y], dim=1).squeeze(0)
 
         ####for r2v # zero temporl component corresponding to ref embeddings
         self.freqs[grid_sizes[0][0] :, : self.rope_t_dim] = 0
         grid_sizes[:, 0] += 1
-
-        if self.config.model_cls == "wan2.2_audio":
-            t = torch.cat(
-                [
-                    t,
-                    torch.zeros(
-                        (1, y.shape[1]),
-                        dtype=t.dtype,
-                        device=t.device,
-                    ),
-                ],
-                dim=1,
-            )
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
         if self.sensitive_layer_dtype != self.infer_dtype:
