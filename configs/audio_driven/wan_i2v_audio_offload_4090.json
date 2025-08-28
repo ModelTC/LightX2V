@@ -29,6 +29,6 @@
   "vae_cpu_offload": false,
   "use_tiling_vae": true,
   "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
+        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F"
   }
 }
