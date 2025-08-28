@@ -25,6 +25,7 @@ from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
 from lightx2v.utils.envs import *
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
 from lightx2v.utils.utils import best_output_size, cache_video
@@ -138,6 +139,7 @@ class WanRunner(DefaultRunner):
             "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
+            "dtype": GET_DTYPE(),
         }
         if self.config.task not in ["i2v", "flf2v", "vace"]:
             return None
@@ -158,6 +160,7 @@ class WanRunner(DefaultRunner):
             "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
+            "dtype": GET_DTYPE(),
         }
         if self.config.get("use_tiny_vae", False):
             tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth")
@@ -309,7 +312,8 @@ class WanRunner(DefaultRunner):
                 dim=1,
             ).cuda()
 
-        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0))
+        with ProfilingContext4Debug("Run VAE Encoder"):
+            vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0))
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder

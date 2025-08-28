@@ -61,6 +61,8 @@ class _ProfilingContext:
 
 class _NullContext:
     # Context manager without decision branch logic overhead
+    __slots__ = ()
+
     def __init__(self, *args, **kwargs):
         pass
 

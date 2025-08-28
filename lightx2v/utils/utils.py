@@ -350,23 +350,28 @@ def load_safetensors_from_dir(in_dir: str):
     return tensors
 
 
-def load_pt_safetensors(in_path: str):
+def load_pt_safetensors(in_path: str, weight_dtype=torch.bfloat16):
     ext = os.path.splitext(in_path)[-1]
     if ext in (".pt", ".pth", ".tar"):
         state_dict = torch.load(in_path, map_location="cpu", weights_only=True)
     else:
         state_dict = load_safetensors(in_path)
+
+    for key, tensor in state_dict.items():
+        if tensor.dtype != weight_dtype:
+            state_dict[key] = tensor.to(weight_dtype)
+
+    logger.info(f"Load weights from {in_path} with weight_dtype = {weight_dtype}")
     return state_dict
 
 
-def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
+def load_weights(checkpoint_path, cpu_offload=False, remove_key=None, weight_dtype=torch.bfloat16):
     if not dist.is_initialized():
         # Single GPU mode
-        cpu_weight_dict = load_pt_safetensors(checkpoint_path)
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path, weight_dtype=weight_dtype)
         for key in list(cpu_weight_dict.keys()):
             if remove_key and remove_key in key:
                 cpu_weight_dict.pop(key)
-        logger.info(f"Loading weights from {checkpoint_path}")
         return cpu_weight_dict
 
     # Multi-GPU mode
@@ -377,8 +382,7 @@ def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
 
     cpu_weight_dict = {}
     if is_weight_loader:
-        logger.info(f"Loading weights from {checkpoint_path}")
-        cpu_weight_dict = load_pt_safetensors(checkpoint_path)
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path, weight_dtype=weight_dtype)
         for key in list(cpu_weight_dict.keys()):
             if remove_key and remove_key in key:
                 cpu_weight_dict.pop(key)
