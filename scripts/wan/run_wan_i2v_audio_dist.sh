@@ -9,7 +9,6 @@ model_path=
 source ${lightx2v_path}/scripts/base/base.sh
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
-export TORCH_CUDA_ARCH_LIST="9.0"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 export ENABLE_GRAPH_MODE=false
