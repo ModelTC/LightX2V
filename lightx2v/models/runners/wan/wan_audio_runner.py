@@ -301,7 +301,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.vae_encoder = self.load_vae_encoder()
 
         img = rearrange(img, "1 C H W -> 1 C 1 H W")
-        vae_encoder_out = self.vae_encoder.encode(img.to(torch.float)).to(GET_DTYPE())
+        vae_encoder_out = self.vae_encoder.encode(img.to(GET_DTYPE()))
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
@@ -333,7 +333,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         """Prepare previous latents for conditioning"""
         device = torch.device("cuda")
         dtype = GET_DTYPE()
-        vae_dtype = torch.float
 
         tgt_h, tgt_w = self.config.tgt_h, self.config.tgt_w
         prev_frames = torch.zeros((1, 3, self.config.target_video_length, tgt_h, tgt_w), device=device)
@@ -354,12 +353,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         _, nframe, height, width = self.model.scheduler.latents.shape
         if self.config.model_cls == "wan2.2_audio":
             if prev_video is not None:
-                prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
+                prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
             else:
                 prev_latents = None
             prev_mask = self.model.scheduler.mask
         else:
-            prev_latents = self.vae_encoder.encode(prev_frames.to(vae_dtype)).to(dtype)
+            prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
 
             frames_n = (nframe - 1) * 4 + 1
             prev_mask = torch.ones((1, frames_n, height, width), device=device, dtype=dtype)

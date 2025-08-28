@@ -64,7 +64,7 @@ class Upsample(nn.Upsample):
         """
         Fix bfloat16 support for nearest neighbor interpolation.
         """
-        return super().forward(x.float()).type_as(x)
+        return super().forward(x)
 
 
 class Resample(nn.Module):
@@ -905,9 +905,9 @@ class WanVAE:
                 video_chunk = video[:, :, :, :, start_idx:end_idx].contiguous()
 
         if self.use_tiling:
-            encoded_chunk = self.model.tiled_encode(video_chunk, self.scale).float()
+            encoded_chunk = self.model.tiled_encode(video_chunk, self.scale)
         else:
-            encoded_chunk = self.model.encode(video_chunk, self.scale).float()
+            encoded_chunk = self.model.encode(video_chunk, self.scale)
 
         if cur_rank == 0:
             if split_dim == 3:
@@ -938,8 +938,6 @@ class WanVAE:
         """
         video: one video  with shape [1, C, T, H, W].
         """
-        if video.dtype != self.dtype:
-            video = video.to(self.dtype)
         if self.cpu_offload:
             self.to_cuda()
 
@@ -956,14 +954,14 @@ class WanVAE:
             else:
                 logger.info("Fall back to naive encode mode")
                 if self.use_tiling:
-                    out = self.model.tiled_encode(video, self.scale).float().squeeze(0)
+                    out = self.model.tiled_encode(video, self.scale).squeeze(0)
                 else:
-                    out = self.model.encode(video, self.scale).float().squeeze(0)
+                    out = self.model.encode(video, self.scale).squeeze(0)
         else:
             if self.use_tiling:
-                out = self.model.tiled_encode(video, self.scale).float().squeeze(0)
+                out = self.model.tiled_encode(video, self.scale).squeeze(0)
             else:
-                out = self.model.encode(video, self.scale).float().squeeze(0)
+                out = self.model.encode(video, self.scale).squeeze(0)
 
         if self.cpu_offload:
             self.to_cpu()
@@ -991,7 +989,7 @@ class WanVAE:
                 zs = zs[:, :, :, cur_rank * splited_chunk_len - padding_size : (cur_rank + 1) * splited_chunk_len + padding_size].contiguous()
 
         decode_func = self.model.tiled_decode if self.use_tiling else self.model.decode
-        images = decode_func(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
+        images = decode_func(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
 
         if cur_rank == 0:
             if split_dim == 2:
@@ -1019,8 +1017,6 @@ class WanVAE:
         return images
 
     def decode(self, zs):
-        if zs.dtype != self.dtype:
-            zs = zs.to(self.dtype)
         if self.cpu_offload:
             self.to_cuda()
 
@@ -1035,13 +1031,13 @@ class WanVAE:
                 images = self.decode_dist(zs, world_size, cur_rank, split_dim=2)
             else:
                 logger.info("Fall back to naive decode mode")
-                images = self.model.decode(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
+                images = self.model.decode(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
         else:
             decode_func = self.model.tiled_decode if self.use_tiling else self.model.decode
-            images = decode_func(zs.unsqueeze(0), self.scale).float().clamp_(-1, 1)
+            images = decode_func(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
 
         if self.cpu_offload:
-            images = images.cpu().float()
+            images = images.cpu()
             self.to_cpu()
 
         return images

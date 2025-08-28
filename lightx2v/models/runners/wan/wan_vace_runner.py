@@ -8,6 +8,7 @@ from PIL import Image
 from lightx2v.models.input_encoders.hf.vace.vace_processor import VaceVideoProcessor
 from lightx2v.models.networks.wan.vace_model import WanVaceModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -96,22 +97,22 @@ class WanVaceRunner(WanRunner):
             assert len(frames) == len(ref_images)
 
         if masks is None:
-            latents = [self.vae_encoder.encode(frame.unsqueeze(0)) for frame in frames]
+            latents = [self.vae_encoder.encode(frame.unsqueeze(0).to(GET_DTYPE())) for frame in frames]
         else:
             masks = [torch.where(m > 0.5, 1.0, 0.0) for m in masks]
             inactive = [i * (1 - m) + 0 * m for i, m in zip(frames, masks)]
             reactive = [i * m + 0 * (1 - m) for i, m in zip(frames, masks)]
-            inactive = [self.vae_encoder.encode(inact.unsqueeze(0)) for inact in inactive]
-            reactive = [self.vae_encoder.encode(react.unsqueeze(0)) for react in reactive]
+            inactive = [self.vae_encoder.encode(inact.unsqueeze(0).to(GET_DTYPE())) for inact in inactive]
+            reactive = [self.vae_encoder.encode(react.unsqueeze(0).to(GET_DTYPE())) for react in reactive]
             latents = [torch.cat((u, c), dim=0) for u, c in zip(inactive, reactive)]
 
         cat_latents = []
         for latent, refs in zip(latents, ref_images):
             if refs is not None:
                 if masks is None:
-                    ref_latent = [self.vae_encoder.encode(ref.unsqueeze(0)) for ref in refs]
+                    ref_latent = [self.vae_encoder.encode(ref.unsqueeze(0).to(GET_DTYPE())) for ref in refs]
                 else:
-                    ref_latent = [self.vae_encoder.encode(ref.unsqueeze(0)) for ref in refs]
+                    ref_latent = [self.vae_encoder.encode(ref.unsqueeze(0).to(GET_DTYPE())) for ref in refs]
                     ref_latent = [torch.cat((u, torch.zeros_like(u)), dim=0) for u in ref_latent]
                 assert all([x.shape[1] == 1 for x in ref_latent])
                 latent = torch.cat([*ref_latent, latent], dim=1)
@@ -169,7 +170,7 @@ class WanVaceRunner(WanRunner):
             if refs is not None:
                 latents = latents[:, len(refs) :, :, :]
 
-        images = self.vae_decoder.decode(latents)
+        images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder

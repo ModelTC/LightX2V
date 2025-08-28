@@ -311,7 +311,7 @@ class WanRunner(DefaultRunner):
                 dim=1,
             ).cuda()
 
-        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0))
+        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0).to(GET_DTYPE()))
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
@@ -498,5 +498,5 @@ class Wan22DenseRunner(WanRunner):
         return vae_encoder_out
 
     def get_vae_encoder_output(self, img):
-        z = self.vae_encoder.encode(img)
+        z = self.vae_encoder.encode(img.to(GET_DTYPE()))
         return z

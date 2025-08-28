@@ -231,7 +231,7 @@ class DefaultRunner(BaseRunner):
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.decode(latents)
+        images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
             torch.cuda.empty_cache()
