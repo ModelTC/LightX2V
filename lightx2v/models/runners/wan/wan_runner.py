@@ -138,6 +138,7 @@ class WanRunner(DefaultRunner):
             "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
+            "dtype": eval(self.config.get("vae_dtype", "torch.float32")),
         }
         if self.config.task not in ["i2v", "flf2v", "vace"]:
             return None
@@ -158,6 +159,7 @@ class WanRunner(DefaultRunner):
             "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
+            "dtype": eval(self.config.get("vae_dtype", "torch.float32")),
         }
         if self.config.get("use_tiny_vae", False):
             tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth")
@@ -444,6 +446,7 @@ class Wan22DenseRunner(WanRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
+            "dtype": eval(self.config.get("vae_dtype", "torch.float32")),
         }
         vae_decoder = Wan2_2_VAE(**vae_config)
         return vae_decoder
@@ -460,6 +463,7 @@ class Wan22DenseRunner(WanRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
+            "dtype": eval(self.config.get("vae_dtype", "torch.float32")),
         }
         if self.config.task not in ["i2v", "flf2v"]:
             return None

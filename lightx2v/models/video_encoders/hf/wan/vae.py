@@ -761,7 +761,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
@@ -783,6 +783,9 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
 
     # load checkpoint
     weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload)
+    for k in weights_dict.keys():
+        if weights_dict[k].dtype != dtype:
+            weights_dict[k] = weights_dict[k].to(dtype)
     model.load_state_dict(weights_dict, assign=True)
 
     return model
@@ -846,7 +849,7 @@ class WanVAE:
         self.scale = [self.mean, self.inv_std]
 
         # init model
-        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload).eval().requires_grad_(False).to(device)
+        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype).eval().requires_grad_(False).to(device).to(dtype)
 
     def current_device(self):
         return next(self.model.parameters()).device
@@ -935,6 +938,8 @@ class WanVAE:
         """
         video: one video  with shape [1, C, T, H, W].
         """
+        if video.dtype != self.dtype:
+            video = video.to(self.dtype)
         if self.cpu_offload:
             self.to_cuda()
 
@@ -1014,6 +1019,8 @@ class WanVAE:
         return images
 
     def decode(self, zs):
+        if zs.dtype != self.dtype:
+            zs = zs.to(self.dtype)
         if self.cpu_offload:
             self.to_cuda()
 

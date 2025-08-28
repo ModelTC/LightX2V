@@ -561,7 +561,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         )
         audio_adapter.to(device)
         if self.config.get("adapter_quantized", False):
-            if self.config.get("adapter_quant_scheme", None) == "fp8":
+            if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f"]:
                 model_name = "audio_adapter_fp8.safetensors"
             elif self.config.get("adapter_quant_scheme", None) == "int8":
                 model_name = "audio_adapter_int8.safetensors"

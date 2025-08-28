@@ -812,7 +812,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, dtype=torch.float32, **kwargs):
     # params
     cfg = dict(
         dim=dim,
@@ -832,6 +832,9 @@ def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offloa
     # load checkpoint
     logging.info(f"loading {pretrained_path}")
     weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload)
+    for k in weights_dict.keys():
+        if weights_dict[k].dtype != dtype:
+            weights_dict[k] = weights_dict[k].to(dtype)
     model.load_state_dict(weights_dict, assign=True)
 
     return model
@@ -956,17 +959,11 @@ class Wan2_2_VAE:
         self.scale = [self.mean, self.inv_std]
         # init model
         self.model = (
-            _video_vae(
-                pretrained_path=vae_pth,
-                z_dim=z_dim,
-                dim=c_dim,
-                dim_mult=dim_mult,
-                temperal_downsample=temperal_downsample,
-                cpu_offload=cpu_offload,
-            )
+            _video_vae(pretrained_path=vae_pth, z_dim=z_dim, dim=c_dim, dim_mult=dim_mult, temperal_downsample=temperal_downsample, cpu_offload=cpu_offload, dtype=dtype)
             .eval()
             .requires_grad_(False)
             .to(device)
+            .to(dtype)
         )
 
     def to_cpu(self):

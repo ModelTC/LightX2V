@@ -247,6 +247,20 @@ class Q8FQuantLinearInt8(nn.Module):
         )
         return output_tensor
 
+    def _apply(self, fn):
+        for module in self.children():
+            module._apply(fn)
+
+        def maybe_cast(t):
+            if t is not None and t.device != fn(t).device:
+                return fn(t)
+            return t
+
+        self.weight = maybe_cast(self.weight)
+        self.weight_scale = maybe_cast(self.weight_scale)
+        self.bias = maybe_cast(self.bias)
+        return self
+
 
 class Q8FQuantLinearFp8(nn.Module):
     def __init__(self, in_features, out_features, bias=True, dtype=torch.float32):
@@ -277,3 +291,17 @@ class Q8FQuantLinearFp8(nn.Module):
             out_dtype=torch.bfloat16,
         )
         return output_tensor
+
+    def _apply(self, fn):
+        for module in self.children():
+            module._apply(fn)
+
+        def maybe_cast(t):
+            if t is not None and t.device != fn(t).device:
+                return fn(t)
+            return t
+
+        self.weight = maybe_cast(self.weight)
+        self.weight_scale = maybe_cast(self.weight_scale)
+        self.bias = maybe_cast(self.bias)
+        return self
