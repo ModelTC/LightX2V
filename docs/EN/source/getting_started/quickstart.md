@@ -45,7 +45,7 @@ docker pull lightx2v/lightx2v:25082901-cu124
 docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
 ```
 
-#### 3. Domestic Mirror Source (Optional)
+#### 3. China Mirror Source (Optional)
 
 For mainland China, if the network is unstable when pulling images, you can pull from Alibaba Cloud:
 

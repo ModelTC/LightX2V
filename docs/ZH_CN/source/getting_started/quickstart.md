@@ -45,7 +45,7 @@ docker pull lightx2v/lightx2v:25082901-cu124
 docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --entrypoint /bin/bash [镜像id]
 ```
 
-#### 3. 国内镜像源（可选）
+#### 3. 中国镜像源（可选）
 
 对于中国大陆地区，如果拉取镜像时网络不稳定，可以从阿里云上拉取：
 
