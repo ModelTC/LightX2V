@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=
-model_path=
+lightx2v_path=/path/to/Lightx2v
+model_path=/path/to/SekoTalk-Distill-fp8/
 
 export CUDA_VISIBLE_DEVICES=0
 
