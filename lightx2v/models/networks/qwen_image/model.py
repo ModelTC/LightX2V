@@ -4,26 +4,24 @@ import os
 import torch
 
 try:
-    from diffusers.models.transformers.transformer_qwenimage import QwenImageTransformer2DModel
+    from .transformer_qwenimage import QwenImageTransformer2DModel
 except ImportError:
     QwenImageTransformer2DModel = None
 
+from .infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
 from .infer.post_infer import QwenImagePostInfer
 from .infer.pre_infer import QwenImagePreInfer
 from .infer.transformer_infer import QwenImageTransformerInfer
-from .layers.linear import DefaultLinear, replace_linear_with_custom
-from .layers.normalization import DefaultLayerNorm, DefaultRMSNorm, replace_layernorm_with_custom, replace_rmsnorm_with_custom
+from .transformer_qwenimage import QwenImageTransformer2DModel
 
 
 class QwenImageTransformerModel:
     def __init__(self, config):
         self.config = config
         self.transformer = QwenImageTransformer2DModel.from_pretrained(os.path.join(config.model_path, "transformer"))
-        # repalce linear & normalization
-        self.transformer = replace_linear_with_custom(self.transformer, DefaultLinear)
-        self.transformer = replace_layernorm_with_custom(self.transformer, DefaultLayerNorm)
-        self.transformer = replace_rmsnorm_with_custom(self.transformer, DefaultRMSNorm)
-        self.transformer.to(torch.device("cuda")).to(torch.bfloat16)
+        self.cpu_offload = config.get("cpu_offload", False)
+        self.target_device = torch.device("cpu") if self.cpu_offload else torch.device("cuda")
+        self.transformer.to(self.target_device).to(torch.bfloat16)
 
         with open(os.path.join(config.model_path, "transformer", "config.json"), "r") as f:
             transformer_config = json.load(f)
@@ -38,7 +36,7 @@ class QwenImageTransformerModel:
 
     def _init_infer_class(self):
         if self.config["feature_caching"] == "NoCaching":
-            self.transformer_infer_class = QwenImageTransformerInfer
+            self.transformer_infer_class = QwenImageTransformerInfer if not self.cpu_offload else QwenImageOffloadTransformerInfer
         else:
             assert NotImplementedError
         self.pre_infer_class = QwenImagePreInfer

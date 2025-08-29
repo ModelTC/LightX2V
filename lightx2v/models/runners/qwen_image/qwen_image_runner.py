@@ -60,12 +60,26 @@ class QwenImageRunner(DefaultRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
+        self.run_dit = self._run_dit_local
+        self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "t2i":
             self.run_input_encoder = self._run_input_encoder_local_t2i
         elif self.config["task"] == "i2i":
             self.run_input_encoder = self._run_input_encoder_local_i2i
         else:
             assert NotImplementedError
+
+    @ProfilingContext("Run DiT")
+    def _run_dit_local(self, total_steps=None):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.model = self.load_transformer()
+        self.init_scheduler()
+        self.model.scheduler.prepare(self.inputs["image_encoder_output"])
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+            self.inputs["image_encoder_output"]["vae_encoder_out"] = None
+        latents, generator = self.run(total_steps)
+        self.end_run()
+        return latents, generator
 
     @ProfilingContext("Run Encoders")
     def _run_input_encoder_local_t2i(self):
@@ -109,6 +123,28 @@ class QwenImageRunner(DefaultRunner):
     def run_vae_encoder(self, image):
         image_latents = self.vae.encode_vae_image(image)
         return {"image_latents": image_latents}
+
+    def run(self, total_steps=None):
+        from lightx2v.utils.profiler import ProfilingContext4Debug
+
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
+        for step_index in range(total_steps):
+            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+
+            with ProfilingContext4Debug("step_pre"):
+                self.model.scheduler.step_pre(step_index=step_index)
+
+            with ProfilingContext4Debug("🚀 infer_main"):
+                self.model.infer(self.inputs)
+
+            with ProfilingContext4Debug("step_post"):
+                self.model.scheduler.step_post()
+
+            if self.progress_callback:
+                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+
+        return self.model.scheduler.latents, self.model.scheduler.generator
 
     def set_target_shape(self):
         if not self.config._auto_resize:
@@ -154,7 +190,7 @@ class QwenImageRunner(DefaultRunner):
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     @ProfilingContext("Run VAE Decoder")
-    def run_vae_decoder(self, latents):
+    def _run_vae_decoder_local(self, latents, generator):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae()
         images = self.vae.decode(latents)
@@ -172,7 +208,7 @@ class QwenImageRunner(DefaultRunner):
         self.set_target_shape()
         latents, generator = self.run_dit()
 
-        images = self.run_vae_decoder(latents)
+        images = self.run_vae_decoder(latents, generator)
         image = images[0]
         image.save(f"{self.config.save_video_path}")
 

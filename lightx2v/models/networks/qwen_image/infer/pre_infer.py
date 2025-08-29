@@ -10,6 +10,16 @@ class QwenImagePreInfer:
         self.time_text_embed = time_text_embed
         self.pos_embed = pos_embed
         self.attention_kwargs = {}
+        self.cpu_offload = config.get("cpu_offload", False)
+        if self.cpu_offload:
+            self.init_cpu_offload()
+
+    def init_cpu_offload(self):
+        self.img_in = self.img_in.to(torch.device("cuda"))
+        self.txt_norm = self.txt_norm.to(torch.device("cuda"))
+        self.txt_in = self.txt_in.to(torch.device("cuda"))
+        self.time_text_embed = self.time_text_embed.to(torch.device("cuda"))
+        self.pos_embed = self.pos_embed.to(torch.device("cuda"))
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

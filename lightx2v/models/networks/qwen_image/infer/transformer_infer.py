@@ -9,6 +9,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.blocks = blocks
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+        self.infer_func = self.infer_calculating
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -87,5 +88,5 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
     def infer(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, pre_infer_out, attention_kwargs):
         _, temb, image_rotary_emb = pre_infer_out
-        encoder_hidden_states, hidden_states = self.infer_calculating(hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs)
+        encoder_hidden_states, hidden_states = self.infer_func(hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs)
         return encoder_hidden_states, hidden_states
