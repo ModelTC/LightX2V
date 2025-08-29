@@ -233,7 +233,7 @@ class AudioProcessor:
         return segments
 
 
-@RUNNER_REGISTER("wan2.1_audio")
+@RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
     def __init__(self, config):
         super().__init__(config)

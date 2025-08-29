@@ -48,7 +48,7 @@ def main():
             "wan2.1_skyreels_v2_df",
             "wan2.1_vace",
             "cogvideox",
-            "wan2.1_audio",
+            "seko_talk",
             "wan2.2_moe",
             "wan2.2",
             "wan2.2_moe_audio",
