@@ -12,7 +12,6 @@ from .infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
 from .infer.post_infer import QwenImagePostInfer
 from .infer.pre_infer import QwenImagePreInfer
 from .infer.transformer_infer import QwenImageTransformerInfer
-from .transformer_qwenimage import QwenImageTransformer2DModel
 
 
 class QwenImageTransformerModel:
