@@ -25,14 +25,10 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 assert NotImplementedError
 
             if offload_granularity != "model":
-                self.weights_stream_mgr = WeightAsyncStreamManager(
-                    blocks_num=len(self.blocks),
-                    offload_ratio=self.offload_ratio,
-                    phases_num=self.phases_num
-                )
+                self.weights_stream_mgr = WeightAsyncStreamManager(blocks_num=len(self.blocks), offload_ratio=self.offload_ratio, phases_num=self.phases_num)
             else:
                 assert NotImplementedError
-                    
+
     def infer_with_blocks_offload(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs):
         for block_idx in range(len(self.blocks)):
             self.block_idx = block_idx
@@ -56,4 +52,3 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
             self.weights_stream_mgr.swap_weights()
 
         return encoder_hidden_states, hidden_states
-    

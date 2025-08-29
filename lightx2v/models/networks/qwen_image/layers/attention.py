@@ -17,7 +17,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from diffusers.utils import deprecate, logging
 from diffusers.utils.import_utils import is_torch_npu_available, is_torch_xla_available, is_xformers_available
 from diffusers.utils.torch_utils import maybe_allow_in_graph
@@ -26,7 +25,6 @@ from .activations import GEGLU, GELU, ApproximateGELU, FP32SiLU, LinearActivatio
 from .attention_processor import Attention, AttentionProcessor, JointAttnProcessor2_0
 from .embeddings import SinusoidalPositionalEmbedding
 from .normalization import AdaLayerNorm, AdaLayerNormContinuous, AdaLayerNormZero, RMSNorm, SD35AdaLayerNormZeroX
-
 
 if is_xformers_available():
     import xformers as xops
@@ -138,11 +136,7 @@ class AttentionModuleMixin:
         """
         # if current processor is in `self._modules` and if passed `processor` is not, we need to
         # pop `processor` from `self._modules`
-        if (
-            hasattr(self, "processor")
-            and isinstance(self.processor, torch.nn.Module)
-            and not isinstance(processor, torch.nn.Module)
-        ):
+        if hasattr(self, "processor") and isinstance(self.processor, torch.nn.Module) and not isinstance(processor, torch.nn.Module):
             logger.info(f"You are removing possibly trained weights of {self.processor} with {processor}")
             self._modules.pop("processor")
 
@@ -209,9 +203,7 @@ class AttentionModuleMixin:
 
         self.set_attention_backend("_native_xla")
 
-    def set_use_memory_efficient_attention_xformers(
-        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
-    ) -> None:
+    def set_use_memory_efficient_attention_xformers(self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None) -> None:
         """
         Set whether to use memory efficient attention from `xformers` or not.
 
@@ -229,10 +221,7 @@ class AttentionModuleMixin:
                     name="xformers",
                 )
             elif not torch.cuda.is_available():
-                raise ValueError(
-                    "torch.cuda.is_available() should be True but is False. xformers' memory efficient attention is"
-                    " only available for GPU "
-                )
+                raise ValueError("torch.cuda.is_available() should be True but is False. xformers' memory efficient attention is only available for GPU ")
             else:
                 try:
                     # Make sure we can run the memory efficient attention
@@ -284,25 +273,15 @@ class AttentionModuleMixin:
                 self.to_qkv.bias.copy_(concatenated_bias)
 
         # Handle added projections for models like SD3, Flux, etc.
-        if (
-            getattr(self, "add_q_proj", None) is not None
-            and getattr(self, "add_k_proj", None) is not None
-            and getattr(self, "add_v_proj", None) is not None
-        ):
-            concatenated_weights = torch.cat(
-                [self.add_q_proj.weight.data, self.add_k_proj.weight.data, self.add_v_proj.weight.data]
-            )
+        if getattr(self, "add_q_proj", None) is not None and getattr(self, "add_k_proj", None) is not None and getattr(self, "add_v_proj", None) is not None:
+            concatenated_weights = torch.cat([self.add_q_proj.weight.data, self.add_k_proj.weight.data, self.add_v_proj.weight.data])
             in_features = concatenated_weights.shape[1]
             out_features = concatenated_weights.shape[0]
 
-            self.to_added_qkv = nn.Linear(
-                in_features, out_features, bias=self.added_proj_bias, device=device, dtype=dtype
-            )
+            self.to_added_qkv = nn.Linear(in_features, out_features, bias=self.added_proj_bias, device=device, dtype=dtype)
             self.to_added_qkv.weight.copy_(concatenated_weights)
             if self.added_proj_bias:
-                concatenated_bias = torch.cat(
-                    [self.add_q_proj.bias.data, self.add_k_proj.bias.data, self.add_v_proj.bias.data]
-                )
+                concatenated_bias = torch.cat([self.add_q_proj.bias.data, self.add_k_proj.bias.data, self.add_v_proj.bias.data])
                 self.to_added_qkv.bias.copy_(concatenated_bias)
 
         self.fused_projections = True
@@ -392,9 +371,7 @@ class AttentionModuleMixin:
 
         return tensor
 
-    def get_attention_scores(
-        self, query: torch.Tensor, key: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+    def get_attention_scores(self, query: torch.Tensor, key: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Compute the attention scores.
 
@@ -412,9 +389,7 @@ class AttentionModuleMixin:
             key = key.float()
 
         if attention_mask is None:
-            baddbmm_input = torch.empty(
-                query.shape[0], query.shape[1], key.shape[1], dtype=query.dtype, device=query.device
-            )
+            baddbmm_input = torch.empty(query.shape[0], query.shape[1], key.shape[1], dtype=query.dtype, device=query.device)
             beta = 0
         else:
             baddbmm_input = attention_mask
@@ -439,9 +414,7 @@ class AttentionModuleMixin:
 
         return attention_probs
 
-    def prepare_attention_mask(
-        self, attention_mask: torch.Tensor, target_length: int, batch_size: int, out_dim: int = 3
-    ) -> torch.Tensor:
+    def prepare_attention_mask(self, attention_mask: torch.Tensor, target_length: int, batch_size: int, out_dim: int = 3) -> torch.Tensor:
         """
         Prepare the attention mask for the attention computation.
 
@@ -603,22 +576,16 @@ class JointTransformerBlock(nn.Module):
             self.norm1 = AdaLayerNormZero(dim)
 
         if context_norm_type == "ada_norm_continous":
-            self.norm1_context = AdaLayerNormContinuous(
-                dim, dim, elementwise_affine=False, eps=1e-6, bias=True, norm_type="layer_norm"
-            )
+            self.norm1_context = AdaLayerNormContinuous(dim, dim, elementwise_affine=False, eps=1e-6, bias=True, norm_type="layer_norm")
         elif context_norm_type == "ada_norm_zero":
             self.norm1_context = AdaLayerNormZero(dim)
         else:
-            raise ValueError(
-                f"Unknown context_norm_type: {context_norm_type}, currently only support `ada_norm_continous`, `ada_norm_zero`"
-            )
+            raise ValueError(f"Unknown context_norm_type: {context_norm_type}, currently only support `ada_norm_continous`, `ada_norm_zero`")
 
         if hasattr(F, "scaled_dot_product_attention"):
             processor = JointAttnProcessor2_0()
         else:
-            raise ValueError(
-                "The current PyTorch version does not support the `scaled_dot_product_attention` function."
-            )
+            raise ValueError("The current PyTorch version does not support the `scaled_dot_product_attention` function.")
 
         self.attn = Attention(
             query_dim=dim,
@@ -678,18 +645,14 @@ class JointTransformerBlock(nn.Module):
     ):
         joint_attention_kwargs = joint_attention_kwargs or {}
         if self.use_dual_attention:
-            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp, norm_hidden_states2, gate_msa2 = self.norm1(
-                hidden_states, emb=temb
-            )
+            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp, norm_hidden_states2, gate_msa2 = self.norm1(hidden_states, emb=temb)
         else:
             norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
         if self.context_pre_only:
             norm_encoder_hidden_states = self.norm1_context(encoder_hidden_states, temb)
         else:
-            norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
-                encoder_hidden_states, emb=temb
-            )
+            norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(encoder_hidden_states, emb=temb)
 
         # Attention.
         attn_output, context_attn_output = self.attn(
@@ -729,9 +692,7 @@ class JointTransformerBlock(nn.Module):
             norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
             if self._chunk_size is not None:
                 # "feed_forward_chunk_size" can be used to save memory
-                context_ff_output = _chunked_feed_forward(
-                    self.ff_context, norm_encoder_hidden_states, self._chunk_dim, self._chunk_size
-                )
+                context_ff_output = _chunked_feed_forward(self.ff_context, norm_encoder_hidden_states, self._chunk_dim, self._chunk_size)
             else:
                 context_ff_output = self.ff_context(norm_encoder_hidden_states)
             encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
@@ -823,18 +784,13 @@ class BasicTransformerBlock(nn.Module):
         self.use_ada_layer_norm_continuous = norm_type == "ada_norm_continuous"
 
         if norm_type in ("ada_norm", "ada_norm_zero") and num_embeds_ada_norm is None:
-            raise ValueError(
-                f"`norm_type` is set to {norm_type}, but `num_embeds_ada_norm` is not defined. Please make sure to"
-                f" define `num_embeds_ada_norm` if setting `norm_type` to {norm_type}."
-            )
+            raise ValueError(f"`norm_type` is set to {norm_type}, but `num_embeds_ada_norm` is not defined. Please make sure to define `num_embeds_ada_norm` if setting `norm_type` to {norm_type}.")
 
         self.norm_type = norm_type
         self.num_embeds_ada_norm = num_embeds_ada_norm
 
         if positional_embeddings and (num_positional_embeddings is None):
-            raise ValueError(
-                "If `positional_embedding` type is defined, `num_positition_embeddings` must also be defined."
-            )
+            raise ValueError("If `positional_embedding` type is defined, `num_positition_embeddings` must also be defined.")
 
         if positional_embeddings == "sinusoidal":
             self.pos_embed = SinusoidalPositionalEmbedding(dim, max_seq_length=num_positional_embeddings)
@@ -970,17 +926,13 @@ class BasicTransformerBlock(nn.Module):
         if self.norm_type == "ada_norm":
             norm_hidden_states = self.norm1(hidden_states, timestep)
         elif self.norm_type == "ada_norm_zero":
-            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
-                hidden_states, timestep, class_labels, hidden_dtype=hidden_states.dtype
-            )
+            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, timestep, class_labels, hidden_dtype=hidden_states.dtype)
         elif self.norm_type in ["layer_norm", "layer_norm_i2vgen"]:
             norm_hidden_states = self.norm1(hidden_states)
         elif self.norm_type == "ada_norm_continuous":
             norm_hidden_states = self.norm1(hidden_states, added_cond_kwargs["pooled_text_emb"])
         elif self.norm_type == "ada_norm_single":
-            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-                self.scale_shift_table[None] + timestep.reshape(batch_size, 6, -1)
-            ).chunk(6, dim=1)
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (self.scale_shift_table[None] + timestep.reshape(batch_size, 6, -1)).chunk(6, dim=1)
             norm_hidden_states = self.norm1(hidden_states)
             norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
         else:
@@ -1428,18 +1380,13 @@ class FreeNoiseTransformerBlock(nn.Module):
         self.use_ada_layer_norm_continuous = norm_type == "ada_norm_continuous"
 
         if norm_type in ("ada_norm", "ada_norm_zero") and num_embeds_ada_norm is None:
-            raise ValueError(
-                f"`norm_type` is set to {norm_type}, but `num_embeds_ada_norm` is not defined. Please make sure to"
-                f" define `num_embeds_ada_norm` if setting `norm_type` to {norm_type}."
-            )
+            raise ValueError(f"`norm_type` is set to {norm_type}, but `num_embeds_ada_norm` is not defined. Please make sure to define `num_embeds_ada_norm` if setting `norm_type` to {norm_type}.")
 
         self.norm_type = norm_type
         self.num_embeds_ada_norm = num_embeds_ada_norm
 
         if positional_embeddings and (num_positional_embeddings is None):
-            raise ValueError(
-                "If `positional_embedding` type is defined, `num_positition_embeddings` must also be defined."
-            )
+            raise ValueError("If `positional_embedding` type is defined, `num_positition_embeddings` must also be defined.")
 
         if positional_embeddings == "sinusoidal":
             self.pos_embed = SinusoidalPositionalEmbedding(dim, max_seq_length=num_positional_embeddings)
@@ -1532,9 +1479,7 @@ class FreeNoiseTransformerBlock(nn.Module):
 
         return weights
 
-    def set_free_noise_properties(
-        self, context_length: int, context_stride: int, weighting_scheme: str = "pyramid"
-    ) -> None:
+    def set_free_noise_properties(self, context_length: int, context_stride: int, weighting_scheme: str = "pyramid") -> None:
         self.context_length = context_length
         self.context_stride = context_stride
         self.weighting_scheme = weighting_scheme
@@ -1625,9 +1570,7 @@ class FreeNoiseTransformerBlock(nn.Module):
                 hidden_states_chunk = attn_output + hidden_states_chunk
 
             if i == len(frame_indices) - 1 and not is_last_frame_batch_complete:
-                accumulated_values[:, -last_frame_batch_length:] += (
-                    hidden_states_chunk[:, -last_frame_batch_length:] * weights[:, -last_frame_batch_length:]
-                )
+                accumulated_values[:, -last_frame_batch_length:] += hidden_states_chunk[:, -last_frame_batch_length:] * weights[:, -last_frame_batch_length:]
                 num_times_accumulated[:, -last_frame_batch_length:] += weights[:, -last_frame_batch_length]
             else:
                 accumulated_values[:, frame_start:frame_end] += hidden_states_chunk * weights

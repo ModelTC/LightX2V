@@ -17,9 +17,8 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 from diffusers.utils import deprecate
+from torch import nn
 
 from .activations import FP32SiLU, get_activation
 from .attention_processor import Attention
@@ -55,9 +54,7 @@ def get_timestep_embedding(
     assert len(timesteps.shape) == 1, "Timesteps should be a 1d-array"
 
     half_dim = embedding_dim // 2
-    exponent = -math.log(max_period) * torch.arange(
-        start=0, end=half_dim, dtype=torch.float32, device=timesteps.device
-    )
+    exponent = -math.log(max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32, device=timesteps.device)
     exponent = exponent / (half_dim - downscale_freq_shift)
 
     emb = torch.exp(exponent)
@@ -140,14 +137,10 @@ def get_3d_sincos_pos_embed(
 
     # 3. Concat
     pos_embed_spatial = pos_embed_spatial[None, :, :]
-    pos_embed_spatial = pos_embed_spatial.repeat_interleave(
-        temporal_size, dim=0, output_size=pos_embed_spatial.shape[0] * temporal_size
-    )  # [T, H*W, D // 4 * 3]
+    pos_embed_spatial = pos_embed_spatial.repeat_interleave(temporal_size, dim=0, output_size=pos_embed_spatial.shape[0] * temporal_size)  # [T, H*W, D // 4 * 3]
 
     pos_embed_temporal = pos_embed_temporal[:, None, :]
-    pos_embed_temporal = pos_embed_temporal.repeat_interleave(
-        spatial_size[0] * spatial_size[1], dim=1
-    )  # [T, H*W, D // 4]
+    pos_embed_temporal = pos_embed_temporal.repeat_interleave(spatial_size[0] * spatial_size[1], dim=1)  # [T, H*W, D // 4]
 
     pos_embed = torch.concat([pos_embed_temporal, pos_embed_spatial], dim=-1)  # [T, H*W, D]
     return pos_embed
@@ -181,11 +174,7 @@ def _get_3d_sincos_pos_embed_np(
             The 3D sinusoidal positional embeddings of shape `[temporal_size, spatial_size[0] * spatial_size[1],
             embed_dim]`.
     """
-    deprecation_message = (
-        "`get_3d_sincos_pos_embed` uses `torch` and supports `device`."
-        " `from_numpy` is no longer required."
-        "  Pass `output_type='pt' to use the new version now."
-    )
+    deprecation_message = "`get_3d_sincos_pos_embed` uses `torch` and supports `device`. `from_numpy` is no longer required.  Pass `output_type='pt' to use the new version now."
     deprecate("output_type=='np'", "0.33.0", deprecation_message, standard_warn=False)
     if embed_dim % 4 != 0:
         raise ValueError("`embed_dim` must be divisible by 4")
@@ -250,11 +239,7 @@ def get_2d_sincos_pos_embed(
             embed_dim]` if using cls_token
     """
     if output_type == "np":
-        deprecation_message = (
-            "`get_2d_sincos_pos_embed` uses `torch` and supports `device`."
-            " `from_numpy` is no longer required."
-            "  Pass `output_type='pt' to use the new version now."
-        )
+        deprecation_message = "`get_2d_sincos_pos_embed` uses `torch` and supports `device`. `from_numpy` is no longer required.  Pass `output_type='pt' to use the new version now."
         deprecate("output_type=='np'", "0.33.0", deprecation_message, standard_warn=False)
         return get_2d_sincos_pos_embed_np(
             embed_dim=embed_dim,
@@ -267,16 +252,8 @@ def get_2d_sincos_pos_embed(
     if isinstance(grid_size, int):
         grid_size = (grid_size, grid_size)
 
-    grid_h = (
-        torch.arange(grid_size[0], device=device, dtype=torch.float32)
-        / (grid_size[0] / base_size)
-        / interpolation_scale
-    )
-    grid_w = (
-        torch.arange(grid_size[1], device=device, dtype=torch.float32)
-        / (grid_size[1] / base_size)
-        / interpolation_scale
-    )
+    grid_h = torch.arange(grid_size[0], device=device, dtype=torch.float32) / (grid_size[0] / base_size) / interpolation_scale
+    grid_w = torch.arange(grid_size[1], device=device, dtype=torch.float32) / (grid_size[1] / base_size) / interpolation_scale
     grid = torch.meshgrid(grid_w, grid_h, indexing="xy")  # here w goes first
     grid = torch.stack(grid, dim=0)
 
@@ -299,11 +276,7 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid, output_type="np"):
         `torch.Tensor`: The 2D sinusoidal positional embeddings with shape `(H * W, embed_dim)`
     """
     if output_type == "np":
-        deprecation_message = (
-            "`get_2d_sincos_pos_embed_from_grid` uses `torch` and supports `device`."
-            " `from_numpy` is no longer required."
-            "  Pass `output_type='pt' to use the new version now."
-        )
+        deprecation_message = "`get_2d_sincos_pos_embed_from_grid` uses `torch` and supports `device`. `from_numpy` is no longer required.  Pass `output_type='pt' to use the new version now."
         deprecate("output_type=='np'", "0.33.0", deprecation_message, standard_warn=False)
         return get_2d_sincos_pos_embed_from_grid_np(
             embed_dim=embed_dim,
@@ -332,11 +305,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos, output_type="np", flip_sin
         `torch.Tensor`: Sinusoidal positional embeddings of shape `(M, D)`.
     """
     if output_type == "np":
-        deprecation_message = (
-            "`get_1d_sincos_pos_embed_from_grid` uses `torch` and supports `device`."
-            " `from_numpy` is no longer required."
-            "  Pass `output_type='pt' to use the new version now."
-        )
+        deprecation_message = "`get_1d_sincos_pos_embed_from_grid` uses `torch` and supports `device`. `from_numpy` is no longer required.  Pass `output_type='pt' to use the new version now."
         deprecate("output_type=='np'", "0.34.0", deprecation_message, standard_warn=False)
         return get_1d_sincos_pos_embed_from_grid_np(embed_dim=embed_dim, pos=pos)
     if embed_dim % 2 != 0:
@@ -361,9 +330,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos, output_type="np", flip_sin
     return emb
 
 
-def get_2d_sincos_pos_embed_np(
-    embed_dim, grid_size, cls_token=False, extra_tokens=0, interpolation_scale=1.0, base_size=16
-):
+def get_2d_sincos_pos_embed_np(embed_dim, grid_size, cls_token=False, extra_tokens=0, interpolation_scale=1.0, base_size=16):
     """
     Creates 2D sinusoidal positional embeddings.
 
@@ -488,9 +455,7 @@ class PatchEmbed(nn.Module):
         self.layer_norm = layer_norm
         self.pos_embed_max_size = pos_embed_max_size
 
-        self.proj = nn.Conv2d(
-            in_channels, embed_dim, kernel_size=(patch_size, patch_size), stride=patch_size, bias=bias
-        )
+        self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=(patch_size, patch_size), stride=patch_size, bias=bias)
         if layer_norm:
             self.norm = nn.LayerNorm(embed_dim, elementwise_affine=False, eps=1e-6)
         else:
@@ -530,13 +495,9 @@ class PatchEmbed(nn.Module):
         height = height // self.patch_size
         width = width // self.patch_size
         if height > self.pos_embed_max_size:
-            raise ValueError(
-                f"Height ({height}) cannot be greater than `pos_embed_max_size`: {self.pos_embed_max_size}."
-            )
+            raise ValueError(f"Height ({height}) cannot be greater than `pos_embed_max_size`: {self.pos_embed_max_size}.")
         if width > self.pos_embed_max_size:
-            raise ValueError(
-                f"Width ({width}) cannot be greater than `pos_embed_max_size`: {self.pos_embed_max_size}."
-            )
+            raise ValueError(f"Width ({width}) cannot be greater than `pos_embed_max_size`: {self.pos_embed_max_size}.")
 
         top = (self.pos_embed_max_size - height) // 2
         left = (self.pos_embed_max_size - width) // 2
@@ -614,9 +575,7 @@ class LuminaPatchEmbed(nn.Module):
         batch_size, channel, height, width = x.size()
         height_tokens, width_tokens = height // patch_height, width // patch_width
 
-        x = x.view(batch_size, channel, height_tokens, patch_height, width_tokens, patch_width).permute(
-            0, 2, 4, 1, 3, 5
-        )
+        x = x.view(batch_size, channel, height_tokens, patch_height, width_tokens, patch_width).permute(0, 2, 4, 1, 3, 5)
         x = x.flatten(3)
         x = self.proj(x)
         x = x.flatten(1, 2)
@@ -667,9 +626,7 @@ class CogVideoXPatchEmbed(nn.Module):
 
         if patch_size_t is None:
             # CogVideoX 1.0 checkpoints
-            self.proj = nn.Conv2d(
-                in_channels, embed_dim, kernel_size=(patch_size, patch_size), stride=patch_size, bias=bias
-            )
+            self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=(patch_size, patch_size), stride=patch_size, bias=bias)
         else:
             # CogVideoX 1.5 checkpoints
             self.proj = nn.Linear(in_channels * patch_size * patch_size * patch_size_t, embed_dim)
@@ -681,9 +638,7 @@ class CogVideoXPatchEmbed(nn.Module):
             pos_embedding = self._get_positional_embeddings(sample_height, sample_width, sample_frames)
             self.register_buffer("pos_embedding", pos_embedding, persistent=persistent)
 
-    def _get_positional_embeddings(
-        self, sample_height: int, sample_width: int, sample_frames: int, device: Optional[torch.device] = None
-    ) -> torch.Tensor:
+    def _get_positional_embeddings(self, sample_height: int, sample_width: int, sample_frames: int, device: Optional[torch.device] = None) -> torch.Tensor:
         post_patch_height = sample_height // self.patch_size
         post_patch_width = sample_width // self.patch_size
         post_time_compression_frames = (sample_frames - 1) // self.temporal_compression_ratio + 1
@@ -699,9 +654,7 @@ class CogVideoXPatchEmbed(nn.Module):
             output_type="pt",
         )
         pos_embedding = pos_embedding.flatten(0, 1)
-        joint_pos_embedding = pos_embedding.new_zeros(
-            1, self.max_text_seq_length + num_patches, self.embed_dim, requires_grad=False
-        )
+        joint_pos_embedding = pos_embedding.new_zeros(1, self.max_text_seq_length + num_patches, self.embed_dim, requires_grad=False)
         joint_pos_embedding.data[:, self.max_text_seq_length :].copy_(pos_embedding)
 
         return joint_pos_embedding
@@ -729,15 +682,11 @@ class CogVideoXPatchEmbed(nn.Module):
             p_t = self.patch_size_t
 
             image_embeds = image_embeds.permute(0, 1, 3, 4, 2)
-            image_embeds = image_embeds.reshape(
-                batch_size, num_frames // p_t, p_t, height // p, p, width // p, p, channels
-            )
+            image_embeds = image_embeds.reshape(batch_size, num_frames // p_t, p_t, height // p, p, width // p, p, channels)
             image_embeds = image_embeds.permute(0, 1, 3, 5, 7, 2, 4, 6).flatten(4, 7).flatten(1, 3)
             image_embeds = self.proj(image_embeds)
 
-        embeds = torch.cat(
-            [text_embeds, image_embeds], dim=1
-        ).contiguous()  # [batch, seq_length + num_frames x height x width, channels]
+        embeds = torch.cat([text_embeds, image_embeds], dim=1).contiguous()  # [batch, seq_length + num_frames x height x width, channels]
 
         if self.use_positional_embeddings or self.use_learned_positional_embeddings:
             if self.use_learned_positional_embeddings and (self.sample_width != width or self.sample_height != height):
@@ -748,14 +697,8 @@ class CogVideoXPatchEmbed(nn.Module):
 
             pre_time_compression_frames = (num_frames - 1) * self.temporal_compression_ratio + 1
 
-            if (
-                self.sample_height != height
-                or self.sample_width != width
-                or self.sample_frames != pre_time_compression_frames
-            ):
-                pos_embedding = self._get_positional_embeddings(
-                    height, width, pre_time_compression_frames, device=embeds.device
-                )
+            if self.sample_height != height or self.sample_width != width or self.sample_frames != pre_time_compression_frames:
+                pos_embedding = self._get_positional_embeddings(height, width, pre_time_compression_frames, device=embeds.device)
             else:
                 pos_embedding = self.pos_embedding
 
@@ -786,9 +729,7 @@ class CogView3PlusPatchEmbed(nn.Module):
         # Linear projection for text embeddings
         self.text_proj = nn.Linear(text_hidden_size, hidden_size)
 
-        pos_embed = get_2d_sincos_pos_embed(
-            hidden_size, pos_embed_max_size, base_size=pos_embed_max_size, output_type="pt"
-        )
+        pos_embed = get_2d_sincos_pos_embed(hidden_size, pos_embed_max_size, base_size=pos_embed_max_size, output_type="pt")
         pos_embed = pos_embed.reshape(pos_embed_max_size, pos_embed_max_size, hidden_size)
         self.register_buffer("pos_embed", pos_embed.float(), persistent=False)
 
@@ -813,9 +754,7 @@ class CogView3PlusPatchEmbed(nn.Module):
         text_length = encoder_hidden_states.shape[1]
 
         image_pos_embed = self.pos_embed[:height, :width].reshape(height * width, -1)
-        text_pos_embed = torch.zeros(
-            (text_length, self.hidden_size), dtype=image_pos_embed.dtype, device=image_pos_embed.device
-        )
+        text_pos_embed = torch.zeros((text_length, self.hidden_size), dtype=image_pos_embed.dtype, device=image_pos_embed.device)
         pos_embed = torch.cat([text_pos_embed, image_pos_embed], dim=0)[None, ...]
 
         return (hidden_states + pos_embed).to(hidden_states.dtype)
@@ -858,16 +797,10 @@ def get_3d_rotary_pos_embed(
     if grid_type == "linspace":
         start, stop = crops_coords
         grid_size_h, grid_size_w = grid_size
-        grid_h = torch.linspace(
-            start[0], stop[0] * (grid_size_h - 1) / grid_size_h, grid_size_h, device=device, dtype=torch.float32
-        )
-        grid_w = torch.linspace(
-            start[1], stop[1] * (grid_size_w - 1) / grid_size_w, grid_size_w, device=device, dtype=torch.float32
-        )
+        grid_h = torch.linspace(start[0], stop[0] * (grid_size_h - 1) / grid_size_h, grid_size_h, device=device, dtype=torch.float32)
+        grid_w = torch.linspace(start[1], stop[1] * (grid_size_w - 1) / grid_size_w, grid_size_w, device=device, dtype=torch.float32)
         grid_t = torch.arange(temporal_size, device=device, dtype=torch.float32)
-        grid_t = torch.linspace(
-            0, temporal_size * (temporal_size - 1) / temporal_size, temporal_size, device=device, dtype=torch.float32
-        )
+        grid_t = torch.linspace(0, temporal_size * (temporal_size - 1) / temporal_size, temporal_size, device=device, dtype=torch.float32)
     elif grid_type == "slice":
         max_h, max_w = max_size
         grid_size_h, grid_size_w = grid_size
@@ -890,22 +823,12 @@ def get_3d_rotary_pos_embed(
 
     # BroadCast and concatenate temporal and spaial frequencie (height and width) into a 3d tensor
     def combine_time_height_width(freqs_t, freqs_h, freqs_w):
-        freqs_t = freqs_t[:, None, None, :].expand(
-            -1, grid_size_h, grid_size_w, -1
-        )  # temporal_size, grid_size_h, grid_size_w, dim_t
-        freqs_h = freqs_h[None, :, None, :].expand(
-            temporal_size, -1, grid_size_w, -1
-        )  # temporal_size, grid_size_h, grid_size_2, dim_h
-        freqs_w = freqs_w[None, None, :, :].expand(
-            temporal_size, grid_size_h, -1, -1
-        )  # temporal_size, grid_size_h, grid_size_2, dim_w
+        freqs_t = freqs_t[:, None, None, :].expand(-1, grid_size_h, grid_size_w, -1)  # temporal_size, grid_size_h, grid_size_w, dim_t
+        freqs_h = freqs_h[None, :, None, :].expand(temporal_size, -1, grid_size_w, -1)  # temporal_size, grid_size_h, grid_size_2, dim_h
+        freqs_w = freqs_w[None, None, :, :].expand(temporal_size, grid_size_h, -1, -1)  # temporal_size, grid_size_h, grid_size_2, dim_w
 
-        freqs = torch.cat(
-            [freqs_t, freqs_h, freqs_w], dim=-1
-        )  # temporal_size, grid_size_h, grid_size_w, (dim_t + dim_h + dim_w)
-        freqs = freqs.view(
-            temporal_size * grid_size_h * grid_size_w, -1
-        )  # (temporal_size * grid_size_h * grid_size_w), (dim_t + dim_h + dim_w)
+        freqs = torch.cat([freqs_t, freqs_h, freqs_w], dim=-1)  # temporal_size, grid_size_h, grid_size_w, (dim_t + dim_h + dim_w)
+        freqs = freqs.view(temporal_size * grid_size_h * grid_size_w, -1)  # (temporal_size * grid_size_h * grid_size_w), (dim_t + dim_h + dim_w)
         return freqs
 
     t_cos, t_sin = freqs_t  # both t_cos and t_sin has shape: temporal_size, dim_t
@@ -935,15 +858,9 @@ def get_3d_rotary_pos_embed_allegro(
     start, stop = crops_coords
     grid_size_h, grid_size_w = grid_size
     interpolation_scale_t, interpolation_scale_h, interpolation_scale_w = interpolation_scale
-    grid_t = torch.linspace(
-        0, temporal_size * (temporal_size - 1) / temporal_size, temporal_size, device=device, dtype=torch.float32
-    )
-    grid_h = torch.linspace(
-        start[0], stop[0] * (grid_size_h - 1) / grid_size_h, grid_size_h, device=device, dtype=torch.float32
-    )
-    grid_w = torch.linspace(
-        start[1], stop[1] * (grid_size_w - 1) / grid_size_w, grid_size_w, device=device, dtype=torch.float32
-    )
+    grid_t = torch.linspace(0, temporal_size * (temporal_size - 1) / temporal_size, temporal_size, device=device, dtype=torch.float32)
+    grid_h = torch.linspace(start[0], stop[0] * (grid_size_h - 1) / grid_size_h, grid_size_h, device=device, dtype=torch.float32)
+    grid_w = torch.linspace(start[1], stop[1] * (grid_size_w - 1) / grid_size_w, grid_size_w, device=device, dtype=torch.float32)
 
     # Compute dimensions for each axis
     dim_t = embed_dim // 3
@@ -951,23 +868,15 @@ def get_3d_rotary_pos_embed_allegro(
     dim_w = embed_dim // 3
 
     # Temporal frequencies
-    freqs_t = get_1d_rotary_pos_embed(
-        dim_t, grid_t / interpolation_scale_t, theta=theta, use_real=True, repeat_interleave_real=False
-    )
+    freqs_t = get_1d_rotary_pos_embed(dim_t, grid_t / interpolation_scale_t, theta=theta, use_real=True, repeat_interleave_real=False)
     # Spatial frequencies for height and width
-    freqs_h = get_1d_rotary_pos_embed(
-        dim_h, grid_h / interpolation_scale_h, theta=theta, use_real=True, repeat_interleave_real=False
-    )
-    freqs_w = get_1d_rotary_pos_embed(
-        dim_w, grid_w / interpolation_scale_w, theta=theta, use_real=True, repeat_interleave_real=False
-    )
+    freqs_h = get_1d_rotary_pos_embed(dim_h, grid_h / interpolation_scale_h, theta=theta, use_real=True, repeat_interleave_real=False)
+    freqs_w = get_1d_rotary_pos_embed(dim_w, grid_w / interpolation_scale_w, theta=theta, use_real=True, repeat_interleave_real=False)
 
     return freqs_t, freqs_h, freqs_w, grid_t, grid_h, grid_w
 
 
-def get_2d_rotary_pos_embed(
-    embed_dim, crops_coords, grid_size, use_real=True, device: Optional[torch.device] = None, output_type: str = "np"
-):
+def get_2d_rotary_pos_embed(embed_dim, crops_coords, grid_size, use_real=True, device: Optional[torch.device] = None, output_type: str = "np"):
     """
     RoPE for image tokens with 2d structure.
 
@@ -987,11 +896,7 @@ def get_2d_rotary_pos_embed(
         `torch.Tensor`: positional embedding with shape `( grid_size * grid_size, embed_dim/2)`.
     """
     if output_type == "np":
-        deprecation_message = (
-            "`get_2d_sincos_pos_embed` uses `torch` and supports `device`."
-            " `from_numpy` is no longer required."
-            "  Pass `output_type='pt' to use the new version now."
-        )
+        deprecation_message = "`get_2d_sincos_pos_embed` uses `torch` and supports `device`. `from_numpy` is no longer required.  Pass `output_type='pt' to use the new version now."
         deprecate("output_type=='np'", "0.33.0", deprecation_message, standard_warn=False)
         return _get_2d_rotary_pos_embed_np(
             embed_dim=embed_dim,
@@ -1001,12 +906,8 @@ def get_2d_rotary_pos_embed(
         )
     start, stop = crops_coords
     # scale end by (steps−1)/steps matches np.linspace(..., endpoint=False)
-    grid_h = torch.linspace(
-        start[0], stop[0] * (grid_size[0] - 1) / grid_size[0], grid_size[0], device=device, dtype=torch.float32
-    )
-    grid_w = torch.linspace(
-        start[1], stop[1] * (grid_size[1] - 1) / grid_size[1], grid_size[1], device=device, dtype=torch.float32
-    )
+    grid_h = torch.linspace(start[0], stop[0] * (grid_size[0] - 1) / grid_size[0], grid_size[0], device=device, dtype=torch.float32)
+    grid_w = torch.linspace(start[1], stop[1] * (grid_size[1] - 1) / grid_size[1], grid_size[1], device=device, dtype=torch.float32)
     grid = torch.meshgrid(grid_w, grid_h, indexing="xy")
     grid = torch.stack(grid, dim=0)  # [2, W, H]
 
@@ -1061,12 +962,8 @@ def get_2d_rotary_pos_embed_from_grid(embed_dim, grid, use_real=False):
     assert embed_dim % 4 == 0
 
     # use half of dimensions to encode grid_h
-    emb_h = get_1d_rotary_pos_embed(
-        embed_dim // 2, grid[0].reshape(-1), use_real=use_real
-    )  # (H*W, D/2) if use_real else (H*W, D/4)
-    emb_w = get_1d_rotary_pos_embed(
-        embed_dim // 2, grid[1].reshape(-1), use_real=use_real
-    )  # (H*W, D/2) if use_real else (H*W, D/4)
+    emb_h = get_1d_rotary_pos_embed(embed_dim // 2, grid[0].reshape(-1), use_real=use_real)  # (H*W, D/2) if use_real else (H*W, D/4)
+    emb_w = get_1d_rotary_pos_embed(embed_dim // 2, grid[1].reshape(-1), use_real=use_real)  # (H*W, D/2) if use_real else (H*W, D/4)
 
     if use_real:
         cos = torch.cat([emb_h[0], emb_w[0]], dim=1)  # (H*W, D)
@@ -1097,12 +994,8 @@ def get_2d_rotary_pos_embed_lumina(embed_dim, len_h, len_w, linear_factor=1.0, n
     """
     assert embed_dim % 4 == 0
 
-    emb_h = get_1d_rotary_pos_embed(
-        embed_dim // 2, len_h, linear_factor=linear_factor, ntk_factor=ntk_factor
-    )  # (H, D/4)
-    emb_w = get_1d_rotary_pos_embed(
-        embed_dim // 2, len_w, linear_factor=linear_factor, ntk_factor=ntk_factor
-    )  # (W, D/4)
+    emb_h = get_1d_rotary_pos_embed(embed_dim // 2, len_h, linear_factor=linear_factor, ntk_factor=ntk_factor)  # (H, D/4)
+    emb_w = get_1d_rotary_pos_embed(embed_dim // 2, len_w, linear_factor=linear_factor, ntk_factor=ntk_factor)  # (W, D/4)
     emb_h = emb_h.view(len_h, 1, embed_dim // 4, 1).repeat(1, len_w, 1, 1)  # (H, W, D/4, 1)
     emb_w = emb_w.view(1, len_w, embed_dim // 4, 1).repeat(len_h, 1, 1, 1)  # (H, W, D/4, 1)
 
@@ -1154,9 +1047,7 @@ def get_1d_rotary_pos_embed(
         pos = torch.from_numpy(pos)  # type: ignore  # [S]
 
     theta = theta * ntk_factor
-    freqs = (
-        1.0 / (theta ** (torch.arange(0, dim, 2, dtype=freqs_dtype, device=pos.device) / dim)) / linear_factor
-    )  # [D/2]
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=freqs_dtype, device=pos.device) / dim)) / linear_factor  # [D/2]
     freqs = torch.outer(pos, freqs)  # type: ignore   # [S, D/2]
     is_npu = freqs.device.type == "npu"
     if is_npu:
@@ -1322,9 +1213,7 @@ class Timesteps(nn.Module):
 class GaussianFourierProjection(nn.Module):
     """Gaussian Fourier embeddings for noise levels."""
 
-    def __init__(
-        self, embedding_size: int = 256, scale: float = 1.0, set_W_to_weight=True, log=True, flip_sin_to_cos=False
-    ):
+    def __init__(self, embedding_size: int = 256, scale: float = 1.0, set_W_to_weight=True, log=True, flip_sin_to_cos=False):
         super().__init__()
         self.weight = nn.Parameter(torch.randn(embedding_size) * scale, requires_grad=False)
         self.log = log
@@ -1707,9 +1596,7 @@ class HunyuanCombinedTimestepTextSizeStyleEmbedding(nn.Module):
 
         self.size_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=0)
 
-        self.pooler = HunyuanDiTAttentionPool(
-            seq_len, cross_attention_dim, num_heads=8, output_dim=pooled_projection_dim
-        )
+        self.pooler = HunyuanDiTAttentionPool(seq_len, cross_attention_dim, num_heads=8, output_dim=pooled_projection_dim)
 
         # Here we use a default learned embedder layer for future extension.
         self.use_style_cond_and_image_meta_size = use_style_cond_and_image_meta_size
@@ -1755,9 +1642,7 @@ class HunyuanCombinedTimestepTextSizeStyleEmbedding(nn.Module):
 class LuminaCombinedTimestepCaptionEmbedding(nn.Module):
     def __init__(self, hidden_size=4096, cross_attention_dim=2048, frequency_embedding_size=256):
         super().__init__()
-        self.time_proj = Timesteps(
-            num_channels=frequency_embedding_size, flip_sin_to_cos=True, downscale_freq_shift=0.0
-        )
+        self.time_proj = Timesteps(num_channels=frequency_embedding_size, flip_sin_to_cos=True, downscale_freq_shift=0.0)
 
         self.timestep_embedder = TimestepEmbedding(in_channels=frequency_embedding_size, time_embed_dim=hidden_size)
 
@@ -1799,9 +1684,7 @@ class MochiCombinedTimestepCaptionEmbedding(nn.Module):
 
         self.time_proj = Timesteps(num_channels=time_embed_dim, flip_sin_to_cos=True, downscale_freq_shift=0.0)
         self.timestep_embedder = TimestepEmbedding(in_channels=time_embed_dim, time_embed_dim=embedding_dim)
-        self.pooler = MochiAttentionPool(
-            num_attention_heads=num_attention_heads, embed_dim=text_embed_dim, output_dim=embedding_dim
-        )
+        self.pooler = MochiAttentionPool(num_attention_heads=num_attention_heads, embed_dim=text_embed_dim, output_dim=embedding_dim)
         self.caption_proj = nn.Linear(text_embed_dim, pooled_projection_dim)
 
     def forward(
@@ -2279,9 +2162,7 @@ class IPAdapterPlusImageProjection(nn.Module):
         self.proj_out = nn.Linear(hidden_dims, output_dims)
         self.norm_out = nn.LayerNorm(output_dims)
 
-        self.layers = nn.ModuleList(
-            [IPAdapterPlusImageProjectionBlock(hidden_dims, dim_head, heads, ffn_ratio) for _ in range(depth)]
-        )
+        self.layers = nn.ModuleList([IPAdapterPlusImageProjectionBlock(hidden_dims, dim_head, heads, ffn_ratio) for _ in range(depth)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
@@ -2351,9 +2232,7 @@ class IPAdapterFaceIDPlusImageProjection(nn.Module):
         self.proj_out = nn.Linear(embed_dims, output_dims)
         self.norm_out = nn.LayerNorm(output_dims)
 
-        self.layers = nn.ModuleList(
-            [IPAdapterPlusImageProjectionBlock(embed_dims, dim_head, heads, ffn_ratio) for _ in range(depth)]
-        )
+        self.layers = nn.ModuleList([IPAdapterPlusImageProjectionBlock(embed_dims, dim_head, heads, ffn_ratio) for _ in range(depth)])
 
     def forward(self, id_embeds: torch.Tensor) -> torch.Tensor:
         """Forward pass.
@@ -2530,9 +2409,7 @@ class IPAdapterTimeImageProjection(nn.Module):
         self.proj_in = nn.Linear(embed_dim, hidden_dim)
         self.proj_out = nn.Linear(hidden_dim, output_dim)
         self.norm_out = nn.LayerNorm(output_dim)
-        self.layers = nn.ModuleList(
-            [IPAdapterTimeImageProjectionBlock(hidden_dim, dim_head, heads, ffn_ratio) for _ in range(depth)]
-        )
+        self.layers = nn.ModuleList([IPAdapterTimeImageProjectionBlock(hidden_dim, dim_head, heads, ffn_ratio) for _ in range(depth)])
         self.time_proj = Timesteps(timestep_in_dim, timestep_flip_sin_to_cos, timestep_freq_shift)
         self.time_embedding = TimestepEmbedding(timestep_in_dim, hidden_dim, act_fn="silu")
 
@@ -2589,9 +2466,7 @@ class MultiIPAdapterImageProjection(nn.Module):
             image_embeds = [image_embeds.unsqueeze(1)]
 
         if len(image_embeds) != len(self.image_projection_layers):
-            raise ValueError(
-                f"image_embeds must have the same length as image_projection_layers, got {len(image_embeds)} and {len(self.image_projection_layers)}"
-            )
+            raise ValueError(f"image_embeds must have the same length as image_projection_layers, got {len(image_embeds)} and {len(self.image_projection_layers)}")
 
         for image_embed, image_projection_layer in zip(image_embeds, self.image_projection_layers):
             batch_size, num_images = image_embed.shape[0], image_embed.shape[1]

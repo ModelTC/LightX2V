@@ -20,7 +20,6 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
-
 from diffusers.utils import (
     get_logger,
     is_flash_attn_3_available,
@@ -36,7 +35,6 @@ from diffusers.utils import (
     is_xformers_version,
 )
 from diffusers.utils.constants import DIFFUSERS_ATTN_BACKEND, DIFFUSERS_ATTN_CHECKS
-
 
 _REQUIRED_FLASH_VERSION = "2.6.3"
 _REQUIRED_SAGE_VERSION = "2.1.1"
@@ -279,9 +277,7 @@ def _check_device_cuda_atleast_smXY(major: int, minor: int) -> Callable:
     def check_device_cuda(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, **kwargs) -> None:
         _check_device_cuda(query, key, value)
         if torch.cuda.get_device_capability(query.device) < (major, minor):
-            raise ValueError(
-                f"Query, key, and value must be on a CUDA device with compute capability >= {major}.{minor}."
-            )
+            raise ValueError(f"Query, key, and value must be on a CUDA device with compute capability >= {major}.{minor}.")
 
     return check_device_cuda
 
@@ -320,15 +316,11 @@ def _check_shape(
 def _check_attention_backend_requirements(backend: AttentionBackendName) -> None:
     if backend in [AttentionBackendName.FLASH, AttentionBackendName.FLASH_VARLEN]:
         if not _CAN_USE_FLASH_ATTN:
-            raise RuntimeError(
-                f"Flash Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `flash-attn>={_REQUIRED_FLASH_VERSION}`."
-            )
+            raise RuntimeError(f"Flash Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `flash-attn>={_REQUIRED_FLASH_VERSION}`.")
 
     elif backend in [AttentionBackendName._FLASH_3, AttentionBackendName._FLASH_VARLEN_3]:
         if not _CAN_USE_FLASH_ATTN_3:
-            raise RuntimeError(
-                f"Flash Attention 3 backend '{backend.value}' is not usable because of missing package or the version is too old. Please build FA3 beta release from source."
-            )
+            raise RuntimeError(f"Flash Attention 3 backend '{backend.value}' is not usable because of missing package or the version is too old. Please build FA3 beta release from source.")
 
     elif backend in [
         AttentionBackendName.SAGE,
@@ -345,21 +337,15 @@ def _check_attention_backend_requirements(backend: AttentionBackendName) -> None
 
     elif backend == AttentionBackendName.FLEX:
         if not _CAN_USE_FLEX_ATTN:
-            raise RuntimeError(
-                f"Flex Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `torch>=2.5.0`."
-            )
+            raise RuntimeError(f"Flex Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `torch>=2.5.0`.")
 
     elif backend == AttentionBackendName._NATIVE_NPU:
         if not _CAN_USE_NPU_ATTN:
-            raise RuntimeError(
-                f"NPU Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `torch_npu`."
-            )
+            raise RuntimeError(f"NPU Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `torch_npu`.")
 
     elif backend == AttentionBackendName._NATIVE_XLA:
         if not _CAN_USE_XLA_ATTN:
-            raise RuntimeError(
-                f"XLA Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `torch_xla>={_REQUIRED_XLA_VERSION}`."
-            )
+            raise RuntimeError(f"XLA Attention backend '{backend.value}' is not usable because of missing package or the version is too old. Please install `torch_xla>={_REQUIRED_XLA_VERSION}`.")
 
     elif backend == AttentionBackendName.XFORMERS:
         if not _CAN_USE_XFORMERS_ATTN:
@@ -432,27 +418,21 @@ def _normalize_attn_mask(attn_mask: torch.Tensor, batch_size: int, seq_len_k: in
     elif attn_mask.ndim == 2:
         # [batch_size, seq_len_k]. Maybe broadcast across batch
         if attn_mask.size(0) not in [1, batch_size]:
-            raise ValueError(
-                f"attn_mask.shape[0] ({attn_mask.shape[0]}) must be 1 or {batch_size} for 2D attention mask."
-            )
+            raise ValueError(f"attn_mask.shape[0] ({attn_mask.shape[0]}) must be 1 or {batch_size} for 2D attention mask.")
         attn_mask = attn_mask.expand(batch_size, seq_len_k)
 
     elif attn_mask.ndim == 3:
         # [batch_size, seq_len_q, seq_len_k] -> reduce over query dimension
         # We do this reduction because we know that arbitrary QK masks is not supported in Flash/Sage varlen.
         if attn_mask.size(0) not in [1, batch_size]:
-            raise ValueError(
-                f"attn_mask.shape[0] ({attn_mask.shape[0]}) must be 1 or {batch_size} for 3D attention mask."
-            )
+            raise ValueError(f"attn_mask.shape[0] ({attn_mask.shape[0]}) must be 1 or {batch_size} for 3D attention mask.")
         attn_mask = attn_mask.any(dim=1)
         attn_mask = attn_mask.expand(batch_size, seq_len_k)
 
     elif attn_mask.ndim == 4:
         # [batch_size, num_heads, seq_len_q, seq_len_k] or broadcastable versions
         if attn_mask.size(0) not in [1, batch_size]:
-            raise ValueError(
-                f"attn_mask.shape[0] ({attn_mask.shape[0]}) must be 1 or {batch_size} for 4D attention mask."
-            )
+            raise ValueError(f"attn_mask.shape[0] ({attn_mask.shape[0]}) must be 1 or {batch_size} for 4D attention mask.")
         attn_mask = attn_mask.expand(batch_size, -1, -1, seq_len_k)  # [B, H, Q, K]
         attn_mask = attn_mask.any(dim=(1, 2))  # [B, K]
 
@@ -460,9 +440,7 @@ def _normalize_attn_mask(attn_mask: torch.Tensor, batch_size: int, seq_len_k: in
         raise ValueError(f"Unsupported attention mask shape: {attn_mask.shape}")
 
     if attn_mask.shape != (batch_size, seq_len_k):
-        raise ValueError(
-            f"Normalized attention mask shape mismatch: got {attn_mask.shape}, expected ({batch_size}, {seq_len_k})"
-        )
+        raise ValueError(f"Normalized attention mask shape mismatch: got {attn_mask.shape}, expected ({batch_size}, {seq_len_k})")
 
     return attn_mask
 
@@ -479,9 +457,7 @@ def _flex_attention_causal_mask_mod(batch_idx, head_idx, q_idx, kv_idx):
 # TODO: this is only required because the beta release FA3 does not have it. There is a PR adding
 # this but it was never merged: https://github.com/Dao-AILab/flash-attention/pull/1590
 @torch.library.custom_op("flash_attn_3::_flash_attn_forward", mutates_args=(), device_types="cuda")
-def _wrapped_flash_attn_3_original(
-    query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def _wrapped_flash_attn_3_original(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     out, lse = flash_attn_3_func(query, key, value)
     lse = lse.permute(0, 2, 1)
     return out, lse
@@ -559,11 +535,7 @@ def _flash_varlen_attention(
         attn_mask = _normalize_attn_mask(attn_mask, batch_size, seq_len_kv)
 
     if any(x is None for x in (cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)):
-        (_, seqlens_k), (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k) = (
-            _prepare_for_flash_attn_or_sage_varlen(
-                batch_size, seq_len_q, seq_len_kv, attn_mask=attn_mask, device=query.device
-            )
-        )
+        (_, seqlens_k), (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k) = _prepare_for_flash_attn_or_sage_varlen(batch_size, seq_len_q, seq_len_kv, attn_mask=attn_mask, device=query.device)
     else:
         seqlens_k = torch.full((batch_size,), max_seqlen_k, dtype=torch.int32, device=query.device)
         cu_seqlens_q = cu_seqlens_q.to(dtype=torch.int32, device=query.device)
@@ -664,11 +636,7 @@ def _flash_varlen_attention_3(
         attn_mask = _normalize_attn_mask(attn_mask, batch_size, seq_len_kv)
 
     if any(x is None for x in (cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)):
-        (_, seqlens_k), (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k) = (
-            _prepare_for_flash_attn_or_sage_varlen(
-                batch_size, seq_len_q, seq_len_kv, attn_mask=attn_mask, device=query.device
-            )
-        )
+        (_, seqlens_k), (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k) = _prepare_for_flash_attn_or_sage_varlen(batch_size, seq_len_q, seq_len_kv, attn_mask=attn_mask, device=query.device)
     else:
         seqlens_k = torch.full((batch_size,), max_seqlen_k, dtype=torch.int32, device=query.device)
         cu_seqlens_q = cu_seqlens_q.to(dtype=torch.int32, device=query.device)
@@ -736,9 +704,7 @@ def _native_flex_attention(
     if attn_mask is None or isinstance(attn_mask, flex_attention.BlockMask):
         block_mask = attn_mask
     elif is_causal:
-        block_mask = flex_attention.create_block_mask(
-            _flex_attention_causal_mask_mod, batch_size, num_heads, seq_len_q, seq_len_kv, query.device
-        )
+        block_mask = flex_attention.create_block_mask(_flex_attention_causal_mask_mod, batch_size, num_heads, seq_len_q, seq_len_kv, query.device)
     elif torch.is_tensor(attn_mask):
         if attn_mask.ndim == 2:
             attn_mask = attn_mask.view(attn_mask.size(0), 1, attn_mask.size(1), 1)
@@ -750,9 +716,7 @@ def _native_flex_attention(
             def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
                 return attn_mask[batch_idx, head_idx, q_idx, kv_idx]
 
-            block_mask = flex_attention.create_block_mask(
-                mask_mod, batch_size, None, seq_len_q, seq_len_kv, query.device
-            )
+            block_mask = flex_attention.create_block_mask(mask_mod, batch_size, None, seq_len_q, seq_len_kv, query.device)
         else:
 
             def score_mod(score, batch_idx, head_idx, q_idx, kv_idx):
@@ -1021,11 +985,7 @@ def _sage_varlen_attention(
         attn_mask = _normalize_attn_mask(attn_mask, batch_size, seq_len_kv)
 
     if any(x is None for x in (cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)):
-        (_, seqlens_k), (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k) = (
-            _prepare_for_flash_attn_or_sage_varlen(
-                batch_size, seq_len_q, seq_len_kv, attn_mask=attn_mask, device=query.device
-            )
-        )
+        (_, seqlens_k), (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k) = _prepare_for_flash_attn_or_sage_varlen(batch_size, seq_len_q, seq_len_kv, attn_mask=attn_mask, device=query.device)
     else:
         seqlens_k = torch.full((batch_size,), max_seqlen_k, dtype=torch.int32, device=query.device)
         cu_seqlens_q = cu_seqlens_q.to(dtype=torch.int32, device=query.device)

@@ -19,20 +19,18 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
-from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
-from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.modeling_utils import ModelMixin
+from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
+from diffusers.utils.torch_utils import maybe_allow_in_graph
 
 from .layers.attention import FeedForward
 from .layers.attention_dispatch import dispatch_attention_fn
 from .layers.attention_processor import Attention
 from .layers.embeddings import TimestepEmbedding, Timesteps
 from .layers.normalization import AdaLayerNormContinuous, RMSNorm
-
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -67,9 +65,7 @@ def get_timestep_embedding(
     assert len(timesteps.shape) == 1, "Timesteps should be a 1d-array"
 
     half_dim = embedding_dim // 2
-    exponent = -math.log(max_period) * torch.arange(
-        start=0, end=half_dim, dtype=torch.float32, device=timesteps.device
-    )
+    exponent = -math.log(max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32, device=timesteps.device)
     exponent = exponent / (half_dim - downscale_freq_shift)
 
     emb = torch.exp(exponent).to(timesteps.dtype)
@@ -263,9 +259,7 @@ class QwenDoubleStreamAttnProcessor2_0:
 
     def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError(
-                "QwenDoubleStreamAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0."
-            )
+            raise ImportError("QwenDoubleStreamAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
     def __call__(
         self,
@@ -355,9 +349,7 @@ class QwenDoubleStreamAttnProcessor2_0:
 
 @maybe_allow_in_graph
 class QwenImageTransformerBlock(nn.Module):
-    def __init__(
-        self, dim: int, num_attention_heads: int, attention_head_dim: int, qk_norm: str = "rms_norm", eps: float = 1e-6
-    ):
+    def __init__(self, dim: int, num_attention_heads: int, attention_head_dim: int, qk_norm: str = "rms_norm", eps: float = 1e-6):
         super().__init__()
 
         self.dim = dim
@@ -478,7 +470,7 @@ class QwenImageTransformerBlock(nn.Module):
         self.txt_norm1 = self.txt_norm1.to(torch.device("cuda"), non_blocking=True)
         self.txt_norm2 = self.txt_norm2.to(torch.device("cuda"), non_blocking=True)
         self.txt_mlp = self.txt_mlp.to(torch.device("cuda"), non_blocking=True)
-    
+
     def to_cpu(self):
         self.img_mod = self.img_mod.to(torch.device("cuda"), non_blocking=True)
         self.img_norm1 = self.img_norm1.to(torch.device("cuda"), non_blocking=True)
@@ -489,10 +481,10 @@ class QwenImageTransformerBlock(nn.Module):
         self.txt_norm1 = self.txt_norm1.to(torch.device("cuda"), non_blocking=True)
         self.txt_norm2 = self.txt_norm2.to(torch.device("cuda"), non_blocking=True)
         self.txt_mlp = self.txt_mlp.to(torch.device("cuda"), non_blocking=True)
-    
+
     def to_cuda_async(self):
         self.to_cuda()
-        
+
     def to_cpu_async(self):
         self.to_cpu()
 
@@ -617,9 +609,7 @@ class QwenImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
             scale_lora_layers(self, lora_scale)
         else:
             if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
-                logger.warning(
-                    "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
-                )
+                logger.warning("Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective.")
 
         hidden_states = self.img_in(hidden_states)
 
@@ -630,13 +620,9 @@ class QwenImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         if guidance is not None:
             guidance = guidance.to(hidden_states.dtype) * 1000
 
-        temb = (
-            self.time_text_embed(timestep, hidden_states)
-            if guidance is None
-            else self.time_text_embed(timestep, guidance, hidden_states)
-        )
-        
-        image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens, device=hidden_states.device) # torch.Size([6128, 64])  torch.Size([1371, 64])
+        temb = self.time_text_embed(timestep, hidden_states) if guidance is None else self.time_text_embed(timestep, guidance, hidden_states)
+
+        image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens, device=hidden_states.device)  # torch.Size([6128, 64])  torch.Size([1371, 64])
         for index_block, block in enumerate(self.transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(

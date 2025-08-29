@@ -15,11 +15,9 @@
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 from diffusers.utils import deprecate
 from diffusers.utils.import_utils import is_torch_npu_available, is_torch_version
-
+from torch import nn
 
 if is_torch_npu_available():
     import torch_npu
