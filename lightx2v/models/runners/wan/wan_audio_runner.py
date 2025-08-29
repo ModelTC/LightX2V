@@ -362,7 +362,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             frames_n = (nframe - 1) * 4 + 1
             prev_mask = torch.ones((1, frames_n, height, width), device=device, dtype=dtype)
-            prev_mask[:, prev_len:] = 0
+            prev_frame_len = max((prev_len - 1) * 4 + 1, 0)
+            prev_mask[:, prev_frame_len:] = 0
             prev_mask = self._wan_mask_rearrange(prev_mask)
 
         if prev_latents is not None:
