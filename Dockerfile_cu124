@@ -34,9 +34,8 @@ RUN cd flash-attention && python setup.py install && rm -rf build
 
 RUN cd flash-attention/hopper && python setup.py install && rm -rf build
 
-# RUN git clone https://github.com/thu-ml/SageAttention.git
+RUN git clone https://github.com/ModelTC/SageAttention.git
 
-# # install sageattention with hopper gpu sm9.0
-# RUN cd SageAttention && sed -i 's/set()/{"9.0"}/' setup.py && EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install --no-cache-dir -v -e .
+RUN cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install --no-cache-dir -v -e .
 
 WORKDIR /workspace

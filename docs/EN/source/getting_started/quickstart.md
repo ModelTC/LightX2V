@@ -27,39 +27,16 @@ We strongly recommend using the Docker environment, which is the simplest and fa
 
 #### 1. Pull Image
 
-Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags), select a tag with the latest date, such as `25080601-cu128`:
+Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags), select a tag with the latest date, such as `25082901-cu128`:
 
 ```bash
-# Pull the latest version of LightX2V image, this image does not have SageAttention installed
-docker pull lightx2v/lightx2v:25080601-cu128
-```
-
-If you need to use `SageAttention`, you can use image versions with the `-SageSmXX` suffix. The use of `SageAttention` requires selection based on GPU type, where:
-
-1. A100: -SageSm80
-2. RTX30 series: -SageSm86
-3. RTX40 series: -SageSm89
-4. H100: -SageSm90
-5. RTX50 series: -SageSm120
-
-For example, to use `SageAttention` on 4090 or H100, the image pull commands are:
-
-```bash
-# For 4090, with SageAttention installed
-docker pull lightx2v/lightx2v:25080601-cu128-SageSm89
-# For H100, with SageAttention installed
-docker pull lightx2v/lightx2v:25080601-cu128-SageSm90
+docker pull lightx2v/lightx2v:25082901-cu128
 ```
 
 We recommend using the `cuda128` environment for faster inference speed. If you need to use the `cuda124` environment, you can use image versions with the `-cu124` suffix:
 
 ```bash
-# cuda124 version, without SageAttention installed
-docker pull lightx2v/lightx2v:25080601-cu124
-# For 4090, cuda124 version, with SageAttention installed
-docker pull lightx2v/lightx2v:25080601-cu124-SageSm89
-# For H100, cuda124 version, with SageAttention installed
-docker pull lightx2v/lightx2v:25080601-cu124-SageSm90
+docker pull lightx2v/lightx2v:25082901-cu124
 ```
 
 #### 2. Run Container
@@ -73,26 +50,11 @@ docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings
 For mainland China, if the network is unstable when pulling images, you can pull from Alibaba Cloud:
 
 ```bash
-# Replace [tag] with the required image tag to download
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:[tag]
+# cuda128
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25082901-cu128
 
-# For example, download 25080601-cu128
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080601-cu128
-
-# For example, download 25080601-cu128-SageSm89
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080601-cu128-SageSm89
-
-# For example, download 25080601-cu128-SageSm90
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080601-cu128-SageSm90
-
-# For example, download 25080601-cu124
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080601-cu124
-
-# For example, download 25080601-cu124-SageSm89
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080601-cu124-SageSm89
-
-# For example, download 25080601-cu124-SageSm90
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25080601-cu124-SageSm90
+# cuda124
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25082901-cu124
 ```
 
 ### 🐍 Conda Environment Setup
