@@ -217,14 +217,15 @@ class DefaultRunner(BaseRunner):
     def run_main(self, total_steps=None):
         self.init_run()
         for segment_idx in range(self.video_segment_num):
-            # 1. default do nothing
-            self.init_run_segment(segment_idx)
-            # 2. main inference loop
-            latents, generator = self.run_segment(total_steps=total_steps)
-            # 3. vae decoder
-            self.gen_video = self.run_vae_decoder(latents)
-            # 4. default do nothing
-            self.end_run_segment()
+            with ProfilingContext4Debug(f"segment end2end {segment_idx}"):
+                # 1. default do nothing
+                self.init_run_segment(segment_idx)
+                # 2. main inference loop
+                latents, generator = self.run_segment(total_steps=total_steps)
+                # 3. vae decoder
+                self.gen_video = self.run_vae_decoder(latents)
+                # 4. default do nothing
+                self.end_run_segment()
         self.end_run()
 
     @ProfilingContext("Run VAE Decoder")
