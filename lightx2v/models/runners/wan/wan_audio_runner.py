@@ -105,6 +105,27 @@ def adaptive_resize(img):
     return cropped_img, target_h, target_w
 
 
+def normal_resize(img, target_height, target_width):
+    orig_height, orig_width = img.shape[-2:]
+
+    target_ratio = target_height / target_width
+    orig_ratio = orig_height / orig_width
+
+    if orig_ratio > target_ratio:
+        crop_width = orig_width
+        crop_height = int(crop_width * target_ratio)
+    else:
+        crop_height = orig_height
+        crop_width = int(crop_height / target_ratio)
+
+    cropped_img = TF.center_crop(img, [crop_height, crop_width])
+
+    resized_img = TF.resize(cropped_img, [target_height, target_width], antialias=True)
+
+    h, w = resized_img.shape[-2:]  # 更新 h 和 w
+    return resized_img, h, w
+
+
 @dataclass
 class AudioSegment:
     """Data class for audio segment information"""
@@ -269,10 +290,18 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ref_img = Image.open(img_path).convert("RGB")
         ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
 
-        ref_img, h, w = adaptive_resize(ref_img)
+        if self.config.get("resize_type", "None") == "adaptive":
+            ref_img, h, w = adaptive_resize(ref_img)
+        elif self.config.get("resize_type", "None") == "normal":
+            ref_img, h, w = normal_resize(ref_img, self.config.target_height, self.config.target_width)
+        else:
+            max_area = 720 * 1280  # Default for Wan 5B and 14B
+            h, w = ref_img.shape[-2:]
+            h = round(np.sqrt(max_area * (h / w)))
+            w = round(np.sqrt(max_area / (h / w)))
+
         patched_h = h // self.config.vae_stride[1] // self.config.patch_size[1]
         patched_w = w // self.config.vae_stride[2] // self.config.patch_size[2]
-
         patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
 
         self.config.lat_h = patched_h * self.config.patch_size[1]
