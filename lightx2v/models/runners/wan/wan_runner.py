@@ -163,10 +163,7 @@ class WanRunner(DefaultRunner):
         }
         if self.config.get("use_tiny_vae", False):
             tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth")
-            vae_decoder = WanVAE_tiny(
-                vae_pth=tiny_vae_path,
-                device=self.init_device,
-            ).to("cuda")
+            vae_decoder = WanVAE_tiny(vae_pth=tiny_vae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
         else:
             vae_decoder = WanVAE(**vae_config)
         return vae_decoder
