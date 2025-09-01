@@ -10,7 +10,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.utils import masks_like
 
 
-class ConsistencyModelScheduler(WanScheduler):
+class EulerScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
 
@@ -89,8 +89,7 @@ class ConsistencyModelScheduler(WanScheduler):
         sample = self.latents.to(torch.float32)
         sigma = self.unsqueeze_to_ndim(self.sigmas[self.step_index], sample.ndim).to(sample.device, sample.dtype)
         sigma_next = self.unsqueeze_to_ndim(self.sigmas[self.step_index + 1], sample.ndim).to(sample.device, sample.dtype)
-        x0 = sample - model_output * sigma
-        x_t_next = x0 * (1 - sigma_next) + sigma_next * torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, generator=self.generator)
+        x_t_next = sample + (sigma_next - sigma) * model_output
         self.latents = x_t_next
         if self.config["model_cls"] == "wan2.2_audio" and self.prev_latents is not None:
             self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
@@ -110,3 +109,16 @@ class ConsistencyModelScheduler(WanScheduler):
         if in_tensor.ndim < tgt_n_dim:
             in_tensor = in_tensor[(...,) + (None,) * (tgt_n_dim - in_tensor.ndim)]
         return in_tensor
+
+
+class ConsistencyModelScheduler(EulerScheduler):
+    def step_post(self):
+        model_output = self.noise_pred.to(torch.float32)
+        sample = self.latents.to(torch.float32)
+        sigma = self.unsqueeze_to_ndim(self.sigmas[self.step_index], sample.ndim).to(sample.device, sample.dtype)
+        sigma_next = self.unsqueeze_to_ndim(self.sigmas[self.step_index + 1], sample.ndim).to(sample.device, sample.dtype)
+        x0 = sample - model_output * sigma
+        x_t_next = x0 * (1 - sigma_next) + sigma_next * torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, generator=self.generator)
+        self.latents = x_t_next
+        if self.config["model_cls"] == "wan2.2_audio" and self.prev_latents is not None:
+            self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents

@@ -20,7 +20,7 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudio
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
-from lightx2v.models.schedulers.wan.audio.scheduler import ConsistencyModelScheduler
+from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
@@ -241,7 +241,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
-        scheduler = ConsistencyModelScheduler(self.config)
+        scheduler = EulerScheduler(self.config)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.audio_adapter = self.load_audio_adapter()
             self.model.set_audio_adapter(self.audio_adapter)
