@@ -23,7 +23,7 @@ from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
-from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
+from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -34,6 +34,10 @@ from lightx2v.utils.utils import best_output_size, cache_video
 class WanRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
+        self.vae_cls = WanVAE
+        self.tiny_vae_cls = WanVAE_tiny
+        self.vae_name = "Wan2.1_VAE.pth"
+        self.tiny_vae_name = "taew2_1.pth"
 
     def load_transformer(self):
         model = WanModel(
@@ -133,7 +137,7 @@ class WanRunner(DefaultRunner):
             vae_device = torch.device("cuda")
 
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
             "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -143,7 +147,7 @@ class WanRunner(DefaultRunner):
         if self.config.task not in ["i2v", "flf2v", "vace"]:
             return None
         else:
-            return WanVAE(**vae_config)
+            return self.vae_cls(**vae_config)
 
     def load_vae_decoder(self):
         # offload config
@@ -154,7 +158,7 @@ class WanRunner(DefaultRunner):
             vae_device = torch.device("cuda")
 
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
             "parallel": self.config.parallel,
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -162,10 +166,10 @@ class WanRunner(DefaultRunner):
             "dtype": GET_DTYPE(),
         }
         if self.config.get("use_tiny_vae", False):
-            tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth")
-            vae_decoder = WanVAE_tiny(vae_pth=tiny_vae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
+            tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", self.tiny_vae_name)
+            vae_decoder = self.tiny_vae_cls(vae_pth=tiny_vae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
         else:
-            vae_decoder = WanVAE(**vae_config)
+            vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
 
     def load_vae(self):
@@ -430,47 +434,10 @@ class Wan22DenseRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
         self.vae_encoder_need_img_original = True
-
-    def load_vae_decoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device("cuda")
-        vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dtype": GET_DTYPE(),
-        }
-        vae_decoder = Wan2_2_VAE(**vae_config)
-        return vae_decoder
-
-    def load_vae_encoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device("cuda")
-        vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dtype": GET_DTYPE(),
-        }
-        if self.config.task not in ["i2v", "flf2v"]:
-            return None
-        else:
-            return Wan2_2_VAE(**vae_config)
-
-    def load_vae(self):
-        vae_encoder = self.load_vae_encoder()
-        vae_decoder = self.load_vae_decoder()
-        return vae_encoder, vae_decoder
+        self.vae_cls = Wan2_2_VAE
+        self.tiny_vae_cls = Wan2_2_VAE_tiny
+        self.vae_name = "Wan2.2_VAE.pth"
+        self.tiny_vae_name = "taew2_2.pth"
 
     def run_vae_encoder(self, img):
         max_area = self.config.target_height * self.config.target_width

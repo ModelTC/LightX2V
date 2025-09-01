@@ -1,12 +1,15 @@
-import os
+#!/usr/bin/env python3
+"""
+Tiny AutoEncoder for Hunyuan Video
+(DNN for encoding / decoding videos to Hunyuan Video's latent space)
+"""
+
 from collections import namedtuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32,expandable_segments:True"
 
 DecoderResult = namedtuple("DecoderResult", ("frame", "memory"))
 TWorkItem = namedtuple("TWorkItem", ("input_tensor", "block_index"))
@@ -149,27 +152,31 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
                     xt = b(xt)
                     # add successor to work queue
                     work_queue.insert(0, TWorkItem(xt, i + 1))
-
         progress_bar.close()
         x = torch.stack(out, 1)
     return x
 
 
 class TAEHV(nn.Module):
-    latent_channels = 16
-    image_channels = 3
-
-    def __init__(self, checkpoint_path="taehv.pth", decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True)):
+    def __init__(self, checkpoint_path="taehv.pth", decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True), patch_size=1, latent_channels=16):
         """Initialize pretrained TAEHV from the given checkpoint.
 
         Arg:
             checkpoint_path: path to weight file to load. taehv.pth for Hunyuan, taew2_1.pth for Wan 2.1.
             decoder_time_upscale: whether temporal upsampling is enabled for each block. upsampling can be disabled for a cheaper preview.
             decoder_space_upscale: whether spatial upsampling is enabled for each block. upsampling can be disabled for a cheaper preview.
+            patch_size: input/output pixelshuffle patch-size for this model.
+            latent_channels: number of latent channels (z dim) for this model.
         """
         super().__init__()
+        self.patch_size = patch_size
+        self.latent_channels = latent_channels
+        self.image_channels = 3
+        self.is_cogvideox = checkpoint_path is not None and "taecvx" in checkpoint_path
+        if checkpoint_path is not None and "taew2_2" in checkpoint_path:
+            self.patch_size, self.latent_channels = 2, 48
         self.encoder = nn.Sequential(
-            conv(TAEHV.image_channels, 64),
+            conv(self.image_channels * self.patch_size**2, 64),
             nn.ReLU(inplace=True),
             TPool(64, 2),
             conv(64, 64, stride=2, bias=False),
@@ -186,13 +193,13 @@ class TAEHV(nn.Module):
             MemBlock(64, 64),
             MemBlock(64, 64),
             MemBlock(64, 64),
-            conv(64, TAEHV.latent_channels),
+            conv(64, self.latent_channels),
         )
         n_f = [256, 128, 64, 64]
         self.frames_to_trim = 2 ** sum(decoder_time_upscale) - 1
         self.decoder = nn.Sequential(
             Clamp(),
-            conv(TAEHV.latent_channels, n_f[0]),
+            conv(self.latent_channels, n_f[0]),
             nn.ReLU(inplace=True),
             MemBlock(n_f[0], n_f[0]),
             MemBlock(n_f[0], n_f[0]),
@@ -213,7 +220,7 @@ class TAEHV(nn.Module):
             TGrow(n_f[2], 2 if decoder_time_upscale[1] else 1),
             conv(n_f[2], n_f[3], bias=False),
             nn.ReLU(inplace=True),
-            conv(n_f[3], TAEHV.image_channels),
+            conv(n_f[3], self.image_channels * self.patch_size**2),
         )
         if checkpoint_path is not None:
             self.load_state_dict(self.patch_tgrow_layers(torch.load(checkpoint_path, map_location="cpu", weights_only=True)))
@@ -243,6 +250,13 @@ class TAEHV(nn.Module):
               if False, frames will be processed sequentially.
         Returns NTCHW latent tensor with ~Gaussian values.
         """
+        if self.patch_size > 1:
+            x = F.pixel_unshuffle(x, self.patch_size)
+        if x.shape[1] % 4 != 0:
+            # pad at end to multiple of 4
+            n_pad = 4 - x.shape[1] % 4
+            padding = x[:, -1:].repeat_interleave(n_pad, dim=1)
+            x = torch.cat([x, padding], 1)
         return apply_model_with_memblocks(self.encoder, x, parallel, show_progress_bar)
 
     def decode_video(self, x, parallel=True, show_progress_bar=True):
@@ -255,16 +269,23 @@ class TAEHV(nn.Module):
               if False, frames will be processed sequentially.
         Returns NTCHW RGB tensor with ~[0, 1] values.
         """
+        skip_trim = self.is_cogvideox and x.shape[1] % 2 == 0
         x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar)
+        x = x.clamp_(0, 1)
+        if self.patch_size > 1:
+            x = F.pixel_shuffle(x, self.patch_size)
+        if skip_trim:
+            # skip trimming for cogvideox to make frame counts match.
+            # this still doesn't have correct temporal alignment for certain frame counts
+            # (cogvideox seems to pad at the start?), but for multiple-of-4 it's fine.
+            return x
         return x[:, self.frames_to_trim :]
-
-    def forward(self, x):
-        return self.c(x)
 
 
 @torch.no_grad()
 def main():
     """Run TAEHV roundtrip reconstruction on the given video paths."""
+    import os
     import sys
 
     import cv2  # no highly esteemed deed is commemorated here
@@ -300,8 +321,10 @@ def main():
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     dtype = torch.float16
-    print("Using device", dev, "and dtype", dtype)
-    taehv = TAEHV().to(dev, dtype)
+    checkpoint_path = os.getenv("TAEHV_CHECKPOINT_PATH", "taehv.pth")
+    checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+    print(f"Using device \033[31m{dev}\033[0m, dtype \033[32m{dtype}\033[0m, checkpoint \033[34m{checkpoint_name}\033[0m ({checkpoint_path})")
+    taehv = TAEHV(checkpoint_path=checkpoint_path).to(dev, dtype)
     for video_path in sys.argv[1:]:
         print(f"Processing {video_path}...")
         video_in = VideoTensorReader(video_path)
@@ -322,7 +345,7 @@ def main():
             print(f"  Encoded {video_path} -> {vid_enc.shape}. Decoding...")
             vid_dec = taehv.decode_video(vid_enc, parallel=False)
             print(f"  Decoded {video_path} -> {vid_dec.shape}")
-        video_out_path = video_path + ".reconstructed_by_taehv.mp4"
+        video_out_path = video_path + f".reconstructed_by_{checkpoint_name}.mp4"
         video_out = VideoTensorWriter(video_out_path, (vid_dec.shape[-1], vid_dec.shape[-2]), fps=int(round(video_in.fps)))
         for frame in vid_dec.clamp_(0, 1).mul_(255).round_().byte().cpu()[0]:
             video_out.write(frame)
