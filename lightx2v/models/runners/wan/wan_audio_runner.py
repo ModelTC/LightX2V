@@ -80,7 +80,9 @@ def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
     return resized_frames
 
 
-def adaptive_resize(img):
+def resize_image(img, resize_mode="adaptive", fixed_area=None):
+    assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area"]
+
     bucket_config = {
         0.667: (np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64), np.array([0.2, 0.5, 0.3])),
         1.0: (np.array([[480, 480], [576, 576], [704, 704], [960, 960]], dtype=np.int64), np.array([0.1, 0.1, 0.5, 0.3])),
@@ -89,18 +91,36 @@ def adaptive_resize(img):
     ori_height = img.shape[-2]
     ori_weight = img.shape[-1]
     ori_ratio = ori_height / ori_weight
-    aspect_ratios = np.array(np.array(list(bucket_config.keys())))
-    closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
-    closet_ratio = aspect_ratios[closet_aspect_idx]
-    if ori_ratio < 1.0:
-        target_h, target_w = 480, 832
-    elif ori_ratio == 1.0:
-        target_h, target_w = 480, 480
-    else:
-        target_h, target_w = 832, 480
-    for resolution in bucket_config[closet_ratio][0]:
-        if ori_height * ori_weight >= resolution[0] * resolution[1]:
-            target_h, target_w = resolution
+
+    if resize_mode == "adaptive":
+        aspect_ratios = np.array(np.array(list(bucket_config.keys())))
+        closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
+        closet_ratio = aspect_ratios[closet_aspect_idx]
+        if ori_ratio < 1.0:
+            target_h, target_w = 480, 832
+        elif ori_ratio == 1.0:
+            target_h, target_w = 480, 480
+        else:
+            target_h, target_w = 832, 480
+        for resolution in bucket_config[closet_ratio][0]:
+            if ori_height * ori_weight >= resolution[0] * resolution[1]:
+                target_h, target_w = resolution
+    elif resize_mode == "keep_ratio_fixed_area":
+        assert fixed_area in ["480p", "720p"], f"fixed_area must be in ['480p', '720p'], but got {fixed_area}, please set fixed_area in config."
+        fixed_area = 480 * 832 if fixed_area == "480p" else 720 * 1280
+        target_h = round(np.sqrt(fixed_area * ori_ratio))
+        target_w = round(np.sqrt(fixed_area / ori_ratio))
+    elif resize_mode == "fixed_min_area":
+        aspect_ratios = np.array(np.array(list(bucket_config.keys())))
+        closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
+        closet_ratio = aspect_ratios[closet_aspect_idx]
+        target_h, target_w = bucket_config[closet_ratio][0][0]
+    elif resize_mode == "fixed_max_area":
+        aspect_ratios = np.array(np.array(list(bucket_config.keys())))
+        closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
+        closet_ratio = aspect_ratios[closet_aspect_idx]
+        target_h, target_w = bucket_config[closet_ratio][0][-1]
+
     cropped_img = isotropic_crop_resize(img, (target_h, target_w))
     return cropped_img, target_h, target_w
 
@@ -269,7 +289,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ref_img = Image.open(img_path).convert("RGB")
         ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
 
-        ref_img, h, w = adaptive_resize(ref_img)
+        ref_img, h, w = resize_image(ref_img, resize_mode=self.config.get("resize_mode", "adaptive"), fixed_area=self.config.get("fixed_area", None))
+        logger.info(f"[wan_audio] resize_image target_h: {h}, target_w: {w}")
         patched_h = h // self.config.vae_stride[1] // self.config.patch_size[1]
         patched_w = w // self.config.vae_stride[2] // self.config.patch_size[2]
 

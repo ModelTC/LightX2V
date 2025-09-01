@@ -4,9 +4,8 @@
     "video_duration": 12,
     "audio_sr": 16000,
     "target_video_length": 121,
+    "resize_mode": "adaptive",
     "text_len": 512,
-    "target_height": 704,
-    "target_width": 1280,
     "num_channels_latents": 48,
     "vae_stride": [4, 16, 16],
     "self_attn_1_type": "flash_attn3",
@@ -20,7 +19,6 @@
     "offload_granularity": "model",
     "fps": 24,
     "use_image_encoder": false,
-    "adaptive_resize": true,
     "use_31_block": false,
     "lora_configs": [
         {

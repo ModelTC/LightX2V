@@ -4,8 +4,7 @@
     "video_duration": 5,
     "audio_sr": 16000,
     "target_video_length": 81,
-    "target_height": 720,
-    "target_width": 1280,
+    "resize_mode": "adaptive",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -14,7 +13,6 @@
     "sample_shift": 5,
     "enable_cfg": false,
     "use_31_block": false,
-    "adaptive_resize": true,
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"
