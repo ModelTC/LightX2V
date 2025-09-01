@@ -20,7 +20,7 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudio
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
-from lightx2v.models.schedulers.wan.audio.scheduler import ConsistencyModelScheduler
+from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
@@ -80,8 +80,34 @@ def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
     return resized_frames
 
 
-def resize_image(img, resize_mode="adaptive", fixed_area=None):
-    assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area"]
+def fixed_shape_resize(img, target_height, target_width):
+    orig_height, orig_width = img.shape[-2:]
+
+    target_ratio = target_height / target_width
+    orig_ratio = orig_height / orig_width
+
+    if orig_ratio > target_ratio:
+        crop_width = orig_width
+        crop_height = int(crop_width * target_ratio)
+    else:
+        crop_height = orig_height
+        crop_width = int(crop_height / target_ratio)
+
+    cropped_img = TF.center_crop(img, [crop_height, crop_width])
+
+    resized_img = TF.resize(cropped_img, [target_height, target_width], antialias=True)
+
+    h, w = resized_img.shape[-2:]
+    return resized_img, h, w
+
+
+def resize_image(img, resize_mode="adaptive", fixed_area=None, fixed_shape=None):
+    assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape"]
+
+    if resize_mode == "fixed_shape":
+        assert fixed_shape is not None
+        logger.info(f"[wan_audio] fixed_shape_resize fixed_height: {fixed_shape[0]}, fixed_width: {fixed_shape[1]}")
+        return fixed_shape_resize(img, fixed_shape[0], fixed_shape[1])
 
     bucket_config = {
         0.667: (np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64), np.array([0.2, 0.5, 0.3])),
@@ -261,7 +287,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
-        scheduler = ConsistencyModelScheduler(self.config)
+        scheduler = EulerScheduler(self.config)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.audio_adapter = self.load_audio_adapter()
             self.model.set_audio_adapter(self.audio_adapter)
@@ -289,7 +315,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ref_img = Image.open(img_path).convert("RGB")
         ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
 
-        ref_img, h, w = resize_image(ref_img, resize_mode=self.config.get("resize_mode", "adaptive"), fixed_area=self.config.get("fixed_area", None))
+        ref_img, h, w = resize_image(ref_img, resize_mode=self.config.get("resize_mode", "adaptive"), fixed_area=self.config.get("fixed_area", None), fixed_shape=self.config.get("fixed_shape", None))
         logger.info(f"[wan_audio] resize_image target_h: {h}, target_w: {w}")
         patched_h = h // self.config.vae_stride[1] // self.config.patch_size[1]
         patched_w = w // self.config.vae_stride[2] // self.config.patch_size[2]
