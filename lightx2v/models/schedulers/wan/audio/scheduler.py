@@ -1,4 +1,3 @@
-import gc
 import math
 
 import numpy as np
@@ -99,8 +98,6 @@ class EulerScheduler(WanScheduler):
             self.prev_latents = previmg_encoder_output["prev_latents"]
             self.prev_len = previmg_encoder_output["prev_len"]
         self.prepare_latents(self.config.target_shape, dtype=torch.float32)
-        gc.collect()
-        torch.cuda.empty_cache()
 
     def unsqueeze_to_ndim(self, in_tensor, tgt_n_dim):
         if in_tensor.ndim > tgt_n_dim:
