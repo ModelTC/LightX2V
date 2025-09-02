@@ -841,7 +841,9 @@ def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offloa
 
 
 class Wan2_2_VAE:
-    def __init__(self, z_dim=48, c_dim=160, vae_pth=None, dim_mult=[1, 2, 4, 4], temperal_downsample=[False, True, True], dtype=torch.float, device="cuda", cpu_offload=False, offload_cache=False, **kwargs):
+    def __init__(
+        self, z_dim=48, c_dim=160, vae_pth=None, dim_mult=[1, 2, 4, 4], temperal_downsample=[False, True, True], dtype=torch.float, device="cuda", cpu_offload=False, offload_cache=False, **kwargs
+    ):
         self.dtype = dtype
         self.device = device
         self.cpu_offload = cpu_offload

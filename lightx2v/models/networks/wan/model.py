@@ -44,7 +44,6 @@ class WanModel:
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device):
-
         self.model_path = model_path
         self.config = config
         self.cpu_offload = self.config.get("cpu_offload", False)
