@@ -1,12 +1,15 @@
 {
     "infer_steps": 4,
     "target_fps": 16,
-    "video_duration": 12,
+    "video_duration": 15,
     "audio_sr": 16000,
     "target_video_length": 17,
     "prev_frame_length": 1,
     "resize_mode": "fixed_shape",
-    "fixed_shape": [480, 480],
+    "fixed_shape": [
+        480,
+        480
+    ],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",

@@ -1,11 +1,14 @@
 {
     "infer_steps": 4,
     "target_fps": 16,
-    "video_duration": 12,
+    "video_duration": 15,
     "audio_sr": 16000,
     "target_video_length": 81,
     "resize_mode": "fixed_shape",
-    "fixed_shape": [240, 320],
+    "fixed_shape": [
+        240,
+        320
+    ],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
