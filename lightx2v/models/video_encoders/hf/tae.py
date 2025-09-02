@@ -158,7 +158,7 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
 
 
 class TAEHV(nn.Module):
-    def __init__(self, checkpoint_path="taehv.pth", decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True), patch_size=1, latent_channels=16):
+    def __init__(self, checkpoint_path="taehv.pth", decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True), patch_size=1, latent_channels=16, model_type='wan21'):
         """Initialize pretrained TAEHV from the given checkpoint.
 
         Arg:
@@ -173,7 +173,10 @@ class TAEHV(nn.Module):
         self.latent_channels = latent_channels
         self.image_channels = 3
         self.is_cogvideox = checkpoint_path is not None and "taecvx" in checkpoint_path
-        if checkpoint_path is not None and "taew2_2" in checkpoint_path:
+        # if checkpoint_path is not None and "taew2_2" in checkpoint_path:
+        #     self.patch_size, self.latent_channels = 2, 48
+
+        if model_type == 'wan22':
             self.patch_size, self.latent_channels = 2, 48
         self.encoder = nn.Sequential(
             conv(self.image_channels * self.patch_size**2, 64),

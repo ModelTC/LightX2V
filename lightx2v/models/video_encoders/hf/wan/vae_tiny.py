@@ -80,7 +80,7 @@ class Wan2_2_VAE_tiny(nn.Module):
         super().__init__()
         self.dtype = dtype
         self.device = torch.device("cuda")
-        self.taehv = TAEHV(vae_pth).to(self.dtype)
+        self.taehv = TAEHV(vae_pth, model_type='wan22').to(self.dtype)
         self.need_scaled = need_scaled
         if self.need_scaled:
             self.latents_mean = [

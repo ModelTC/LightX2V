@@ -44,6 +44,7 @@ class WanModel:
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device):
+
         self.model_path = model_path
         self.config = config
         self.cpu_offload = self.config.get("cpu_offload", False)
@@ -79,8 +80,6 @@ class WanModel:
         else:
             self.dit_quantized_ckpt = None
             assert not self.config.get("lazy_load", False)
-
-        self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
 
         self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
         if self.dit_quantized:

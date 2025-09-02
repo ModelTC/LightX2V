@@ -53,7 +53,7 @@ class HunyuanModel:
         return weight_dict
 
     def _load_quant_ckpt(self):
-        ckpt_path = self.config.dit_quantized_ckpt
+        ckpt_path = self.dit_quantized_ckpt
         logger.info(f"Loading quant dit model from {ckpt_path}")
 
         if ckpt_path.endswith(".pth"):
