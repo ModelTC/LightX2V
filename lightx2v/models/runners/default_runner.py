@@ -128,7 +128,7 @@ class DefaultRunner(BaseRunner):
             if self.progress_callback:
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
-        return self.model.scheduler.latents, self.model.scheduler.generator
+        return self.model.scheduler.latents
 
     def run_step(self):
         self.inputs = self.run_input_encoder()
@@ -224,12 +224,12 @@ class DefaultRunner(BaseRunner):
         self.init_run()
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 segment_idx: {segment_idx + 1}/{self.video_segment_num}")
-            with ProfilingContext(f"segment end2end {segment_idx}"):
+            with ProfilingContext(f"segment end2end {segment_idx + 1}/{self.video_segment_num}"):
                 self.check_stop()
                 # 1. default do nothing
                 self.init_run_segment(segment_idx)
                 # 2. main inference loop
-                latents, generator = self.run_segment(total_steps=total_steps)
+                latents = self.run_segment(total_steps=total_steps)
                 # 3. vae decoder
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing

@@ -172,6 +172,5 @@ class BaseRunner(ABC):
             dist.broadcast(t, src=signal_rank)
             stopped = t.item()
 
-        print(f"rank {rank} recv stopped: {stopped}")
         if stopped == 1:
             raise Exception(f"find rank: {rank} stop_signal, stop running, it's an expected behavior")
