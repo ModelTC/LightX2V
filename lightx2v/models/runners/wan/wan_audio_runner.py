@@ -15,6 +15,8 @@ from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
+from lightx2v.deploy.common.va_reader import VAReader
+from lightx2v.deploy.common.va_recorder import VARecorder
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
@@ -221,7 +223,7 @@ class AudioProcessor:
     def get_audio_range(self, start_frame: int, end_frame: int) -> Tuple[int, int]:
         """Calculate audio range for given frame range"""
         audio_frame_rate = self.audio_sr / self.target_fps
-        return round(start_frame * audio_frame_rate), round((end_frame + 1) * audio_frame_rate)
+        return round(start_frame * audio_frame_rate), round(end_frame * audio_frame_rate)
 
     def segment_audio(self, audio_array: np.ndarray, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
         """Segment audio based on frame requirements"""
@@ -299,6 +301,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_sr = self.config.get("audio_sr", 16000)
         target_fps = self.config.get("target_fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
+        if not isinstance(self.config["audio_path"], str):
+            return [], 0
         audio_array = self._audio_processor.load_audio(self.config["audio_path"])
 
         video_duration = self.config.get("video_duration", 5)
@@ -312,7 +316,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return audio_segments, expected_frames
 
     def read_image_input(self, img_path):
-        ref_img = Image.open(img_path).convert("RGB")
+        if isinstance(img_path, Image.Image):
+            ref_img = img_path
+        else:
+            ref_img = Image.open(img_path).convert("RGB")
         ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
 
         ref_img, h, w = resize_image(ref_img, resize_mode=self.config.get("resize_mode", "adaptive"), fixed_area=self.config.get("fixed_area", None), fixed_shape=self.config.get("fixed_shape", None))
@@ -449,10 +456,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.prev_video = None
 
     @ProfilingContext4Debug("Init run segment")
-    def init_run_segment(self, segment_idx):
+    def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
-
-        self.segment = self.inputs["audio_segments"][segment_idx]
+        if audio_array is not None:
+            self.segment = AudioSegment(audio_array, 0, audio_array.shape[0], False)
+        else:
+            self.segment = self.inputs["audio_segments"][segment_idx]
 
         self.config.seed = self.config.seed + segment_idx
         torch.manual_seed(self.config.seed)
@@ -477,7 +486,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         # Extract relevant frames
         start_frame = 0 if self.segment_idx == 0 else self.prev_frame_length
-        start_audio_frame = 0 if self.segment_idx == 0 else int((self.prev_frame_length + 1) * self._audio_processor.audio_sr / self.config.get("target_fps", 16))
+        start_audio_frame = 0 if self.segment_idx == 0 else int(self.prev_frame_length * self._audio_processor.audio_sr / self.config.get("target_fps", 16))
 
         if self.segment.is_last and self.segment.useful_length:
             end_frame = self.segment.end_frame - self.segment.start_frame
@@ -490,12 +499,116 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.gen_video_list.append(self.gen_video[:, :, start_frame:].cpu())
             self.cut_audio_list.append(self.segment.audio_array[start_audio_frame:])
 
+        if self.va_recorder:
+            cur_video = vae_to_comfyui_image(self.gen_video_list[-1])
+            self.va_recorder.pub_livestream(cur_video, self.cut_audio_list[-1])
+
+        if self.va_reader:
+            self.gen_video_list.pop()
+            self.cut_audio_list.pop()
+
         # Update prev_video for next iteration
         self.prev_video = self.gen_video
 
         # Clean up GPU memory after each segment
         del self.gen_video
         torch.cuda.empty_cache()
+
+    def get_rank_and_world_size(self):
+        rank = 0
+        world_size = 1
+        if dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        return rank, world_size
+
+    def init_va_recorder(self):
+        output_video_path = self.config.get("save_video_path", None)
+        self.va_recorder = None
+        if isinstance(output_video_path, dict):
+            assert output_video_path["type"] == "stream", f"unexcept save_video_path: {output_video_path}"
+            rank, world_size = self.get_rank_and_world_size()
+            if rank == 2 % world_size:
+                record_fps = self.config.get("target_fps", 16)
+                audio_sr = self.config.get("audio_sr", 16000)
+                if "video_frame_interpolation" in self.config and self.vfi_model is not None:
+                    record_fps = self.config["video_frame_interpolation"]["target_fps"]
+                self.va_recorder = VARecorder(
+                    livestream_url=output_video_path["data"],
+                    fps=record_fps,
+                    sample_rate=audio_sr,
+                )
+
+    def init_va_reader(self):
+        audio_path = self.config.get("audio_path", None)
+        self.va_reader = None
+        if isinstance(audio_path, dict):
+            assert audio_path["type"] == "stream", f"unexcept audio_path: {audio_path}"
+            rank, world_size = self.get_rank_and_world_size()
+            target_fps = self.config.get("target_fps", 16)
+            max_num_frames = self.config.get("target_video_length", 81)
+            audio_sr = self.config.get("audio_sr", 16000)
+            prev_frames = self.config.get("prev_frame_length", 5)
+            self.va_reader = VAReader(
+                rank=rank,
+                world_size=world_size,
+                stream_url=audio_path["data"],
+                sample_rate=audio_sr,
+                segment_duration=max_num_frames / target_fps,
+                prev_duration=prev_frames / target_fps,
+                target_rank=1,
+            )
+
+    def run_main(self, total_steps=None):
+        try:
+            self.init_va_recorder()
+            self.init_va_reader()
+            logger.info(f"init va_recorder: {self.va_recorder} and va_reader: {self.va_reader}")
+
+            if self.va_reader is None:
+                return super().run_main(total_steps)
+
+            rank, world_size = self.get_rank_and_world_size()
+            if rank == 2 % world_size:
+                assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 0"
+            self.va_reader.start()
+
+            self.init_run()
+            self.video_segment_num = "unlimited"
+
+            fetch_timeout = self.va_reader.segment_duration + 1
+            segment_idx = 0
+            fail_count = 0
+            max_fail_count = 10
+
+            while True:
+                with ProfilingContext4Debug(f"stream segment get audio segment {segment_idx}"):
+                    self.check_stop()
+                    audio_array = self.va_reader.get_audio_segment(timeout=fetch_timeout)
+                    if audio_array is None:
+                        fail_count += 1
+                        logger.warning(f"Failed to get audio chunk {fail_count} times")
+                        if fail_count > max_fail_count:
+                            raise Exception(f"Failed to get audio chunk {fail_count} times, stop reader")
+                        continue
+
+                with ProfilingContext4Debug(f"stream segment end2end {segment_idx}"):
+                    fail_count = 0
+                    self.init_run_segment(segment_idx, audio_array)
+                    latents, generator = self.run_segment(total_steps=None)
+                    self.gen_video = self.run_vae_decoder(latents)
+                    self.end_run_segment()
+                    segment_idx += 1
+
+        finally:
+            if hasattr(self.model, "scheduler"):
+                self.end_run()
+            if self.va_reader:
+                self.va_reader.stop()
+                self.va_reader = None
+            if self.va_recorder:
+                self.va_recorder.stop(wait=False)
+                self.va_recorder = None
 
     @ProfilingContext4Debug("Process after vae decoder")
     def process_images_after_vae_decoder(self, save_video=True):
@@ -515,7 +628,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 target_fps=target_fps,
             )
 
-        if save_video:
+        if save_video and isinstance(self.config["save_video_path"], str):
             if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
                 fps = self.config["video_frame_interpolation"]["target_fps"]
             else:

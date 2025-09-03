@@ -111,6 +111,9 @@ class DefaultRunner(BaseRunner):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
         for step_index in range(total_steps):
+            # only for single segment, check stop signal every step
+            if self.video_segment_num == 1:
+                self.check_stop()
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
             with ProfilingContext4Debug("step_pre"):
@@ -145,7 +148,10 @@ class DefaultRunner(BaseRunner):
         gc.collect()
 
     def read_image_input(self, img_path):
-        img_ori = Image.open(img_path).convert("RGB")
+        if isinstance(img_path, Image.Image):
+            img_ori = img_path
+        else:
+            img_ori = Image.open(img_path).convert("RGB")
         img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
         return img, img_ori
 
@@ -219,6 +225,7 @@ class DefaultRunner(BaseRunner):
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 segment_idx: {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext(f"segment end2end {segment_idx}"):
+                self.check_stop()
                 # 1. default do nothing
                 self.init_run_segment(segment_idx)
                 # 2. main inference loop

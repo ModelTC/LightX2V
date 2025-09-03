@@ -1,0 +1,128 @@
+{
+    "data":
+    {
+        "t2v": {
+            "wan2.1-1.3B": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": [],
+                        "outputs": ["output_video"]
+                    }
+                },
+                "multi_stage": {
+                    "text_encoder": {
+                        "inputs": [],
+                        "outputs": ["text_encoder_output"]
+                    },
+                    "dit": {
+                        "inputs": ["text_encoder_output"],
+                        "outputs": ["latents"]
+                    },
+                    "vae_decoder": {
+                        "inputs": ["latents"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            }
+        },
+        "i2v": {
+            "wan2.1-14B-480P": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image"],
+                        "outputs": ["output_video"]
+                    }
+                },
+                "multi_stage": {
+                    "text_encoder": {
+                        "inputs": ["input_image"],
+                        "outputs": ["text_encoder_output"]
+                    },
+                    "image_encoder": {
+                        "inputs": ["input_image"],
+                        "outputs": ["clip_encoder_output"]
+                    },
+                    "vae_encoder": {
+                        "inputs": ["input_image"],
+                        "outputs": ["vae_encoder_output"]
+                    },
+                    "dit": {
+                        "inputs": [
+                            "clip_encoder_output",
+                            "vae_encoder_output",
+                            "text_encoder_output"
+                        ],
+                        "outputs": ["latents"]
+                    },
+                    "vae_decoder": {
+                        "inputs": ["latents"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            },
+            "SekoTalk-Distill": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image", "input_audio"],
+                        "outputs": ["output_video"]
+                    }
+                },
+                "multi_stage": {
+                    "text_encoder": {
+                        "inputs": ["input_image"],
+                        "outputs": ["text_encoder_output"]
+                    },
+                    "image_encoder": {
+                        "inputs": ["input_image"],
+                        "outputs": ["clip_encoder_output"]
+                    },
+                    "vae_encoder": {
+                        "inputs": ["input_image"],
+                        "outputs": ["vae_encoder_output"]
+                    },
+                    "segment_dit": {
+                        "inputs": [
+                            "input_audio",
+                            "clip_encoder_output",
+                            "vae_encoder_output",
+                            "text_encoder_output"
+                        ],
+                        "outputs": ["output_video"]
+                    }
+                }
+            }
+        }
+    },
+    "meta": {
+        "special_types": {
+            "input_image": "IMAGE",
+            "input_audio": "AUDIO",
+            "latents": "TENSOR",
+            "output_video": "VIDEO"
+        },
+        "monitor": {
+            "subtask_created_timeout": 1800,
+            "subtask_pending_timeout": 1800,
+            "subtask_running_timeouts": {
+                "t2v-wan2.1-1.3B-multi_stage-dit": 300,
+                "t2v-wan2.1-1.3B-single_stage-pipeline": 300,
+                "i2v-wan2.1-14B-480P-multi_stage-dit": 600,
+                "i2v-wan2.1-14B-480P-single_stage-pipeline": 600,
+                "i2v-SekoTalk-Distill-single_stage-pipeline": 3600,
+                "i2v-SekoTalk-Distill-multi_stage-segment_dit": 3600
+            },
+            "worker_avg_window": 20,
+            "worker_offline_timeout": 5,
+            "worker_min_capacity": 20,
+            "worker_min_cnt": 1,
+            "worker_max_cnt": 10,
+            "task_timeout": 3600,
+            "schedule_ratio_high": 0.25,
+            "schedule_ratio_low": 0.02,
+            "ping_timeout": 30,
+            "user_max_active_tasks": 3,
+            "user_max_daily_tasks": 100,
+            "user_visit_frequency": 0.05
+        }
+    }
+}
