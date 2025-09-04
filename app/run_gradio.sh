@@ -46,7 +46,7 @@ gpu_id=0
 export CUDA_VISIBLE_DEVICES=$gpu_id
 export CUDA_LAUNCH_BLOCKING=1
 export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
-export ENABLE_PROFILING_DEBUG=true
+export PROFILING_DEBUG_LEVEL=2
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ==================== Parameter Parsing ====================

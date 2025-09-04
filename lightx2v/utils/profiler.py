@@ -12,7 +12,6 @@ from lightx2v.utils.envs import *
 class _ProfilingContext:
     def __init__(self, name):
         self.name = name
-        self.rank_info = ""
         if dist.is_initialized():
             self.rank_info = f"Rank {dist.get_rank()}"
         else:
@@ -80,5 +79,24 @@ class _NullContext:
         return func
 
 
-ProfilingContext = _ProfilingContext
-ProfilingContext4Debug = _ProfilingContext if CHECK_ENABLE_PROFILING_DEBUG() else _NullContext
+class _ProfilingContextL1(_ProfilingContext):
+    """Level 1 profiling context with Level1_Log prefix."""
+
+    def __init__(self, name):
+        super().__init__(f"Level1_Log {name}")
+
+
+class _ProfilingContextL2(_ProfilingContext):
+    """Level 2 profiling context with Level2_Log prefix."""
+
+    def __init__(self, name):
+        super().__init__(f"Level2_Log {name}")
+
+
+"""
+PROFILING_DEBUG_LEVEL=0: [Default] disable all profiling
+PROFILING_DEBUG_LEVEL=1: enable ProfilingContext4DebugL1
+PROFILING_DEBUG_LEVEL=2: enable ProfilingContext4DebugL1 and ProfilingContext4DebugL2
+"""
+ProfilingContext4DebugL1 = _ProfilingContextL1 if CHECK_PROFILING_DEBUG_LEVEL(1) else _NullContext  # if user >= 1, enable profiling
+ProfilingContext4DebugL2 = _ProfilingContextL2 if CHECK_PROFILING_DEBUG_LEVEL(2) else _NullContext  # if user >= 2, enable profiling

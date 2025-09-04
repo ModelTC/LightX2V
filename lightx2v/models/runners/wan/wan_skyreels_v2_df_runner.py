@@ -10,7 +10,7 @@ from loguru import logger
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.df.skyreels_v2_df_scheduler import WanSkyreelsV2DFScheduler
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -55,9 +55,9 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
     def run_input_encoder(self):
         image_encoder_output = None
         if os.path.isfile(self.config.image_path):
-            with ProfilingContext("Run Img Encoder"):
+            with ProfilingContext4DebugL2("Run Img Encoder"):
                 image_encoder_output = self.run_image_encoder(self.config, self.image_encoder, self.vae_model)
-        with ProfilingContext("Run Text Encoder"):
+        with ProfilingContext4DebugL2("Run Text Encoder"):
             text_encoder_output = self.run_text_encoder(self.config["prompt"], self.text_encoders, self.config, image_encoder_output)
         self.set_target_shape()
         self.inputs = {"text_encoder_output": text_encoder_output, "image_encoder_output": image_encoder_output}
@@ -107,13 +107,13 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
 
             for step_index in range(self.model.scheduler.infer_steps):
                 logger.info(f"==> step_index: {step_index + 1} / {self.model.scheduler.infer_steps}")
-                with ProfilingContext4Debug("step_pre"):
+                with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.step_pre(step_index=step_index)
 
-                with ProfilingContext4Debug("🚀 infer_main"):
+                with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs)
 
-                with ProfilingContext4Debug("step_post"):
+                with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
 
             videos = self.run_vae(self.model.scheduler.latents, self.model.scheduler.generator)

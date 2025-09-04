@@ -10,7 +10,7 @@ from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -32,7 +32,7 @@ class QwenImageRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
 
-    @ProfilingContext("Load models")
+    @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
@@ -69,7 +69,7 @@ class QwenImageRunner(DefaultRunner):
         else:
             assert NotImplementedError
 
-    @ProfilingContext("Run DiT")
+    @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
@@ -81,7 +81,7 @@ class QwenImageRunner(DefaultRunner):
         self.end_run()
         return latents, generator
 
-    @ProfilingContext("Run Encoders")
+    @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         text_encoder_output = self.run_text_encoder(prompt)
@@ -92,7 +92,7 @@ class QwenImageRunner(DefaultRunner):
             "image_encoder_output": None,
         }
 
-    @ProfilingContext("Run Encoders")
+    @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
         image = Image.open(self.config["image_path"])
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
@@ -125,20 +125,18 @@ class QwenImageRunner(DefaultRunner):
         return {"image_latents": image_latents}
 
     def run(self, total_steps=None):
-        from lightx2v.utils.profiler import ProfilingContext4Debug
-
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
         for step_index in range(total_steps):
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
-            with ProfilingContext4Debug("step_pre"):
+            with ProfilingContext4DebugL1("step_pre"):
                 self.model.scheduler.step_pre(step_index=step_index)
 
-            with ProfilingContext4Debug("🚀 infer_main"):
+            with ProfilingContext4DebugL1("🚀 infer_main"):
                 self.model.infer(self.inputs)
 
-            with ProfilingContext4Debug("step_post"):
+            with ProfilingContext4DebugL1("step_post"):
                 self.model.scheduler.step_post()
 
             if self.progress_callback:
@@ -181,7 +179,7 @@ class QwenImageRunner(DefaultRunner):
     def run_image_encoder(self):
         pass
 
-    @ProfilingContext("Load models")
+    @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
@@ -189,7 +187,7 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
-    @ProfilingContext("Run VAE Decoder")
+    @ProfilingContext4DebugL1("Run VAE Decoder")
     def _run_vae_decoder_local(self, latents, generator):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae()

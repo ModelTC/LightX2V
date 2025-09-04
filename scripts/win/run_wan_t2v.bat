@@ -27,7 +27,7 @@ if "%model_path%"=="" (
 :: 设置环境变量
 set TOKENIZERS_PARALLELISM=false
 set PYTHONPATH=%lightx2v_path%;%PYTHONPATH%
-set ENABLE_PROFILING_DEBUG=true
+set PROFILING_DEBUG_LEVEL=2
 set ENABLE_GRAPH_MODE=false
 set DTYPE=BF16
 

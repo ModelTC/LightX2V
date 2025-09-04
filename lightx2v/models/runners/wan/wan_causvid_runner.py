@@ -9,7 +9,7 @@ from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext4Debug
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -85,11 +85,11 @@ class WanCausVidRunner(WanRunner):
 
             if fragment_idx > 0:
                 logger.info("recompute the kv_cache ...")
-                with ProfilingContext4Debug("step_pre"):
+                with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.latents = self.model.scheduler.last_sample
                     self.model.scheduler.step_pre(step_index=self.model.scheduler.infer_steps - 1)
 
-                with ProfilingContext4Debug("🚀 infer_main"):
+                with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs, kv_start, kv_end)
 
                 kv_start += self.num_frame_per_block * self.frame_seq_length
@@ -105,13 +105,13 @@ class WanCausVidRunner(WanRunner):
                 for step_index in range(self.model.scheduler.infer_steps):
                     logger.info(f"==> step_index: {step_index + 1} / {self.model.scheduler.infer_steps}")
 
-                    with ProfilingContext4Debug("step_pre"):
+                    with ProfilingContext4DebugL1("step_pre"):
                         self.model.scheduler.step_pre(step_index=step_index)
 
-                    with ProfilingContext4Debug("🚀 infer_main"):
+                    with ProfilingContext4DebugL1("🚀 infer_main"):
                         self.model.infer(self.inputs, kv_start, kv_end)
 
-                    with ProfilingContext4Debug("step_post"):
+                    with ProfilingContext4DebugL1("step_post"):
                         self.model.scheduler.step_post()
 
                 kv_start += self.num_frame_per_block * self.frame_seq_length

@@ -9,7 +9,7 @@ from lightx2v.models.input_encoders.hf.vace.vace_processor import VaceVideoProce
 from lightx2v.models.networks.wan.vace_model import WanVaceModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -159,7 +159,7 @@ class WanVaceRunner(WanRunner):
         target_shape[0] = int(target_shape[0] / 2)
         self.config.target_shape = target_shape
 
-    @ProfilingContext("Run VAE Decoder")
+    @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
