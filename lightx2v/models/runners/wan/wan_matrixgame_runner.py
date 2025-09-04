@@ -12,7 +12,7 @@ from lightx2v.models.networks.wan.infer.matrixgame.conditions import Bench_actio
 from lightx2v.models.networks.wan.infer.matrixgame.wan_wrapper import WanDiffusionWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext4Debug
+from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 model_ckpt_path_map = {
@@ -134,10 +134,25 @@ class WanMatrixGameRunner(WanRunner):
         cond_concat = torch.cat([mask_cond[:, :4], img_cond], dim=1)
         return cond_concat
 
-    def load_text_encoder(self):
-        pass
+    def get_encoder_output_i2v(self, clip_encoder_out, vae_encoder_out):
+        image_encoder_output = {
+            "clip_encoder_out": clip_encoder_out,
+            "vae_encoder_out": vae_encoder_out,
+        }
+        return {
+            "image_encoder_output": image_encoder_output,
+        }
 
-    def run_text_encoder(self, prompt, img):
+    @ProfilingContext("Run Encoders")
+    def _run_input_encoder_local_i2v(self):
+        image = self.read_image_input(self.config["image_path"])
+        clip_encoder_out = self.run_image_encoder(image)
+        vae_encode_out = self.run_vae_encoder(image)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out)
+
+    def load_text_encoder(self):
         pass
 
     def run_pipeline(self, save_video=True):
