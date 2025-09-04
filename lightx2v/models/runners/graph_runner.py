@@ -1,6 +1,6 @@
 from loguru import logger
 
-from lightx2v.utils.profiler import ProfilingContext4Debug
+from lightx2v.utils.profiler import *
 
 
 class GraphRunner:
@@ -13,7 +13,7 @@ class GraphRunner:
         logger.info("🚀 Starting Model Compilation - Please wait, this may take a while... 🚀")
         logger.info("=" * 60)
 
-        with ProfilingContext4Debug("compile"):
+        with ProfilingContext4DebugL2("compile"):
             self.runner.run_step()
 
         logger.info("=" * 60)

@@ -45,7 +45,7 @@ set gpu_id=0
 REM ==================== Environment Variables Setup ====================
 set CUDA_VISIBLE_DEVICES=%gpu_id%
 set PYTHONPATH=%lightx2v_path%;%PYTHONPATH%
-set ENABLE_PROFILING_DEBUG=true
+set PROFILING_DEBUG_LEVEL=2
 set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 REM ==================== Parameter Parsing ====================

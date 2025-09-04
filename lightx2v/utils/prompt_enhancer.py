@@ -4,7 +4,7 @@ import torch
 from loguru import logger
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import *
 
 sys_prompt = """
 Transform the short prompt into a detailed video-generation caption using this structure:
@@ -40,7 +40,7 @@ class PromptEnhancer:
     def to_device(self, device):
         self.model = self.model.to(device)
 
-    @ProfilingContext("Run prompt enhancer")
+    @ProfilingContext4DebugL1("Run prompt enhancer")
     @torch.no_grad()
     def __call__(self, prompt):
         prompt = prompt.strip()

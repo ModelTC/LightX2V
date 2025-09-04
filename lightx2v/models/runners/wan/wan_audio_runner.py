@@ -25,7 +25,7 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext, ProfilingContext4Debug
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, save_to_video, vae_to_comfyui_image
 
@@ -368,7 +368,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             gc.collect()
         return vae_encoder_out
 
-    @ProfilingContext("Run Encoders")
+    @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_r2v_audio(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = self.read_image_input(self.config["image_path"])
@@ -410,7 +410,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.vae_encoder = self.load_vae_encoder()
 
         _, nframe, height, width = self.model.scheduler.latents.shape
-        with ProfilingContext4Debug("vae_encoder in init run segment"):
+        with ProfilingContext4DebugL1("vae_encoder in init run segment"):
             if self.config.model_cls == "wan2.2_audio":
                 if prev_video is not None:
                     prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
@@ -460,7 +460,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.cut_audio_list = []
         self.prev_video = None
 
-    @ProfilingContext4Debug("Init run segment")
+    @ProfilingContext4DebugL1("Init run segment")
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
@@ -485,7 +485,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if segment_idx > 0:
             self.model.scheduler.reset(self.inputs["previmg_encoder_output"])
 
-    @ProfilingContext4Debug("End run segment")
+    @ProfilingContext4DebugL1("End run segment")
     def end_run_segment(self):
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
@@ -575,7 +575,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             max_fail_count = 10
 
             while True:
-                with ProfilingContext4Debug(f"stream segment get audio segment {segment_idx}"):
+                with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
                     self.check_stop()
                     audio_array = self.va_reader.get_audio_segment(timeout=fetch_timeout)
                     if audio_array is None:
@@ -585,7 +585,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                             raise Exception(f"Failed to get audio chunk {fail_count} times, stop reader")
                         continue
 
-                with ProfilingContext4Debug(f"stream segment end2end {segment_idx}"):
+                with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
                     fail_count = 0
                     self.init_run_segment(segment_idx, audio_array)
                     latents = self.run_segment(total_steps=None)
@@ -603,7 +603,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 self.va_recorder.stop(wait=False)
                 self.va_recorder = None
 
-    @ProfilingContext4Debug("Process after vae decoder")
+    @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self, save_video=True):
         # Merge results
         gen_lvideo = torch.cat(self.gen_video_list, dim=2).float()
@@ -728,12 +728,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 
-    @ProfilingContext("Load models")
     def load_model(self):
         super().load_model()
-        self.audio_encoder = self.load_audio_encoder()
-        self.audio_adapter = self.load_audio_adapter()
-        self.model.set_audio_adapter(self.audio_adapter)
+        with ProfilingContext4DebugL2("Load audio encoder and adapter"):
+            self.audio_encoder = self.load_audio_encoder()
+            self.audio_adapter = self.load_audio_adapter()
+            self.model.set_audio_adapter(self.audio_adapter)
 
     def set_target_shape(self):
         """Set target shape for generation"""

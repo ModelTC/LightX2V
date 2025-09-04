@@ -10,7 +10,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 source ${lightx2v_path}/scripts/base/base.sh
 export DTYPE=FP16
 export SENSITIVE_LAYER_DTYPE=FP16
-export ENABLE_PROFILING_DEBUG=true
+export PROFILING_DEBUG_LEVEL=2
 export ENABLE_GRAPH_MODE=false
 
 echo "==============================================================================="
@@ -21,7 +21,7 @@ echo "model_path: ${model_path}"
 echo "-------------------------------------------------------------------------------"
 echo "Model Inference Data Type: ${DTYPE}"
 echo "Sensitive Layer Data Type: ${SENSITIVE_LAYER_DTYPE}"
-echo "Performance Profiling Debug Mode: ${ENABLE_PROFILING_DEBUG}"
+echo "Performance Profiling Debug Level: ${PROFILING_DEBUG_LEVEL}"
 echo "Graph Mode Optimization: ${ENABLE_GRAPH_MODE}"
 echo "==============================================================================="
 

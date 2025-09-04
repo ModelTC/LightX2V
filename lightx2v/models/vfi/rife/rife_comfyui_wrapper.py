@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 import torch
 from torch.nn import functional as F
 
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import *
 
 
 class RIFEWrapper:
@@ -25,12 +25,12 @@ class RIFEWrapper:
         from .train_log.RIFE_HDv3 import Model
 
         self.model = Model()
-        with ProfilingContext("Load RIFE model"):
+        with ProfilingContext4DebugL2("Load RIFE model"):
             self.model.load_model(model_path, -1)
             self.model.eval()
             self.model.device()
 
-    @ProfilingContext("Interpolate frames")
+    @ProfilingContext4DebugL2("Interpolate frames")
     def interpolate_frames(
         self,
         images: torch.Tensor,

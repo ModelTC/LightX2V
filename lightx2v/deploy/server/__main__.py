@@ -21,7 +21,7 @@ from lightx2v.deploy.server.auth import AuthManager
 from lightx2v.deploy.server.metrics import MetricMonitor
 from lightx2v.deploy.server.monitor import ServerMonitor, WorkerStatus
 from lightx2v.deploy.task_manager import LocalTaskManager, PostgresSQLTaskManager, TaskStatus
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import *
 from lightx2v.utils.service_utils import ProcessManager
 
 # =========================
@@ -679,7 +679,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
-    with ProfilingContext("Init Server Cost"):
+    with ProfilingContext4DebugL1("Init Server Cost"):
         model_pipelines = Pipeline(args.pipeline_json)
         auth_manager = AuthManager()
         if args.task_url.startswith("/"):

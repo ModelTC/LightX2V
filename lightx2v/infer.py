@@ -15,7 +15,7 @@ from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # 
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import ProfilingContext
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
@@ -103,7 +103,7 @@ def main():
 
     print_config(config)
 
-    with ProfilingContext("Total Cost"):
+    with ProfilingContext4DebugL1("Total Cost"):
         runner = init_runner(config)
         runner.run_pipeline()
 
