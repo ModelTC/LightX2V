@@ -1,0 +1,13 @@
+{
+    "num_frame_per_block": 3,
+    "timestep_shift": 5.0,
+    "denoising_step_list": [1000, 666, 333],
+    "warp_denoising_step": true,
+    "target_video_length": 81,
+    "seed": 42,
+    "use_image_encoder": true,
+    "num_output_frames": 150,
+    "context_noise": 0,
+    "mode": "universal",
+    "fps": 12
+}

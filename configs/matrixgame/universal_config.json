@@ -1,0 +1,49 @@
+{
+  "_class_name": "CausalWanModel",
+  "_diffusers_version": "0.35.0.dev0",
+  "action_config": {
+    "blocks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+    "enable_keyboard": true,
+    "enable_mouse": true,
+    "heads_num": 16,
+    "hidden_size": 128,
+    "img_hidden_size": 1536,
+    "keyboard_dim_in": 4,
+    "keyboard_hidden_dim": 1024,
+    "mouse_dim_in": 2,
+    "mouse_hidden_dim": 1024,
+    "mouse_qk_dim_list": [
+      8,
+      28,
+      28
+    ],
+    "patch_size": [
+      1,
+      2,
+      2
+    ],
+    "qk_norm": true,
+    "qkv_bias": false,
+    "rope_dim_list": [
+      8,
+      28,
+      28
+    ],
+    "rope_theta": 256,
+    "vae_time_compression_ratio": 4,
+    "windows_size": 3
+  },
+  "dim": 1536,
+  "eps": 1e-06,
+  "ffn_dim": 8960,
+  "freq_dim": 256,
+  "in_dim": 36,
+  "inject_sample_info": false,
+  "local_attn_size": 6,
+  "model_type": "i2v",
+  "num_heads": 12,
+  "num_layers": 30,
+  "out_dim": 16,
+  "sink_size": 0,
+  "text_len": 512
+}

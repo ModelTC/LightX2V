@@ -11,6 +11,7 @@ from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrixgame_runner import WanMatrixGameRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
@@ -49,6 +50,7 @@ def main():
             "wan2.1_vace",
             "cogvideox",
             "seko_talk",
+            "wan2.1_matrixgame",
             "wan2.2_moe",
             "wan2.2",
             "wan2.2_moe_audio",
