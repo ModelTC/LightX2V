@@ -435,12 +435,13 @@ class Wan22MoeRunner(WanRunner):
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]
                 strength = lora_config.get("strength", 1.0)
-                if "high" in lora_path:
+                base_name = os.path.basename(lora_path)
+                if base_name.startswith("high"):
                     lora_wrapper = WanLoraWrapper(high_noise_model)
                     lora_name = lora_wrapper.load_lora(lora_path)
                     lora_wrapper.apply_lora(lora_name, strength)
                     logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-                elif "low" in lora_path:
+                elif base_name.startswith("low"):
                     lora_wrapper = WanLoraWrapper(low_noise_model)
                     lora_name = lora_wrapper.load_lora(lora_path)
                     lora_wrapper.apply_lora(lora_name, strength)
