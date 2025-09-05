@@ -428,6 +428,26 @@ class Wan22MoeRunner(WanRunner):
             self.config,
             self.init_device,
         )
+
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
+
+            for lora_config in self.config.lora_configs:
+                lora_path = lora_config["path"]
+                strength = lora_config.get("strength", 1.0)
+                if "high" in lora_path:
+                    lora_wrapper = WanLoraWrapper(high_noise_model)
+                    lora_name = lora_wrapper.load_lora(lora_path)
+                    lora_wrapper.apply_lora(lora_name, strength)
+                    logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+                elif "low" in lora_path:
+                    lora_wrapper = WanLoraWrapper(low_noise_model)
+                    lora_name = lora_wrapper.load_lora(lora_path)
+                    lora_wrapper.apply_lora(lora_name, strength)
+                    logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+                else:
+                    raise ValueError(f"Unsupported LoRA path: {lora_path}")
+
         return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config.boundary)
 
 
