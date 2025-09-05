@@ -38,4 +38,8 @@ RUN git clone https://github.com/ModelTC/SageAttention.git
 
 RUN cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install --no-cache-dir -v -e .
 
+RUN git clone https://github.com/KONAKONA666/q8_kernels.git
+
+RUN cd q8_kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
+
 WORKDIR /workspace

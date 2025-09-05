@@ -1,7 +1,7 @@
 {
     "infer_steps": 4,
     "target_fps": 24,
-    "video_duration": 15,
+    "video_duration": 360,
     "audio_sr": 16000,
     "target_video_length": 121,
     "resize_mode": "adaptive",
