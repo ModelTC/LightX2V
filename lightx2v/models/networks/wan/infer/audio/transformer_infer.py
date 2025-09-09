@@ -15,7 +15,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         self.audio_adapter = audio_adapter
 
     @torch.no_grad()
-    def post_process(self, x, y, c_gate_msa, pre_infer_out, block_idx=0):
+    def post_process(self, x, y, c_gate_msa, pre_infer_out):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)
 
         x = self.modify_hidden_states(

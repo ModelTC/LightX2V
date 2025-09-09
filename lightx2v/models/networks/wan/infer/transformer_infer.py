@@ -83,12 +83,10 @@ class WanTransformerInfer(BaseTransformerInfer):
     def infer_without_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-            # for torch.compile
-            block_idx_tensor = torch.tensor(block_idx, device=x.device, dtype=torch.int32)
-            x = self.infer_block(blocks[block_idx], x, pre_infer_out, block_idx_tensor)
+            x = self.infer_block(blocks[block_idx], x, pre_infer_out)
         return x
 
-    def infer_block(self, block, x, pre_infer_out, block_idx=0):
+    def infer_block(self, block, x, pre_infer_out):
         if hasattr(block.compute_phases[0], "before_proj"):
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
 
@@ -107,7 +105,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         )
         x, attn_out = self.infer_cross_attn(block.compute_phases[1], x, pre_infer_out.context, y_out, gate_msa)
         y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
-        x = self.post_process(x, y, c_gate_msa, pre_infer_out, block_idx)
+        x = self.post_process(x, y, c_gate_msa, pre_infer_out)
 
         if hasattr(block.compute_phases[2], "after_proj"):
             pre_infer_out.adapter_output["hints"].append(block.compute_phases[2].after_proj.apply(x))
@@ -296,7 +294,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return y
 
-    def post_process(self, x, y, c_gate_msa, pre_infer_out, block_idx=0):
+    def post_process(self, x, y, c_gate_msa, pre_infer_out):
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y.to(self.sensitive_layer_dtype) * c_gate_msa.squeeze()
         else:
