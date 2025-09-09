@@ -38,7 +38,11 @@ def get_qk_lens_audio_range(
 
     if n_query_tokens == 0:
         q_lens = torch.ones(1, dtype=dtype, device=device)
-        return q_lens, torch.tensor(0, device=device), torch.tensor(1, device=device)
+        t0 = torch.tensor(0, device=device)
+        t1 = torch.tensor(1, device=device)
+        k_lens = torch.full((t1 - t0,), num_tokens_x4, dtype=dtype, device=device)
+        max_seqlen_q, max_seqlen_k = get_max_int(q_lens, k_lens)
+        return q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1
 
     idx0 = n_tokens_per_rank * sp_rank
 
@@ -61,7 +65,7 @@ def get_qk_lens_audio_range(
 
     k_lens = torch.full((t1 - t0,), num_tokens_x4, dtype=dtype, device=device)
 
-    # assert q_lens.shape == k_lens.shape
+    assert q_lens.shape == k_lens.shape
     max_seqlen_q, max_seqlen_k = get_max_int(q_lens, k_lens)
 
     return q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1
