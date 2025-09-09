@@ -9,7 +9,7 @@ class QwenImagePostWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
         self.task = config["task"]
-        self.config = config  
+        self.config = config
         if config["do_mm_calib"]:
             self.mm_type = "Calib"
         else:
@@ -19,7 +19,7 @@ class QwenImagePostWeights(WeightModule):
         if self.lazy_load:
             assert NotImplementedError
         self.lazy_load_file = False
-        
+
         # norm_out
         self.add_module(
             "norm_out_linear",
@@ -30,11 +30,8 @@ class QwenImagePostWeights(WeightModule):
                 self.lazy_load_file,
             ),
         )
-        self.add_module(
-            "norm_out",
-            LN_WEIGHT_REGISTER["Default"](eps=1e-6)
-        )
-        
+        self.add_module("norm_out", LN_WEIGHT_REGISTER["Default"](eps=1e-6))
+
         # proj_out
         self.add_module(
             "proj_out_linear",
