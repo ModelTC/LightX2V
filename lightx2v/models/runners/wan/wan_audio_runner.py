@@ -71,14 +71,25 @@ def get_crop_bbox(ori_h, ori_w, tgt_h, tgt_w):
 
 def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
     """
-    frames: (T, C, H, W)
+    frames: (C, H, W) or (T, C, H, W) or (N, C, H, W)
     size: (H, W)
     """
+    original_shape = frames.shape
+
+    if len(frames.shape) == 3:
+        frames = frames.unsqueeze(0)
+    elif len(frames.shape) == 4 and frames.shape[0] > 1:
+        pass
+
     ori_h, ori_w = frames.shape[2:]
     h, w = size
     y0, y1, x0, x1 = get_crop_bbox(ori_h, ori_w, h, w)
     cropped_frames = frames[:, :, y0:y1, x0:x1]
     resized_frames = resize(cropped_frames, [h, w], InterpolationMode.BICUBIC, antialias=True)
+
+    if len(original_shape) == 3:
+        resized_frames = resized_frames.squeeze(0)
+
     return resized_frames
 
 
@@ -104,7 +115,7 @@ def fixed_shape_resize(img, target_height, target_width):
 
 
 def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None, fixed_shape=None):
-    assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape"]
+    assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape", "fixed_min_side"]
 
     if resize_mode == "fixed_shape":
         assert fixed_shape is not None
@@ -158,6 +169,16 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
         closet_ratio = aspect_ratios[closet_aspect_idx]
         target_h, target_w = bucket_config[closet_ratio][0]
+    elif resize_mode == "fixed_min_side":
+        assert fixed_area in ["480p", "720p"], f"fixed_min_side mode requires fixed_area to be '480p' or '720p', got {fixed_area}"
+
+        min_side = 720 if fixed_area == "720p" else 480
+        if ori_ratio < 1.0:
+            target_h = min_side
+            target_w = round(target_h / ori_ratio)
+        else:
+            target_w = min_side
+            target_h = round(target_w * ori_ratio)
     elif resize_mode == "fixed_max_area":
         aspect_ratios = np.array(np.array(list(bucket_config.keys())))
         closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
