@@ -49,3 +49,62 @@
     "prompt_template_encode_start_idx": 64,
     "_auto_resize": true
 }
+{
+    "seed": 42,
+    "batchsize": 1,
+    "num_channels_latents": 16,
+    "vae_scale_factor": 8,
+    "infer_steps": 50,
+    "guidance_embeds": false,
+    "num_images_per_prompt": 1,
+    "vae_latents_mean": [
+        -0.7571,
+        -0.7089,
+        -0.9113,
+        0.1075,
+        -0.1745,
+        0.9653,
+        -0.1517,
+        1.5508,
+        0.4134,
+        -0.0715,
+        0.5517,
+        -0.3632,
+        -0.1922,
+        -0.9497,
+        0.2503,
+        -0.2921
+      ],
+    "vae_latents_std": [
+        2.8184,
+        1.4541,
+        2.3275,
+        2.6558,
+        1.2196,
+        1.7708,
+        2.6052,
+        2.0743,
+        3.2687,
+        2.1526,
+        2.8652,
+        1.5579,
+        1.6382,
+        1.1253,
+        2.8251,
+        1.916
+    ],
+    "vae_z_dim": 16,
+    "feature_caching": "NoCaching",
+    "transformer_in_channels": 64,
+    "prompt_template_encode": "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 64,
+    "_auto_resize": true,
+    "num_layers": 60,
+    "attention_out_dim": 3072,
+    "attention_dim_head": 128,
+    "axes_dims_rope": [
+        16,
+        56,
+        56
+    ]
+}

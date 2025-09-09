@@ -57,5 +57,13 @@
     "prompt_template_encode_start_idx": 34,
     "_auto_resize": false,
     "cpu_offload": true,
-    "offload_granularity": "block"
+    "offload_granularity": "block",
+    "num_layers": 60,
+    "attention_out_dim": 3072,
+    "attention_dim_head": 128,
+    "axes_dims_rope": [
+        16,
+        56,
+        56
+    ]
 }
