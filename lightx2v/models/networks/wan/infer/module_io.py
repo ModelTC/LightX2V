@@ -5,9 +5,15 @@ import torch
 
 
 @dataclass
+class GridOutput:
+    tensor: torch.Tensor
+    tuple: tuple
+
+
+@dataclass
 class WanPreInferModuleOutput:
     embed: torch.Tensor
-    grid_sizes: torch.Tensor
+    grid_sizes: GridOutput
     x: torch.Tensor
     embed0: torch.Tensor
     seq_lens: torch.Tensor

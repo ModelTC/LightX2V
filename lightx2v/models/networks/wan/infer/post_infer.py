@@ -15,7 +15,7 @@ class WanPostInfer:
         self.scheduler = scheduler
 
     def infer(self, x, pre_infer_out):
-        x = self.unpatchify(x, pre_infer_out.grid_sizes)
+        x = self.unpatchify(x, pre_infer_out.grid_sizes.tuple)
 
         if self.clean_cuda_cache:
             torch.cuda.empty_cache()
@@ -23,12 +23,8 @@ class WanPostInfer:
         return [u.float() for u in x]
 
     def unpatchify(self, x, grid_sizes):
-        x = x.unsqueeze(0)
         c = self.out_dim
-        out = []
-        for u, v in zip(x, grid_sizes.tolist()):
-            u = u[: math.prod(v)].view(*v, *self.patch_size, c)
-            u = torch.einsum("fhwpqrc->cfphqwr", u)
-            u = u.reshape(c, *[i * j for i, j in zip(v, self.patch_size)])
-            out.append(u)
-        return out
+        x = x[: math.prod(grid_sizes)].view(*grid_sizes, *self.patch_size, c)
+        x = torch.einsum("fhwpqrc->cfphqwr", x)
+        x = x.reshape(c, *[i * j for i, j in zip(grid_sizes, self.patch_size)])
+        return [x]

@@ -2,7 +2,7 @@ import torch
 
 from lightx2v.utils.envs import *
 
-from .module_io import WanPreInferModuleOutput
+from .module_io import GridOutput, WanPreInferModuleOutput
 from .utils import guidance_scale_embedding, rope_params, sinusoidal_embedding_1d
 
 
@@ -61,13 +61,13 @@ class WanPreInfer:
 
         # embeddings
         x = weights.patch_embedding.apply(x.unsqueeze(0))
-        grid_sizes = torch.tensor(x.shape[2:], dtype=torch.long).unsqueeze(0)
+        grid_sizes = torch.tensor(x.shape[2:], dtype=torch.int32, device=x.device).unsqueeze(0)
         x = x.flatten(2).transpose(1, 2).contiguous()
-        seq_lens = torch.tensor(x.size(1), dtype=torch.long).cuda().unsqueeze(0)
+        seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
         if self.enable_dynamic_cfg:
-            s = torch.tensor([self.cfg_scale], dtype=torch.float32).to(x.device)
+            s = torch.tensor([self.cfg_scale], dtype=torch.float32, device=x.device)
             cfg_embed = guidance_scale_embedding(s, embedding_dim=256, cfg_range=(1.0, 6.0), target_range=1000.0, dtype=torch.float32).type_as(x)
             cfg_embed = weights.cfg_cond_proj_1.apply(cfg_embed)
             cfg_embed = torch.nn.functional.silu(cfg_embed)
@@ -117,6 +117,7 @@ class WanPreInfer:
                 del context_clip
             torch.cuda.empty_cache()
 
+        grid_sizes = GridOutput(tensor=grid_sizes, tuple=(grid_sizes[0][0].item(), grid_sizes[0][1].item(), grid_sizes[0][2].item()))
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,

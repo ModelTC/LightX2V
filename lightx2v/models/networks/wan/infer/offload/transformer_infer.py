@@ -188,7 +188,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             ) = self.pre_process(cur_phase.modulation, pre_infer_out.embed0)
             self.phase_params["y_out"] = self.infer_self_attn(
                 cur_phase,
-                pre_infer_out.grid_sizes,
+                pre_infer_out.grid_sizes.tuple,
                 x,
                 pre_infer_out.seq_lens,
                 pre_infer_out.freqs,
