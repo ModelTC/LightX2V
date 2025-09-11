@@ -75,8 +75,6 @@ class QwenImageRunner(DefaultRunner):
             self.model = self.load_transformer()
         self.init_scheduler()
         self.model.scheduler.prepare(self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
-            self.inputs["image_encoder_output"]["vae_encoder_out"] = None
         latents, generator = self.run(total_steps)
         self.end_run()
         return latents, generator

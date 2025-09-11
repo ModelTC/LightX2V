@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 from typing import Optional
@@ -27,15 +28,23 @@ def retrieve_latents(encoder_output: torch.Tensor, generator: Optional[torch.Gen
 class AutoencoderKLQwenImageVAE:
     def __init__(self, config):
         self.config = config
-        self.model = AutoencoderKLQwenImage.from_pretrained(os.path.join(config.model_path, "vae")).to(torch.device("cuda")).to(torch.bfloat16)
-        self.image_processor = VaeImageProcessor(vae_scale_factor=config.vae_scale_factor * 2)
-        with open(os.path.join(config.model_path, "vae", "config.json"), "r") as f:
+
+        self.cpu_offload = config.get("cpu_offload", False)
+        if self.cpu_offload:
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device("cuda")
+        self.dtype = torch.bfloat16
+        self.latent_channels = config.vae_z_dim
+        self.load()
+
+    def load(self):
+        self.model = AutoencoderKLQwenImage.from_pretrained(os.path.join(self.config.model_path, "vae")).to(self.device).to(self.dtype)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.config.vae_scale_factor * 2)
+        with open(os.path.join(self.config.model_path, "vae", "config.json"), "r") as f:
             vae_config = json.load(f)
             self.vae_scale_factor = 2 ** len(vae_config["temperal_downsample"]) if "temperal_downsample" in vae_config else 8
-            self.generator = torch.Generator(device="cuda").manual_seed(config.seed)
-        self.dtype = torch.bfloat16
-        self.device = torch.device("cuda")
-        self.latent_channels = config.vae_z_dim
+            self.generator = torch.Generator(device="cuda").manual_seed(self.config.seed)
 
     @staticmethod
     def _unpack_latents(latents, height, width, vae_scale_factor):
@@ -55,6 +64,8 @@ class AutoencoderKLQwenImageVAE:
 
     @torch.no_grad()
     def decode(self, latents):
+        if self.cpu_offload:
+            self.model.to(torch.device("cuda"))
         if self.config.task == "t2i":
             width, height = self.config.aspect_ratios[self.config.aspect_ratio]
         elif self.config.task == "i2i":
@@ -66,6 +77,10 @@ class AutoencoderKLQwenImageVAE:
         latents = latents / latents_std + latents_mean
         images = self.model.decode(latents, return_dict=False)[0][:, :, 0]
         images = self.image_processor.postprocess(images, output_type="pil")
+        if self.cpu_offload:
+            self.model.to(torch.device("cpu"))
+            torch.cuda.empty_cache()
+            gc.collect()
         return images
 
     @staticmethod
@@ -88,9 +103,12 @@ class AutoencoderKLQwenImageVAE:
 
         return image_latents
 
+    @torch.no_grad()
     def encode_vae_image(self, image):
+        if self.cpu_offload:
+            self.model.to(torch.device("cuda"))
         num_channels_latents = self.config.transformer_in_channels // 4
-        image = image.to(self.device).to(self.dtype)
+        image = image.to(self.model.device).to(self.dtype)
         if image.shape[1] != self.latent_channels:
             image_latents = self._encode_vae_image(image=image, generator=self.generator)
         else:
@@ -106,4 +124,8 @@ class AutoencoderKLQwenImageVAE:
 
         image_latent_height, image_latent_width = image_latents.shape[3:]
         image_latents = self._pack_latents(image_latents, self.config.batchsize, num_channels_latents, image_latent_height, image_latent_width)
+        if self.cpu_offload:
+            self.model.to(torch.device("cpu"))
+            torch.cuda.empty_cache()
+            gc.collect()
         return image_latents

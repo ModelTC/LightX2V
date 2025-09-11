@@ -1,3 +1,4 @@
+import gc
 import math
 import os
 
@@ -45,19 +46,25 @@ def calculate_dimensions(target_area, ratio):
 class Qwen25_VLForConditionalGeneration_TextEncoder:
     def __init__(self, config):
         self.config = config
-        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(config.model_path, "text_encoder")).to(torch.device("cuda")).to(torch.bfloat16)
-        self.tokenizer = Qwen2Tokenizer.from_pretrained(os.path.join(config.model_path, "tokenizer"))
-
         self.tokenizer_max_length = 1024
         self.prompt_template_encode = config.prompt_template_encode
         self.prompt_template_encode_start_idx = config.prompt_template_encode_start_idx
 
-        if config.task == "i2i":
-            self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
-            self.processor = Qwen2VLProcessor.from_pretrained(os.path.join(config.model_path, "processor"))
-
-        self.device = torch.device("cuda")
+        self.cpu_offload = config.get("cpu_offload", False)
+        if self.cpu_offload:
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device("cuda")
         self.dtype = torch.bfloat16
+
+        self.load()
+
+    def load(self):
+        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config.model_path, "text_encoder")).to(self.device).to(self.dtype)
+        self.tokenizer = Qwen2Tokenizer.from_pretrained(os.path.join(self.config.model_path, "tokenizer"))
+        if self.config.task == "i2i":
+            self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
+            self.processor = Qwen2VLProcessor.from_pretrained(os.path.join(self.config.model_path, "processor"))
 
     def _extract_masked_hidden(self, hidden_states: torch.Tensor, mask: torch.Tensor):
         bool_mask = mask.bool()
@@ -92,7 +99,11 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             image = image.unsqueeze(2)
         return prompt_image, image, (image_height, image_width)
 
+    @torch.no_grad()
     def infer(self, text, image=None):
+        if self.cpu_offload:
+            self.text_encoder.to(torch.device("cuda"))
+
         template = self.prompt_template_encode
         drop_idx = self.prompt_template_encode_start_idx
         txt = [template.format(e) for e in text]
@@ -104,7 +115,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
                 images=prompt_image,
                 padding=True,
                 return_tensors="pt",
-            ).to(self.device)
+            ).to(torch.device("cuda"))
             encoder_hidden_states = self.text_encoder(
                 input_ids=model_inputs.input_ids,
                 attention_mask=model_inputs.attention_mask,
@@ -114,7 +125,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             )
         else:
             prompt_image, image, image_info = None, None, None
-            model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(self.device)
+            model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(torch.device("cuda"))
             encoder_hidden_states = self.text_encoder(
                 input_ids=model_inputs.input_ids,
                 attention_mask=model_inputs.attention_mask,
@@ -129,7 +140,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states])
         encoder_attention_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list])
 
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.device)
+        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=torch.device("cuda"))
         prompt_embeds_mask = encoder_attention_mask
 
         _, seq_len, _ = prompt_embeds.shape
@@ -137,4 +148,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds = prompt_embeds.view(self.config.batchsize * self.config.num_images_per_prompt, seq_len, -1)
         prompt_embeds_mask = prompt_embeds_mask.repeat(1, self.config.num_images_per_prompt, 1)
         prompt_embeds_mask = prompt_embeds_mask.view(self.config.batchsize * self.config.num_images_per_prompt, seq_len)
+
+        if self.cpu_offload:
+            self.text_encoder.to(torch.device("cpu"))
+            torch.cuda.empty_cache()
+            gc.collect()
+
         return prompt_embeds, prompt_embeds_mask, image, image_info
