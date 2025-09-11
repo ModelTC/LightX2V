@@ -96,7 +96,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         )
         y_out = self.infer_self_attn(
             block.compute_phases[0],
-            pre_infer_out.grid_sizes,
+            pre_infer_out.grid_sizes.tuple,
             x,
             pre_infer_out.seq_lens,
             pre_infer_out.freqs,

@@ -6,7 +6,7 @@ from lightx2v.utils.envs import *
 
 def compute_freqs(c, grid_sizes, freqs):
     freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    f, h, w = grid_sizes[0]
+    f, h, w = grid_sizes
     seq_len = f * h * w
     freqs_i = torch.cat(
         [
@@ -24,7 +24,7 @@ def compute_freqs_dist(s, c, grid_sizes, freqs, seq_p_group):
     world_size = dist.get_world_size(seq_p_group)
     cur_rank = dist.get_rank(seq_p_group)
     freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    f, h, w = grid_sizes[0]
+    f, h, w = grid_sizes
     seq_len = f * h * w
     freqs_i = torch.cat(
         [
@@ -43,7 +43,7 @@ def compute_freqs_dist(s, c, grid_sizes, freqs, seq_p_group):
 
 def compute_freqs_causvid(c, grid_sizes, freqs, start_frame=0):
     freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    f, h, w = grid_sizes[0]
+    f, h, w = grid_sizes
     seq_len = f * h * w
     freqs_i = torch.cat(
         [

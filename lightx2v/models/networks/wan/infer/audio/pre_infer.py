@@ -3,7 +3,7 @@ import torch
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
 
-from ..module_io import WanPreInferModuleOutput
+from ..module_io import GridOutput, WanPreInferModuleOutput
 from ..utils import rope_params, sinusoidal_embedding_1d
 
 
@@ -61,9 +61,9 @@ class WanAudioPreInfer(WanPreInfer):
 
         # embeddings
         x = weights.patch_embedding.apply(x.unsqueeze(0))
-        grid_sizes = torch.tensor(x.shape[2:], dtype=torch.long).unsqueeze(0)
+        grid_sizes = torch.tensor(x.shape[2:], dtype=torch.int32, device=x.device).unsqueeze(0)
         x = x.flatten(2).transpose(1, 2).contiguous()
-        seq_lens = torch.tensor(x.size(1), dtype=torch.long).cuda().unsqueeze(0)
+        seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
 
         y = weights.patch_embedding.apply(y.unsqueeze(0))
         y = y.flatten(2).transpose(1, 2).contiguous()
@@ -114,6 +114,7 @@ class WanAudioPreInfer(WanPreInfer):
                 del context_clip
             torch.cuda.empty_cache()
 
+        grid_sizes = GridOutput(tensor=grid_sizes, tuple=(grid_sizes[0][0].item(), grid_sizes[0][1].item(), grid_sizes[0][2].item()))
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
