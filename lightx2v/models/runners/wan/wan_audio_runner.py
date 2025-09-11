@@ -745,7 +745,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             model_name = "audio_adapter_model.safetensors"
 
-        weights_dict = load_weights(os.path.join(self.config["model_path"], model_name), cpu_offload=audio_adapter_offload)
+        weights_dict = load_weights(os.path.join(self.config["model_path"], model_name), cpu_offload=audio_adapter_offload, remove_key="ca")
         audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 
@@ -754,7 +754,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         with ProfilingContext4DebugL2("Load audio encoder and adapter"):
             self.audio_encoder = self.load_audio_encoder()
             self.audio_adapter = self.load_audio_adapter()
-            self.model.set_audio_adapter(self.audio_adapter)
 
     def set_target_shape(self):
         """Set target shape for generation"""

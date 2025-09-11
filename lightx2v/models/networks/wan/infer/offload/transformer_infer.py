@@ -212,6 +212,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.phase_params["c_scale_msa"],
             )
             x = self.post_process(
+                cur_phase,
                 x,
                 self.phase_params["y"],
                 self.phase_params["c_gate_msa"],

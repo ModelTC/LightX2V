@@ -2,17 +2,15 @@ from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfe
 from lightx2v.models.networks.wan.infer.audio.pre_infer import WanAudioPreInfer
 from lightx2v.models.networks.wan.infer.audio.transformer_infer import WanAudioTransformerInfer
 from lightx2v.models.networks.wan.model import WanModel
+from lightx2v.models.networks.wan.weights.audio.transformer_weights import WanAudioTransformerWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
-from lightx2v.models.networks.wan.weights.transformer_weights import (
-    WanTransformerWeights,
-)
 
 
 class WanAudioModel(WanModel):
     pre_weight_class = WanPreWeights
     post_weight_class = WanPostWeights
-    transformer_weight_class = WanTransformerWeights
+    transformer_weight_class = WanAudioTransformerWeights
 
     def __init__(self, model_path, config, device):
         super().__init__(model_path, config, device)
@@ -22,7 +20,3 @@ class WanAudioModel(WanModel):
         self.pre_infer_class = WanAudioPreInfer
         self.post_infer_class = WanAudioPostInfer
         self.transformer_infer_class = WanAudioTransformerInfer
-
-    def set_audio_adapter(self, audio_adapter):
-        self.audio_adapter = audio_adapter
-        self.transformer_infer.set_audio_adapter(self.audio_adapter)

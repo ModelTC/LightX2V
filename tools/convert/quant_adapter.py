@@ -4,7 +4,7 @@ from safetensors.torch import save_file
 
 from lightx2v.utils.quant_utils import FloatQuantizer
 
-model_path = "/data/nvme0/models/Wan2.1-R2V721-Audio-14B-720P/audio_adapter_model.safetensors"
+model_path = "/data/nvme0/models/SekoTalk-Distill/audio_adapter_model.safetensors"
 
 state_dict = {}
 with safetensors.safe_open(model_path, framework="pt", device="cpu") as f:
@@ -13,10 +13,10 @@ with safetensors.safe_open(model_path, framework="pt", device="cpu") as f:
 
 
 new_state_dict = {}
-new_model_path = "/data/nvme0/models/Wan2.1-R2V721-Audio-14B-720P/audio_adapter_model_fp8.safetensors"
+new_model_path = "/data/nvme0/models/SekoTalk-Distill-fp8/audio_adapter_model_fp8.safetensors"
 
 for key in state_dict.keys():
-    if key.startswith("ca") and ".to" in key and "weight" in key and "to_kv" not in key:
+    if key.startswith("ca") and ".to" in key and "weight" in key:
         print(key, state_dict[key].dtype)
 
         weight = state_dict[key].to(torch.float32).cuda()

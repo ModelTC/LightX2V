@@ -94,6 +94,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
+                Placeholder(),  # put some adapter weights here
             ]
         )
 
@@ -367,3 +368,8 @@ class WanFFN(WeightModule):
                     self.lazy_load_file,
                 ),
             )
+
+
+class Placeholder(WeightModule):
+    def __init__(self):
+        super().__init__()
