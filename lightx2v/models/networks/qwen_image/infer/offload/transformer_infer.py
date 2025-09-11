@@ -5,9 +5,10 @@ from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImag
 
 
 class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
-    def __init__(self, config, blocks):
-        super().__init__(config, blocks)
+    def __init__(self, config):
+        super().__init__(config)
         self.phases_num = 3
+        self.num_blocks = config["num_layers"]
         if self.config.get("cpu_offload", False):
             if "offload_ratio" in self.config:
                 self.offload_ratio = self.config["offload_ratio"]
@@ -25,23 +26,23 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 assert NotImplementedError
 
             if offload_granularity != "model":
-                self.weights_stream_mgr = WeightAsyncStreamManager(blocks_num=len(self.blocks), offload_ratio=self.offload_ratio, phases_num=self.phases_num)
+                self.weights_stream_mgr = WeightAsyncStreamManager(blocks_num=self.num_blocks, offload_ratio=self.offload_ratio, phases_num=self.phases_num)
             else:
                 assert NotImplementedError
 
-    def infer_with_blocks_offload(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs):
-        for block_idx in range(len(self.blocks)):
+    def infer_with_blocks_offload(self, block_weights, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, temb, image_rotary_emb, attention_kwargs):
+        for block_idx in range(self.num_blocks):
             self.block_idx = block_idx
             if block_idx == 0:
-                self.weights_stream_mgr.active_weights[0] = self.blocks[0]
+                self.weights_stream_mgr.active_weights[0] = block_weights.blocks[0]
                 self.weights_stream_mgr.active_weights[0].to_cuda()
 
-            if block_idx < len(self.blocks) - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, self.blocks)
+            if block_idx < self.num_blocks - 1:
+                self.weights_stream_mgr.prefetch_weights(block_idx + 1, block_weights.blocks)
 
             with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
                 encoder_hidden_states, hidden_states = self.infer_block(
-                    block=self.blocks[block_idx],
+                    block_weight=block_weights.blocks[block_idx],
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_hidden_states_mask=encoder_hidden_states_mask,
@@ -49,6 +50,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                     image_rotary_emb=image_rotary_emb,
                     joint_attention_kwargs=attention_kwargs,
                 )
+
             self.weights_stream_mgr.swap_weights()
 
         return encoder_hidden_states, hidden_states
