@@ -4,6 +4,7 @@
     "num_channels_latents": 16,
     "vae_scale_factor": 8,
     "infer_steps": 50,
+    "num_laysers": 60,
     "guidance_embeds": false,
     "num_images_per_prompt": 1,
     "vae_latents_mean": [

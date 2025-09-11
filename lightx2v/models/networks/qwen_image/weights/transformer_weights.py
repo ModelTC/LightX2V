@@ -104,7 +104,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
             lazy_load_file=self.lazy_load_file,
         )
         self.add_module("txt_mlp", txt_mlp)
-        
+
         self.cpu_offload = config["cpu_offload"]
         if self.cpu_offload:
             offload_granularity = config.get("offload_granularity", "block")
@@ -115,23 +115,21 @@ class QwenImageTransformerAttentionBlock(WeightModule):
                     "img_norm1": self.img_norm1,
                     "txt_norm1": self.txt_norm1,
                 }
-                phase2_dict = {
-                    "attn": self.attn
-                }
+                phase2_dict = {"attn": self.attn}
                 phase3_dict = {
                     "img_norm2": self.img_norm2,
                     "img_mlp": self.img_mlp,
                     "txt_norm2": self.txt_norm2,
                     "txt_mlp": self.txt_mlp,
                 }
-                
+
                 compute_phases = [
                     ComputePhase(phase1_dict),
                     ComputePhase(phase2_dict),
                     ComputePhase(phase3_dict),
                 ]
                 self.add_module("compute_phases", compute_phases)
-            
+
 
 class QwenImageCrossAttention(WeightModule):
     def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
@@ -308,7 +306,7 @@ class ComputePhase(WeightModule):
         super().__init__()
         for k, v in sub_module_dict.items():
             self.add_module(k, v)
-    
+
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cpu"):

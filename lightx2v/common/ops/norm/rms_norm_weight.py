@@ -119,3 +119,20 @@ class RMSWeightSgl(RMSWeight):
                 input_tensor = input_tensor * self.weight
 
         return input_tensor
+
+
+@RMS_WEIGHT_REGISTER("fp32_variance")
+class RMSWeightFP32(RMSWeight):
+    def __init__(self, weight_name, lazy_load=False, lazy_load_file=None, eps=1e-6):
+        super().__init__(weight_name, lazy_load, lazy_load_file, eps)
+
+    def apply(self, input_tensor):
+        input_dtype = input_tensor.dtype
+        variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
+
+        if self.weight is not None:
+            hidden_states = hidden_states * self.weight
+        hidden_states = hidden_states.to(input_dtype)
+
+        return hidden_states
