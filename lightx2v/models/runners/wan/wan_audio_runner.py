@@ -734,7 +734,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
         )
-        
+
         audio_adapter.to(device)
         weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=audio_adapter_offload, remove_key="ca")
         audio_adapter.load_state_dict(weights_dict, strict=False)

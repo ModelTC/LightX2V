@@ -239,7 +239,7 @@ class WanModel:
 
             if self.config.get("device_mesh") is not None:
                 weight_dict = self._load_weights_distribute(weight_dict, is_weight_loader)
-            
+
             if hasattr(self, "adapter_weights_dict"):
                 weight_dict.update(self.adapter_weights_dict)
 

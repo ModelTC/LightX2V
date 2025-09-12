@@ -682,7 +682,7 @@ def main():
             "wan_dit": {
                 "key_idx": 2,
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
-                "ignore_key": ['ca', "audio"],
+                "ignore_key": ["ca", "audio"],
             },
             "hunyuan_dit": {
                 "key_idx": 2,

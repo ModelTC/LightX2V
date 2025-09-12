@@ -1,5 +1,7 @@
 import os
+
 import torch.distributed as dist
+
 from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
 from lightx2v.models.networks.wan.infer.audio.pre_infer import WanAudioPreInfer
 from lightx2v.models.networks.wan.infer.audio.transformer_infer import WanAudioTransformerInfer
@@ -18,7 +20,7 @@ class WanAudioModel(WanModel):
     def __init__(self, model_path, config, device):
         self.config = config
         self._load_adapter_ckpt()
-        super().__init__(model_path, config, device)  
+        super().__init__(model_path, config, device)
 
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
@@ -44,4 +46,3 @@ class WanAudioModel(WanModel):
         self.pre_infer_class = WanAudioPreInfer
         self.post_infer_class = WanAudioPostInfer
         self.transformer_infer_class = WanAudioTransformerInfer
-
