@@ -175,6 +175,10 @@ class WeightModuleList(WeightModule):
     def __getitem__(self, idx):
         return self._list[idx]
 
+    def __setitem__(self, idx, module):
+        self._list[idx] = module
+        self.add_module(str(idx), module)
+
     def __len__(self):
         return len(self._list)
 

@@ -2,15 +2,12 @@ try:
     import flash_attn
 except ModuleNotFoundError:
     flash_attn = None
-import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from einops import rearrange
-
-from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
 
 
 def linear_interpolation(features, output_len: int):
@@ -84,16 +81,17 @@ def calculate_n_query_tokens(hidden_states, sp_rank, sp_size, n_tokens_per_rank,
         n_query_tokens = n_tokens_per_rank
 
     if n_query_tokens > 0:
-        hidden_states_aligned = hidden_states[:, :n_query_tokens]
-        hidden_states_tail = hidden_states[:, n_query_tokens:]
+        hidden_states_aligned = hidden_states[:n_query_tokens]
+        hidden_states_tail = hidden_states[n_query_tokens:]
     else:
         # for ranks that should be excluded from cross-attn, fake cross-attn will be applied so that FSDP works.
-        hidden_states_aligned = hidden_states[:, :1]
-        hidden_states_tail = hidden_states[:, 1:]
+        hidden_states_aligned = hidden_states[:1]
+        hidden_states_tail = hidden_states[1:]
 
     return n_query_tokens, hidden_states_aligned, hidden_states_tail
 
 
+'''
 class PerceiverAttentionCA(nn.Module):
     def __init__(self, dim_head=128, heads=16, kv_dim=2048, adaLN: bool = False, quantized=False, quant_scheme=None):
         super().__init__()
@@ -156,6 +154,7 @@ class PerceiverAttentionCA(nn.Module):
         )
         out = rearrange(out, "(B L) H C -> B L (H C)", B=batchsize)
         return self.to_out(out) * gate
+'''
 
 
 class AudioProjection(nn.Module):
@@ -258,9 +257,10 @@ class AudioAdapter(nn.Module):
         # self.num_tokens = num_tokens * 4
         self.num_tokens_x4 = num_tokens * 4
         self.audio_pe = nn.Parameter(torch.randn(self.num_tokens_x4, mlp_dims[-1] // num_tokens) * 0.02)
-        ca_num = math.ceil(base_num_layers / interval)
+        # ca_num = math.ceil(base_num_layers / interval)
         self.base_num_layers = base_num_layers
         self.interval = interval
+        """
         self.ca = nn.ModuleList(
             [
                 PerceiverAttentionCA(
@@ -274,6 +274,7 @@ class AudioAdapter(nn.Module):
                 for _ in range(ca_num)
             ]
         )
+        """
         self.dim = attention_head_dim * num_attention_heads
         if time_freq_dim > 0:
             self.time_embedding = TimeEmbedding(self.dim, time_freq_dim, self.dim * 3)
