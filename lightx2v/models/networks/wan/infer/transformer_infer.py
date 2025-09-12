@@ -15,6 +15,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.attention_type = config.get("attention_type", "flash_attn2")
         self.blocks_num = config.num_layers
         self.phases_num = 3
+        self.has_post_adapter = False
         self.num_heads = config.num_heads
         self.head_dim = config.dim // config.num_heads
         self.window_size = config.get("window_size", (-1, -1))
@@ -105,10 +106,10 @@ class WanTransformerInfer(BaseTransformerInfer):
         )
         x, attn_out = self.infer_cross_attn(block.compute_phases[1], x, pre_infer_out.context, y_out, gate_msa)
         y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
-        x = self.post_process(block.compute_phases[3], x, y, c_gate_msa, pre_infer_out)
+        x = self.post_process(x, y, c_gate_msa)
 
-        if hasattr(block.compute_phases[2], "after_proj"):
-            pre_infer_out.adapter_output["hints"].append(block.compute_phases[2].after_proj.apply(x))
+        if self.has_post_adapter:
+            x = self.infer_post_adapter(block.compute_phases[3], x, pre_infer_out)
         return x
 
     def pre_process(self, modulation, embed0):
@@ -294,7 +295,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return y
 
-    def post_process(self, phase, x, y, c_gate_msa, pre_infer_out):
+    def post_process(self, x, y, c_gate_msa):
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y.to(self.sensitive_layer_dtype) * c_gate_msa.squeeze()
         else:
@@ -304,3 +305,6 @@ class WanTransformerInfer(BaseTransformerInfer):
             del y, c_gate_msa
             torch.cuda.empty_cache()
         return x
+
+    def infer_post_adapter(self, phase, x, pre_infer_out):
+        pass

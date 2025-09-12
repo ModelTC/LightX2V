@@ -1,4 +1,4 @@
-from lightx2v.common.modules.weight_module import WeightModuleList
+from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanTransformerAttentionBlock,
     WanTransformerWeights,
@@ -51,8 +51,14 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
                     self.lazy_load_file,
                 ),
             )
+        self.compute_phases.append(WanVaceTransformerAfterProj(base_block_idx, block_index, task, mm_type, config, block_prefix))
 
-        self.compute_phases[-1].add_module(
+
+class WanVaceTransformerAfterProj(WeightModule):
+    def __init__(self, base_block_idx, block_index, task, mm_type, config, block_prefix):
+        super().__init__()
+
+        self.add_module(
             "after_proj",
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.after_proj.weight",

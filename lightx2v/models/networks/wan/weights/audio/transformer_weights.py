@@ -11,14 +11,16 @@ class WanAudioTransformerWeights(WanTransformerWeights):
     def __init__(self, config):
         super().__init__(config)
         for i in range(self.blocks_num):
-            self.blocks[i].compute_phases[-1] = WanAudioAdapterCA(
-                i,
-                f"ca",
-                self.task,
-                self.mm_type,
-                self.config,
-                self.blocks[i].lazy_load,
-                self.blocks[i].lazy_load_file,
+            self.blocks[i].compute_phases.append(
+                WanAudioAdapterCA(
+                    i,
+                    f"ca",
+                    self.task,
+                    self.mm_type,
+                    self.config,
+                    self.blocks[i].lazy_load,
+                    self.blocks[i].lazy_load_file,
+                )
             )
 
 
