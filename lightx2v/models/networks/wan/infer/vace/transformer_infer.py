@@ -34,3 +34,4 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         if self.infer_state == "base" and self.block_idx in self.vace_blocks_mapping:
             hint_idx = self.vace_blocks_mapping[self.block_idx]
             x = x + pre_infer_out.adapter_output["hints"][hint_idx] * pre_infer_out.adapter_output.get("context_scale", 1.0)
+        return x
