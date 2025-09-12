@@ -734,18 +734,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
         )
+        
         audio_adapter.to(device)
-        if self.config.get("adapter_quantized", False):
-            if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f"]:
-                model_name = "audio_adapter_model_fp8.safetensors"
-            elif self.config.get("adapter_quant_scheme", None) == "int8":
-                model_name = "audio_adapter_model_int8.safetensors"
-            else:
-                raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
-        else:
-            model_name = "audio_adapter_model.safetensors"
-
-        weights_dict = load_weights(os.path.join(self.config["model_path"], model_name), cpu_offload=audio_adapter_offload, remove_key="ca")
+        weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=audio_adapter_offload, remove_key="ca")
         audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 

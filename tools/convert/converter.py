@@ -369,7 +369,7 @@ def quantize_model(
         for key in pbar:
             pbar.set_postfix(current_key=key, refresh=False)
 
-            if ignore_key is not None and ignore_key in key:
+            if ignore_key is not None and any(ig_key in key for ig_key in ignore_key):
                 del weights[key]
                 continue
 
@@ -682,7 +682,7 @@ def main():
             "wan_dit": {
                 "key_idx": 2,
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
-                "ignore_key": None,
+                "ignore_key": ['ca', "audio"],
             },
             "hunyuan_dit": {
                 "key_idx": 2,

@@ -5,8 +5,6 @@ from lightx2v.utils.envs import *
 class WanVaceTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
-        self.has_post_adapter = True
-        self.phases_num = 4
         self.vace_blocks_num = len(self.config.vace_layers)
         self.vace_blocks_mapping = {orig_idx: seq_idx for seq_idx, orig_idx in enumerate(self.config.vace_layers)}
 
@@ -31,9 +29,8 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         if hasattr(self, "weights_stream_mgr"):
             self.weights_stream_mgr.init(self.blocks_num, self.phases_num, self.offload_ratio)
 
-    def infer_post_adapter(self, phase, x, pre_infer_out):
-        pre_infer_out.adapter_output["hints"].append(phase.after_proj.apply(x))
+    def post_process(self, x, y, c_gate_msa, pre_infer_out):
+        x = super().post_process(x, y, c_gate_msa, pre_infer_out)
         if self.infer_state == "base" and self.block_idx in self.vace_blocks_mapping:
             hint_idx = self.vace_blocks_mapping[self.block_idx]
             x = x + pre_infer_out.adapter_output["hints"][hint_idx] * pre_infer_out.adapter_output.get("context_scale", 1.0)
-        return x
