@@ -1,5 +1,6 @@
 import os
 
+import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
@@ -46,3 +47,31 @@ class WanAudioModel(WanModel):
         self.pre_infer_class = WanAudioPreInfer
         self.post_infer_class = WanAudioPostInfer
         self.transformer_infer_class = WanAudioTransformerInfer
+
+    def compile(self):
+        new_inputs = {}
+        new_inputs["text_encoder_output"] = {}
+        new_inputs["text_encoder_output"]["context"] = torch.randn(1, 512, 4096, dtype=torch.bfloat16).cuda()
+        new_inputs["text_encoder_output"]["context_null"] = torch.randn(1, 512, 4096, dtype=torch.bfloat16).cuda()
+
+        new_inputs["image_encoder_output"] = {}
+        new_inputs["image_encoder_output"]["clip_encoder_out"] = torch.randn(257, 1280, dtype=torch.bfloat16).cuda()
+        new_inputs["image_encoder_output"]["vae_encoder_out"] = torch.randn(16, 1, 90, 160, dtype=torch.bfloat16).cuda()
+
+        new_inputs["audio_encoder_output"] = torch.randn(1, 21, 128, 1024, dtype=torch.bfloat16).cuda()
+
+        new_inputs["previmg_encoder_output"] = {}
+        new_inputs["previmg_encoder_output"]["prev_latents"] = torch.randn(16, 21, 90, 160, dtype=torch.bfloat16).cuda()
+        new_inputs["previmg_encoder_output"]["prev_mask"] = torch.randn(4, 21, 90, 160, dtype=torch.bfloat16).cuda()
+
+        self.scheduler.latents = torch.randn(16, 21, 90, 160, dtype=torch.bfloat16).cuda()
+        self.scheduler.timestep_input = torch.tensor([600.0], dtype=torch.float32).cuda()
+        self.scheduler.audio_adapter_t_emb = torch.randn(1, 3, 5120, dtype=torch.bfloat16).cuda()
+
+        self.enable_compile_mode("_infer_cond_uncond")
+
+        self._infer_cond_uncond(new_inputs, infer_condition=True, graph_name="graph_01")
+
+        self.disable_compile_mode("_infer_cond_uncond")
+
+        self.select_graph("_infer_cond_uncond", "graph_01")

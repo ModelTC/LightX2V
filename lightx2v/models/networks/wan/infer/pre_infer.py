@@ -23,7 +23,6 @@ class WanPreInfer:
         ).cuda()
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
-        self.text_len = config["text_len"]
         self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)
         self.cfg_scale = config.get("cfg_scale", 4.0)
         self.infer_dtype = GET_DTYPE()
@@ -32,6 +31,7 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         x = self.scheduler.latents
         t = self.scheduler.timestep_input
@@ -84,15 +84,14 @@ class WanPreInfer:
         embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
 
         # text embeddings
-        stacked = torch.stack([torch.cat([u, u.new_zeros(self.text_len - u.size(0), u.size(1))]) for u in context])
         if self.sensitive_layer_dtype != self.infer_dtype:
-            out = weights.text_embedding_0.apply(stacked.squeeze(0).to(self.sensitive_layer_dtype))
+            out = weights.text_embedding_0.apply(context.squeeze(0).to(self.sensitive_layer_dtype))
         else:
-            out = weights.text_embedding_0.apply(stacked.squeeze(0))
+            out = weights.text_embedding_0.apply(context.squeeze(0))
         out = torch.nn.functional.gelu(out, approximate="tanh")
         context = weights.text_embedding_2.apply(out)
         if self.clean_cuda_cache:
-            del out, stacked
+            del out
             torch.cuda.empty_cache()
 
         if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):

@@ -29,6 +29,7 @@ class DefaultRunner(BaseRunner):
         if not self.has_prompt_enhancer:
             self.config.use_prompt_enhancer = False
         self.set_init_device()
+        self.init_scheduler()
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
@@ -36,6 +37,7 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
+        self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif self.config["task"] == "flf2v":
@@ -214,7 +216,6 @@ class DefaultRunner(BaseRunner):
         self.get_video_segment_num()
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
-        self.init_scheduler()
         self.model.scheduler.prepare(self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
@@ -290,6 +291,7 @@ class DefaultRunner(BaseRunner):
         return {"video": self.gen_video}
 
     def run_pipeline(self, save_video=True):
+        self.model.compile()
         if self.config["use_prompt_enhancer"]:
             self.config["prompt_enhanced"] = self.post_prompt_enhancer()
 

@@ -1,5 +1,6 @@
 import argparse
 
+import torch
 import torch.distributed as dist
 from loguru import logger
 
@@ -23,6 +24,7 @@ from lightx2v.utils.utils import seed_all
 
 def init_runner(config):
     seed_all(config.seed)
+    torch.set_grad_enabled(False)
 
     if CHECK_ENABLE_GRAPH_MODE():
         default_runner = RUNNER_REGISTER[config.model_cls](config)

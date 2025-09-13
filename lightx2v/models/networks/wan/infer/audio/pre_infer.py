@@ -23,29 +23,30 @@ class WanAudioPreInfer(WanPreInfer):
         ).cuda()
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
-        self.text_len = config["text_len"]
         self.rope_t_dim = d // 2 - 2 * (d // 6)
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
+    @torch.no_grad()
     def infer(self, weights, inputs):
+        infer_condition, latents, timestep_input = self.scheduler.infer_condition, self.scheduler.latents, self.scheduler.timestep_input
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"]
-        hidden_states = self.scheduler.latents
+        hidden_states = latents
         if self.config.model_cls != "wan2.2_audio":
             prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
             hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=0)
 
         x = hidden_states
-        t = self.scheduler.timestep_input
+        t = timestep_input
 
-        if self.scheduler.infer_condition:
+        if infer_condition:
             context = inputs["text_encoder_output"]["context"]
         else:
             context = inputs["text_encoder_output"]["context_null"]
 
         clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
-        ref_image_encoder = inputs["image_encoder_output"]["vae_encoder_out"].to(self.scheduler.latents.dtype)
+        ref_image_encoder = inputs["image_encoder_output"]["vae_encoder_out"].to(latents.dtype)
 
         num_channels, _, height, width = x.shape
         ref_num_channels, ref_num_frames, _, _ = ref_image_encoder.shape
@@ -53,8 +54,8 @@ class WanAudioPreInfer(WanPreInfer):
         if ref_num_channels != num_channels:
             zero_padding = torch.zeros(
                 (num_channels - ref_num_channels, ref_num_frames, height, width),
-                dtype=self.scheduler.latents.dtype,
-                device=self.scheduler.latents.device,
+                dtype=latents.dtype,
+                device=latents.device,
             )
             ref_image_encoder = torch.concat([ref_image_encoder, zero_padding], dim=0)
         y = ref_image_encoder
@@ -85,15 +86,14 @@ class WanAudioPreInfer(WanPreInfer):
         embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
 
         # text embeddings
-        stacked = torch.stack([torch.cat([u, u.new_zeros(self.text_len - u.size(0), u.size(1))]) for u in context])
         if self.sensitive_layer_dtype != self.infer_dtype:
-            out = weights.text_embedding_0.apply(stacked.squeeze(0).to(self.sensitive_layer_dtype))
+            out = weights.text_embedding_0.apply(context.squeeze(0).to(self.sensitive_layer_dtype))
         else:
-            out = weights.text_embedding_0.apply(stacked.squeeze(0))
+            out = weights.text_embedding_0.apply(context.squeeze(0))
         out = torch.nn.functional.gelu(out, approximate="tanh")
         context = weights.text_embedding_2.apply(out)
         if self.clean_cuda_cache:
-            del out, stacked
+            del out
             torch.cuda.empty_cache()
 
         if self.task == "i2v" and self.config.get("use_image_encoder", True):

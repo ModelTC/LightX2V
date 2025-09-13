@@ -47,8 +47,7 @@ class WanCausVidRunner(WanRunner):
         self.num_fragments = self.config["num_fragments"]
 
     def init_scheduler(self):
-        scheduler = WanStepDistillScheduler(self.config)
-        self.model.set_scheduler(scheduler)
+        self.scheduler = WanStepDistillScheduler(self.config)
 
     def set_target_shape(self):
         if self.config.task == "i2v":

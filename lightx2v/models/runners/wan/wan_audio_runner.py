@@ -309,12 +309,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
-        scheduler = EulerScheduler(self.config)
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.audio_adapter = self.load_audio_adapter()
-            self.model.set_audio_adapter(self.audio_adapter)
-        scheduler.set_audio_adapter(self.audio_adapter)
-        self.model.set_scheduler(scheduler)
+        self.scheduler = EulerScheduler(self.config)
 
     def read_audio_input(self):
         """Read audio input"""
@@ -469,13 +464,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         mask_first_frame = torch.repeat_interleave(mask[:, 0:1], repeats=4, dim=1)
         mask = torch.concat([mask_first_frame, mask[:, 1:]], dim=1)
         mask = mask.view(mask.shape[1] // 4, 4, h, w)
-        return mask.transpose(0, 1)
+        return mask.transpose(0, 1).contiguous()
 
     def get_video_segment_num(self):
         self.video_segment_num = len(self.inputs["audio_segments"])
 
     def init_run(self):
         super().init_run()
+        self.scheduler.set_audio_adapter(self.audio_adapter)
 
         self.gen_video_list = []
         self.cut_audio_list = []

@@ -127,7 +127,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k.size(0),
                 model_cls=self.config["model_cls"],
-                mask_map=self.mask_map,
             )
         else:
             # TODO: Implement parallel attention for causvid inference
