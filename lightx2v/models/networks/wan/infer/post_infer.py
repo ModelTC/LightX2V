@@ -14,6 +14,7 @@ class WanPostInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    @torch.no_grad()
     def infer(self, x, pre_infer_out):
         x = self.unpatchify(x, pre_infer_out.grid_sizes.tuple)
 

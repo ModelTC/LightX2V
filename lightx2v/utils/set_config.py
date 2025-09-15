@@ -26,6 +26,11 @@ def get_default_config():
         "cfg_parallel": False,
         "enable_cfg": False,
         "use_image_encoder": True,
+        "lat_h": None,
+        "lat_w": None,
+        "tgt_h": None,
+        "tgt_w": None,
+        "target_shape": None,
     }
     return default_config
 

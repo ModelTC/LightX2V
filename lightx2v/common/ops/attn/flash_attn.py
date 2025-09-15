@@ -33,7 +33,6 @@ class FlashAttn2Weight(AttnWeightTemplate):
         max_seqlen_q=None,
         max_seqlen_kv=None,
         model_cls=None,
-        mask_map=None,
     ):
         x = flash_attn_varlen_func(
             q,
@@ -62,7 +61,6 @@ class FlashAttn3Weight(AttnWeightTemplate):
         max_seqlen_q=None,
         max_seqlen_kv=None,
         model_cls=None,
-        mask_map=None,
     ):
         x = flash_attn_varlen_func_v3(
             q,

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=
-model_path=
+lightx2v_path=/path/to/Lightx2v
+model_path=/path/to/SekoTalk-Distill-fp8
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
@@ -10,7 +10,6 @@ source ${lightx2v_path}/scripts/base/base.sh
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-export ENABLE_GRAPH_MODE=false
 export SENSITIVE_LAYER_DTYPE=None
 
 torchrun --nproc-per-node 4 -m lightx2v.infer \

@@ -191,10 +191,9 @@ class WanRunner(DefaultRunner):
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
 
         if self.config.get("changing_resolution", False):
-            scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
+            self.scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
         else:
-            scheduler = scheduler_class(self.config)
-        self.model.set_scheduler(scheduler)
+            self.scheduler = scheduler_class(self.config)
 
     def run_text_encoder(self, text, img=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -206,13 +205,17 @@ class WanRunner(DefaultRunner):
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
                 context = self.text_encoders[0].infer([text])
+                context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
                 text_encoder_output = {"context": context}
             else:
                 context_null = self.text_encoders[0].infer([n_prompt])
+                context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
                 text_encoder_output = {"context_null": context_null}
         else:
             context = self.text_encoders[0].infer([text])
+            context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
             context_null = self.text_encoders[0].infer([n_prompt])
+            context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
             text_encoder_output = {
                 "context": context,
                 "context_null": context_null,

@@ -1,11 +1,11 @@
 import argparse
 
+import torch
 import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner  # noqa: F401
-from lightx2v.models.runners.graph_runner import GraphRunner
 from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -23,14 +23,9 @@ from lightx2v.utils.utils import seed_all
 
 def init_runner(config):
     seed_all(config.seed)
-
-    if CHECK_ENABLE_GRAPH_MODE():
-        default_runner = RUNNER_REGISTER[config.model_cls](config)
-        default_runner.init_modules()
-        runner = GraphRunner(default_runner)
-    else:
-        runner = RUNNER_REGISTER[config.model_cls](config)
-        runner.init_modules()
+    torch.set_grad_enabled(False)
+    runner = RUNNER_REGISTER[config.model_cls](config)
+    runner.init_modules()
     return runner
 
 

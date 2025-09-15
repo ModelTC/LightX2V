@@ -86,15 +86,19 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         gathered_txt_attn = [torch.empty_like(txt_attn) for _ in range(world_size)]
         dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)
 
-        # 处理图像注意力结果
-        img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
-        img_attn = all2all_head2seq(img_attn, group=seq_p_group)  # 将头的格式转换回序列格式
-        img_attn = img_attn.reshape(shard_seqlen, -1)  # 重塑为 [shard_seqlen, -1] 形状
+        img_attn = self._reshape_img_attn(img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group)
 
-        torch.cuda.synchronize()  # 确保CUDA操作完成
         txt_attn = torch.cat(gathered_txt_attn, dim=1)  # 合并所有进程的文本注意力结果
 
         # 合并图像和文本的注意力结果
         attn = torch.cat([img_attn, txt_attn], dim=0)
 
         return attn  # 返回最终的注意力结果
+
+    @torch.compiler.disable
+    def _reshape_img_attn(self, img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group):
+        img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
+        img_attn = all2all_head2seq(img_attn, group=seq_p_group)  # 将头的格式转换回序列格式
+        img_attn = img_attn.reshape(shard_seqlen, -1)  # 重塑为 [shard_seqlen, -1] 形状
+        torch.cuda.synchronize()  # 确保CUDA操作完成
+        return img_attn
