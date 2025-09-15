@@ -69,14 +69,14 @@ class QwenImageRunner(DefaultRunner):
         else:
             assert NotImplementedError
 
+        self.model.set_scheduler(self.scheduler)
+
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
         self.init_scheduler()
         self.model.scheduler.prepare(self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
-            self.inputs["image_encoder_output"]["vae_encoder_out"] = None
         latents, generator = self.run(total_steps)
         self.end_run()
         return latents, generator
@@ -167,11 +167,7 @@ class QwenImageRunner(DefaultRunner):
         self.config.target_shape = (self.config.batchsize, 1, num_channels_latents, height, width)
 
     def init_scheduler(self):
-        scheduler = QwenImageScheduler(self.config)
-        self.model.set_scheduler(scheduler)
-        self.model.pre_infer.set_scheduler(scheduler)
-        self.model.transformer_infer.set_scheduler(scheduler)
-        self.model.post_infer.set_scheduler(scheduler)
+        self.scheduler = QwenImageScheduler(self.config)
 
     def get_encoder_output_i2v(self):
         pass
