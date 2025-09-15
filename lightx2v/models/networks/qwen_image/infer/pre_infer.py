@@ -171,7 +171,7 @@ class QwenImagePreInfer:
     def infer(self, weights, hidden_states, timestep, guidance, encoder_hidden_states_mask, encoder_hidden_states, img_shapes, txt_seq_lens, attention_kwargs):
         hidden_states = hidden_states.squeeze(0)
         hidden_states = weights.img_in.apply(hidden_states)
-        
+
         timestep = timestep.to(hidden_states.dtype)
         encoder_hidden_states = encoder_hidden_states.squeeze(0)
         encoder_hidden_states = weights.txt_norm.apply(encoder_hidden_states)
