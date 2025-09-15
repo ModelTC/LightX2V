@@ -29,7 +29,6 @@ export DTYPE=BF16
 # Used for layers requiring higher precision
 # Available options: [FP32, None]
 # If not set, default value: None (follows DTYPE setting)
-# Note: If set to FP32, it will be slower, so we recommend set ENABLE_GRAPH_MODE to true.
 export SENSITIVE_LAYER_DTYPE=FP32
 
 # Performance Profiling Debug Level (Debug Only)
@@ -38,14 +37,6 @@ export SENSITIVE_LAYER_DTYPE=FP32
 # If not set, default value: 0
 # Note: This option can be set to 0 for production.
 export PROFILING_DEBUG_LEVEL=2
-
-# Graph Mode Optimization (Performance Enhancement)
-# Enables torch.compile for graph optimization, can improve inference performance
-# Available options: [true, false]
-# If not set, default value: false
-# Note: First run may require compilation time, subsequent runs will be faster
-# Note: When you use lightx2v as a service, you can set this option to true.
-export ENABLE_GRAPH_MODE=true
 
 
 echo "==============================================================================="
@@ -57,5 +48,4 @@ echo "--------------------------------------------------------------------------
 echo "Model Inference Data Type: ${DTYPE}"
 echo "Sensitive Layer Data Type: ${SENSITIVE_LAYER_DTYPE}"
 echo "Performance Profiling Debug Level: ${PROFILING_DEBUG_LEVEL}"
-echo "Graph Mode Optimization: ${ENABLE_GRAPH_MODE}"
 echo "==============================================================================="

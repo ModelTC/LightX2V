@@ -27,7 +27,6 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
 export DTYPE=BF16
 export PROFILING_DEBUG_LEVEL=2
-export ENABLE_GRAPH_MODE=false
 
 
 python -m lightx2v.infer \

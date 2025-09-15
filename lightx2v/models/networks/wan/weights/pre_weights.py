@@ -68,7 +68,7 @@ class WanPreWeights(WeightModule):
                 MM_WEIGHT_REGISTER["Default"]("guidance_embedding.linear_2.weight", "guidance_embedding.linear_2.bias"),
             )
 
-        if config.task == "flf2v":
+        if config.task == "flf2v" and config.get("use_image_encoder", True):
             self.add_module(
                 "emb_pos",
                 TENSOR_REGISTER["Default"](f"img_emb.emb_pos"),

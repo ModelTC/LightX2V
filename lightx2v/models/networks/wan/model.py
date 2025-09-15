@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.attn import MaskMap
 from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import (
     WanTransformerInferAdaCaching,
     WanTransformerInferCustomCaching,
@@ -30,6 +29,7 @@ from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanTransformerWeights,
 )
+from lightx2v.utils.custom_compiler import CompiledMethodsMixin, compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
@@ -39,11 +39,12 @@ except ImportError:
     gguf = None
 
 
-class WanModel:
+class WanModel(CompiledMethodsMixin):
     pre_weight_class = WanPreWeights
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device):
+        super().__init__()
         self.model_path = model_path
         self.config = config
         self.cpu_offload = self.config.get("cpu_offload", False)
@@ -136,8 +137,12 @@ class WanModel:
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         safetensors_path = find_hf_model_path(self.config, self.model_path, "dit_original_ckpt", subdir="original")
         safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+
         weight_dict = {}
         for file_path in safetensors_files:
+            if self.config.get("adapter_model_path", None) is not None:
+                if self.config.adapter_model_path == file_path:
+                    continue
             file_weights = self._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
             weight_dict.update(file_weights)
         return weight_dict
@@ -236,6 +241,9 @@ class WanModel:
             if self.config.get("device_mesh") is not None:
                 weight_dict = self._load_weights_distribute(weight_dict, is_weight_loader)
 
+            if hasattr(self, "adapter_weights_dict"):
+                weight_dict.update(self.adapter_weights_dict)
+
             self.original_weight_dict = weight_dict
         else:
             self.original_weight_dict = weight_dict
@@ -333,11 +341,6 @@ class WanModel:
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        if self.transformer_infer.mask_map is None:
-            _, c, h, w = self.scheduler.latents.shape
-            video_token_num = c * (h // 2) * (w // 2)
-            self.transformer_infer.mask_map = MaskMap(video_token_num, c)
-
         if self.config["enable_cfg"]:
             if self.config["cfg_parallel"]:
                 # ==================== CFG Parallel Processing ====================
@@ -371,7 +374,7 @@ class WanModel:
                 self.pre_weight.to_cpu()
                 self.transformer_weights.non_block_weights_to_cpu()
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
+    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         self.scheduler.infer_condition = infer_condition

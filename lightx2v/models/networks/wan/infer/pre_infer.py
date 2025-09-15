@@ -23,7 +23,6 @@ class WanPreInfer:
         ).cuda()
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
-        self.text_len = config["text_len"]
         self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)
         self.cfg_scale = config.get("cfg_scale", 4.0)
         self.infer_dtype = GET_DTYPE()
@@ -32,6 +31,7 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         x = self.scheduler.latents
         t = self.scheduler.timestep_input
@@ -61,7 +61,7 @@ class WanPreInfer:
 
         # embeddings
         x = weights.patch_embedding.apply(x.unsqueeze(0))
-        grid_sizes = torch.tensor(x.shape[2:], dtype=torch.int32, device=x.device).unsqueeze(0)
+        grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
         seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
 
@@ -84,15 +84,14 @@ class WanPreInfer:
         embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
 
         # text embeddings
-        stacked = torch.stack([torch.cat([u, u.new_zeros(self.text_len - u.size(0), u.size(1))]) for u in context])
         if self.sensitive_layer_dtype != self.infer_dtype:
-            out = weights.text_embedding_0.apply(stacked.squeeze(0).to(self.sensitive_layer_dtype))
+            out = weights.text_embedding_0.apply(context.squeeze(0).to(self.sensitive_layer_dtype))
         else:
-            out = weights.text_embedding_0.apply(stacked.squeeze(0))
+            out = weights.text_embedding_0.apply(context.squeeze(0))
         out = torch.nn.functional.gelu(out, approximate="tanh")
         context = weights.text_embedding_2.apply(out)
         if self.clean_cuda_cache:
-            del out, stacked
+            del out
             torch.cuda.empty_cache()
 
         if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
@@ -117,7 +116,7 @@ class WanPreInfer:
                 del context_clip
             torch.cuda.empty_cache()
 
-        grid_sizes = GridOutput(tensor=grid_sizes, tuple=(grid_sizes[0][0].item(), grid_sizes[0][1].item(), grid_sizes[0][2].item()))
+        grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,

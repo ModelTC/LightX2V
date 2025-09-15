@@ -65,13 +65,29 @@ class Wan22StepDistillScheduler(WanStepDistillScheduler):
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
         super().set_denoising_timesteps(device)
-        self.sigma_boundary = self.sigmas[self.boundary_step_index].item()
+        self.sigma_bound = self.sigmas[self.boundary_step_index].item()
+
+    def calculate_alpha_beta_high(self, sigma):
+        alpha = (1 - sigma) / (1 - self.sigma_bound)
+        beta = math.sqrt(sigma**2 - (alpha * self.sigma_bound) ** 2)
+        return alpha, beta
 
     def step_post(self):
         flow_pred = self.noise_pred.to(torch.float32)
         sigma = self.sigmas[self.step_index].item()
-        noisy_image_or_video = self.latents.to(torch.float32) - sigma * flow_pred
-        if self.step_index < self.infer_steps - 1:
-            sigma_n = self.sigmas[self.step_index + 1].item()
-            noisy_image_or_video = noisy_image_or_video + flow_pred * sigma_n
+        # self.latent: x_t
+        if self.step_index < self.boundary_step_index:
+            # noisy_image_or_video: x_500
+            alpha, beta = self.calculate_alpha_beta_high(sigma)
+            noisy_image_or_video = (self.latents.to(torch.float32) - beta * (1 - self.sigma_bound) * flow_pred) / (alpha + beta)
+            if self.step_index < self.boundary_step_index - 1:
+                sigma_n = self.sigmas[self.step_index + 1].item()
+                alpha_n, beta_n = self.calculate_alpha_beta_high(sigma_n)
+                noisy_image_or_video = (alpha_n + beta_n) * noisy_image_or_video + (1 - self.sigma_bound) * beta_n * flow_pred
+        else:
+            # noisy_image_or_video: x_0
+            noisy_image_or_video = self.latents.to(torch.float32) - flow_pred * sigma
+            if self.step_index < self.infer_steps - 1:
+                sigma_n = self.sigmas[self.step_index + 1].item()
+                noisy_image_or_video = noisy_image_or_video + flow_pred * sigma_n
         self.latents = noisy_image_or_video.to(self.latents.dtype)

@@ -10,7 +10,6 @@ source ${lightx2v_path}/scripts/base/base.sh
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-export ENABLE_GRAPH_MODE=false
 export SENSITIVE_LAYER_DTYPE=None
 
 torchrun --nproc-per-node 4 -m lightx2v.infer \

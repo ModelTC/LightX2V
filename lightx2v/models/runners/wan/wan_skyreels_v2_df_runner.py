@@ -20,8 +20,7 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
         super().__init__(config)
 
     def init_scheduler(self):
-        scheduler = WanSkyreelsV2DFScheduler(self.config)
-        self.model.set_scheduler(scheduler)
+        self.scheduler = WanSkyreelsV2DFScheduler(self.config)
 
     def run_image_encoder(self, config, image_encoder, vae_model):
         img = Image.open(config.image_path).convert("RGB")
@@ -126,6 +125,7 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
 
     def run_pipeline(self):
         self.init_scheduler()
+        self.model.set_scheduler(self.scheduler)
         self.run_input_encoder()
         self.model.scheduler.prepare()
         output_video = self.run()

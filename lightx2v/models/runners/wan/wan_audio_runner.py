@@ -309,12 +309,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def init_scheduler(self):
         """Initialize consistency model scheduler"""
-        scheduler = EulerScheduler(self.config)
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.audio_adapter = self.load_audio_adapter()
-            self.model.set_audio_adapter(self.audio_adapter)
-        scheduler.set_audio_adapter(self.audio_adapter)
-        self.model.set_scheduler(scheduler)
+        self.scheduler = EulerScheduler(self.config)
 
     def read_audio_input(self):
         """Read audio input"""
@@ -469,13 +464,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         mask_first_frame = torch.repeat_interleave(mask[:, 0:1], repeats=4, dim=1)
         mask = torch.concat([mask_first_frame, mask[:, 1:]], dim=1)
         mask = mask.view(mask.shape[1] // 4, 4, h, w)
-        return mask.transpose(0, 1)
+        return mask.transpose(0, 1).contiguous()
 
     def get_video_segment_num(self):
         self.video_segment_num = len(self.inputs["audio_segments"])
 
     def init_run(self):
         super().init_run()
+        self.scheduler.set_audio_adapter(self.audio_adapter)
 
         self.gen_video_list = []
         self.cut_audio_list = []
@@ -734,18 +730,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
         )
-        audio_adapter.to(device)
-        if self.config.get("adapter_quantized", False):
-            if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f"]:
-                model_name = "audio_adapter_model_fp8.safetensors"
-            elif self.config.get("adapter_quant_scheme", None) == "int8":
-                model_name = "audio_adapter_model_int8.safetensors"
-            else:
-                raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
-        else:
-            model_name = "audio_adapter_model.safetensors"
 
-        weights_dict = load_weights(os.path.join(self.config["model_path"], model_name), cpu_offload=audio_adapter_offload)
+        audio_adapter.to(device)
+        weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=audio_adapter_offload, remove_key="ca")
         audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 
@@ -754,7 +741,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         with ProfilingContext4DebugL2("Load audio encoder and adapter"):
             self.audio_encoder = self.load_audio_encoder()
             self.audio_adapter = self.load_audio_adapter()
-            self.model.set_audio_adapter(self.audio_adapter)
 
     def set_target_shape(self):
         """Set target shape for generation"""

@@ -46,7 +46,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
 
         self.crossattn_cache = crossattn_cache
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
         return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end)
 
@@ -127,7 +126,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k.size(0),
                 model_cls=self.config["model_cls"],
-                mask_map=self.mask_map,
             )
         else:
             # TODO: Implement parallel attention for causvid inference

@@ -35,10 +35,9 @@ class WanDistillRunner(WanRunner):
 
     def init_scheduler(self):
         if self.config.feature_caching == "NoCaching":
-            scheduler = WanStepDistillScheduler(self.config)
+            self.scheduler = WanStepDistillScheduler(self.config)
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
-        self.model.set_scheduler(scheduler)
 
 
 class MultiDistillModelStruct(MultiModelStruct):
@@ -131,7 +130,6 @@ class Wan22MoeDistillRunner(WanDistillRunner):
 
     def init_scheduler(self):
         if self.config.feature_caching == "NoCaching":
-            scheduler = Wan22StepDistillScheduler(self.config)
+            self.scheduler = Wan22StepDistillScheduler(self.config)
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
-        self.model.set_scheduler(scheduler)

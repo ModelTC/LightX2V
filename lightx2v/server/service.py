@@ -226,6 +226,11 @@ def _distributed_inference_worker(rank, world_size, master_addr, master_port, ar
                 task_data = shared_data.get("current_task")
                 if task_data:
                     worker.dist_manager.broadcast_task_data(task_data)
+                    shared_data["current_task"] = None
+                    try:
+                        task_event.clear()
+                    except Exception:
+                        pass
                 else:
                     continue
             else:
@@ -255,7 +260,7 @@ def _distributed_inference_worker(rank, world_size, master_addr, master_port, ar
                         logger.info(f"Task {task_data['task_id']} success")
 
                 except Exception as e:
-                    logger.error(f"Process {rank} error occurred while processing task: {str(e)}")
+                    logger.exception(f"Process {rank} error occurred while processing task: {str(e)}")
 
                     worker.dist_manager.barrier()
 
