@@ -42,6 +42,9 @@ class QwenImageTransformerModel:
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self.pre_infer.set_scheduler(scheduler)
+        self.transformer_infer.set_scheduler(scheduler)
+        self.post_infer.set_scheduler(scheduler)
 
     def _init_infer_class(self):
         if self.config["feature_caching"] == "NoCaching":
