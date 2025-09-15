@@ -29,7 +29,7 @@ export DTYPE=BF16
 # Used for layers requiring higher precision
 # Available options: [FP32, None]
 # If not set, default value: None (follows DTYPE setting)
-export SENSITIVE_LAYER_DTYPE=FP32
+export SENSITIVE_LAYER_DTYPE=None
 
 # Performance Profiling Debug Level (Debug Only)
 # Enables detailed performance analysis output, such as time cost and memory usage
