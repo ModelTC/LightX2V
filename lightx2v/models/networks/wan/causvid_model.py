@@ -2,7 +2,6 @@ import os
 
 import torch
 
-from lightx2v.common.ops.attn.radial_attn import MaskMap
 from lightx2v.models.networks.wan.infer.causvid.transformer_infer import (
     WanTransformerInferCausVid,
 )
@@ -45,11 +44,6 @@ class WanCausVidModel(WanModel):
 
     @torch.no_grad()
     def infer(self, inputs, kv_start, kv_end):
-        if self.transformer_infer.mask_map is None:
-            _, c, h, w = self.scheduler.latents.shape
-            video_token_num = c * (h // 2) * (w // 2)
-            self.transformer_infer.mask_map = MaskMap(video_token_num, c)
-
         if self.config["cpu_offload"]:
             self.pre_weight.to_cuda()
             self.transformer_weights.post_weights_to_cuda()

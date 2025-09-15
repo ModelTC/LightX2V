@@ -11,7 +11,6 @@ source ${lightx2v_path}/scripts/base/base.sh
 export DTYPE=FP16
 export SENSITIVE_LAYER_DTYPE=FP16
 export PROFILING_DEBUG_LEVEL=2
-export ENABLE_GRAPH_MODE=false
 
 echo "==============================================================================="
 echo "LightX2V Lazyload Environment Variables Summary:"
@@ -22,7 +21,6 @@ echo "--------------------------------------------------------------------------
 echo "Model Inference Data Type: ${DTYPE}"
 echo "Sensitive Layer Data Type: ${SENSITIVE_LAYER_DTYPE}"
 echo "Performance Profiling Debug Level: ${PROFILING_DEBUG_LEVEL}"
-echo "Graph Mode Optimization: ${ENABLE_GRAPH_MODE}"
 echo "==============================================================================="
 
 

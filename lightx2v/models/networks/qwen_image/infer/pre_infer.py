@@ -24,7 +24,6 @@ class QwenImagePreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, hidden_states, timestep, guidance, encoder_hidden_states_mask, encoder_hidden_states, img_shapes, txt_seq_lens, attention_kwargs):
         hidden_states_0 = hidden_states
         hidden_states = self.img_in(hidden_states)

@@ -8,7 +8,7 @@ class WanAudioPostInfer(WanPostInfer):
     def __init__(self, config):
         super().__init__(config)
 
-    @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
+    @torch.no_grad()
     def infer(self, x, pre_infer_out):
         x = x[: pre_infer_out.seq_lens[0]]
 

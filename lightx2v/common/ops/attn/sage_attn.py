@@ -34,7 +34,6 @@ class SageAttn2Weight(AttnWeightTemplate):
         max_seqlen_q=None,
         max_seqlen_kv=None,
         model_cls=None,
-        mask_map=None,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         if model_cls == "hunyuan":

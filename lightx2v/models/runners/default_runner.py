@@ -29,6 +29,7 @@ class DefaultRunner(BaseRunner):
         if not self.has_prompt_enhancer:
             self.config.use_prompt_enhancer = False
         self.set_init_device()
+        self.init_scheduler()
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
@@ -36,6 +37,7 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
+        self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif self.config["task"] == "flf2v":
@@ -44,6 +46,9 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_t2v
         elif self.config["task"] == "vace":
             self.run_input_encoder = self._run_input_encoder_local_vace
+        if self.config.get("compile", False):
+            logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
+            self.model.compile(self.config.get("compile_shapes", []))
 
     def set_init_device(self):
         if self.config.cpu_offload:
@@ -214,7 +219,6 @@ class DefaultRunner(BaseRunner):
         self.get_video_segment_num()
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
-        self.init_scheduler()
         self.model.scheduler.prepare(self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
@@ -222,6 +226,8 @@ class DefaultRunner(BaseRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
         self.init_run()
+        if self.config.get("compile", False):
+            self.model.select_graph_for_compile()
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(f"segment end2end {segment_idx + 1}/{self.video_segment_num}"):

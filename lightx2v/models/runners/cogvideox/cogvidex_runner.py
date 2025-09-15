@@ -31,8 +31,7 @@ class CogvideoxRunner(DefaultRunner):
         return vae_model, vae_model
 
     def init_scheduler(self):
-        scheduler = CogvideoxXDPMScheduler(self.config)
-        self.model.set_scheduler(scheduler)
+        self.scheduler = CogvideoxXDPMScheduler(self.config)
 
     def run_text_encoder(self, text, img):
         text_encoder_output = {}

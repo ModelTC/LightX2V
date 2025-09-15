@@ -26,7 +26,6 @@ class WanTransformerInfer(BaseTransformerInfer):
         else:
             self.apply_rotary_emb_func = apply_rotary_emb
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.mask_map = None
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
@@ -49,6 +48,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
         return freqs_i
 
+    @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
@@ -186,7 +186,6 @@ class WanTransformerInfer(BaseTransformerInfer):
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k.size(0),
                 model_cls=self.config["model_cls"],
-                mask_map=self.mask_map,
             )
 
         y = phase.self_attn_o.apply(attn_out)
