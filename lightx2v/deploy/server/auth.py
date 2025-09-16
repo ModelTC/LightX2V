@@ -6,6 +6,8 @@ import jwt
 from fastapi import HTTPException
 from loguru import logger
 
+from lightx2v.deploy.common.aliyun import AlibabaCloudClient
+
 
 class AuthManager:
     def __init__(self):
@@ -15,12 +17,24 @@ class AuthManager:
         # GitHub OAuth
         self.github_client_id = os.getenv("GITHUB_CLIENT_ID", "")
         self.github_client_secret = os.getenv("GITHUB_CLIENT_SECRET", "")
+
+        # Google OAuth
+        self.google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+        self.google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        self.google_redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "")
+
         self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
         self.jwt_expiration_hours = os.getenv("JWT_EXPIRATION_HOURS", 24)
         self.jwt_secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 
+        # Aliyun SMS
+        self.aliyun_client = AlibabaCloudClient()
+
         logger.info(f"AuthManager: GITHUB_CLIENT_ID: {self.github_client_id}")
         logger.info(f"AuthManager: GITHUB_CLIENT_SECRET: {self.github_client_secret}")
+        logger.info(f"AuthManager: GOOGLE_CLIENT_ID: {self.google_client_id}")
+        logger.info(f"AuthManager: GOOGLE_CLIENT_SECRET: {self.google_client_secret}")
+        logger.info(f"AuthManager: GOOGLE_REDIRECT_URI: {self.google_redirect_uri}")
         logger.info(f"AuthManager: JWT_SECRET_KEY: {self.jwt_secret_key}")
         logger.info(f"AuthManager: WORKER_SECRET_KEY: {self.worker_secret_key}")
 
@@ -80,6 +94,74 @@ class AuthManager:
         except Exception as e:
             logger.error(f"Authentication error: {e}")
             raise HTTPException(status_code=500, detail="Authentication failed")
+
+    async def auth_google(self, code):
+        try:
+            logger.info(f"Google OAuth code: {code}")
+            token_url = "https://oauth2.googleapis.com/token"
+            token_data = {
+                "client_id": self.google_client_id,
+                "client_secret": self.google_client_secret,
+                "code": code,
+                "redirect_uri": self.google_redirect_uri,
+                "grant_type": "authorization_code",
+            }
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+            proxy = os.getenv("auth_https_proxy", None)
+            if proxy:
+                logger.info(f"auth_google use proxy: {proxy}")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(token_url, data=token_data, headers=headers, proxy=proxy) as response:
+                    response.raise_for_status()
+                    token_info = await response.json()
+
+            if "error" in token_info:
+                raise HTTPException(status_code=400, detail=f"Google OAuth error: {token_info['error']}")
+
+            access_token = token_info.get("access_token")
+            if not access_token:
+                raise HTTPException(status_code=400, detail="Failed to get access token")
+
+            # get user info
+            user_url = "https://www.googleapis.com/oauth2/v2/userinfo"
+            user_headers = {"Authorization": f"Bearer {access_token}"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(user_url, headers=user_headers, proxy=proxy) as response:
+                    response.raise_for_status()
+                    user_info = await response.json()
+            return {
+                "source": "google",
+                "id": str(user_info["id"]),
+                "username": user_info.get("name", user_info.get("email", "")),
+                "email": user_info.get("email", ""),
+                "homepage": user_info.get("link", ""),
+                "avatar_url": user_info.get("picture", ""),
+            }
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Google API request failed: {e}")
+            raise HTTPException(status_code=500, detail="Failed to authenticate with Google")
+
+        except Exception as e:
+            logger.error(f"Google authentication error: {e}")
+            raise HTTPException(status_code=500, detail="Google authentication failed")
+
+    async def send_sms(self, phone_number):
+        return await self.aliyun_client.send_sms(phone_number)
+
+    async def check_sms(self, phone_number, verify_code):
+        ok = await self.aliyun_client.check_sms(phone_number, verify_code)
+        if not ok:
+            return None
+        return {
+            "source": "phone",
+            "id": phone_number,
+            "username": phone_number,
+            "email": "",
+            "homepage": "",
+            "avatar_url": "",
+        }
 
     def verify_jwt_token(self, token):
         try:

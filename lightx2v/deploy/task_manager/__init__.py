@@ -4,7 +4,7 @@ from re import T
 
 from loguru import logger
 
-from lightx2v.deploy.common.utils import current_time, data_name
+from lightx2v.deploy.common.utils import class_try_catch, current_time, data_name
 
 
 class TaskStatus(Enum):
@@ -63,6 +63,9 @@ class BaseTaskManager:
     async def resume_task(self, task_id, all_subtask=False, user_id=None):
         raise NotImplementedError
 
+    async def delete_task(self, task_id, user_id=None):
+        raise NotImplementedError
+
     def fmt_dict(self, data):
         for k in ["status"]:
             if k in data:
@@ -74,7 +77,7 @@ class BaseTaskManager:
                 data[k] = TaskStatus[data[k]]
 
     async def create_user(self, user_info):
-        assert user_info["source"] == "github", f"do not support {user_info['source']} user!"
+        assert user_info["source"] in ["github", "google", "phone"], f"do not support {user_info['source']} user!"
         cur_t = current_time()
         user_id = f"{user_info['source']}_{user_info['id']}"
         data = {
@@ -112,7 +115,8 @@ class BaseTaskManager:
             "outputs": {x: data_name(x, task_id) for x in outputs},
             "user_id": user_id,
         }
-        self.mark_task_start(task)
+        records = []
+        self.mark_task_start(records, task)
         subtasks = []
         for worker_name, worker_item in workers.items():
             subtasks.append(
@@ -134,25 +138,23 @@ class BaseTaskManager:
                     "infer_cost": -1.0,
                 }
             )
-            self.mark_subtask_change(subtasks[-1], None, TaskStatus.CREATED)
+            self.mark_subtask_change(records, subtasks[-1], None, TaskStatus.CREATED)
         ret = await self.insert_task(task, subtasks)
-        # if insert error
-        if not ret:
-            self.mark_task_end(task, TaskStatus.FAILED)
-            for sub in subtasks:
-                self.mark_subtask_change(sub, sub["status"], TaskStatus.FAILED)
         assert ret, f"create task {task_id} failed"
+        self.metrics_commit(records)
         return task_id
 
     async def mark_server_restart(self):
-        if self.metrics_monitor:
-            tasks = await self.list_tasks(status=ActiveStatus)
-            subtasks = await self.list_tasks(status=ActiveStatus, subtasks=True)
-            logger.warning(f"Mark system restart, {len(tasks)} tasks, {len(subtasks)} subtasks")
-            self.metrics_monitor.record_task_recover(tasks)
-            self.metrics_monitor.record_subtask_recover(subtasks)
+        pass
+        # only for start server with active tasks
+        # if self.metrics_monitor:
+        #     tasks = await self.list_tasks(status=ActiveStatus)
+        #     subtasks = await self.list_tasks(status=ActiveStatus, subtasks=True)
+        #     logger.warning(f"Mark system restart, {len(tasks)} tasks, {len(subtasks)} subtasks")
+        #     self.metrics_monitor.record_task_recover(tasks)
+        #     self.metrics_monitor.record_subtask_recover(subtasks)
 
-    def mark_task_start(self, task):
+    def mark_task_start(self, records, task):
         t = current_time()
         if not isinstance(task["extra_info"], dict):
             task["extra_info"] = {}
@@ -161,9 +163,14 @@ class BaseTaskManager:
         task["extra_info"]["start_t"] = t
         logger.info(f"Task {task['task_id']} active start")
         if self.metrics_monitor:
-            self.metrics_monitor.record_task_start(task)
+            records.append(
+                [
+                    self.metrics_monitor.record_task_start,
+                    [task],
+                ]
+            )
 
-    def mark_task_end(self, task, end_status):
+    def mark_task_end(self, records, task, end_status):
         if "start_t" not in task["extra_info"]:
             logger.warning(f"Task {task} has no start time")
         else:
@@ -173,9 +180,14 @@ class BaseTaskManager:
 
             logger.info(f"Task {task['task_id']} active end with [{end_status}], elapse: {elapse}")
             if self.metrics_monitor:
-                self.metrics_monitor.record_task_end(task, end_status, elapse)
+                records.append(
+                    [
+                        self.metrics_monitor.record_task_end,
+                        [task, end_status, elapse],
+                    ]
+                )
 
-    def mark_subtask_change(self, subtask, old_status, new_status, fail_msg=None):
+    def mark_subtask_change(self, records, subtask, old_status, new_status, fail_msg=None):
         t = current_time()
         if not isinstance(subtask["extra_info"], dict):
             subtask["extra_info"] = {}
@@ -211,7 +223,17 @@ class BaseTaskManager:
         )
 
         if self.metrics_monitor:
-            self.metrics_monitor.record_subtask_change(subtask, old_status, new_status, elapse_key, elapse)
+            records.append(
+                [
+                    self.metrics_monitor.record_subtask_change,
+                    [subtask, old_status, new_status, elapse_key, elapse],
+                ]
+            )
+
+    @class_try_catch
+    def metrics_commit(self, records):
+        for func, args in records:
+            func(*args)
 
 
 # Import task manager implementations

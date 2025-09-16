@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import mimetypes
 import os
 import traceback
@@ -20,8 +21,8 @@ from lightx2v.deploy.queue_manager import LocalQueueManager, RabbitMQQueueManage
 from lightx2v.deploy.server.auth import AuthManager
 from lightx2v.deploy.server.metrics import MetricMonitor
 from lightx2v.deploy.server.monitor import ServerMonitor, WorkerStatus
-from lightx2v.deploy.task_manager import LocalTaskManager, PostgresSQLTaskManager, TaskStatus
-from lightx2v.utils.profiler import *
+from lightx2v.deploy.server.redis_monitor import RedisServerMonitor
+from lightx2v.deploy.task_manager import FinishedStatus, LocalTaskManager, PostgresSQLTaskManager, TaskStatus
 from lightx2v.utils.service_utils import ProcessManager
 
 # =========================
@@ -43,7 +44,8 @@ async def lifespan(app: FastAPI):
     await task_manager.mark_server_restart()
     await data_manager.init()
     await queue_manager.init()
-    asyncio.create_task(server_monitor.init())
+    await server_monitor.init()
+    asyncio.create_task(server_monitor.loop())
     yield
     await server_monitor.close()
     await queue_manager.close()
@@ -70,6 +72,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# 添加icon目录的静态文件服务
+icon_dir = os.path.join(os.path.dirname(__file__), "static", "icon")
+app.mount("/icon", StaticFiles(directory=icon_dir), name="icon")
 security = HTTPBearer()
 
 
@@ -119,6 +125,13 @@ def error_response(e, code):
     return JSONResponse({"message": f"error: {e}!"}, status_code=code)
 
 
+def guess_file_type(name, default_type):
+    content_type, _ = mimetypes.guess_type(name)
+    if content_type is None:
+        content_type = default_type
+    return content_type
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     with open(os.path.join(static_dir, "index.html"), "r", encoding="utf-8") as f:
@@ -150,6 +163,69 @@ async def github_callback(request: Request):
         return error_response(str(e), 500)
 
 
+@app.get("/auth/login/google")
+async def google_auth(request: Request):
+    client_id = auth_manager.google_client_id
+    redirect_uri = auth_manager.google_redirect_uri
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope=openid%20email%20profile&access_type=offline"
+    logger.info(f"Google auth: auth_url: {auth_url}")
+    return {"auth_url": auth_url}
+
+
+@app.get("/auth/callback/google")
+async def google_callback(request: Request):
+    try:
+        code = request.query_params.get("code")
+        if not code:
+            return error_response("Missing authorization code", 400)
+        user_info = await auth_manager.auth_google(code)
+        user_id = await task_manager.create_user(user_info)
+        user_info["user_id"] = user_id
+        access_token = auth_manager.create_jwt_token(user_info)
+        logger.info(f"Google callback: user_info: {user_info}, access_token: {access_token}")
+        return {"access_token": access_token, "user_info": user_info}
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.get("/auth/login/sms")
+async def sms_auth(request: Request):
+    try:
+        phone_number = request.query_params.get("phone_number")
+        if not phone_number:
+            return error_response("Missing phone number", 400)
+        ok = await auth_manager.send_sms(phone_number)
+        if not ok:
+            return error_response("SMS send failed", 400)
+        return {"msg": "SMS send successfully"}
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.get("/auth/callback/sms")
+async def sms_callback(request: Request):
+    try:
+        phone_number = request.query_params.get("phone_number")
+        verify_code = request.query_params.get("verify_code")
+        if not phone_number or not verify_code:
+            return error_response("Missing phone number or verify code", 400)
+        user_info = await auth_manager.check_sms(phone_number, verify_code)
+        if not user_info:
+            return error_response("SMS verify failed", 400)
+
+        user_id = await task_manager.create_user(user_info)
+        user_info["user_id"] = user_id
+        access_token = auth_manager.create_jwt_token(user_info)
+        logger.info(f"SMS callback: user_info: {user_info}, access_token: {access_token}")
+        return {"access_token": access_token, "user_info": user_info}
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
 async def prepare_subtasks(task_id):
     # schedule next subtasks and pend, put to message queue
     subtasks = await task_manager.next_subtasks(task_id)
@@ -157,14 +233,12 @@ async def prepare_subtasks(task_id):
         logger.info(f"Prepare ready subtask: ({task_id}, {sub['worker_name']})")
         r = await queue_manager.put_subtask(sub)
         assert r, "put subtask to queue error"
+        await server_monitor.pending_subtasks_add(sub["queue"], sub["task_id"])
 
 
 @app.get("/api/v1/model/list")
 async def api_v1_model_list(user=Depends(verify_user_access)):
     try:
-        msg = await server_monitor.check_user_busy(user["user_id"])
-        if msg is not True:
-            return error_response(msg, 400)
         return {"models": model_pipelines.get_model_lists()}
     except Exception as e:
         traceback.print_exc()
@@ -219,16 +293,26 @@ async def api_v1_task_submit(request: Request, user=Depends(verify_user_access))
 @app.get("/api/v1/task/query")
 async def api_v1_task_query(request: Request, user=Depends(verify_user_access)):
     try:
-        msg = await server_monitor.check_user_busy(user["user_id"])
-        if msg is not True:
-            return error_response(msg, 400)
+        # 检查是否有task_ids参数（批量查询）
+        if "task_ids" in request.query_params:
+            task_ids = request.query_params["task_ids"].split(",")
+            tasks = []
+            for task_id in task_ids:
+                task_id = task_id.strip()
+                if task_id:
+                    task, subtasks = await task_manager.query_task(task_id, user["user_id"], only_task=False)
+                    if task is not None:
+                        task["subtasks"] = await server_monitor.format_subtask(subtasks)
+                        task["status"] = task["status"].name
+                        tasks.append(task)
+            return {"tasks": tasks}
+
+        # 单个任务查询
         task_id = request.query_params["task_id"]
         task, subtasks = await task_manager.query_task(task_id, user["user_id"], only_task=False)
         if task is None:
             return error_response(f"Task {task_id} not found", 404)
-        for sub in subtasks:
-            sub["status"] = sub["status"].name
-        task["subtasks"] = subtasks
+        task["subtasks"] = await server_monitor.format_subtask(subtasks)
         task["status"] = task["status"].name
         return task
     except Exception as e:
@@ -240,10 +324,6 @@ async def api_v1_task_query(request: Request, user=Depends(verify_user_access)):
 async def api_v1_task_list(request: Request, user=Depends(verify_user_access)):
     try:
         user_id = user["user_id"]
-        msg = await server_monitor.check_user_busy(user_id)
-        if msg is not True:
-            return error_response(msg, 400)
-
         page = int(request.query_params.get("page", 1))
         page_size = int(request.query_params.get("page_size", 10))
         assert page > 0 and page_size > 0, "page and page_size must be greater than 0"
@@ -272,29 +352,63 @@ async def api_v1_task_list(request: Request, user=Depends(verify_user_access)):
         return error_response(str(e), 500)
 
 
-@app.get("/api/v1/task/result")
-async def api_v1_task_result(request: Request, user=Depends(verify_user_access_from_query)):
+@app.get("/api/v1/task/result_url")
+async def api_v1_task_result_url(request: Request, user=Depends(verify_user_access)):
     try:
-        msg = await server_monitor.check_user_busy(user["user_id"])
-        if msg is not True:
-            return error_response(msg, 400)
         name = request.query_params["name"]
         task_id = request.query_params["task_id"]
         task = await task_manager.query_task(task_id, user_id=user["user_id"])
-        if task is None:
-            return error_response(f"Task {task_id} not found", 404)
-        if task["status"] != TaskStatus.SUCCEED:
-            return error_response(f"Task {task_id} not succeed", 400)
+        assert task is not None, f"Task {task_id} not found"
+        assert task["status"] == TaskStatus.SUCCEED, f"Task {task_id} not succeed"
         assert name in task["outputs"], f"Output {name} not found in task {task_id}"
-        if name in task["params"]:
-            return error_response(f"Output {name} is a stream", 400)
+        assert name not in task["params"], f"Output {name} is a stream"
+
+        url = await data_manager.presign_url(task["outputs"][name])
+        if url is None:
+            url = f"./assets/task/result?task_id={task_id}&name={name}"
+        return {"url": url}
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.get("/api/v1/task/input_url")
+async def api_v1_task_input_url(request: Request, user=Depends(verify_user_access)):
+    try:
+        name = request.query_params["name"]
+        task_id = request.query_params["task_id"]
+        task = await task_manager.query_task(task_id, user_id=user["user_id"])
+        assert task is not None, f"Task {task_id} not found"
+        assert name in task["inputs"], f"Input {name} not found in task {task_id}"
+        assert name not in task["params"], f"Input {name} is a stream"
+
+        url = await data_manager.presign_url(task["inputs"][name])
+        if url is None:
+            url = f"./assets/task/input?task_id={task_id}&name={name}"
+        return {"url": url}
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.get("/assets/task/result")
+async def assets_task_result(request: Request, user=Depends(verify_user_access_from_query)):
+    try:
+        name = request.query_params["name"]
+        task_id = request.query_params["task_id"]
+        task = await task_manager.query_task(task_id, user_id=user["user_id"])
+        assert task is not None, f"Task {task_id} not found"
+        assert task["status"] == TaskStatus.SUCCEED, f"Task {task_id} not succeed"
+        assert name in task["outputs"], f"Output {name} not found in task {task_id}"
+        assert name not in task["params"], f"Output {name} is a stream"
         data = await data_manager.load_bytes(task["outputs"][name])
 
         #  set correct Content-Type
-        content_type, _ = mimetypes.guess_type(name)
-        if content_type is None:
-            content_type = "application/octet-stream"
+        content_type = guess_file_type(name, "application/octet-stream")
         headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+        headers["Cache-Control"] = "public, max-age=3600"
         return Response(content=data, media_type=content_type, headers=headers)
 
     except Exception as e:
@@ -302,90 +416,22 @@ async def api_v1_task_result(request: Request, user=Depends(verify_user_access_f
         return error_response(str(e), 500)
 
 
-@app.get("/api/v1/task/input")
-async def api_v1_task_input(request: Request, user=Depends(verify_user_access_from_query)):
+@app.get("/assets/task/input")
+async def assets_task_input(request: Request, user=Depends(verify_user_access_from_query)):
     try:
-        # msg = await server_monitor.check_user_busy(user['user_id'])
-        # if msg is not True:
-        #     return error_response(msg, 400)
         name = request.query_params["name"]
         task_id = request.query_params["task_id"]
         task = await task_manager.query_task(task_id, user_id=user["user_id"])
-        if task is None:
-            return error_response(f"Task {task_id} not found", 404)
-        if name not in task["inputs"]:
-            return error_response(f"Input {name} not found in task {task_id}", 404)
-        if name in task["params"]:
-            return error_response(f"Input {name} is a stream", 400)
+        assert task is not None, f"Task {task_id} not found"
+        assert name in task["inputs"], f"Input {name} not found in task {task_id}"
+        assert name not in task["params"], f"Input {name} is a stream"
         data = await data_manager.load_bytes(task["inputs"][name])
 
         #  set correct Content-Type
-        content_type, _ = mimetypes.guess_type(name)
-        if content_type is None:
-            content_type = "application/octet-stream"
+        content_type = guess_file_type(name, "application/octet-stream")
         headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+        headers["Cache-Control"] = "public, max-age=3600"
         return Response(content=data, media_type=content_type, headers=headers)
-
-    except Exception as e:
-        traceback.print_exc()
-        return error_response(str(e), 500)
-
-
-@app.get("/api/v1/task/thumbnails")
-async def api_v1_task_thumbnails(request: Request, user=Depends(verify_user_access)):
-    """一次性获取所有任务的缩略图"""
-    try:
-        user_id = user["user_id"]
-        msg = await server_monitor.check_user_busy(user_id)
-        if msg is not True:
-            return error_response(msg, 400)
-
-        # 获取所有任务
-        tasks = await task_manager.list_tasks(user_id=user_id, limit=1000)  # 限制最多1000个任务
-        logger.info(f"获取到 {len(tasks)} 个任务")
-
-        # 转换任务状态为字符串
-        for task in tasks:
-            task["status"] = task["status"].name
-
-        thumbnails = {}
-
-        for task in tasks:
-            task_id = task["task_id"]
-            if task.get("inputs"):
-                # 查找输入中的图片文件
-                image_inputs = []
-                for key, value in task["inputs"].items():
-                    if key.lower().find("image") != -1 or str(value).lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")):
-                        image_inputs.append(key)
-
-                if image_inputs:
-                    # 使用第一个图片作为缩略图
-                    first_image_key = image_inputs[0]
-                    try:
-                        # 获取图片数据
-                        image_data = await data_manager.load_bytes(task["inputs"][first_image_key])
-
-                        # 转换为base64
-                        import base64
-
-                        image_base64 = base64.b64encode(image_data).decode("utf-8")
-
-                        # 根据文件扩展名确定MIME类型
-                        content_type, _ = mimetypes.guess_type(first_image_key)
-                        if content_type is None:
-                            content_type = "image/jpeg"  # 默认类型
-
-                        # 构建data URL
-                        data_url = f"data:{content_type};base64,{image_base64}"
-                        thumbnails[task_id] = data_url
-
-                    except Exception as e:
-                        logger.warning(f"Failed to load thumbnail for task {task_id}: {e}")
-                        # 如果加载失败，不添加到结果中
-
-        result = {"thumbnails": thumbnails, "total_tasks": len(tasks), "total_thumbnails": len(thumbnails)}
-        return result
 
     except Exception as e:
         traceback.print_exc()
@@ -395,9 +441,6 @@ async def api_v1_task_thumbnails(request: Request, user=Depends(verify_user_acce
 @app.get("/api/v1/task/cancel")
 async def api_v1_task_cancel(request: Request, user=Depends(verify_user_access)):
     try:
-        msg = await server_monitor.check_user_busy(user["user_id"])
-        if msg is not True:
-            return error_response(msg, 400)
         task_id = request.query_params["task_id"]
         ret = await task_manager.cancel_task(task_id, user_id=user["user_id"])
         logger.warning(f"Task {task_id} cancelled: {ret}")
@@ -413,16 +456,47 @@ async def api_v1_task_cancel(request: Request, user=Depends(verify_user_access))
 @app.get("/api/v1/task/resume")
 async def api_v1_task_resume(request: Request, user=Depends(verify_user_access)):
     try:
-        msg = await server_monitor.check_user_busy(user["user_id"], active_new_task=True)
-        if msg is not True:
-            return error_response(msg, 400)
         task_id = request.query_params["task_id"]
-        ret = await task_manager.resume_task(task_id, user_id=user["user_id"], all_subtask=True)
+        ret = await task_manager.resume_task(task_id, user_id=user["user_id"], all_subtask=False)
         if ret:
             await prepare_subtasks(task_id)
             return {"msg": "ok"}
         else:
             return error_response(f"Task {task_id} resume failed", 400)
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.delete("/api/v1/task/delete")
+async def api_v1_task_delete(request: Request, user=Depends(verify_user_access)):
+    try:
+        task_id = request.query_params["task_id"]
+
+        task = await task_manager.query_task(task_id, user["user_id"], only_task=True)
+        if not task:
+            return error_response("Task not found", 404)
+
+        if task["status"] not in FinishedStatus:
+            return error_response("Only finished tasks can be deleted", 400)
+
+        # delete input files
+        for _, input_filename in task["inputs"].items():
+            await data_manager.delete_bytes(input_filename)
+            logger.info(f"Deleted input file: {input_filename}")
+
+        # delete output files
+        for _, output_filename in task["outputs"].items():
+            await data_manager.delete_bytes(output_filename)
+            logger.info(f"Deleted output file: {output_filename}")
+
+        # delete task record
+        success = await task_manager.delete_task(task_id, user["user_id"])
+        if success:
+            logger.info(f"Task {task_id} deleted by user {user['user_id']}")
+            return JSONResponse({"message": "Task deleted successfully"})
+        else:
+            return error_response("Failed to delete task", 400)
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
@@ -463,6 +537,8 @@ async def api_v1_worker_fetch(request: Request, valid=Depends(verify_worker_acce
         check_task.cancel()
 
         subtasks = [] if subtasks is None else subtasks
+        for sub in subtasks:
+            await server_monitor.pending_subtasks_sub(sub["queue"], sub["task_id"])
         valid_subtasks = await task_manager.run_subtasks(subtasks, identity)
         valids = [sub["task_id"] for sub in valid_subtasks]
 
@@ -541,37 +617,6 @@ async def api_v1_worker_ping_subtask(request: Request, valid=Depends(verify_work
         return error_response(str(e), 500)
 
 
-@app.post("/api/v1/worker/ping/life")
-async def api_v1_worker_ping_life(request: Request, valid=Depends(verify_worker_access)):
-    try:
-        params = await request.json()
-        logger.info(f"{params}")
-        identity = params.pop("worker_identity")
-        keys = params.pop("worker_keys")
-        worker = model_pipelines.get_worker(keys)
-
-        # worker lost, init it again
-        queue = server_monitor.identity_to_queue.get(identity, None)
-        if queue is None:
-            queue = worker["queue"]
-            logger.warning(f"worker {identity} lost, refetching it")
-            await server_monitor.worker_update(queue, identity, WorkerStatus.FETCHING)
-        else:
-            assert queue == worker["queue"], f"worker {identity} queue not matched: {queue} vs {worker['queue']}"
-
-        metrics = await server_monitor.cal_metrics()
-        ret = {"queue": queue, "metrics": metrics[queue]}
-        if identity in metrics[queue]["del_worker_identities"]:
-            ret["msg"] = "delete"
-        else:
-            ret["msg"] = "ok"
-        return ret
-
-    except Exception as e:
-        traceback.print_exc()
-        return error_response(str(e), 500)
-
-
 @app.get("/metrics")
 async def api_v1_monitor_metrics():
     try:
@@ -581,24 +626,29 @@ async def api_v1_monitor_metrics():
         return error_response(str(e), 500)
 
 
-# Template API endpoints
-@app.get("/api/v1/template/{template_type}/{filename}")
-async def api_v1_template(template_type: str, filename: str):
-    """获取模板文件"""
+@app.get("/api/v1/template/asset_url/{template_type}/{filename}")
+async def api_v1_template_asset_url(template_type: str, filename: str, valid=Depends(verify_user_access)):
     try:
-        import os
+        url = await data_manager.presign_template_url(template_type, filename)
+        if url is None:
+            url = f"./assets/template/{template_type}/{filename}"
+        headers = {"Cache-Control": "public, max-age=3600"}
+        return Response(content=json.dumps({"url": url}), media_type="application/json", headers=headers)
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
 
-        template_dir = os.path.join(os.path.dirname(__file__), "..", "template")
-        file_path = os.path.join(template_dir, template_type, filename)
 
-        # 安全检查：确保文件在template目录内
-        if not os.path.exists(file_path) or not file_path.startswith(template_dir):
-            return error_response(f"Template file not found", 404)
+# Template API endpoints
+@app.get("/assets/template/{template_type}/{filename}")
+async def assets_template(template_type: str, filename: str, valid=Depends(verify_user_access_from_query)):
+    """get template file"""
+    try:
+        if not await data_manager.template_file_exists(template_type, filename):
+            return error_response(f"template file {template_type} {filename} not found", 404)
+        data = await data_manager.load_template_file(template_type, filename)
 
-        with open(file_path, "rb") as f:
-            data = f.read()
-
-        # 根据文件类型设置媒体类型
+        # set media type according to file type
         if template_type == "images":
             if filename.lower().endswith(".png"):
                 media_type = "image/png"
@@ -613,43 +663,132 @@ async def api_v1_template(template_type: str, filename: str):
                 media_type = "audio/wav"
             else:
                 media_type = "application/octet-stream"
+        elif template_type == "videos":
+            if filename.lower().endswith(".mp4"):
+                media_type = "video/mp4"
+            elif filename.lower().endswith(".webm"):
+                media_type = "video/webm"
+            elif filename.lower().endswith(".avi"):
+                media_type = "video/x-msvideo"
+            else:
+                media_type = "video/mp4"  # default to mp4
         else:
             media_type = "application/octet-stream"
 
-        return Response(content=data, media_type=media_type)
+        headers = {"Cache-Control": "public, max-age=3600"}
+        return Response(content=data, media_type=media_type, headers=headers)
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
 
 
 @app.get("/api/v1/template/list")
-async def api_v1_template_list():
-    """获取模板文件列表"""
+async def api_v1_template_list(request: Request, valid=Depends(verify_user_access)):
+    """get template file list (support pagination)"""
     try:
-        import glob
-        import os
+        # check page params
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 12))
+        if page < 1 or page_size < 1:
+            return error_response("page and page_size must be greater than 0", 400)
+        # limit page size
+        page_size = min(page_size, 100)
 
-        template_dir = os.path.join(os.path.dirname(__file__), "..", "template")
+        all_images = await data_manager.list_template_files("images")
+        all_audios = await data_manager.list_template_files("audios")
+        all_videos = await data_manager.list_template_files("videos")
+        all_images = [] if all_images is None else all_images
+        all_audios = [] if all_audios is None else all_audios
+        all_videos = [] if all_videos is None else all_videos
 
-        templates = {"images": [], "audios": []}
+        # page info
+        total_images = len(all_images)
+        total_audios = len(all_audios)
+        total_videos = len(all_videos)
+        total_pages = (max(total_images, total_audios, total_videos) + page_size - 1) // page_size
 
-        # 获取图片模板
-        image_dir = os.path.join(template_dir, "images")
-        if os.path.exists(image_dir):
-            for file_path in glob.glob(os.path.join(image_dir, "*")):
-                if os.path.isfile(file_path):
-                    filename = os.path.basename(file_path)
-                    templates["images"].append({"filename": filename, "url": f"/api/v1/template/images/{filename}"})
+        paginated_image_templates = []
+        paginated_audio_templates = []
+        paginated_video_templates = []
 
-        # 获取音频模板
-        audio_dir = os.path.join(template_dir, "audios")
-        if os.path.exists(audio_dir):
-            for file_path in glob.glob(os.path.join(audio_dir, "*")):
-                if os.path.isfile(file_path):
-                    filename = os.path.basename(file_path)
-                    templates["audios"].append({"filename": filename, "url": f"/api/v1/template/audios/{filename}"})
+        if page <= total_pages:
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            all_images.sort(key=lambda x: x)
+            all_audios.sort(key=lambda x: x)
+            all_videos.sort(key=lambda x: x)
 
-        return {"templates": templates}
+            for image in all_images[start_idx:end_idx]:
+                url = await data_manager.presign_template_url("images", image)
+                if url is None:
+                    url = f"./assets/template/images/{image}"
+                paginated_image_templates.append({"filename": image, "url": url})
+
+            for audio in all_audios[start_idx:end_idx]:
+                url = await data_manager.presign_template_url("audios", audio)
+                if url is None:
+                    url = f"./assets/template/audios/{audio}"
+                paginated_audio_templates.append({"filename": audio, "url": url})
+
+            for video in all_videos[start_idx:end_idx]:
+                url = await data_manager.presign_template_url("videos", video)
+                if url is None:
+                    url = f"./assets/template/videos/{video}"
+                paginated_video_templates.append({"filename": video, "url": url})
+
+        return {
+            "templates": {"images": paginated_image_templates, "audios": paginated_audio_templates, "videos": paginated_video_templates},
+            "pagination": {"page": page, "page_size": page_size, "total": max(total_images, total_audios), "total_pages": total_pages},
+        }
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.get("/api/v1/template/tasks")
+async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_access)):
+    """get template task list (support pagination)"""
+    try:
+        # check page params
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 12))
+        category = request.query_params.get("category", None)
+        search = request.query_params.get("search", None)
+        if page < 1 or page_size < 1:
+            return error_response("page and page_size must be greater than 0", 400)
+        # limit page size
+        page_size = min(page_size, 100)
+
+        all_templates = []
+        template_files = await data_manager.list_template_files("tasks")
+        template_files = [] if template_files is None else template_files
+
+        for template_file in template_files:
+            try:
+                bytes_data = await data_manager.load_template_file("tasks", template_file)
+                template_data = json.loads(bytes_data)
+                if category is not None and category != "all" and category not in template_data["task"]["tags"]:
+                    continue
+                if search is not None and search not in template_data["task"]["params"]["prompt"] + template_data["task"]["params"]["negative_prompt"] + template_data["task"][
+                    "model_cls"
+                ] + template_data["task"]["stage"] + template_data["task"]["task_type"] + ",".join(template_data["task"]["tags"]):
+                    continue
+                all_templates.append(template_data["task"])
+            except Exception as e:
+                logger.warning(f"Failed to load template file {template_file}: {e}")
+
+        # page info
+        total_templates = len(all_templates)
+        total_pages = (total_templates + page_size - 1) // page_size
+        paginated_templates = []
+
+        if page <= total_pages:
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            paginated_templates = all_templates[start_idx:end_idx]
+
+        return {"templates": paginated_templates, "pagination": {"page": page, "page_size": page_size, "total": total_templates, "total_pages": total_pages}}
+
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
@@ -674,32 +813,36 @@ if __name__ == "__main__":
     parser.add_argument("--task_url", type=str, default=dft_task_url)
     parser.add_argument("--data_url", type=str, default=dft_data_url)
     parser.add_argument("--queue_url", type=str, default=dft_queue_url)
+    parser.add_argument("--redis_url", type=str, default="")
+    parser.add_argument("--template_dir", type=str, default="")
     parser.add_argument("--ip", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
-    with ProfilingContext4DebugL1("Init Server Cost"):
-        model_pipelines = Pipeline(args.pipeline_json)
-        auth_manager = AuthManager()
-        if args.task_url.startswith("/"):
-            task_manager = LocalTaskManager(args.task_url, metrics_monitor)
-        elif args.task_url.startswith("postgresql://"):
-            task_manager = PostgresSQLTaskManager(args.task_url, metrics_monitor)
-        else:
-            raise NotImplementedError
-        if args.data_url.startswith("/"):
-            data_manager = LocalDataManager(args.data_url)
-        elif args.data_url.startswith("{"):
-            data_manager = S3DataManager(args.data_url)
-        else:
-            raise NotImplementedError
-        if args.queue_url.startswith("/"):
-            queue_manager = LocalQueueManager(args.queue_url)
-        elif args.queue_url.startswith("amqp://"):
-            queue_manager = RabbitMQQueueManager(args.queue_url)
-        else:
-            raise NotImplementedError
+    model_pipelines = Pipeline(args.pipeline_json)
+    auth_manager = AuthManager()
+    if args.task_url.startswith("/"):
+        task_manager = LocalTaskManager(args.task_url, metrics_monitor)
+    elif args.task_url.startswith("postgresql://"):
+        task_manager = PostgresSQLTaskManager(args.task_url, metrics_monitor)
+    else:
+        raise NotImplementedError
+    if args.data_url.startswith("/"):
+        data_manager = LocalDataManager(args.data_url, args.template_dir)
+    elif args.data_url.startswith("{"):
+        data_manager = S3DataManager(args.data_url, args.template_dir)
+    else:
+        raise NotImplementedError
+    if args.queue_url.startswith("/"):
+        queue_manager = LocalQueueManager(args.queue_url)
+    elif args.queue_url.startswith("amqp://"):
+        queue_manager = RabbitMQQueueManager(args.queue_url)
+    else:
+        raise NotImplementedError
+    if args.redis_url:
+        server_monitor = RedisServerMonitor(model_pipelines, task_manager, queue_manager, args.redis_url)
+    else:
         server_monitor = ServerMonitor(model_pipelines, task_manager, queue_manager)
 
     uvicorn.run(app, host=args.ip, port=args.port, reload=False, workers=1)

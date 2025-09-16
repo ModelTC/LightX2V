@@ -31,6 +31,8 @@ class BaseWorker:
         if config.parallel:
             self.rank = dist.get_rank()
             set_parallel_config(config)
+            seed_all(config.seed)
+        torch.set_grad_enabled(False)
         self.runner = RUNNER_REGISTER[config.model_cls](config)
         # fixed config
         self.fixed_config = copy.deepcopy(self.runner.config)
@@ -189,15 +191,6 @@ class PipelineWorker(BaseWorker):
         self.runner.init_modules()
         self.run_func = self.runner.run_pipeline
 
-    def init_temp_params(self):
-        cur_dir = os.path.dirname(os.path.abspath(__file__))
-        base_dir = os.path.abspath(os.path.join(cur_dir, "../../.."))
-        self.runner.config["prompt"] = "The video features a old lady is saying something and knitting a sweater."
-        if self.runner.config.task == "i2v":
-            self.runner.config["image_path"] = os.path.join(base_dir, "assets", "inputs", "audio", "15.png")
-        if self.is_audio_model():
-            self.runner.config["audio_path"] = os.path.join(base_dir, "assets", "inputs", "audio", "15.wav")
-
     @class_try_catch_async_with_thread
     async def run(self, inputs, outputs, params, data_manager):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -323,7 +316,7 @@ class DiTWorker(BaseWorker):
         future = asyncio.Future()
         self.thread = RunnerThread(asyncio.get_running_loop(), future, self.run_dit, self.rank)
         self.thread.start()
-        status, (out, _) = await future
+        status, out = await future
         if not status:
             return False
 

@@ -1,5 +1,6 @@
 import io
 import json
+import os
 
 import torch
 from PIL import Image
@@ -9,13 +10,22 @@ from lightx2v.deploy.common.utils import class_try_catch_async
 
 class BaseDataManager:
     def __init__(self):
-        pass
+        self.template_images_dir = None
+        self.template_audios_dir = None
+        self.template_videos_dir = None
+        self.template_tasks_dir = None
 
     async def init(self):
         pass
 
     async def close(self):
         pass
+
+    def fmt_path(self, base, filename, abs_path=None):
+        if abs_path:
+            return abs_path
+        else:
+            return os.path.join(base, filename)
 
     def to_device(self, data, device):
         if isinstance(data, dict):
@@ -27,14 +37,17 @@ class BaseDataManager:
         else:
             return data
 
-    async def save_bytes(self, bytes_data, filename):
+    async def save_bytes(self, bytes_data, filename, abs_path=None):
         raise NotImplementedError
 
-    async def load_bytes(self, filename):
+    async def load_bytes(self, filename, abs_path=None):
         raise NotImplementedError
 
-    async def delete_bytes(self, filename):
+    async def delete_bytes(self, filename, abs_path=None):
         raise NotImplementedError
+
+    async def presign_url(self, filename, abs_path=None):
+        return None
 
     async def recurrent_save(self, data, prefix):
         if isinstance(data, dict):
@@ -129,6 +142,60 @@ class BaseDataManager:
             "VIDEO": self.delete_bytes,
         }
         return maps[type]
+
+    def get_template_dir(self, template_type):
+        if template_type == "audios":
+            return self.template_audios_dir
+        elif template_type == "images":
+            return self.template_images_dir
+        elif template_type == "videos":
+            return self.template_videos_dir
+        elif template_type == "tasks":
+            return self.template_tasks_dir
+        else:
+            raise ValueError(f"Invalid template type: {template_type}")
+
+    @class_try_catch_async
+    async def list_template_files(self, template_type):
+        template_dir = self.get_template_dir(template_type)
+        if template_dir is None:
+            return []
+        return await self.list_files(base_dir=template_dir)
+
+    @class_try_catch_async
+    async def load_template_file(self, template_type, filename):
+        template_dir = self.get_template_dir(template_type)
+        if template_dir is None:
+            return None
+        return await self.load_bytes(None, abs_path=os.path.join(template_dir, filename))
+
+    @class_try_catch_async
+    async def template_file_exists(self, template_type, filename):
+        template_dir = self.get_template_dir(template_type)
+        if template_dir is None:
+            return None
+        return await self.file_exists(None, abs_path=os.path.join(template_dir, filename))
+
+    @class_try_catch_async
+    async def delete_template_file(self, template_type, filename):
+        template_dir = self.get_template_dir(template_type)
+        if template_dir is None:
+            return None
+        return await self.delete_bytes(None, abs_path=os.path.join(template_dir, filename))
+
+    @class_try_catch_async
+    async def save_template_file(self, template_type, filename, bytes_data):
+        template_dir = self.get_template_dir(template_type)
+        if template_dir is None:
+            return None
+        return await self.save_bytes(bytes_data, None, abs_path=os.path.join(template_dir, filename))
+
+    @class_try_catch_async
+    async def presign_template_url(self, template_type, filename):
+        template_dir = self.get_template_dir(template_type)
+        if template_dir is None:
+            return None
+        return await self.presign_url(None, abs_path=os.path.join(template_dir, filename))
 
 
 # Import data manager implementations

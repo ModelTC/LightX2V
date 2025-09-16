@@ -4,6 +4,7 @@ import json
 import os
 
 import aioboto3
+import tos
 from botocore.client import Config
 from loguru import logger
 
@@ -12,7 +13,8 @@ from lightx2v.deploy.data_manager import BaseDataManager
 
 
 class S3DataManager(BaseDataManager):
-    def __init__(self, config_string, max_retries=3):
+    def __init__(self, config_string, template_dir, max_retries=3):
+        super().__init__()
         self.name = "s3"
         self.config = json.loads(config_string)
         self.max_retries = max_retries
@@ -22,16 +24,36 @@ class S3DataManager(BaseDataManager):
         self.endpoint_url = self.config["endpoint_url"]
         self.base_path = self.config["base_path"]
         self.connect_timeout = self.config.get("connect_timeout", 60)
-        self.read_timeout = self.config.get("read_timeout", 10)
+        self.read_timeout = self.config.get("read_timeout", 60)
         self.write_timeout = self.config.get("write_timeout", 10)
+        self.addressing_style = self.config.get("addressing_style", None)
+        self.region = self.config.get("region", None)
         self.session = None
         self.s3_client = None
+        self.presign_client = None
+        if template_dir:
+            self.template_images_dir = os.path.join(template_dir, "images")
+            self.template_audios_dir = os.path.join(template_dir, "audios")
+            self.template_videos_dir = os.path.join(template_dir, "videos")
+            self.template_tasks_dir = os.path.join(template_dir, "tasks")
+
+    async def init_presign_client(self):
+        # init tos client for volces.com
+        if "volces.com" in self.endpoint_url:
+            self.presign_client = tos.TosClientV2(
+                self.aws_access_key_id,
+                self.aws_secret_access_key,
+                self.endpoint_url.replace("tos-s3-", "tos-"),
+                self.region,
+            )
 
     async def init(self):
         for i in range(self.max_retries):
             try:
                 logger.info(f"S3DataManager init with config: {self.config} (attempt {i + 1}/{self.max_retries}) ...")
-
+                s3_config = {"payload_signing_enabled": True}
+                if self.addressing_style:
+                    s3_config["addressing_style"] = self.addressing_style
                 self.session = aioboto3.Session()
                 self.s3_client = await self.session.client(
                     "s3",
@@ -40,7 +62,7 @@ class S3DataManager(BaseDataManager):
                     endpoint_url=self.endpoint_url,
                     config=Config(
                         signature_version="s3v4",
-                        s3={"payload_signing_enabled": True},
+                        s3=s3_config,
                         connect_timeout=self.connect_timeout,
                         read_timeout=self.read_timeout,
                         parameter_validation=False,
@@ -55,6 +77,7 @@ class S3DataManager(BaseDataManager):
                     logger.info(f"check bucket {self.bucket_name} error: {e}, try to create it...")
                     await self.s3_client.create_bucket(Bucket=self.bucket_name)
 
+                await self.init_presign_client()
                 logger.info(f"Successfully init S3 bucket: {self.bucket_name} with timeouts - connect: {self.connect_timeout}s, read: {self.read_timeout}s, write: {self.write_timeout}s")
                 return
             except Exception as e:
@@ -68,8 +91,8 @@ class S3DataManager(BaseDataManager):
             self.session = None
 
     @class_try_catch_async
-    async def save_bytes(self, bytes_data, filename):
-        filename = os.path.join(self.base_path, filename)
+    async def save_bytes(self, bytes_data, filename, abs_path=None):
+        filename = self.fmt_path(self.base_path, filename, abs_path)
         content_sha256 = hashlib.sha256(bytes_data).hexdigest()
         await self.s3_client.put_object(
             Bucket=self.bucket_name,
@@ -81,34 +104,46 @@ class S3DataManager(BaseDataManager):
         return True
 
     @class_try_catch_async
-    async def load_bytes(self, filename):
-        filename = os.path.join(self.base_path, filename)
+    async def load_bytes(self, filename, abs_path=None):
+        filename = self.fmt_path(self.base_path, filename, abs_path)
         response = await self.s3_client.get_object(Bucket=self.bucket_name, Key=filename)
         return await response["Body"].read()
 
     @class_try_catch_async
-    async def delete_bytes(self, filename):
-        filename = os.path.join(self.base_path, filename)
+    async def delete_bytes(self, filename, abs_path=None):
+        filename = self.fmt_path(self.base_path, filename, abs_path)
         await self.s3_client.delete_object(Bucket=self.bucket_name, Key=filename)
         logger.info(f"deleted s3 file {filename}")
         return True
 
-    async def file_exists(self, filename):
-        filename = os.path.join(self.base_path, filename)
+    @class_try_catch_async
+    async def file_exists(self, filename, abs_path=None):
+        filename = self.fmt_path(self.base_path, filename, abs_path)
         try:
             await self.s3_client.head_object(Bucket=self.bucket_name, Key=filename)
             return True
         except Exception:
             return False
 
-    async def list_files(self, prefix=""):
-        prefix = os.path.join(self.base_path, prefix)
+    @class_try_catch_async
+    async def list_files(self, base_dir=None):
+        prefix = base_dir if base_dir else self.base_path
         response = await self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
         files = []
         if "Contents" in response:
             for obj in response["Contents"]:
-                files.append(obj["Key"])
+                files.append(obj["Key"].replace(prefix + "/", ""))
         return files
+
+    @class_try_catch_async
+    async def presign_url(self, filename, abs_path=None):
+        filename = self.fmt_path(self.base_path, filename, abs_path)
+        if self.presign_client:
+            expires = self.config.get("presign_expires", 24 * 60 * 60)
+            out = await asyncio.to_thread(self.presign_client.pre_signed_url, tos.HttpMethodType.Http_Method_Get, self.bucket_name, filename, expires)
+            return out.signed_url
+        else:
+            return None
 
 
 async def test():
@@ -126,7 +161,7 @@ async def test():
         "write_timeout": 10,
     }
 
-    m = S3DataManager(json.dumps(s3_config))
+    m = S3DataManager(json.dumps(s3_config), None)
     await m.init()
 
     img = Image.open("../../../assets/img_lightx2v.png")

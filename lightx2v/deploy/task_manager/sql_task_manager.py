@@ -9,8 +9,6 @@ from loguru import logger
 from lightx2v.deploy.common.utils import class_try_catch_async
 from lightx2v.deploy.task_manager import ActiveStatus, BaseTaskManager, FinishedStatus, TaskStatus
 
-ASYNC_LOCK = asyncio.Lock()
-
 
 class PostgresSQLTaskManager(BaseTaskManager):
     def __init__(self, db_url, metrics_monitor=None):
@@ -198,6 +196,15 @@ class PostgresSQLTaskManager(BaseTaskManager):
             subtasks.append(sub)
         return task, subtasks
 
+    def check_update_valid(self, ret, prefix, query, params):
+        if ret.startswith("UPDATE "):
+            count = int(ret.split(" ")[1])
+            assert count > 0, f"{prefix}: no row changed: {query} {params}"
+            return count
+        else:
+            logger.warning(f"parse postsql update ret failed: {ret}")
+            return 0
+
     async def update_task(self, conn, task_id, **kwargs):
         query = f"UPDATE {self.table_tasks} SET "
         conds = ["update_t = $1"]
@@ -211,10 +218,19 @@ class PostgresSQLTaskManager(BaseTaskManager):
             param_idx += 1
             conds.append(f"extra_info = ${param_idx}")
             params.append(json.dumps(kwargs["extra_info"], ensure_ascii=False))
-        query += " ,".join(conds)
-        query += f" WHERE task_id = ${param_idx + 1}"
+
+        limit_conds = [f"task_id = ${param_idx + 1}"]
+        param_idx += 1
         params.append(task_id)
-        await conn.execute(query, *params)
+
+        if "src_status" in kwargs:
+            param_idx += 1
+            limit_conds.append(f"status = ${param_idx}")
+            params.append(kwargs["src_status"].name)
+
+        query += " ,".join(conds) + " WHERE " + " AND ".join(limit_conds)
+        ret = await conn.execute(query, *params)
+        return self.check_update_valid(ret, "update_task", query, params)
 
     async def update_subtask(self, conn, task_id, worker_name, **kwargs):
         query = f"UPDATE {self.table_subtasks} SET "
@@ -249,10 +265,19 @@ class PostgresSQLTaskManager(BaseTaskManager):
             param_idx += 1
             conds.append(f"extra_info = ${param_idx}")
             params.append(json.dumps(kwargs["extra_info"], ensure_ascii=False))
-        query += " ,".join(conds)
-        query += f" WHERE task_id = ${param_idx + 1} AND worker_name = ${param_idx + 2}"
+
+        limit_conds = [f"task_id = ${param_idx + 1}", f"worker_name = ${param_idx + 2}"]
+        param_idx += 2
         params.extend([task_id, worker_name])
-        await conn.execute(query, *params)
+
+        if "src_status" in kwargs:
+            param_idx += 1
+            limit_conds.append(f"status = ${param_idx}")
+            params.append(kwargs["src_status"].name)
+
+        query += " ,".join(conds) + " WHERE " + " AND ".join(limit_conds)
+        ret = await conn.execute(query, *params)
+        return self.check_update_valid(ret, "update_subtask", query, params)
 
     @class_try_catch_async
     async def insert_task(self, task, subtasks):
@@ -384,7 +409,8 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 query += " WHERE " + " AND ".join(conds)
 
             if not count:
-                query += " ORDER BY create_t DESC"
+                sort_key = "update_t" if kwargs.get("sort_by_update_t", False) else "create_t"
+                query += f" ORDER BY {sort_key} DESC"
 
             if "limit" in kwargs:
                 param_idx += 1
@@ -399,10 +425,26 @@ class PostgresSQLTaskManager(BaseTaskManager):
             rows = await conn.fetch(query, *params)
             if count:
                 return rows[0]["count"]
+
+            # query subtasks with task
+            subtasks = {}
+            if not kwargs.get("subtasks", False):
+                subtask_query = f"SELECT {self.table_subtasks}.* FROM ({query}) AS t \
+                                JOIN {self.table_subtasks} ON t.task_id = {self.table_subtasks}.task_id"
+                subtask_rows = await conn.fetch(subtask_query, *params)
+                for row in subtask_rows:
+                    sub = dict(row)
+                    self.parse_dict(sub)
+                    if sub["task_id"] not in subtasks:
+                        subtasks[sub["task_id"]] = []
+                    subtasks[sub["task_id"]].append(sub)
+
             tasks = []
             for row in rows:
                 task = dict(row)
                 self.parse_dict(task)
+                if not kwargs.get("subtasks", False):
+                    task["subtasks"] = subtasks.get(task["task_id"], [])
                 tasks.append(task)
             return tasks
         except:  # noqa
@@ -425,8 +467,8 @@ class PostgresSQLTaskManager(BaseTaskManager):
     @class_try_catch_async
     async def next_subtasks(self, task_id):
         conn = await self.get_conn()
+        records = []
         try:
-            await ASYNC_LOCK.acquire()
             async with conn.transaction(isolation="read_uncommitted"):
                 task, subtasks = await self.load(conn, task_id)
                 if task["status"] not in ActiveStatus:
@@ -445,24 +487,31 @@ class PostgresSQLTaskManager(BaseTaskManager):
                                 break
                         if dep_ok:
                             sub["params"] = task["params"]
-                            self.mark_subtask_change(sub, sub["status"], TaskStatus.PENDING)
-                            await self.update_subtask(conn, task_id, sub["worker_name"], status=TaskStatus.PENDING, extra_info=sub["extra_info"])
+                            self.mark_subtask_change(records, sub, sub["status"], TaskStatus.PENDING)
+                            await self.update_subtask(
+                                conn,
+                                task_id,
+                                sub["worker_name"],
+                                status=TaskStatus.PENDING,
+                                extra_info=sub["extra_info"],
+                                src_status=sub["status"],
+                            )
                             nexts.append(sub)
                 if len(nexts) > 0:
                     await self.update_task(conn, task_id, status=TaskStatus.PENDING)
+                self.metrics_commit(records)
                 return nexts
         except:  # noqa
             logger.error(f"next_subtasks error: {traceback.format_exc()}")
             return None
         finally:
-            ASYNC_LOCK.release()
             await self.release_conn(conn)
 
     @class_try_catch_async
     async def run_subtasks(self, cands, worker_identity):
         conn = await self.get_conn()
+        records = []
         try:
-            await ASYNC_LOCK.acquire()
             async with conn.transaction(isolation="read_uncommitted"):
                 valids = []
                 for cand in cands:
@@ -473,24 +522,32 @@ class PostgresSQLTaskManager(BaseTaskManager):
                     if task["status"] in [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]:
                         continue
 
-                    self.mark_subtask_change(subs[0], subs[0]["status"], TaskStatus.RUNNING)
-                    await self.update_subtask(conn, task_id, worker_name, status=TaskStatus.RUNNING, worker_identity=worker_identity, ping_t=True, extra_info=subs[0]["extra_info"])
+                    self.mark_subtask_change(records, subs[0], subs[0]["status"], TaskStatus.RUNNING)
+                    await self.update_subtask(
+                        conn,
+                        task_id,
+                        worker_name,
+                        status=TaskStatus.RUNNING,
+                        worker_identity=worker_identity,
+                        ping_t=True,
+                        extra_info=subs[0]["extra_info"],
+                        src_status=subs[0]["status"],
+                    )
                     await self.update_task(conn, task_id, status=TaskStatus.RUNNING)
                     valids.append(cand)
                     break
+                self.metrics_commit(records)
                 return valids
         except:  # noqa
             logger.error(f"run_subtasks error: {traceback.format_exc()}")
             return []
         finally:
-            ASYNC_LOCK.release()
             await self.release_conn(conn)
 
     @class_try_catch_async
     async def ping_subtask(self, task_id, worker_name, worker_identity):
         conn = await self.get_conn()
         try:
-            await ASYNC_LOCK.acquire()
             async with conn.transaction(isolation="read_uncommitted"):
                 task, subtasks = await self.load(conn, task_id)
                 for sub in subtasks:
@@ -504,14 +561,13 @@ class PostgresSQLTaskManager(BaseTaskManager):
             logger.error(f"ping_subtask error: {traceback.format_exc()}")
             return False
         finally:
-            ASYNC_LOCK.release()
             await self.release_conn(conn)
 
     @class_try_catch_async
     async def finish_subtasks(self, task_id, status, worker_identity=None, worker_name=None, fail_msg=None, should_running=False):
         conn = await self.get_conn()
+        records = []
         try:
-            await ASYNC_LOCK.acquire()
             async with conn.transaction(isolation="read_uncommitted"):
                 task, subtasks = await self.load(conn, task_id)
                 subs = subtasks
@@ -529,11 +585,19 @@ class PostgresSQLTaskManager(BaseTaskManager):
                         if should_running and sub["status"] != TaskStatus.RUNNING:
                             logger.warning(f"task {task_id} is not running, skip finish subtask: {sub}")
                             continue
-                        self.mark_subtask_change(sub, sub["status"], status, fail_msg=fail_msg)
-                        await self.update_subtask(conn, task_id, sub["worker_name"], status=status, extra_info=sub["extra_info"])
+                        self.mark_subtask_change(records, sub, sub["status"], status, fail_msg=fail_msg)
+                        await self.update_subtask(
+                            conn,
+                            task_id,
+                            sub["worker_name"],
+                            status=status,
+                            extra_info=sub["extra_info"],
+                            src_status=sub["status"],
+                        )
                         sub["status"] = status
 
                 if task["status"] == TaskStatus.CANCEL:
+                    self.metrics_commit(records)
                     return TaskStatus.CANCEL
 
                 running_subs = []
@@ -547,57 +611,93 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 # some subtask failed, we should fail all other subtasks
                 if failed_sub:
                     if task["status"] != TaskStatus.FAILED:
-                        self.mark_task_end(task, TaskStatus.FAILED)
-                        await self.update_task(conn, task_id, status=TaskStatus.FAILED, extra_info=task["extra_info"])
+                        self.mark_task_end(records, task, TaskStatus.FAILED)
+                        await self.update_task(
+                            conn,
+                            task_id,
+                            status=TaskStatus.FAILED,
+                            extra_info=task["extra_info"],
+                            src_status=task["status"],
+                        )
                     for sub in running_subs:
-                        self.mark_subtask_change(sub, sub["status"], TaskStatus.FAILED, fail_msg="other subtask failed")
-                        await self.update_subtask(conn, task_id, sub["worker_name"], status=TaskStatus.FAILED, extra_info=sub["extra_info"])
+                        self.mark_subtask_change(records, sub, sub["status"], TaskStatus.FAILED, fail_msg="other subtask failed")
+                        await self.update_subtask(
+                            conn,
+                            task_id,
+                            sub["worker_name"],
+                            status=TaskStatus.FAILED,
+                            extra_info=sub["extra_info"],
+                            src_status=sub["status"],
+                        )
+                    self.metrics_commit(records)
                     return TaskStatus.FAILED
 
                 # all subtasks finished and all succeed
                 elif len(running_subs) == 0:
                     if task["status"] != TaskStatus.SUCCEED:
-                        self.mark_task_end(task, TaskStatus.SUCCEED)
-                        await self.update_task(conn, task_id, status=TaskStatus.SUCCEED, extra_info=task["extra_info"])
+                        self.mark_task_end(records, task, TaskStatus.SUCCEED)
+                        await self.update_task(
+                            conn,
+                            task_id,
+                            status=TaskStatus.SUCCEED,
+                            extra_info=task["extra_info"],
+                            src_status=task["status"],
+                        )
+                    self.metrics_commit(records)
                     return TaskStatus.SUCCEED
+
+                self.metrics_commit(records)
                 return None
         except:  # noqa
             logger.error(f"finish_subtasks error: {traceback.format_exc()}")
             return None
         finally:
-            ASYNC_LOCK.release()
             await self.release_conn(conn)
 
     @class_try_catch_async
     async def cancel_task(self, task_id, user_id=None):
         conn = await self.get_conn()
+        records = []
         try:
-            await ASYNC_LOCK.acquire()
             async with conn.transaction(isolation="read_uncommitted"):
                 task, subtasks = await self.load(conn, task_id, user_id)
                 if task["status"] not in ActiveStatus:
-                    return f"Task {task_id} is not in active status (current status: {task['status']}). Only tasks with status CREATED, PENDING, or RUNNING can be cancelled."
+                    return f"Task {task_id} is not in active status (current status: {task['status']}). \
+                        Only tasks with status CREATED, PENDING, or RUNNING can be cancelled."
 
                 for sub in subtasks:
                     if sub["status"] not in FinishedStatus:
-                        self.mark_subtask_change(sub, sub["status"], TaskStatus.CANCEL)
-                        await self.update_subtask(conn, task_id, sub["worker_name"], status=TaskStatus.CANCEL, extra_info=sub["extra_info"])
+                        self.mark_subtask_change(records, sub, sub["status"], TaskStatus.CANCEL)
+                        await self.update_subtask(
+                            conn,
+                            task_id,
+                            sub["worker_name"],
+                            status=TaskStatus.CANCEL,
+                            extra_info=sub["extra_info"],
+                            src_status=sub["status"],
+                        )
 
-                self.mark_task_end(task, TaskStatus.CANCEL)
-                await self.update_task(conn, task_id, status=TaskStatus.CANCEL, extra_info=task["extra_info"])
+                self.mark_task_end(records, task, TaskStatus.CANCEL)
+                await self.update_task(
+                    conn,
+                    task_id,
+                    status=TaskStatus.CANCEL,
+                    extra_info=task["extra_info"],
+                    src_status=task["status"],
+                )
+                self.metrics_commit(records)
                 return True
         except:  # noqa
             logger.error(f"cancel_task error: {traceback.format_exc()}")
             return "unknown cancel error"
         finally:
-            ASYNC_LOCK.release()
             await self.release_conn(conn)
 
     @class_try_catch_async
     async def resume_task(self, task_id, all_subtask=False, user_id=None):
         conn = await self.get_conn()
+        records = []
         try:
-            await ASYNC_LOCK.acquire()
             async with conn.transaction(isolation="read_uncommitted"):
                 task, subtasks = await self.load(conn, task_id, user_id)
                 # the task is not finished
@@ -609,17 +709,55 @@ class PostgresSQLTaskManager(BaseTaskManager):
 
                 for sub in subtasks:
                     if all_subtask or sub["status"] != TaskStatus.SUCCEED:
-                        self.mark_subtask_change(sub, None, TaskStatus.CREATED)
-                        await self.update_subtask(conn, task_id, sub["worker_name"], status=TaskStatus.CREATED, reset_ping_t=True, extra_info=sub["extra_info"])
+                        self.mark_subtask_change(records, sub, None, TaskStatus.CREATED)
+                        await self.update_subtask(
+                            conn,
+                            task_id,
+                            sub["worker_name"],
+                            status=TaskStatus.CREATED,
+                            reset_ping_t=True,
+                            extra_info=sub["extra_info"],
+                            src_status=sub["status"],
+                        )
 
-                self.mark_task_start(task)
-                await self.update_task(conn, task_id, status=TaskStatus.CREATED, extra_info=task["extra_info"])
+                self.mark_task_start(records, task)
+                await self.update_task(
+                    conn,
+                    task_id,
+                    status=TaskStatus.CREATED,
+                    extra_info=task["extra_info"],
+                    src_status=task["status"],
+                )
+                self.metrics_commit(records)
                 return True
         except:  # noqa
             logger.error(f"resume_task error: {traceback.format_exc()}")
             return False
         finally:
-            ASYNC_LOCK.release()
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def delete_task(self, task_id, user_id=None):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                task = await self.load(conn, task_id, user_id, only_task=True)
+
+                # only allow to delete finished tasks
+                if task["status"] not in FinishedStatus:
+                    logger.warning(f"Cannot delete task {task_id} with status {task['status']}, only finished tasks can be deleted")
+                    return False
+
+                # delete subtasks & task record
+                await conn.execute(f"DELETE FROM {self.table_subtasks} WHERE task_id = $1", task_id)
+                await conn.execute(f"DELETE FROM {self.table_tasks} WHERE task_id = $1", task_id)
+                logger.info(f"Task {task_id} and its subtasks deleted successfully")
+                return True
+
+        except:  # noqa
+            logger.error(f"delete_task error: {traceback.format_exc()}")
+            return False
+        finally:
             await self.release_conn(conn)
 
     @class_try_catch_async

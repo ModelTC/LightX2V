@@ -481,7 +481,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
-            self.segment = AudioSegment(audio_array, 0, audio_array.shape[0])
+            end_idx = audio_array.shape[0] // self._audio_processor.audio_frame_rate - self.prev_frame_length
+            self.segment = AudioSegment(audio_array, 0, end_idx)
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
 
@@ -584,6 +585,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.va_reader.start()
 
             self.init_run()
+            if self.config.get("compile", False):
+                self.model.select_graph_for_compile()
             self.video_segment_num = "unlimited"
 
             fetch_timeout = self.va_reader.segment_duration + 1
@@ -611,7 +614,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     segment_idx += 1
 
         finally:
-            if hasattr(self.model, "scheduler"):
+            if hasattr(self.model, "inputs"):
                 self.end_run()
             if self.va_reader:
                 self.va_reader.stop()

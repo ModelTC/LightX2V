@@ -8,38 +8,58 @@ from lightx2v.deploy.data_manager import BaseDataManager
 
 
 class LocalDataManager(BaseDataManager):
-    def __init__(self, local_dir):
+    def __init__(self, local_dir, template_dir):
+        super().__init__()
         self.local_dir = local_dir
         self.name = "local"
         if not os.path.exists(self.local_dir):
             os.makedirs(self.local_dir)
+        if template_dir:
+            self.template_images_dir = os.path.join(template_dir, "images")
+            self.template_audios_dir = os.path.join(template_dir, "audios")
+            self.template_videos_dir = os.path.join(template_dir, "videos")
+            self.template_tasks_dir = os.path.join(template_dir, "tasks")
+            assert os.path.exists(self.template_images_dir), f"{self.template_images_dir} not exists!"
+            assert os.path.exists(self.template_audios_dir), f"{self.template_audios_dir} not exists!"
+            assert os.path.exists(self.template_videos_dir), f"{self.template_videos_dir} not exists!"
+            assert os.path.exists(self.template_tasks_dir), f"{self.template_tasks_dir} not exists!"
 
     @class_try_catch_async
-    async def save_bytes(self, bytes_data, filename):
-        out_path = os.path.join(self.local_dir, filename)
+    async def save_bytes(self, bytes_data, filename, abs_path=None):
+        out_path = self.fmt_path(self.local_dir, filename, abs_path)
         with open(out_path, "wb") as fout:
             fout.write(bytes_data)
             return True
 
     @class_try_catch_async
-    async def load_bytes(self, filename):
-        inp_path = os.path.join(self.local_dir, filename)
+    async def load_bytes(self, filename, abs_path=None):
+        inp_path = self.fmt_path(self.local_dir, filename, abs_path)
         with open(inp_path, "rb") as fin:
             return fin.read()
 
     @class_try_catch_async
-    async def delete_bytes(self, filename):
-        inp_path = os.path.join(self.local_dir, filename)
+    async def delete_bytes(self, filename, abs_path=None):
+        inp_path = self.fmt_path(self.local_dir, filename, abs_path)
         os.remove(inp_path)
         logger.info(f"deleted local file {filename}")
         return True
+
+    @class_try_catch_async
+    async def file_exists(self, filename, abs_path=None):
+        filename = self.fmt_path(self.local_dir, filename, abs_path)
+        return os.path.exists(filename)
+
+    @class_try_catch_async
+    async def list_files(self, base_dir=None):
+        prefix = base_dir if base_dir else self.local_dir
+        return os.listdir(prefix)
 
 
 async def test():
     import torch
     from PIL import Image
 
-    m = LocalDataManager("/data/nvme1/liuliang1/lightx2v/local_data")
+    m = LocalDataManager("/data/nvme1/liuliang1/lightx2v/local_data", None)
     await m.init()
 
     img = Image.open("/data/nvme1/liuliang1/lightx2v/assets/img_lightx2v.png")

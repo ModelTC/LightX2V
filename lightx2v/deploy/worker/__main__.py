@@ -201,13 +201,15 @@ async def sync_subtask():
 async def main(args):
     if args.model_name == "":
         args.model_name = args.model_cls
-    worker_keys = [args.task, args.model_name, args.stage, args.worker]
+    if args.task_name == "":
+        args.task_name = args.task
+    worker_keys = [args.task_name, args.model_name, args.stage, args.worker]
 
     data_manager = None
     if args.data_url.startswith("/"):
-        data_manager = LocalDataManager(args.data_url)
+        data_manager = LocalDataManager(args.data_url, None)
     elif args.data_url.startswith("{"):
-        data_manager = S3DataManager(args.data_url)
+        data_manager = S3DataManager(args.data_url, None)
     else:
         raise NotImplementedError
     await data_manager.init()
@@ -300,6 +302,7 @@ if __name__ == "__main__":
     dft_data_url = os.path.join(base_dir, "local_data")
 
     parser.add_argument("--task", type=str, required=True)
+    parser.add_argument("--task_name", type=str, default="")
     parser.add_argument("--model_cls", type=str, required=True)
     parser.add_argument("--model_name", type=str, default="")
     parser.add_argument("--stage", type=str, required=True)
