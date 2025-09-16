@@ -39,9 +39,12 @@ class WanAudioModel(WanModel):
 
         adapter_offload = self.config.get("cpu_offload", False)
         self.adapter_weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=adapter_offload, remove_key="audio")
-        if not adapter_offload and not dist.is_initialized():
-            for key, value in self.adapter_weights_dict.items():
-                self.adapter_weights_dict[key] = value.cuda()
+        if not dist.is_initialized():
+            for key in self.adapter_weights_dict:
+                # if adapter_offload:
+                #     self.adapter_weights_dict[key] = self.adapter_weights_dict[key].pin_memory()
+                # else:
+                self.adapter_weights_dict[key] = self.adapter_weights_dict[key].pin_memory().to("cuda")
 
     def _init_infer_class(self):
         super()._init_infer_class()

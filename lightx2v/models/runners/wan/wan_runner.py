@@ -59,6 +59,12 @@ class WanRunner(DefaultRunner):
     def load_image_encoder(self):
         image_encoder = None
         if self.config.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
+            # offload config
+            clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
+            if clip_offload:
+                clip_device = torch.device("cpu")
+            else:
+                clip_device = torch.device("cuda")
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -76,12 +82,12 @@ class WanRunner(DefaultRunner):
 
             image_encoder = CLIPModel(
                 dtype=torch.float16,
-                device=self.init_device,
+                device=clip_device,
                 checkpoint_path=clip_original_ckpt,
                 clip_quantized=clip_quantized,
                 clip_quantized_ckpt=clip_quantized_ckpt,
                 quant_scheme=clip_quant_scheme,
-                cpu_offload=self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False)),
+                cpu_offload=clip_offload,
                 use_31_block=self.config.get("use_31_block", True),
             )
 

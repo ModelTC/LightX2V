@@ -70,18 +70,11 @@ class MMWeightTemplate(metaclass=ABCMeta):
             self.bias = self.bias.cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
-        if hasattr(self, "pinned_weight"):
-            self.weight = self.pinned_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
-            if hasattr(self, "weight_scale_name"):
-                self.weight_scale = self.pinned_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
-            if self.bias is not None:
-                self.bias = self.pinned_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
-        else:
-            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-            if hasattr(self, "weight_scale"):
-                self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
-            if hasattr(self, "bias") and self.bias is not None:
-                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
+        self.weight = self.weight.to("cpu", non_blocking=non_blocking)
+        if hasattr(self, "weight_scale"):
+            self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
+        if hasattr(self, "bias") and self.bias is not None:
+            self.bias = self.bias.to("cpu", non_blocking=non_blocking)
 
 
 @MM_WEIGHT_REGISTER("Default")
@@ -90,10 +83,20 @@ class MMWeight(MMWeightTemplate):
         super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
 
     def load(self, weight_dict):
-        self.weight = weight_dict[self.weight_name].t()
-        self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
-        self.bias = weight_dict[self.bias_name] if self.bias_name is not None else None
-        self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype) if self.bias is not None else None
+        device = weight_dict[self.weight_name].device
+
+        weight_shape = weight_dict[self.weight_name].t().shape
+        weight_dtype = weight_dict[self.weight_name].dtype
+        self.weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype).to(device)
+        self.weight = self.weight.copy_(weight_dict[self.weight_name].t())
+
+        if self.bias_name is not None:
+            bias_shape = weight_dict[self.bias_name].shape
+            bias_dtype = weight_dict[self.bias_name].dtype
+            self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype).to(device)
+            self.bias = self.bias.copy_(weight_dict[self.bias_name])
+        else:
+            self.bias = None
 
     def _calculate_size(self):
         if self.bias is not None:
@@ -166,7 +169,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.load_func(weight_dict)
             if self.weight_need_transpose:
                 self.weight = self.weight.t()
-                self.pinned_weight = self.pinned_weight.t()
 
     def clear(self):
         attrs = ["weight", "weight_scale", "bias", "pinned_weight", "pinned_weight_scale", "pinned_bias"]
@@ -182,11 +184,24 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return self.weight.numel() * self.weight.element_size() + self.weight_scale.numel() * self.weight_scale.element_size()
 
     def load_quantized(self, weight_dict):
-        self.weight = weight_dict[self.weight_name]
-        self.weight_scale = weight_dict[self.weight_scale_name].float()
+        device = weight_dict[self.weight_name].device
+        weight_shape = weight_dict[self.weight_name].shape
+        weight_dtype = weight_dict[self.weight_name].dtype
+        self.weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype).to(device)
+        self.weight = self.weight.copy_(weight_dict[self.weight_name])
 
-        self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
-        self.pinned_weight_scale = torch.empty(self.weight_scale.shape, pin_memory=True, dtype=self.weight_scale.dtype)
+        weight_scale_shape = weight_dict[self.weight_scale_name].shape
+        weight_scale_dtype = torch.float
+        self.weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype).to(device)
+        self.weight_scale = self.weight_scale.copy_(weight_dict[self.weight_scale_name])
+
+        if self.bias_name is not None:
+            bias_shape = weight_dict[self.bias_name].shape
+            bias_dtype = weight_dict[self.bias_name].dtype
+            self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype).to(device)
+            self.bias = self.bias.copy_(weight_dict[self.bias_name])
+        else:
+            self.bias = None
 
     def load_fp8_perchannel_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
@@ -195,14 +210,15 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale, _ = w_quantizer.real_quant_tensor(self.weight)
             self.weight = self.weight.to(torch.float8_e4m3fn)
             self.weight_scale = self.weight_scale.to(torch.float32)
-            self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
-            self.pinned_weight_scale = torch.empty(self.weight_scale.shape, pin_memory=True, dtype=self.weight_scale.dtype)
         else:
             self.load_quantized(weight_dict)
 
         if self.bias_name is not None:
-            self.bias = weight_dict[self.bias_name]
-            self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype)
+            device = weight_dict[self.bias_name].device
+            bias_shape = weight_dict[self.bias_name].shape
+            bias_dtype = weight_dict[self.bias_name].dtype
+            self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype).to(device)
+            self.bias = self.bias.copy_(weight_dict[self.bias_name])
         else:
             self.bias = None
 
@@ -213,14 +229,15 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale, _ = w_quantizer.real_quant_tensor(self.weight)
             self.weight = self.weight.to(torch.int8)
             self.weight_scale = self.weight_scale.to(torch.float32)
-            self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
-            self.pinned_weight_scale = torch.empty(self.weight_scale.shape, pin_memory=True, dtype=self.weight_scale.dtype)
         else:
             self.load_quantized(weight_dict)
 
         if self.bias_name is not None:
-            self.bias = weight_dict[self.bias_name]
-            self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype)
+            device = weight_dict[self.bias_name].device
+            bias_shape = weight_dict[self.bias_name].shape
+            bias_dtype = weight_dict[self.bias_name].dtype
+            self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype).to(device)
+            self.bias = self.bias.copy_(weight_dict[self.bias_name])
         else:
             self.bias = None
 
@@ -228,14 +245,15 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name]
             self.weight, self.weight_scale = self.per_block_cast_to_fp8(self.weight)
-            self.pinned_weight = torch.empty(self.weight.shape, pin_memory=True, dtype=self.weight.dtype)
-            self.pinned_weight_scale = torch.empty(self.weight_scale.shape, pin_memory=True, dtype=self.weight_scale.dtype)
         else:
             self.load_quantized(weight_dict)
 
         if self.bias_name is not None:
-            self.bias = weight_dict[self.bias_name]
-            self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype)
+            device = weight_dict[self.bias_name].device
+            bias_shape = weight_dict[self.bias_name].shape
+            bias_dtype = weight_dict[self.bias_name].dtype
+            self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype).to(device)
+            self.bias = self.bias.copy_(weight_dict[self.bias_name])
         else:
             self.bias = None
 
@@ -713,9 +731,12 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         assert not self.lazy_load
         self.load_func(weight_dict)
         self.workspace = weight_dict[f"{self.weight_name}_workspace"]
+
         if self.bias_name is not None:
-            self.bias = weight_dict[self.bias_name]
-            self.pinned_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype)
+            bias_shape = weight_dict[self.bias_name].shape
+            bias_dtype = weight_dict[self.bias_name].dtype
+            self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype).to(device)
+            self.bias = self.bias.copy_(weight_dict[self.bias_name])
         else:
             self.bias = None
 

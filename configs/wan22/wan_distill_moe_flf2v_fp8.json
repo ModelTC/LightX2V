@@ -13,6 +13,8 @@
     "enable_cfg": false,
     "cpu_offload": true,
     "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
     "use_image_encoder": false,
     "boundary_step_index": 2,
     "denoising_step_list": [1000, 750, 500, 250],

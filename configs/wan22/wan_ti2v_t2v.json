@@ -15,5 +15,7 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
     "fps": 24
 }
