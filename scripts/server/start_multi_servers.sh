@@ -17,5 +17,3 @@ torchrun --nproc_per_node 4 -m lightx2v.server \
     --model_path $model_path \
     --config_json ${lightx2v_path}/configs/seko_talk/xxx_dist.json \
     --port 8000
-    
-    

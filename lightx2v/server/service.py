@@ -1,7 +1,7 @@
 import asyncio
+import json
 import os
 import uuid
-import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -220,7 +220,7 @@ class TorchrunInferenceWorker:
 
             # Initialize model
             config = set_config(args)
-            if self.rank==0:
+            if self.rank == 0:
                 logger.info(f"Config:\n {json.dumps(config, ensure_ascii=False, indent=4)}")
 
             self.runner = init_runner(config)
