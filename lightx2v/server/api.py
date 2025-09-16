@@ -314,7 +314,6 @@ class ApiServer:
             return False
 
     def _ensure_processing_thread_running(self):
-        """Ensure the processing thread is running."""
         if self.processing_thread is None or not self.processing_thread.is_alive():
             self.stop_processing.clear()
             self.processing_thread = threading.Thread(target=self._task_processing_loop, daemon=True)
@@ -322,8 +321,10 @@ class ApiServer:
             logger.info("Started task processing thread")
 
     def _task_processing_loop(self):
-        """Main loop that processes tasks from the queue one by one."""
         logger.info("Task processing loop started")
+
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        loop = asyncio.get_event_loop()
 
         while not self.stop_processing.is_set():
             task_id = task_manager.get_next_pending_task()
@@ -335,12 +336,12 @@ class ApiServer:
             task_info = task_manager.get_task(task_id)
             if task_info and task_info.status == TaskStatus.PENDING:
                 logger.info(f"Processing task {task_id}")
-                self._process_single_task(task_info)
+                loop.run_until_complete(self._process_single_task(task_info))
 
+        loop.close()
         logger.info("Task processing loop stopped")
 
-    def _process_single_task(self, task_info: Any):
-        """Process a single task."""
+    async def _process_single_task(self, task_info: Any):
         assert self.video_service is not None, "Video service is not initialized"
 
         task_id = task_info.task_id
@@ -360,7 +361,7 @@ class ApiServer:
                 task_manager.fail_task(task_id, "Task cancelled")
                 return
 
-            result = asyncio.run(self.video_service.generate_video_with_stop_event(message, task_info.stop_event))
+            result = await self.video_service.generate_video_with_stop_event(message, task_info.stop_event)
 
             if result:
                 task_manager.complete_task(task_id, result.save_video_path)
