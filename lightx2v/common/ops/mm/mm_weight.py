@@ -217,10 +217,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.load_quantized(weight_dict)
 
         if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
             if device.type == "cuda":
                 self.bias = weight_dict[self.bias_name]
             elif device.type == "cpu":
-                device = weight_dict[self.bias_name].device
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
                 self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
@@ -241,10 +241,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.load_quantized(weight_dict)
 
         if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
             if device.type == "cuda":
                 self.bias = weight_dict[self.bias_name]
             elif device.type == "cpu":
-                device = weight_dict[self.bias_name].device
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
                 self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
@@ -262,10 +262,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.load_quantized(weight_dict)
 
         if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
             if device.type == "cuda":
                 self.bias = weight_dict[self.bias_name]
             elif device.type == "cpu":
-                device = weight_dict[self.bias_name].device
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
                 self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
