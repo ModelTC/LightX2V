@@ -14,8 +14,6 @@ def main():
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Server host")
     parser.add_argument("--port", type=int, default=8000, help="Server port")
 
-    # Distributed arguments
-    parser.add_argument("--nproc_per_node", type=int, required=True, help="Number of processes per node")
 
     # Parse any additional arguments that might be passed
     args, unknown = parser.parse_known_args()

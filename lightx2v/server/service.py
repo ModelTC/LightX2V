@@ -1,6 +1,7 @@
 import asyncio
 import os
 import uuid
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -219,7 +220,8 @@ class TorchrunInferenceWorker:
 
             # Initialize model
             config = set_config(args)
-            logger.info(f"Rank {self.rank} config: {config}")
+            if self.rank==0:
+                logger.info(f"Config:\n {json.dumps(config, ensure_ascii=False, indent=4)}")
 
             self.runner = init_runner(config)
             logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed")
@@ -370,7 +372,7 @@ class DistributedInferenceService:
 
     def server_metadata(self):
         assert hasattr(self, "args"), "Distributed inference service has not been started. Call start_distributed_inference() first."
-        return {"nproc_per_node": self.args.nproc_per_node, "model_cls": self.args.model_cls, "model_path": self.args.model_path}
+        return {"nproc_per_node": self.worker.world_size, "model_cls": self.args.model_cls, "model_path": self.args.model_path}
 
     async def run_worker_loop(self):
         """Run the worker loop for non-rank-0 processes"""

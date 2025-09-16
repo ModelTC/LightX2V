@@ -141,7 +141,7 @@ class DefaultRunner(BaseRunner):
 
     def end_run(self):
         self.model.scheduler.clear()
-        del self.inputs, self.model.scheduler
+        # del self.inputs, self.model.scheduler
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
                 self.model.transformer_infer.weights_stream_mgr.clear()
