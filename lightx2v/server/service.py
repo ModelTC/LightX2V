@@ -201,7 +201,6 @@ class TorchrunInferenceWorker:
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.runner = None
         self.dist_manager = DistributedManager()
-        self.request_queue = asyncio.Queue() if self.rank == 0 else None
         self.processing = False  # Track if currently processing a request
 
     def init(self, args) -> bool:
