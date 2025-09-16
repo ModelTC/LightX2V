@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/mtc/gushiqiao/llmc_workspace/lightx2v_latest2/LightX2V
-model_path=/data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-I2V-A14B/
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -20,14 +20,3 @@ python -m lightx2v.infer \
 --image_path /mtc/gushiqiao/llmc_workspace/wan22_14B_flf2v_start_image.png \
 --last_frame_path /mtc/gushiqiao/llmc_workspace/wan22_14B_flf2v_end_image.png \
 --save_video_path ${lightx2v_path}/save_results/output_lightx2v_wan_flf2v.mp4
-
-
-#               total        used        free      shared  buff/cache   available
-# Mem:          2.0Ti        58Gi       208Gi       107Gi       1.7Ti       1.8Ti
-# Swap:            0B          0B          0B
-
-#               total        used        free      shared  buff/cache   available
-# Mem:          2.0Ti       111Gi       5.7Gi       270Gi       1.9Ti       1.6Ti
-# Swap:            0B          0B          0B
-
-# # 270Gi

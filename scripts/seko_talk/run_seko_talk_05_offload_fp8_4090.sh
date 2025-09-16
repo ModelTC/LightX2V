@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/mtc/gushiqiao/llmc_workspace/lightx2v_latest2/LightX2V
-model_path=/data/nvme0/gushiqiao/models/Lightx2v_models/seko-new/SekoTalk-Distill-fp8/
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/SekoTalk-Distill-fp8/
 
 export CUDA_VISIBLE_DEVICES=0
 
