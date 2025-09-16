@@ -8,15 +8,11 @@
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
     "seed": 42,
-    "sample_guide_scale": [4.0, 3.0],
-    "sample_shift": 12.0,
+    "sample_guide_scale": [3.5, 3.5],
+    "sample_shift": 5.0,
     "enable_cfg": true,
     "cpu_offload": true,
-    "offload_granularity": "model",
-    "t5_cpu_offload": false,
-    "vae_cpu_offload": false,
-    "boundary": 0.875,
-    "parallel": {
-        "cfg_p_size": 2
-    }
+    "offload_granularity": "phase",
+    "boundary": 0.900,
+    "use_image_encoder": false
 }

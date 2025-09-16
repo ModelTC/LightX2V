@@ -20,7 +20,6 @@
     "sample_shift": 5.0,
     "enable_cfg": false,
     "cpu_offload": false,
-    "offload_granularity": "model",
     "fps": 24,
     "use_image_encoder": false,
     "use_31_block": false,

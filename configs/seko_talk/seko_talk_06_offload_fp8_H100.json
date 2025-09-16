@@ -15,18 +15,19 @@
     "use_31_block": false,
     "cpu_offload": true,
     "offload_granularity": "block",
-    "offload_ratio_val": 1,
+    "offload_ratio": 1,
     "t5_cpu_offload": true,
     "t5_offload_granularity": "model",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8",
+    "clip_cpu_offload": false,
     "audio_encoder_cpu_offload": false,
     "audio_adapter_cpu_offload": false,
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
     "vae_cpu_offload": false,
-    "use_tiling_vae": true,
+    "use_tiling_vae": false,
     "mm_config": {
-            "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl"
+        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl"
     }
 }
