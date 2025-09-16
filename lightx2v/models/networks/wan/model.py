@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 
@@ -252,6 +253,10 @@ class WanModel(CompiledMethodsMixin):
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
+
+        del self.original_weight_dict
+        torch.cuda.empty_cache()
+        gc.collect()
 
     def _load_weights_distribute(self, weight_dict, is_weight_loader):
         global_src_rank = 0
