@@ -379,7 +379,7 @@ def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
     cpu_weight_dict = {}
     if is_weight_loader:
         logger.info(f"Loading weights from {checkpoint_path}")
-        cpu_weight_dict = load_pt_safetensors(checkpoint_path)
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path, remove_key)
         for key in list(cpu_weight_dict.keys()):
             if remove_key and remove_key in key:
                 cpu_weight_dict.pop(key)

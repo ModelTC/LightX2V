@@ -59,8 +59,10 @@
                         "outputs": ["output_video"]
                     }
                 }
-            },
-            "SekoTalk-Distill": {
+            }
+        },
+        "s2v": {
+            "seko_talk": {
                 "single_stage": {
                     "pipeline": {
                         "inputs": ["input_image", "input_audio"],
