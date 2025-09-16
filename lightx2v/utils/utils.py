@@ -324,49 +324,50 @@ def find_gguf_model_path(config, ckpt_config_key=None, subdir=None):
     raise FileNotFoundError(f"No GGUF model files (.gguf) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
 
 
-def load_safetensors(in_path: str):
+def load_safetensors(in_path, remove_key):
     if os.path.isdir(in_path):
-        return load_safetensors_from_dir(in_path)
+        return load_safetensors_from_dir(in_path, remove_key)
     elif os.path.isfile(in_path):
-        return load_safetensors_from_path(in_path)
+        return load_safetensors_from_path(in_path, remove_key)
     else:
         raise ValueError(f"{in_path} does not exist")
 
 
-def load_safetensors_from_path(in_path: str):
+def load_safetensors_from_path(in_path, remove_key):
     tensors = {}
     with safetensors.safe_open(in_path, framework="pt", device="cpu") as f:
         for key in f.keys():
-            tensors[key] = f.get_tensor(key)
+            if remove_key not in key:
+                tensors[key] = f.get_tensor(key)
     return tensors
 
 
-def load_safetensors_from_dir(in_dir: str):
+def load_safetensors_from_dir(in_dir, remove_key):
     tensors = {}
     safetensors = os.listdir(in_dir)
     safetensors = [f for f in safetensors if f.endswith(".safetensors")]
     for f in safetensors:
-        tensors.update(load_safetensors_from_path(os.path.join(in_dir, f)))
+        tensors.update(load_safetensors_from_path(os.path.join(in_dir, f), remove_key))
     return tensors
 
 
-def load_pt_safetensors(in_path: str):
+def load_pt_safetensors(in_path, remove_key):
     ext = os.path.splitext(in_path)[-1]
     if ext in (".pt", ".pth", ".tar"):
         state_dict = torch.load(in_path, map_location="cpu", weights_only=True)
+        for key in list(state_dict.keys()):
+            if remove_key and remove_key in key:
+                state_dict.pop(key)
     else:
-        state_dict = load_safetensors(in_path)
+        state_dict = load_safetensors(in_path, remove_key)
     return state_dict
 
 
 def load_weights(checkpoint_path, cpu_offload=False, remove_key=None):
     if not dist.is_initialized():
         # Single GPU mode
-        cpu_weight_dict = load_pt_safetensors(checkpoint_path)
-        for key in list(cpu_weight_dict.keys()):
-            if remove_key and remove_key in key:
-                cpu_weight_dict.pop(key)
         logger.info(f"Loading weights from {checkpoint_path}")
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path, remove_key)
         return cpu_weight_dict
 
     # Multi-GPU mode

@@ -16,5 +16,7 @@
     "fps": 24,
     "cpu_offload": true,
     "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
     "vae_offload_cache": true
 }

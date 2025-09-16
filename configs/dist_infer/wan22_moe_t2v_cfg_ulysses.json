@@ -13,6 +13,8 @@
     "enable_cfg": true,
     "cpu_offload": true,
     "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
     "boundary": 0.875,
     "parallel": {
         "seq_p_size": 4,

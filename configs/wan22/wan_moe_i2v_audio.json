@@ -16,6 +16,8 @@
     "enable_cfg": false,
     "cpu_offload": true,
     "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
     "boundary": 0.900,
     "use_image_encoder": false,
     "use_31_block": false,
