@@ -192,7 +192,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         device = weight_dict[self.weight_name].device
         if device.type == "cuda":
             self.weight = weight_dict[self.weight_name]
-            self.weight_scale = weight_dict[self.weight_scale_name]
+            self.weight_scale = weight_dict[self.weight_scale_name].float()
         elif device.type == "cpu":
             weight_shape = weight_dict[self.weight_name].shape
             weight_dtype = weight_dict[self.weight_name].dtype
