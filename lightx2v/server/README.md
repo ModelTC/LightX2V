@@ -9,85 +9,91 @@ The LightX2V server is a distributed video generation service built with FastAPI
 ### System Architecture
 
 ```mermaid
-graph TB
-    subgraph "Client Layer"
-        Client[HTTP Client]
+flowchart TB
+    Client[Client] -->|Send API Request| Router[FastAPI Router]
+
+    subgraph API Layer
+        Router --> TaskRoutes[Task APIs]
+        Router --> FileRoutes[File APIs]
+        Router --> ServiceRoutes[Service Status APIs]
+
+        TaskRoutes --> CreateTask["POST /v1/tasks/ - Create Task"]
+        TaskRoutes --> CreateTaskForm["POST /v1/tasks/form - Form Create"]
+        TaskRoutes --> ListTasks["GET /v1/tasks/ - List Tasks"]
+        TaskRoutes --> GetTaskStatus["GET /v1/tasks/id/status - Get Status"]
+        TaskRoutes --> GetTaskResult["GET /v1/tasks/id/result - Get Result"]
+        TaskRoutes --> StopTask["DELETE /v1/tasks/id - Stop Task"]
+
+        FileRoutes --> DownloadFile["GET /v1/files/download/path - Download File"]
+
+        ServiceRoutes --> GetServiceStatus["GET /v1/service/status - Service Status"]
+        ServiceRoutes --> GetServiceMetadata["GET /v1/service/metadata - Metadata"]
     end
 
-    subgraph "API Layer"
-        FastAPI[FastAPI Application]
-        ApiServer[ApiServer]
-        Router1[Tasks Router<br/>/v1/tasks]
-        Router2[Files Router<br/>/v1/files]
-        Router3[Service Router<br/>/v1/service]
+    subgraph Task Management
+        TaskManager[Task Manager]
+        TaskQueue[Task Queue]
+        TaskStatus[Task Status]
+        TaskResult[Task Result]
+
+        CreateTask --> TaskManager
+        CreateTaskForm --> TaskManager
+        TaskManager --> TaskQueue
+        TaskManager --> TaskStatus
+        TaskManager --> TaskResult
     end
 
-    subgraph "Service Layer"
-        TaskManager[TaskManager<br/>Thread-safe Task Queue]
-        FileService[FileService<br/>File I/O & Downloads]
-        VideoService[VideoGenerationService]
+    subgraph File Service
+        FileService[File Service]
+        DownloadImage[Download Image]
+        DownloadAudio[Download Audio]
+        SaveFile[Save File]
+        GetOutputPath[Get Output Path]
+
+        FileService --> DownloadImage
+        FileService --> DownloadAudio
+        FileService --> SaveFile
+        FileService --> GetOutputPath
     end
 
-    subgraph "Processing Layer"
-        Thread[Processing Thread<br/>Sequential Task Loop]
+    subgraph Processing Thread
+        ProcessingThread[Processing Thread]
+        NextTask[Get Next Task]
+        ProcessTask[Process Single Task]
+
+        ProcessingThread --> NextTask
+        ProcessingThread --> ProcessTask
     end
 
-    subgraph "Distributed Inference Layer"
-        DistService[DistributedInferenceService]
-        SharedData[(Shared Data<br/>mp.Manager.dict)]
-        TaskEvent[Task Event<br/>mp.Manager.Event]
-        ResultEvent[Result Event<br/>mp.Manager.Event]
+    subgraph Video Generation Service
+        VideoService[Video Service]
+        GenerateVideo[Generate Video]
 
-        subgraph "Worker Processes"
-            W0[Worker 0<br/>Master/Rank 0]
-            W1[Worker 1<br/>Rank 1]
-            WN[Worker N<br/>Rank N]
-        end
+        VideoService --> GenerateVideo
     end
 
-    subgraph "Resource Management"
-        GPUManager[GPUManager<br/>GPU Detection & Allocation]
-        DistManager[DistributedManager<br/>PyTorch Distributed]
-        Config[ServerConfig<br/>Configuration]
+    subgraph Distributed Inference Service
+        InferenceService[Distributed Inference Service]
+        SubmitTask[Submit Task]
+        Worker[Inference Worker Node]
+        ProcessRequest[Process Request]
+        RunPipeline[Run Inference Pipeline]
+
+        InferenceService --> SubmitTask
+        SubmitTask --> Worker
+        Worker --> ProcessRequest
+        ProcessRequest --> RunPipeline
     end
 
-    Client -->|HTTP Request| FastAPI
-    FastAPI --> ApiServer
-    ApiServer --> Router1
-    ApiServer --> Router2
-    ApiServer --> Router3
-
-    Router1 -->|Create/Manage Tasks| TaskManager
-    Router1 -->|Process Tasks| Thread
-    Router2 -->|File Operations| FileService
-    Router3 -->|Service Status| TaskManager
-
-    Thread -->|Get Pending Tasks| TaskManager
-    Thread -->|Generate Video| VideoService
-
-    VideoService -->|Download Images| FileService
-    VideoService -->|Submit Task| DistService
-
-    DistService -->|Update| SharedData
-    DistService -->|Signal| TaskEvent
-    TaskEvent -->|Notify| W0
-    W0 -->|Broadcast| W1
-    W0 -->|Broadcast| WN
-
-    W0 -->|Update Result| SharedData
-    W0 -->|Signal| ResultEvent
-    ResultEvent -->|Notify| DistService
-
-    W0 -.->|Uses| GPUManager
-    W1 -.->|Uses| GPUManager
-    WN -.->|Uses| GPUManager
-
-    W0 -.->|Setup| DistManager
-    W1 -.->|Setup| DistManager
-    WN -.->|Setup| DistManager
-
-    DistService -.->|Reads| Config
-    ApiServer -.->|Reads| Config
+    %% ====== Connect Modules ======
+    TaskQueue --> ProcessingThread
+    ProcessTask --> VideoService
+    GenerateVideo --> InferenceService
+    GetTaskResult --> FileService
+    DownloadFile --> FileService
+    VideoService --> FileService
+    InferenceService --> TaskManager
+    TaskManager --> TaskStatus
 ```
 
 ## Task Processing Flow
@@ -100,9 +106,9 @@ sequenceDiagram
     participant PT as Processing Thread
     participant VS as VideoService
     participant FS as FileService
-    participant DIS as Distributed<br/>Inference Service
-    participant W0 as Worker 0<br/>(Master)
-    participant W1 as Worker 1..N
+    participant DIS as DistributedInferenceService
+    participant TIW0 as TorchrunInferenceWorker<br/>(Rank 0)
+    participant TIW1 as TorchrunInferenceWorker<br/>(Rank 1..N)
 
     C->>API: POST /v1/tasks<br/>(Create Task)
     API->>TM: create_task()
@@ -127,32 +133,54 @@ sequenceDiagram
     else Image is Base64
         VS->>FS: save_base64_image()
         FS-->>VS: image_path
-    else Image is Upload
-        VS->>FS: validate_file()
-        FS-->>VS: image_path
+    else Image is local path
+        VS->>VS: use existing path
     end
 
-    VS->>DIS: submit_task(task_data)
-    DIS->>DIS: shared_data["current_task"] = task_data
-    DIS->>DIS: task_event.set()
+    alt Audio is URL
+        VS->>FS: download_audio()
+        FS->>FS: HTTP download<br/>with retry
+        FS-->>VS: audio_path
+    else Audio is Base64
+        VS->>FS: save_base64_audio()
+        FS-->>VS: audio_path
+    else Audio is local path
+        VS->>VS: use existing path
+    end
 
-    Note over W0,W1: Distributed Processing
-    W0->>W0: task_event.wait()
-    W0->>W0: Get task from shared_data
-    W0->>W1: broadcast_task_data()
+    VS->>DIS: submit_task_async(task_data)
+    DIS->>TIW0: process_request(task_data)
 
-    par Parallel Inference
-        W0->>W0: run_pipeline()
+    Note over TIW0,TIW1: Torchrun-based Distributed Processing
+    TIW0->>TIW0: Check if processing
+    TIW0->>TIW0: Set processing = True
+
+    alt Multi-GPU Mode (world_size > 1)
+        TIW0->>TIW1: broadcast_task_data()<br/>(via DistributedManager)
+        Note over TIW1: worker_loop() listens for broadcasts
+        TIW1->>TIW1: Receive task_data
+    end
+
+    par Parallel Inference across all ranks
+        TIW0->>TIW0: runner.set_inputs(task_data)
+        TIW0->>TIW0: runner.run_pipeline()
     and
-        W1->>W1: run_pipeline()
+        Note over TIW1: If world_size > 1
+        TIW1->>TIW1: runner.set_inputs(task_data)
+        TIW1->>TIW1: runner.run_pipeline()
     end
 
-    W0->>W0: barrier() for sync
-    W0->>W0: shared_data["result"] = result
-    W0->>DIS: result_event.set()
+    Note over TIW0,TIW1: Synchronization
+    alt Multi-GPU Mode
+        TIW0->>TIW1: barrier() for sync
+        TIW1->>TIW0: barrier() response
+    end
 
-    DIS->>DIS: result_event.wait()
-    DIS->>VS: return result
+    TIW0->>TIW0: Set processing = False
+    TIW0->>DIS: Return result (only rank 0)
+    TIW1->>TIW1: Return None (non-rank 0)
+
+    DIS-->>VS: TaskResponse
     VS-->>PT: TaskResponse
 
     PT->>TM: complete_task()<br/>(status: COMPLETED)

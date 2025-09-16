@@ -6,8 +6,6 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from .gpu_manager import gpu_manager
-
 
 class DistributedManager:
     def __init__(self):
@@ -18,29 +16,35 @@ class DistributedManager:
 
     CHUNK_SIZE = 1024 * 1024
 
-    def init_process_group(self, rank: int, world_size: int, master_addr: str, master_port: str) -> bool:
+    def init_process_group(self) -> bool:
+        """Initialize process group using torchrun environment variables"""
         try:
-            os.environ["RANK"] = str(rank)
-            os.environ["WORLD_SIZE"] = str(world_size)
-            os.environ["MASTER_ADDR"] = master_addr
-            os.environ["MASTER_PORT"] = master_port
+            # torchrun sets these environment variables automatically
+            self.rank = int(os.environ.get("LOCAL_RANK", 0))
+            self.world_size = int(os.environ.get("WORLD_SIZE", 1))
 
-            backend = "nccl" if torch.cuda.is_available() else "gloo"
+            if self.world_size > 1:
+                # torchrun handles backend, init_method, rank, and world_size
+                # We just need to call init_process_group without parameters
+                backend = "nccl" if torch.cuda.is_available() else "gloo"
+                dist.init_process_group(backend=backend, init_method="env://")
+                logger.info(f"Setup backend: {backend}")
 
-            dist.init_process_group(backend=backend, init_method=f"tcp://{master_addr}:{master_port}", rank=rank, world_size=world_size)
-            logger.info(f"Setup backend: {backend}")
-
-            self.device = gpu_manager.set_device_for_rank(rank, world_size)
+                # Set CUDA device for this rank
+                if torch.cuda.is_available():
+                    torch.cuda.set_device(self.rank)
+                    self.device = f"cuda:{self.rank}"
+                else:
+                    self.device = "cpu"
+            else:
+                self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
             self.is_initialized = True
-            self.rank = rank
-            self.world_size = world_size
-
-            logger.info(f"Rank {rank}/{world_size - 1} distributed environment initialized successfully")
+            logger.info(f"Rank {self.rank}/{self.world_size - 1} distributed environment initialized successfully")
             return True
 
         except Exception as e:
-            logger.error(f"Rank {rank} distributed environment initialization failed: {str(e)}")
+            logger.error(f"Rank {self.rank} distributed environment initialization failed: {str(e)}")
             return False
 
     def cleanup(self):
@@ -143,30 +147,3 @@ class DistributedManager:
                 task_bytes = self._receive_byte_chunks(total_length, broadcast_device)
                 task_data = pickle.loads(task_bytes)
                 return task_data
-
-
-class DistributedWorker:
-    def __init__(self, rank: int, world_size: int, master_addr: str, master_port: str):
-        self.rank = rank
-        self.world_size = world_size
-        self.master_addr = master_addr
-        self.master_port = master_port
-        self.dist_manager = DistributedManager()
-
-    def init(self) -> bool:
-        return self.dist_manager.init_process_group(self.rank, self.world_size, self.master_addr, self.master_port)
-
-    def cleanup(self):
-        self.dist_manager.cleanup()
-
-    def sync_and_report(self, task_id: str, status: str, result_queue, **kwargs):
-        self.dist_manager.barrier()
-
-        if self.dist_manager.is_rank_zero():
-            result = {"task_id": task_id, "status": status, **kwargs}
-            result_queue.put(result)
-            logger.info(f"Task {task_id} {status}")
-
-
-def create_distributed_worker(rank: int, world_size: int, master_addr: str, master_port: str) -> DistributedWorker:
-    return DistributedWorker(rank, world_size, master_addr, master_port)

@@ -11,11 +11,11 @@ source ${lightx2v_path}/scripts/base/base.sh
 
 
 # Start API server with distributed inference service
-python -m lightx2v.api_server \
---model_cls wan2.1_distill \
+torchrun -m lightx2v.server \
+--model_cls seko_talk \
 --task i2v \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/distill/wan_i2v_distill_4step_cfg.json \
+--config_json ${lightx2v_path}/configs/seko_talk/seko_talk_05_offload_fp8_4090.json \
 --port 8000 \
 --nproc_per_node 1
 

@@ -11,9 +11,6 @@ class ServerConfig:
     port: int = 8000
     max_queue_size: int = 10
 
-    master_addr: str = "127.0.0.1"
-    master_port_range: tuple = (29500, 29600)
-
     task_timeout: int = 300
     task_history_limit: int = 1000
 
@@ -42,30 +39,12 @@ class ServerConfig:
             except ValueError:
                 logger.warning(f"Invalid max queue size: {env_queue_size}")
 
-        if env_master_addr := os.environ.get("MASTER_ADDR"):
-            config.master_addr = env_master_addr
+        # MASTER_ADDR is now managed by torchrun, no need to set manually
 
         if env_cache_dir := os.environ.get("LIGHTX2V_CACHE_DIR"):
             config.cache_dir = env_cache_dir
 
         return config
-
-    def find_free_master_port(self) -> str:
-        import socket
-
-        for port in range(self.master_port_range[0], self.master_port_range[1]):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind((self.master_addr, port))
-                    logger.info(f"Found free port for master: {port}")
-                    return str(port)
-            except OSError:
-                continue
-
-        raise RuntimeError(
-            f"No free port found for master in range {self.master_port_range[0]}-{self.master_port_range[1] - 1} "
-            f"on address {self.master_addr}. Please adjust 'master_port_range' or free an occupied port."
-        )
 
     def validate(self) -> bool:
         valid = True
