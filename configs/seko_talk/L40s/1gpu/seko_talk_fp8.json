@@ -4,11 +4,7 @@
     "video_duration": 360,
     "audio_sr": 16000,
     "target_video_length": 81,
-    "resize_mode": "fixed_shape",
-    "fixed_shape": [
-        1280,
-        720
-    ],
+    "resize_mode": "adaptive",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -30,9 +26,5 @@
     "clip_cpu_offload": true,
     "vae_cpu_offload": true,
     "audio_encoder_cpu_offload": true,
-    "audio_adapter_cpu_offload": true,
-    "parallel": {
-        "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses"
-    }
+    "audio_adapter_cpu_offload": true
 }
