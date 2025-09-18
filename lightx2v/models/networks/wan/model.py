@@ -122,14 +122,21 @@ class WanModel(CompiledMethodsMixin):
             # Single GPU mode
             return True
         elif dist.is_initialized():
-            # Multi-GPU mode, only rank 0 loads
-            if dist.get_rank() == 0:
-                logger.info(f"Loading weights from {self.model_path}")
+            if self.config.get("load_from_rank0", False):
+                # Multi-GPU mode, only rank 0 loads
+                if dist.get_rank() == 0:
+                    logger.info(f"Loading weights from {self.model_path}")
+                    return True
+            else:
                 return True
         return False
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
-        with safe_open(file_path, framework="pt", device=str(self.device)) as f:
+        if self.device.type == "cuda" and dist.is_initialized():
+            device = torch.device("cuda:{}".format(dist.get_rank()))
+        else:
+            device = self.device
+        with safe_open(file_path, framework="pt", device=str(device)) as f:
             return {key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE())) for key in f.keys()}
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
@@ -147,8 +154,6 @@ class WanModel(CompiledMethodsMixin):
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
         ckpt_path = self.dit_quantized_ckpt
-        logger.info(f"Loading quant dit model from {ckpt_path}")
-
         index_files = [f for f in os.listdir(ckpt_path) if f.endswith(".index.json")]
         if not index_files:
             raise FileNotFoundError(f"No *.index.json found in {ckpt_path}")
@@ -236,8 +241,8 @@ class WanModel(CompiledMethodsMixin):
                     else:
                         weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
 
-            if self.config.get("device_mesh") is not None:
-                weight_dict = self._load_weights_distribute(weight_dict, is_weight_loader)
+            if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
+                weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
 
             if hasattr(self, "adapter_weights_dict"):
                 weight_dict.update(self.adapter_weights_dict)
@@ -258,7 +263,8 @@ class WanModel(CompiledMethodsMixin):
         torch.cuda.empty_cache()
         gc.collect()
 
-    def _load_weights_distribute(self, weight_dict, is_weight_loader):
+    def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
+        logger.info("Loading distributed weights")
         global_src_rank = 0
         target_device = "cpu" if self.cpu_offload else "cuda"
 
@@ -313,6 +319,7 @@ class WanModel(CompiledMethodsMixin):
                     tensor.copy_(tensor, non_blocking=False)
 
         logger.info(f"Weights distributed across {dist.get_world_size()} devices on {target_device}")
+
         return distributed_weight_dict
 
     def _init_infer(self):

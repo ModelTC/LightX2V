@@ -1,6 +1,7 @@
 from abc import ABCMeta, abstractmethod
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.utils.envs import *
@@ -101,6 +102,7 @@ class MMWeight(MMWeightTemplate):
                 self.bias.copy_(weight_dict[self.bias_name])
             else:
                 self.bias = None
+            del weight_dict[self.weight_name]
         else:
             raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 
@@ -203,6 +205,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             weight_scale_dtype = torch.float
             self.weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
             self.weight_scale.copy_(weight_dict[self.weight_scale_name])
+            if dist.is_initialized():
+                del weight_dict[self.weight_name]
         else:
             raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 

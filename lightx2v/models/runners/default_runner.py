@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
+from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
 
@@ -112,6 +113,7 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
+    @peak_memory_decorator
     def run_segment(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
