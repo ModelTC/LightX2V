@@ -812,7 +812,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, dtype=torch.float32, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, dtype=torch.float32, load_from_rank0=False, **kwargs):
     # params
     cfg = dict(
         dim=dim,
@@ -831,7 +831,7 @@ def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offloa
 
     # load checkpoint
     logging.info(f"loading {pretrained_path}")
-    weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload)
+    weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
     for k in weights_dict.keys():
         if weights_dict[k].dtype != dtype:
             weights_dict[k] = weights_dict[k].to(dtype)
@@ -842,7 +842,18 @@ def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offloa
 
 class Wan2_2_VAE:
     def __init__(
-        self, z_dim=48, c_dim=160, vae_pth=None, dim_mult=[1, 2, 4, 4], temperal_downsample=[False, True, True], dtype=torch.float, device="cuda", cpu_offload=False, offload_cache=False, **kwargs
+        self,
+        z_dim=48,
+        c_dim=160,
+        vae_pth=None,
+        dim_mult=[1, 2, 4, 4],
+        temperal_downsample=[False, True, True],
+        dtype=torch.float,
+        device="cuda",
+        cpu_offload=False,
+        offload_cache=False,
+        load_from_rank0=False,
+        **kwargs,
     ):
         self.dtype = dtype
         self.device = device
@@ -961,7 +972,9 @@ class Wan2_2_VAE:
         self.scale = [self.mean, self.inv_std]
         # init model
         self.model = (
-            _video_vae(pretrained_path=vae_pth, z_dim=z_dim, dim=c_dim, dim_mult=dim_mult, temperal_downsample=temperal_downsample, cpu_offload=cpu_offload, dtype=dtype)
+            _video_vae(
+                pretrained_path=vae_pth, z_dim=z_dim, dim=c_dim, dim_mult=dim_mult, temperal_downsample=temperal_downsample, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0
+            )
             .eval()
             .requires_grad_(False)
             .to(device)

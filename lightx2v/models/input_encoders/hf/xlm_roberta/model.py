@@ -418,7 +418,7 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 
 
 class CLIPModel:
-    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True):
+    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False):
         self.dtype = dtype
         self.device = device
         self.quantized = clip_quantized
@@ -435,7 +435,7 @@ class CLIPModel:
             pretrained=False, return_transforms=True, return_tokenizer=False, dtype=dtype, device=device, quantized=self.quantized, quant_scheme=quant_scheme
         )
         self.model = self.model.eval().requires_grad_(False)
-        weight_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, remove_key="textual")
+        weight_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, remove_key="textual", load_from_rank0=load_from_rank0)
         self.model.load_state_dict(weight_dict)
 
     def visual(self, videos):
