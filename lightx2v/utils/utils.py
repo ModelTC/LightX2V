@@ -373,7 +373,7 @@ def load_weights(checkpoint_path, cpu_offload=False, remove_key=None, load_from_
     # Multi-GPU mode
     is_weight_loader = False
     current_rank = dist.get_rank()
-    if load_from_rank0 and current_rank == 0:
+    if current_rank == 0:
         is_weight_loader = True
 
     cpu_weight_dict = {}
