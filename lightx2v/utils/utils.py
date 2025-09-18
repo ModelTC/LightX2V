@@ -364,17 +364,17 @@ def load_pt_safetensors(in_path, remove_key):
 
 
 def load_weights(checkpoint_path, cpu_offload=False, remove_key=None, load_from_rank0=False):
-    if not dist.is_initialized():
+    if not dist.is_initialized() or not load_from_rank0:
         # Single GPU mode
         logger.info(f"Loading weights from {checkpoint_path}")
         cpu_weight_dict = load_pt_safetensors(checkpoint_path, remove_key)
         return cpu_weight_dict
 
     # Multi-GPU mode
-    is_weight_loader = True
+    is_weight_loader = False
     current_rank = dist.get_rank()
-    if load_from_rank0 and current_rank != 0:
-        is_weight_loader = False
+    if load_from_rank0 and current_rank == 0:
+        is_weight_loader = True
 
     cpu_weight_dict = {}
     if is_weight_loader:
