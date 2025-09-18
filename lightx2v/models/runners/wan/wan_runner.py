@@ -89,6 +89,7 @@ class WanRunner(DefaultRunner):
                 quant_scheme=clip_quant_scheme,
                 cpu_offload=clip_offload,
                 use_31_block=self.config.get("use_31_block", True),
+                load_from_rank0=self.config.get("load_from_rank0", False),
             )
 
         return image_encoder
@@ -130,6 +131,7 @@ class WanRunner(DefaultRunner):
             t5_quantized=t5_quantized,
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,
+            load_from_rank0=self.config.get("load_from_rank0", False),
         )
         text_encoders = [text_encoder]
         return text_encoders
@@ -149,6 +151,7 @@ class WanRunner(DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
+            "load_from_rank0": self.config.get("load_from_rank0", False),
         }
         if self.config.task not in ["i2v", "flf2v", "vace"]:
             return None
@@ -170,6 +173,7 @@ class WanRunner(DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
+            "load_from_rank0": self.config.get("load_from_rank0", False),
         }
         if self.config.get("use_tiny_vae", False):
             tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", self.tiny_vae_name)

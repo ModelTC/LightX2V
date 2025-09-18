@@ -761,7 +761,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, load_from_rank0=False, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
@@ -782,7 +782,7 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
         model = WanVAE_(**cfg)
 
     # load checkpoint
-    weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload)
+    weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
     for k in weights_dict.keys():
         if weights_dict[k].dtype != dtype:
             weights_dict[k] = weights_dict[k].to(dtype)
@@ -802,6 +802,7 @@ class WanVAE:
         use_tiling=False,
         cpu_offload=False,
         use_2d_split=True,
+        load_from_rank0=False,
     ):
         self.dtype = dtype
         self.device = device
@@ -888,7 +889,7 @@ class WanVAE:
         }
 
         # init model
-        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype).eval().requires_grad_(False).to(device).to(dtype)
+        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0).eval().requires_grad_(False).to(device).to(dtype)
 
     def _calculate_2d_grid(self, latent_height, latent_width, world_size):
         if (latent_height, latent_width, world_size) in self.grid_table:

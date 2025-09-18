@@ -24,5 +24,6 @@
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
     "t5_quantized": true,
-    "t5_quant_scheme": "fp8"
+    "t5_quant_scheme": "fp8",
+    "load_from_rank0": true
 }

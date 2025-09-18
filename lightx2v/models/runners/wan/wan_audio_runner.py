@@ -735,7 +735,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         )
 
         audio_adapter.to(device)
-        weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=audio_adapter_offload, remove_key="ca")
+        load_from_rank0 = self.config.get("load_from_rank0", False)
+        weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
         audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 

@@ -540,6 +540,7 @@ class T5EncoderModel:
         t5_quantized=False,
         t5_quantized_ckpt=None,
         quant_scheme=None,
+        load_from_rank0=False,
     ):
         self.text_len = text_len
         self.dtype = dtype
@@ -570,7 +571,7 @@ class T5EncoderModel:
             .requires_grad_(False)
         )
 
-        weights_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload)
+        weights_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
         model.load_state_dict(weights_dict)
 
         self.model = model
