@@ -1,12 +1,15 @@
 import gc
 import os
+import re
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 import torchaudio as ta
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -196,7 +199,7 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
 class AudioSegment:
     """Data class for audio segment information"""
 
-    audio_array: np.ndarray
+    audio_array: torch.Tensor
     start_frame: int
     end_frame: int
 
@@ -252,35 +255,61 @@ class AudioProcessor:
         self.target_fps = target_fps
         self.audio_frame_rate = audio_sr // target_fps
 
-    def load_audio(self, audio_path: str) -> np.ndarray:
+    def load_audio(self, audio_path: str):
         """Load and resample audio"""
-        audio_array, ori_sr = ta.load(audio_path)
-        audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
-        return audio_array.numpy()
+        audio_path = Path(audio_path)
+        if audio_path.is_dir():
+            pattern = re.compile(r"^p\d+\.wav$")
+            files = sorted([f for f in audio_path.iterdir() if f.is_file() and pattern.match(f.name)], key=lambda x: int(re.findall(r"\d+", x.name)[0]))
+        else:
+            files = [audio_path]
+        logger.info(f"audio files:{files}")
+        audio_arrays = []
+        max_len = 0
+
+        for f in files:  # 第一次遍历，加载并找最大长度
+            audio_array, ori_sr = ta.load(f)
+            audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
+            audio_arrays.append(audio_array)
+            max_len = max(max_len, audio_array.numel())
+
+        num_files = len(audio_arrays)
+        padded = torch.zeros(num_files, max_len, dtype=torch.float32)  # 申请 [N, T]，用0填充
+
+        for i, arr in enumerate(audio_arrays):  # 填充每个音频
+            length = arr.numel()
+            padded[i, :length] = arr
+
+        return padded
 
     def get_audio_range(self, start_frame: int, end_frame: int) -> Tuple[int, int]:
         """Calculate audio range for given frame range"""
         return round(start_frame * self.audio_frame_rate), round(end_frame * self.audio_frame_rate)
 
-    def segment_audio(self, audio_array: np.ndarray, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
-        """Segment audio based on frame requirements"""
+    def segment_audio(self, audio_array: torch.tensor, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
+        """
+        Segment audio based on frame requirements
+        audio_array is (N, T) tensor
+        """
         segments = []
         segments_idx = self.init_segments_idx(expected_frames, max_num_frames, prev_frame_length)
 
         audio_start, audio_end = self.get_audio_range(0, expected_frames)
-        audio_array_ori = audio_array[audio_start:audio_end]
+        audio_array_ori = audio_array[:, audio_start:audio_end]
 
+        # import debugpy
+        # debugpy.breakpoint()
         for idx, (start_idx, end_idx) in enumerate(segments_idx):
             audio_start, audio_end = self.get_audio_range(start_idx, end_idx)
-            audio_array = audio_array_ori[audio_start:audio_end]
+            audio_array = audio_array_ori[:, audio_start:audio_end]
 
             if idx < len(segments_idx) - 1:
                 end_idx = segments_idx[idx + 1][0]
-            else:
-                if audio_array.shape[0] < audio_end - audio_start:
-                    padding_len = audio_end - audio_start - audio_array.shape[0]
-                    audio_array = np.concatenate((audio_array, np.zeros(padding_len)), axis=0)
-                    end_idx = end_idx - padding_len // self.audio_frame_rate
+            else:  # for last segments
+                if audio_array.shape[1] < audio_end - audio_start:
+                    padding_len = audio_end - audio_start - audio_array.shape[1]
+                    audio_array = F.pad(audio_array, (0, padding_len))
+                    end_idx = end_idx - padding_len // self.audio_frame_rate  # for really
 
             segments.append(AudioSegment(audio_array, start_idx, end_idx))
         del audio_array, audio_array_ori
@@ -325,13 +354,54 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         video_duration = self.config.get("video_duration", 5)
 
-        audio_len = int(audio_array.shape[0] / audio_sr * target_fps)
+        audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
 
         return audio_segments, expected_frames
+
+    def read_person_mask(self):
+        mask_path = Path(self.config["person_mask_path"])
+        if not mask_path.exists():
+            return None
+
+        if mask_path.is_dir():
+            pattern = re.compile(r"^p\d+_mask\.png$")
+            files = sorted([f for f in mask_path.iterdir() if f.is_file() and pattern.match(f.name)], key=lambda x: int(re.findall(r"\d+", x.name)[0]))
+        else:
+            files = [mask_path]
+        logger.info(f"person_mask_path files:{files}")
+        mask_latents = []
+        for f in files:
+            mask_img = Image.open(f).convert("RGB")
+            mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+
+            if mask_img.shape[1] == 3:  # 如果是RGB三通道
+                mask_img = mask_img[:, :1]  # 只取第一个通道
+            # mask_img = rearrange(mask_img, 'H W C -> 1 C H W')
+
+            mask_img, h, w = resize_image(
+                mask_img,
+                resize_mode=self.config.get("resize_mode", "adaptive"),
+                bucket_shape=self.config.get("bucket_shape", None),
+                fixed_area=self.config.get("fixed_area", None),
+                fixed_shape=self.config.get("fixed_shape", None),
+            )
+            mask_latent = torch.nn.functional.interpolate(
+                mask_img,  # (1, 1, H, W)
+                size=(h // 16, w // 16),
+                mode="bicubic",
+            )
+            import debugpy
+
+            debugpy.breakpoint()
+            mask_latent = (mask_latent > 0).to(torch.int8)
+            mask_latents.append(mask_latent)
+
+        mask_latents = torch.cat(mask_latents, dim=0)
+        return mask_latents
 
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
@@ -391,6 +461,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def _run_input_encoder_local_r2v_audio(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = self.read_image_input(self.config["image_path"])
+        person_mask_latens = self.read_person_mask()
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
         audio_segments, expected_frames = self.read_audio_input()
@@ -405,6 +476,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             },
             "audio_segments": audio_segments,
             "expected_frames": expected_frames,
+            "person_mask_latens": person_mask_latens,
         }
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
@@ -484,7 +556,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
-            end_idx = audio_array.shape[0] // self._audio_processor.audio_frame_rate - self.prev_frame_length
+            end_idx = audio_array.shape[1] // self._audio_processor.audio_frame_rate - self.prev_frame_length
             self.segment = AudioSegment(audio_array, 0, end_idx)
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
@@ -496,8 +568,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
             self.audio_encoder = self.load_audio_encoder()
 
-        audio_features = self.audio_encoder.infer(self.segment.audio_array)
-        audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
+        import debugpy
+
+        debugpy.breakpoint()
+        features_list = []
+        for i in range(self.segment.audio_array.shape[0]):
+            feat = self.audio_encoder.infer(self.segment.audio_array[i])
+            feat = self.audio_adapter.forward_audio_proj(feat, self.model.scheduler.latents.shape[1])
+            features_list.append(feat.squeeze(0))
+        audio_features = torch.stack(features_list, dim=0)
 
         self.inputs["audio_encoder_output"] = audio_features
         self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=self.prev_frame_length)
@@ -630,7 +709,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def process_images_after_vae_decoder(self, save_video=True):
         # Merge results
         gen_lvideo = torch.cat(self.gen_video_list, dim=2).float()
-        merge_audio = np.concatenate(self.cut_audio_list, axis=0).astype(np.float32)
+        merge_audio = torch.cat(self.cut_audio_list, dim=0).to(torch.float32)
 
         comfyui_images = vae_to_comfyui_image(gen_lvideo)
 
@@ -657,7 +736,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 logger.info(f"✅ Video saved successfully to: {self.config.save_video_path} ✅")
 
         # Convert audio to ComfyUI format
-        audio_waveform = torch.from_numpy(merge_audio).unsqueeze(0).unsqueeze(0)
+        audio_waveform = merge_audio.unsqueeze(0).unsqueeze(0)
         comfyui_audio = {"waveform": audio_waveform, "sample_rate": self._audio_processor.audio_sr}
 
         return {"video": comfyui_images, "audio": comfyui_audio}
@@ -677,12 +756,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if images.dtype != torch.uint8:
             images = (images * 255).clamp(0, 255).to(torch.uint8)
 
+        audio_mixed = audio_array.sum(dim=0)  # 多条音频混合音轨
+
         write_video(
             filename=output_path,
             video_array=images,
             fps=fps,
             video_codec="libx264",
-            audio_array=torch.tensor(audio_array[None]),
+            audio_array=audio_mixed[None],
             audio_fps=sample_rate,
             audio_codec="aac",
             options={"preset": "medium", "crf": "23"},  # 可调整视频输出质量

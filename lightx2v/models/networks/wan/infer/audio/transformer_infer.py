@@ -23,6 +23,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
     def infer_post_adapter(self, phase, x, pre_infer_out):
         grid_sizes = pre_infer_out.grid_sizes.tensor
         audio_encoder_output = pre_infer_out.adapter_output["audio_encoder_output"]
+        person_mask_ids = pre_infer_out.adapter_output["person_mask_ids"]
 
         total_tokens = grid_sizes[0].prod()
         pre_frame_tokens = grid_sizes[0][1:].prod()
@@ -39,19 +40,32 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
             sp_size = 1
             sp_rank = 0
 
-        n_query_tokens, hidden_states_aligned, hidden_states_tail = calculate_n_query_tokens(x, sp_rank, sp_size, n_tokens_per_rank, n_tokens)
+        n_query_tokens, hidden_states_aligned, hidden_states_tail, person_mask_ids_aligned = calculate_n_query_tokens(x, person_mask_ids, sp_rank, sp_size, n_tokens_per_rank, n_tokens)
 
         q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1 = get_qk_lens_audio_range(
             n_tokens_per_rank=n_tokens_per_rank, n_query_tokens=n_query_tokens, n_tokens_per_frame=pre_frame_tokens, sp_rank=sp_rank, num_tokens_x4=128
         )
+        import debugpy
 
-        audio_encoder_output = audio_encoder_output[:, t0:t1].reshape(-1, audio_encoder_output.size(-1))
-        residual = self.perceiver_attention_ca(phase, audio_encoder_output, hidden_states_aligned, self.scheduler.audio_adapter_t_emb, q_lens, k_lens, max_seqlen_q, max_seqlen_k)
+        debugpy.breakpoint()
+        total_residual = None
+        for i in range(audio_encoder_output.shape[0]):
+            audio_encoder = audio_encoder_output[i]
+            audio_encoder = audio_encoder[t0:t1].reshape(-1, audio_encoder.size(-1))
+            residual = self.perceiver_attention_ca(phase, audio_encoder, hidden_states_aligned, self.scheduler.audio_adapter_t_emb, q_lens, k_lens, max_seqlen_q, max_seqlen_k)
 
-        residual = residual.to(ori_dtype)  # audio做了CrossAttention之后以Residual的方式注入
-        if n_query_tokens == 0:
-            residual = residual * 0.0
-        x = torch.cat([hidden_states_aligned + residual, hidden_states_tail], dim=0)
+            residual = residual.to(ori_dtype)  # audio做了CrossAttention之后以Residual的方式注入
+            if n_query_tokens == 0:
+                residual = residual * 0.0
+            if person_mask_ids_aligned is not None:
+                residual = residual * person_mask_ids_aligned[i]
+
+            if total_residual is None:
+                total_residual = residual
+            else:
+                total_residual += residual
+
+        x = torch.cat([hidden_states_aligned + total_residual, hidden_states_tail], dim=0)
         return x
 
     @torch.no_grad()
