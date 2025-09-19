@@ -45,9 +45,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1 = get_qk_lens_audio_range(
             n_tokens_per_rank=n_tokens_per_rank, n_query_tokens=n_query_tokens, n_tokens_per_frame=pre_frame_tokens, sp_rank=sp_rank, num_tokens_x4=128
         )
-        import debugpy
 
-        debugpy.breakpoint()
         total_residual = None
         for i in range(audio_encoder_output.shape[0]):
             audio_encoder = audio_encoder_output[i]

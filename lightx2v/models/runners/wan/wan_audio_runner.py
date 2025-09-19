@@ -263,7 +263,7 @@ class AudioProcessor:
             files = sorted([f for f in audio_path.iterdir() if f.is_file() and pattern.match(f.name)], key=lambda x: int(re.findall(r"\d+", x.name)[0]))
         else:
             files = [audio_path]
-        logger.info(f"audio files:{files}")
+
         audio_arrays = []
         max_len = 0
 
@@ -297,8 +297,6 @@ class AudioProcessor:
         audio_start, audio_end = self.get_audio_range(0, expected_frames)
         audio_array_ori = audio_array[:, audio_start:audio_end]
 
-        # import debugpy
-        # debugpy.breakpoint()
         for idx, (start_idx, end_idx) in enumerate(segments_idx):
             audio_start, audio_end = self.get_audio_range(start_idx, end_idx)
             audio_array = audio_array_ori[:, audio_start:audio_end]
@@ -372,7 +370,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             files = sorted([f for f in mask_path.iterdir() if f.is_file() and pattern.match(f.name)], key=lambda x: int(re.findall(r"\d+", x.name)[0]))
         else:
             files = [mask_path]
-        logger.info(f"person_mask_path files:{files}")
+
         mask_latents = []
         for f in files:
             mask_img = Image.open(f).convert("RGB")
@@ -394,9 +392,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 size=(h // 16, w // 16),
                 mode="bicubic",
             )
-            import debugpy
 
-            debugpy.breakpoint()
             mask_latent = (mask_latent > 0).to(torch.int8)
             mask_latents.append(mask_latent)
 
@@ -568,9 +564,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
             self.audio_encoder = self.load_audio_encoder()
 
-        import debugpy
-
-        debugpy.breakpoint()
         features_list = []
         for i in range(self.segment.audio_array.shape[0]):
             feat = self.audio_encoder.infer(self.segment.audio_array[i])
