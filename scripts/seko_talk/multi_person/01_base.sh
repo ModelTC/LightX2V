@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/mnt/Text2Video2/wangshankun/lightx2v
-model_path=/mnt/Text2Video/gushiqiao/Wan2.1-R2V0909-Audio-14B-720P
+lightx2v_path=/mnt/afs2/wangshankun/lightx2v
+model_path=/mnt/afs1/gushiqiao/Wan2.1-R2V0909-Audio-14B-720P
 
 export CUDA_VISIBLE_DEVICES=0
 

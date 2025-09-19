@@ -68,7 +68,7 @@ def get_qk_lens_audio_range(
     return q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1
 
 
-def calculate_n_query_tokens(hidden_states, person_mask_ids, sp_rank, sp_size, n_tokens_per_rank, n_tokens):
+def calculate_n_query_tokens(hidden_states, person_mask_latens, sp_rank, sp_size, n_tokens_per_rank, n_tokens):
     tail_length = n_tokens_per_rank * sp_size - n_tokens
     n_unused_ranks = tail_length // n_tokens_per_rank
 
@@ -83,20 +83,20 @@ def calculate_n_query_tokens(hidden_states, person_mask_ids, sp_rank, sp_size, n
     if n_query_tokens > 0:
         hidden_states_aligned = hidden_states[:n_query_tokens]
         hidden_states_tail = hidden_states[n_query_tokens:]
-        if person_mask_ids is not None:
-            person_mask_ids_aligned = person_mask_ids[:, :n_query_tokens]
+        if person_mask_latens is not None:
+            person_mask_aligned = person_mask_latens[:, :n_query_tokens]
         else:
-            person_mask_ids_aligned = None
+            person_mask_aligned = None
     else:
         # for ranks that should be excluded from cross-attn, fake cross-attn will be applied so that FSDP works.
         hidden_states_aligned = hidden_states[:1]
         hidden_states_tail = hidden_states[1:]
-        if person_mask_ids is not None:
-            person_mask_ids_aligned = person_mask_ids[:, :1]
+        if person_mask_latens is not None:
+            person_mask_aligned = person_mask_latens[:, :1]
         else:
-            person_mask_ids_aligned = None
+            person_mask_aligned = None
 
-    return n_query_tokens, hidden_states_aligned, hidden_states_tail, person_mask_ids_aligned
+    return n_query_tokens, hidden_states_aligned, hidden_states_tail, person_mask_aligned
 
 
 '''

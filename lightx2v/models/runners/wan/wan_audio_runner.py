@@ -702,8 +702,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def process_images_after_vae_decoder(self, save_video=True):
         # Merge results
         gen_lvideo = torch.cat(self.gen_video_list, dim=2).float()
-        merge_audio = torch.cat(self.cut_audio_list, dim=0).to(torch.float32)
-
+        merge_audio = torch.cat(self.cut_audio_list, dim=1).to(torch.float32)
         comfyui_images = vae_to_comfyui_image(gen_lvideo)
 
         # Apply frame interpolation if configured

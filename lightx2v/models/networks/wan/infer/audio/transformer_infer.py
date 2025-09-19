@@ -23,7 +23,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
     def infer_post_adapter(self, phase, x, pre_infer_out):
         grid_sizes = pre_infer_out.grid_sizes.tensor
         audio_encoder_output = pre_infer_out.adapter_output["audio_encoder_output"]
-        person_mask_ids = pre_infer_out.adapter_output["person_mask_ids"]
+        person_mask_latens = pre_infer_out.adapter_output["person_mask_latens"]
 
         total_tokens = grid_sizes[0].prod()
         pre_frame_tokens = grid_sizes[0][1:].prod()
@@ -40,7 +40,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
             sp_size = 1
             sp_rank = 0
 
-        n_query_tokens, hidden_states_aligned, hidden_states_tail, person_mask_ids_aligned = calculate_n_query_tokens(x, person_mask_ids, sp_rank, sp_size, n_tokens_per_rank, n_tokens)
+        n_query_tokens, hidden_states_aligned, hidden_states_tail, person_mask_aligned = calculate_n_query_tokens(x, person_mask_latens, sp_rank, sp_size, n_tokens_per_rank, n_tokens)
 
         q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1 = get_qk_lens_audio_range(
             n_tokens_per_rank=n_tokens_per_rank, n_query_tokens=n_query_tokens, n_tokens_per_frame=pre_frame_tokens, sp_rank=sp_rank, num_tokens_x4=128
@@ -55,8 +55,8 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
             residual = residual.to(ori_dtype)  # audio做了CrossAttention之后以Residual的方式注入
             if n_query_tokens == 0:
                 residual = residual * 0.0
-            if person_mask_ids_aligned is not None:
-                residual = residual * person_mask_ids_aligned[i]
+            if person_mask_aligned is not None:
+                residual = residual * person_mask_aligned[i].unsqueeze(-1)
 
             if total_residual is None:
                 total_residual = residual

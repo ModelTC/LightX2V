@@ -3,7 +3,10 @@ import io
 import os
 import time
 import traceback
+import warnings
 from datetime import datetime
+
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 
 import httpx
 import torchaudio

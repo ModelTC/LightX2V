@@ -75,9 +75,9 @@ class WanAudioPreInfer(WanPreInfer):
         grid_sizes_t += 1
 
         person_mask_latens = inputs["person_mask_latens"]
-
-        person_mask_latens = person_mask_latens.expand(-1, grid_sizes_t, -1, -1)
-        person_mask_latens = person_mask_latens.reshape(person_mask_latens.shape[0], -1).unsqueeze(-1)
+        if person_mask_latens is not None:
+            person_mask_latens = person_mask_latens.expand(-1, grid_sizes_t, -1, -1)
+            person_mask_latens = person_mask_latens.reshape(person_mask_latens.shape[0], -1)
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
         if self.sensitive_layer_dtype != self.infer_dtype:
@@ -128,5 +128,5 @@ class WanAudioPreInfer(WanPreInfer):
             seq_lens=seq_lens,
             freqs=self.freqs,
             context=context,
-            adapter_output={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_ids": person_mask_latens},
+            adapter_output={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
         )
