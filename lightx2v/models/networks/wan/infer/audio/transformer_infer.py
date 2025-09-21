@@ -68,9 +68,6 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
 
     @torch.no_grad()
     def perceiver_attention_ca(self, phase, audio_encoder_output, latents, t_emb, q_lens, k_lens, max_seqlen_q, max_seqlen_k):
-        import debugpy
-
-        debugpy.breakpoint()
         audio_encoder_output = phase.norm_kv.apply(audio_encoder_output)
         shift, scale, gate = (t_emb + phase.shift_scale_gate.tensor)[0].chunk(3, dim=0)
         norm_q = phase.norm_q.apply(latents)

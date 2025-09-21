@@ -26,7 +26,7 @@ RUN git clone https://github.com/sgl-project/sglang.git && cd sglang/sgl-kernel 
     && make build && make clean
 
 RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy imageio \
-    imageio-ffmpeg einops loguru qtorch ftfy easydict
+    imageio-ffmpeg einops loguru qtorch ftfy easydict av
 
 RUN git clone https://github.com/Dao-AILab/flash-attention.git --recursive
 

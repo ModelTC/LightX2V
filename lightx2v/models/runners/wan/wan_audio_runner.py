@@ -33,7 +33,8 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image
 
-warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io._video_deprecation_warning")
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
 
 
 def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):

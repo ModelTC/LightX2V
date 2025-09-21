@@ -17,3 +17,4 @@ easydict
 gradio
 aiohttp
 pydantic
+av

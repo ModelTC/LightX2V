@@ -1,9 +1,9 @@
 #!/bin/bash
 
-lightx2v_path=/mnt/afs2/wangshankun/lightx2v
-model_path=/mnt/afs1/gushiqiao/Wan2.1-R2V0909-Audio-14B-720P
+lightx2v_path=/path/to/Lightx2v
+model_path=/path/to/SekoTalk-Distill
 
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -12,8 +12,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 export SENSITIVE_LAYER_DTYPE=None
 
-#torchrun --nproc-per-node 2 -m lightx2v.infer \
-torchrun -m debugpy --listen 0.0.0.0:15678  -m torch.distributed.launch --use-env --nproc-per-node 2 -m lightx2v.infer \
+torchrun --nproc-per-node 4 -m lightx2v.infer \
 --model_cls seko_talk \
 --task i2v \
 --model_path $model_path \
