@@ -583,7 +583,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
         self.gen_video_list.append(self.gen_video[:, :, :useful_length].cpu())
-        self.cut_audio_list.append(self.segment.audio_array[: useful_length * self._audio_processor.audio_frame_rate])
+        self.cut_audio_list.append(self.segment.audio_array[:, :useful_length * self._audio_processor.audio_frame_rate])
 
         if self.va_recorder:
             cur_video = vae_to_comfyui_image(self.gen_video_list[-1])
@@ -701,8 +701,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self, save_video=True):
         # Merge results
-        gen_lvideo = torch.cat(self.gen_video_list, dim=2).float()
-        merge_audio = torch.cat(self.cut_audio_list, dim=1).to(torch.float32)
+        gen_lvideo  = torch.cat(self.gen_video_list, dim=2).float()
+        merge_audio = torch.cat(self.cut_audio_list, dim=1).float()
         comfyui_images = vae_to_comfyui_image(gen_lvideo)
 
         # Apply frame interpolation if configured
