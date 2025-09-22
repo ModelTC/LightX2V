@@ -91,3 +91,15 @@
 ### MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training
 
 [paper](https://sandai-org.github.io/MagiAttention/blog/) [code](https://github.com/SandAI-org/MagiAttention)
+
+### DraftAttention: Fast Video Diffusion via Low-Resolution Attention Guidance
+
+[paper](https://arxiv.org/abs/2505.14708) [code](https://github.com/shawnricecake/draft-attention)
+
+### XAttention: Block Sparse Attention with Antidiagonal Scoring
+
+[paper](https://arxiv.org/abs/2503.16428) [code](https://github.com/mit-han-lab/x-attention)
+
+### VSA: Faster Video Diffusion with Trainable Sparse Attention
+
+[paper](https://arxiv.org/abs/2505.13389) [code](https://github.com/hao-ai-lab/FastVideo)
