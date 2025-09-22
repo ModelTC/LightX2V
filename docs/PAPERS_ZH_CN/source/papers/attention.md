@@ -87,3 +87,7 @@
 ### LoViC: Efficient Long Video Generation with Context Compression
 
 [paper](https://arxiv.org/abs/2507.12952)
+
+### MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training
+
+[paper](https://sandai-org.github.io/MagiAttention/blog/) [code](https://github.com/SandAI-org/MagiAttention)
