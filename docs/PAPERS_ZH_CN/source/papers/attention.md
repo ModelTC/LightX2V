@@ -67,3 +67,27 @@
 ### ∇NABLA: Neighborhood Adaptive Block-Level Attention
 
 [paper](https://arxiv.org/abs/2507.13546v1) [code](https://github.com/gen-ai-team/Wan2.1-NABLA)
+
+### Compact Attention: Exploiting Structured Spatio-Temporal Sparsity for Fast Video Generation
+
+[paper](https://arxiv.org/abs/2508.12969)
+
+### A Survey of Efficient Attention Methods: Hardware-efficient, Sparse, Compact, and Linear Attention
+
+[paper](https://attention-survey.github.io/files/Attention_Survey.pdf)
+
+### Bidirectional Sparse Attention for Faster Video Diffusion Training
+
+[paper](https://arxiv.org/abs/2509.01085)
+
+### Mixture of Contexts for Long Video Generation
+
+[paper](https://arxiv.org/abs/2508.21058)
+
+### LoViC: Efficient Long Video Generation with Context Compression
+
+[paper](https://arxiv.org/abs/2507.12952)
+
+### MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training
+
+[paper](https://sandai-org.github.io/MagiAttention/blog/) [code](https://github.com/SandAI-org/MagiAttention)
