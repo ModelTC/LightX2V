@@ -1,4 +1,5 @@
 import queue
+import random
 import signal
 import socket
 import subprocess
@@ -18,14 +19,13 @@ class VARecorder:
         livestream_url: str,
         fps: float = 16.0,
         sample_rate: int = 16000,
-        audio_port: int = 30200,
-        video_port: int = 30201,
     ):
         self.livestream_url = livestream_url
         self.fps = fps
         self.sample_rate = sample_rate
-        self.audio_port = audio_port
-        self.video_port = video_port
+        self.audio_port = random.choice(range(32000, 40000))
+        self.video_port = self.audio_port + 1
+        logger.info(f"VARecorder audio port: {self.audio_port}, video port: {self.video_port}")
 
         self.width = None
         self.height = None
@@ -115,6 +115,58 @@ class VARecorder:
             logger.error(f"Video push worker thread error: {traceback.format_exc()}")
         finally:
             logger.info("Video push worker thread stopped")
+
+    def start_ffmpeg_process_local(self):
+        """Start ffmpeg process that connects to our TCP sockets"""
+        ffmpeg_cmd = [
+            "/opt/conda/bin/ffmpeg",
+            "-re",
+            "-f",
+            "s16le",
+            "-ar",
+            str(self.sample_rate),
+            "-ac",
+            "1",
+            "-i",
+            f"tcp://127.0.0.1:{self.audio_port}",
+            "-f",
+            "rawvideo",
+            "-re",
+            "-pix_fmt",
+            "rgb24",
+            "-r",
+            str(self.fps),
+            "-s",
+            f"{self.width}x{self.height}",
+            "-i",
+            f"tcp://127.0.0.1:{self.video_port}",
+            "-ar",
+            "44100",
+            "-b:v",
+            "4M",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-g",
+            f"{self.fps}",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "mp4",
+            self.livestream_url,
+            "-y",
+            "-loglevel",
+            "info",
+        ]
+        try:
+            self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
+            logger.info(f"FFmpeg streaming started with PID: {self.ffmpeg_process.pid}")
+            logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
+        except Exception as e:
+            logger.error(f"Failed to start FFmpeg: {e}")
 
     def start_ffmpeg_process_rtmp(self):
         """Start ffmpeg process that connects to our TCP sockets"""
@@ -240,7 +292,7 @@ class VARecorder:
         elif self.livestream_url.startswith("http"):
             self.start_ffmpeg_process_whip()
         else:
-            raise Exception(f"Unsupported livestream URL: {self.livestream_url}")
+            self.start_ffmpeg_process_local()
         self.audio_thread = threading.Thread(target=self.audio_worker)
         self.video_thread = threading.Thread(target=self.video_worker)
         self.audio_thread.start()
@@ -353,12 +405,13 @@ if __name__ == "__main__":
 
     recorder = VARecorder(
         # livestream_url="rtmp://localhost/live/test",
-        livestream_url="https://reverse.st-oc-01.chielo.org/10.5.64.49:8000/rtc/v1/whip/?app=live&stream=ll_test_video&eip=127.0.0.1:8000",
+        # livestream_url="https://reverse.st-oc-01.chielo.org/10.5.64.49:8000/rtc/v1/whip/?app=live&stream=ll_test_video&eip=127.0.0.1:8000",
+        livestream_url="/path/to/output_video.mp4",
         fps=fps,
         sample_rate=sample_rate,
     )
 
-    audio_path = "/mtc/liuliang1/lightx2v/test_deploy/media_test/test_b_2min.wav"
+    audio_path = "/path/to/test_b_2min.wav"
     audio_array, ori_sr = ta.load(audio_path)
     audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=16000)
     audio_array = audio_array.numpy().reshape(-1)

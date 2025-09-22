@@ -221,7 +221,6 @@
                 transform: translateY(-1px);
                 box-shadow: 0 14px 40px rgba(140, 110, 255, 0.55);
             }
-
             /* 修复布局问题 */
             .task-type-btn {
                 padding: 0.75rem 1rem;
@@ -577,6 +576,53 @@
                 padding: 0 1rem;
             }
 
+            /* 移动端全屏显示 */
+            @media (max-width: 768px) {
+                #task-creator {
+                    width: 100%;
+                    padding: 0 0.5rem;
+                }
+
+                #inspiration-gallery {
+                    width: 100%;
+                    padding: 0 0.5rem;
+                }
+
+                /* 任务详情面板移动端全屏 */
+                .task-detail-panel {
+                    width: 100%;
+                    padding: 0 0.5rem;
+                }
+
+                /* 任务运行面板移动端全屏 */
+                .task-running-panel {
+                    width: 100%;
+                    padding: 0 0.5rem;
+                }
+
+                /* 任务失败面板移动端全屏 */
+                .task-failed-panel {
+                    width: 100%;
+                    padding: 0 0.5rem;
+                }
+
+                /* 任务取消面板移动端全屏 */
+                .task-cancelled-panel {
+                    width: 100%;
+                    padding: 0 0.5rem;
+                }
+
+                /* 移动端内容区域调整 */
+                .content-area {
+                    padding: 0.5rem !important;
+                }
+
+                /* 移动端创作区域调整 */
+                .creation-area-container {
+                    padding: 0.5rem;
+                }
+            }
+
             /* 任务详情面板全屏 */
             .task-detail-panel {
                 max-width: none;
@@ -755,14 +801,9 @@
             @media (max-width: 640px) {
                 /* 通用移动端样式 */
                 .mobile-bottom-nav {
-                    position: fixed !important;
-                    bottom: 0 !important;
-                    left: 0 !important;
-                    right: 0 !important;
                     width: 100% !important;
                     height: auto !important;
                     padding: 0 !important;
-                    background: rgba(11, 10, 32, 0.95) !important;
                     backdrop-filter: blur(20px) !important;
                     border-top: 1px solid rgba(154, 114, 255, 0.2) !important;
                     z-index: 50 !important;
@@ -782,10 +823,6 @@
                     width: 3rem !important;
                     height: 3rem !important;
                     flex-shrink: 0 !important;
-                }
-
-                .mobile-content {
-                    margin-bottom: 5rem !important;
                 }
 
                 .sms-login-form .input-group {
@@ -820,19 +857,7 @@
                 }
 
                 /* 左侧功能区在移动端移动到下方 */
-                .relative.w-20.pl-5.flex.flex-col.z-10 {
-                    position: fixed !important;
-                    bottom: 0 !important;
-                    left: 0 !important;
-                    right: 0 !important;
-                    width: 100% !important;
-                    height: auto !important;
-                    padding: 0 !important;
-                    background: rgba(11, 10, 32, 0.95) !important;
-                    backdrop-filter: blur(20px) !important;
-                    border-top: 1px solid rgba(154, 114, 255, 0.2) !important;
-                    z-index: 50 !important;
-                }
+
 
                 /* 功能导航在移动端水平排列 */
                 .p-2.flex.flex-col.justify-center.h-full {
@@ -879,10 +904,6 @@
                     flex-shrink: 0 !important;
                 }
 
-                /* 主内容区域在移动端占满全屏 */
-                .flex-1.flex.flex-col.min-h-0 {
-                    margin-bottom: 5rem !important; /* 为底部导航留出空间 */
-                }
 
                 /* 历史任务区域调整 */
                 .flex-1.overflow-y-auto.p-10.content-area.main-scrollbar {
@@ -949,11 +970,6 @@
                 .grid.grid-cols-1.gap-6 {
                     grid-template-columns: 1fr !important;
                     gap: 1rem !important;
-                }
-
-                /* 模板卡片在移动端调整 */
-                .bg-dark-light.rounded-xl.overflow-hidden {
-                    margin: 0 !important;
                 }
 
                 /* 模态框在移动端调整 */
@@ -2444,7 +2460,7 @@
         </div>
 
         <!-- 登录页面 -->
-        <div v-if="isLoggedIn === false" class="login-container w-full">
+        <div v-if="isLoggedIn === false || currentView === 'login'" class="login-container w-full">
             <!-- 浮动粒子背景 -->
             <div class="floating-particles">
                 <div class="particle"></div>
@@ -2573,7 +2589,7 @@
         </div>
 
         <!-- 主应用页面 -->
-        <div v-if="isLoggedIn === true" class="main-container">
+        <div v-if="isLoggedIn === true && currentView !== 'login'" class="main-container">
         <!-- 浮动粒子背景 -->
         <div class="floating-particles">
             <div class="particle"></div>
@@ -2603,10 +2619,6 @@
             <!-- 顶部栏 -->
             <div class="top-bar">
                 <div class="top-bar-content">
-                    <!-- 左侧图标 -->
-                    <!-- <div class="top-bar-left">
-                        <img src="/icon/seko_logo_white.svg" alt="SekoTalk Logo" class="top-bar-logo">
-                    </div> -->
                     <div class="top-bar-left">
                         <i class="fas fa-video text-gradient-icon mr-2 text-xl"></i>
                         <span class="text-lg">LightX2V</span>
@@ -2793,41 +2805,48 @@
                         </div>
 
                         <!-- 可滚动的任务列表区域 -->
-                                <div class="flex-1 overflow-y-auto history-tasks-scroll min-h-0 p-4"
+                                <div class="flex-1 overflow-y-auto main-scrollbar min-h-0 p-4"
                                     style="overflow-x: visible;">
                             <div v-cloak>
                                         <div v-if="filteredTasks.length === 0"
                                             class="flex-col items-center justify-center py-12 text-center">
                                             <p class="text-gray-400 text-sm">{{ t('noHistoryTasks') }}</p>
                                             <p class="text-gray-500 text-xs mt-1">{{ t('startToCreateYourFirstAIVideo') }}</p>
-                                </div>
+                                        </div>
                                         <div v-else
-                                            class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-6">
+                                            class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-3">
                                                 <!-- 任务卡片 -->
                                             <div v-for="task in filteredTasks" :key="task.task_id"
-                                                    class="cursor-pointer break-inside-avoid mb-6 group relative bg-dark-light rounded-xl overflow-hidden border border-gray-700/50 hover:border-laser-purple/40 transition-all duration-300 hover:shadow-laser/20"
+                                                    class="break-inside-avoid mb-3 group relative bg-dark-light rounded-xl overflow-hidden border border-gray-700/50 hover:border-laser-purple/40 transition-all duration-300 hover:shadow-laser/20">
+                                                <!-- 缩略图区域 -->
+                                                <div class="cursor-pointer bg-gray-800 relative flex flex-col"
                                                 @click="openTaskDetailModal(task)"
-                                                :title="viewTaskDetail">
-                                                    <!-- 缩略图区域 -->
-                                                    <div class="relative mb-3">
-                                                        <div class="w-full h-auto bg-dark-light rounded-lg overflow-hidden">
-                                                            <!-- 成功任务：显示视频动图 -->
-                                                        <video v-if="task.status === 'SUCCEED'"
-                                                            :src="getTaskVideoUrl(task.task_id, 'output_video')"
-                                                            :poster="getTaskImageUrl(task)"
-                                                                class="w-full h-auto object-cover group-hover:scale-105 transition-transform duration-300"
-                                                            playsinline webkit-playsinline
+                                                :title="t('viewTaskDetails')">
+                                                    <!-- 视频预览 -->
+                                                        <!-- 成功任务：显示视频动图 -->
+                                                        <video v-if="task.status === 'SUCCEED' && task.outputs?.output_video"
+                                                            :src="getTaskFileUrlSync(task.task_id, 'output_video')"
+                                                            :poster="getTaskFileUrlSync(task.task_id, 'input_image')"
+                                                                class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                                                            preload="auto" playsinline webkit-playsinline
                                                                 @mouseenter="playVideo($event)"
                                                                 @mouseleave="pauseVideo($event)"
                                                                 @loadeddata="onVideoLoaded($event)"
+                                                                @ended="onVideoEnded($event)"
                                                             @error="onVideoError($event)"></video>
 
-                                                            <!-- 其他状态：显示输入图片或占位符 -->
-                                                        <img v-else
-                                                            :src="getTaskImageUrl(task)" :alt="t('taskPreview')"
-                                                                class="w-full h-auto object-cover bg-dark-light transition-transform duration-300 group-hover:scale-105"
-                                                            @error="handleThumbnailError" />
-                                    </div>
+                                                    <!-- 其他状态：显示输入图片或占位符 -->
+                                                    <img v-else="task.inputs?.input_image"
+                                                    :src="getTaskFileUrlSync(task.task_id, 'input_image')"
+                                                    class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                                                    @error="handleThumbnailError" />
+
+                                                    <!-- 移动端播放按钮 -->
+                                                    <button v-if="task.status === 'SUCCEED'"
+                                                    @click.stop="toggleVideoPlay($event)"
+                                                    class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
+                                                    <i class="fas fa-play text-sm"></i>
+                                                </button>
 
                                                         <!-- 状态指示器 -->
                                                         <div class="absolute top-2 right-2">
@@ -2837,43 +2856,43 @@
                                                             </span>
                                                         </div>
 
-                                                        <!-- 悬停时显示的操作按钮 -->
+                                                        <!-- 悬停时显示的操作按钮（桌面端） -->
                                                     <div
-                                                        class="absolute bottom-2 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-                                                            <div class="flex space-x-3 pointer-events-auto">
+                                                        class="hidden md:block absolute bottom-2 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                                                            <div class="flex space-x-2 sm:space-x-3 pointer-events-auto">
                                                 <button
                                                                     v-if="['CREATED', 'PENDING', 'RUNNING','SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
                                                                     @click.stop="reuseTask(task)"
-                                                                    class="w-10 h-10 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors"
+                                                                    class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors"
                                                                 :title="t('reuseTask')">
-                                                            <i class="fas fa-copy text-lg"></i>
+                                                            <i class="fas fa-copy text-sm sm:text-lg"></i>
                                                 </button>
                                                         <button
                                                                 v-if="['CREATED', 'PENDING', 'RUNNING'].includes(task.status)"
                                                                 @click.stop="cancelTask(task.task_id)"
                                                                 class="w-10 h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
                                                                 :title="t('cancelTask')">
-                                                            <i class="fas fa-times text-lg"></i>
+                                                            <i class="fas fa-times text-sm sm:text-lg"></i>
                                                         </button>
                                                         <button
                                                                     v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
                                                                     @click.stop="resumeTask(task.task_id)"
-                                                                    class="w-10 h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                                                    class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
                                                                 :title="t('retryTask')">
-                                                                    <i class="fas fa-redo text-lg"></i>
+                                                                    <i class="fas fa-redo text-sm sm:text-lg"></i>
                                                         </button>
                                                             <button v-if="task.status === 'SUCCEED'"
-                                                                    @click.stop="downloadTaskOutput(task)"
-                                                                    class="w-10 h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                                                    @click.stop="downloadFile(task.outputs?.output_video)"
+                                                                    class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
                                                                 :title="t('downloadTask')">
-                                                                    <i class="fas fa-download text-lg"></i>
+                                                                    <i class="fas fa-download text-sm sm:text-lg"></i>
                                                         </button>
                                                         <button
                                                                     v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
                                                                     @click.stop="deleteTask(task.task_id)"
-                                                                    class="w-10 h-10 rounded-full bg-red-400/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-red-500 transition-colors"
+                                                                    class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-red-400/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-red-500 transition-colors"
                                                                 :title="t('deleteTask')">
-                                                                    <i class="fas fa-trash text-lg"></i>
+                                                                    <i class="fas fa-trash text-sm sm:text-lg"></i>
                                                         </button>
                                                 </div>
                                             </div>
@@ -2892,7 +2911,7 @@
 
                                 </div>
                             </div>
-                            </div>
+                                        </div>
                                 </div>
                             </div>
                         </div>
@@ -3038,7 +3057,7 @@
                                                 </div>
                                             </div>
                                          <div class="overflow-y-auto flex-1 max-h-[60vh] main-scrollbar">
-                                         <div v-if="imageTemplates.length > 0" class="columns-4 gap-4">
+                                         <div v-if="imageTemplates.length > 0" class="columns-2 sm:columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
                                             <div v-for="template in imageTemplates" :key="template.filename"
                                                 @click="selectImageTemplate(template)"
                                                 class="break-inside-avoid mb-4 relative group cursor-pointer rounded-lg border border-gray-700 hover:border-laser-purple/50 transition-all">
@@ -3196,8 +3215,9 @@
 
                                         </div>
                                 </div>
-                            </div>
                         </div>
+                    </div>
+
 
                         <!-- 任务创建面板 -->
                         <div class="max-w-4xl mx-auto" id="task-creator">
@@ -3354,27 +3374,34 @@
                                         <div class="flex justify-between items-center mb-2">
                                                 <label class="block text-sm text-gray-400 flex items-center">
                                                                 {{ t('image') }}
-                                                            <button
-                                                            @click.stop="showImageTemplates = true; mediaModalTab = 'history'; getImageHistory()"
-                                                        class="text-xs hover:text-gradient-icon transition-colors pl-3"
-                                                        :title="t('templates')">
-
-                                                    <i class="fas fa-lightbulb mr-1"></i>
-                                                </button>
                                                 </label>
                                         </div>
                                         <!-- 上传图片 -->
                                         <div class="upload-area"
-                                            @click="triggerImageUpload">
+                                            >
                                             <!-- 默认上传界面 -->
                                             <div v-if="!getCurrentImagePreview()" class="upload-content">
-                                            <div class="upload-icon">
-                                                <i class="fas fa-image text-gradient-icon text-xl"></i>
-                                            </div>
-                                                    <p class="text-xs text-gray-400 mb-4">{{ t('supportedImageFormats') }}</p>
-                                            <div class="flex gap-2">
-                                                        <button
-                                                            class="btn-primary px-4 py-1.5 rounded-lg transition-all flex-1">{{ t('uploadImage') }}</button>
+                                            <p class="text-base text-white font-bold mb-4">{{ t('uploadImage') }}</p>
+                                            <p class="text-xs text-gray-400 mb-4">{{ t('supportedImageFormats') }}</p>
+                                            <div class="flex items-center justify-center space-x-6">
+                                                        <div class="flex flex-col items-center space-y-2">
+                                                            <button
+                                                                class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
+                                                                @click="triggerImageUpload"
+                                                                :title="t('uploadImage')">
+                                                                <i class="fas fa-upload text-lg"></i>
+                                                            </button>
+                                                            <span class="text-xs text-gray-300">{{ t('upload') }}</span>
+                                                        </div>
+                                                        <div class="flex flex-col items-center space-y-2">
+                                                            <button
+                                                                @click.stop="showImageTemplates = true; mediaModalTab = 'history'; getImageHistory()"
+                                                                class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
+                                                                :title="t('templates')">
+                                                                <i class="fas fa-history text-lg"></i>
+                                                            </button>
+                                                            <span class="text-xs text-gray-300">{{ t('templates') }}</span>
+                                                        </div>
                                             </div>
                                             </div>
 
@@ -3385,7 +3412,7 @@
 
                                                 <!-- 悬停时显示的操作按钮，位置在中下方 -->
                                                     <div
-                                                        class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                                        class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-300">
                                                     <div class="flex space-x-3">
                                                             <button @click.stop="triggerImageUpload"
                                                             class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
@@ -3411,45 +3438,73 @@
                                         <div class="flex justify-between items-center mb-2">
                                                         <label class="block text-sm text-gray-400 flex items-center">
                                                                         {{ t('audio') }}
-                                                                    <button
-                                                                    @click.stop="showAudioTemplates = true; mediaModalTab = 'history'; getAudioHistory()"
-                                                                class="text-xs hover:text-gradient-icon transition-colors pl-3"
-                                                                :title="t('templates')">
-
-                                                            <i class="fas fa-lightbulb mr-1"></i>
-                                                        </button>
                                                         </label>
                                         </div>
                                         <!-- 上传音频 -->
                                         <div class="upload-area">
                                         <!-- 默认上传界面 -->
                                             <div v-if="!getCurrentAudioPreview()" class="upload-content"
-                                                @click="triggerAudioUpload">
-                                        <div class="upload-icon">
-                                            <i class="fas fa-microphone text-gradient-icon text-xl"></i>
-                                        </div>
+                                                >
+                                                <p class="text-base text-white font-bold mb-4">{{ t('uploadAudio') }}</p>
                                                 <p class="text-xs text-gray-400 mb-4">{{ t('supportedAudioFormats') }}</p>
-                                        <div class="flex gap-2">
-                                                    <button
-                                                        class="btn-primary px-4 py-1.5 rounded-lg transition-all flex-1">{{ t('uploadAudio') }}</button>
-
+                                            <div class="flex items-center justify-center space-x-6">
+                                                    <div class="flex flex-col items-center space-y-2">
+                                                        <button
+                                                            @click.stop="showAudioTemplates = true; mediaModalTab = 'history'; getAudioHistory()"
+                                                            class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
+                                                            :title="t('templates')">
+                                                            <i class="fas fa-history text-lg"></i>
+                                                        </button>
+                                                        <span class="text-xs text-gray-300">{{ t('templates') }}</span>
+                                                    </div>
+                                                    <div class="flex flex-col items-center space-y-2">
+                                                        <button
+                                                            class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
+                                                            @click="triggerAudioUpload"
+                                                            :title="t('uploadAudio')">
+                                                            <i class="fas fa-upload text-lg"></i>
+                                                        </button>
+                                                        <span class="text-xs text-gray-300">{{ t('upload') }}</span>
+                                                    </div>
+                                                    <div class="flex flex-col items-center space-y-2">
+                                                        <button
+                                                            @click.stop="isRecording ? stopRecording() : startRecording()"
+                                                            class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
+                                                            :class="{ 'bg-red-500/80': isRecording }"
+                                                            :title="isRecording ? t('stopRecording') : t('recordAudio')">
+                                                            <i class="fas fa-microphone text-lg" :class="{ 'animate-pulse': isRecording }"></i>
+                                                        </button>
+                                                        <span class="text-xs text-gray-300">{{ t('recordAudio') }}</span>
+                                                    </div>
+                                                    <div v-if="isRecording && recordingDuration > 0" class="flex flex-col items-center space-y-2">
+                                                        <div class="text-white text-xs font-medium bg-black/20 px-2 py-1 rounded-full">
+                                                            {{ formatRecordingDuration(recordingDuration) }}
+                                                        </div>
+                                                        <span class="text-xs text-gray-300">{{ t('recording') }}</span>
+                                                    </div>
                                         </div>
                                             </div>
 
                                         <!-- 音频预览 -->
                                             <div v-if="getCurrentAudioPreview()" class="audio-preview group">
-                                            <audio controls class="w-full h-full">
+                                            <audio controls class="w-full h-full" @error="handleAudioError" @loadstart="console.log('音频开始加载')" @canplay="console.log('音频可以播放')">
                                                     <source :src="getCurrentAudioPreviewUrl()" :type="getAudioMimeType()" preload="metadata">
                                             </audio>
 
                                             <!-- 悬停时显示的操作按钮，位置在中下方 -->
                                                 <div
-                                                    class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-black/20">
+                                                    class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-300">
                                                 <div class="flex space-x-3">
                                                         <button @click.stop="triggerAudioUpload"
                                                         class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
                                                             :title="t('reupload')">
                                                         <i class="fas fa-upload text-lg"></i>
+                                                    </button>
+                                                        <button @click.stop="isRecording ? stopRecording() : startRecording()"
+                                                        class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
+                                                            :title="isRecording ? t('stopRecording') : t('recordAudio')"
+                                                            :class="{ 'bg-red-500/80': isRecording }">
+                                                        <i class="fas fa-microphone text-lg" :class="{ 'animate-pulse': isRecording }"></i>
                                                     </button>
                                                         <button @click.stop="removeAudio"
                                                         class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
@@ -3477,7 +3532,7 @@
                                                 </button>
                                             </label>
                                             <div class="text-xs text-gray-400">
-                                                {{ getCurrentForm().prompt?.length || 0 }} / 500
+                                                {{ getCurrentForm().prompt?.length || 0 }} / 1000
                                             </div>
                                         </div>
                                         <div class="relative group cursor-pointer">
@@ -3504,7 +3559,9 @@
                                 <div class="flex justify-center mt-2">
                                     <button @click="submitTask" :disabled="submitting"
                                         class="btn-primary flex items-center justify-center px-8 py-3 rounded-lg text-lg transition-all shadow-lg">
-                                        <i class="fas fa-play text-xl mr-2"></i>
+
+                                        <i class="fas fa-spinner fa-spin text-xl mr-2" :class="{ 'hidden': !submitting }"></i>
+                                        <i class="fas fa-play text-xl mr-2" :class="{ 'hidden': submitting }"></i>
                                         {{ submitting ? t('submitting') : t('generateVideo') }}
                                     </button>
                                 </div>
@@ -3549,13 +3606,13 @@
 
                                             <!-- 分类筛选 -->
                                                 <div class="flex gap-2 flex-wrap">
-                                                    <button v-for="category in dynamicInspirationCategories" :key="category.id"
-                                                    @click="selectInspirationCategory(category.id)"
-                                                    :class="selectedInspirationCategory === category.id
+                                                    <button v-for="category in InspirationCategories" :key="category"
+                                                    @click="selectInspirationCategory(category)"
+                                                    :class="selectedInspirationCategory === category
                                                         ? 'bg-laser-purple/20 text-white border-laser-purple/40'
                                                         : 'bg-dark-light text-gray-400 hover:text-white hover:bg-dark-light/80'"
                                                         class="px-4 py-2 rounded-lg border border-transparent transition-all duration-200 text-sm font-medium">
-                                                    {{ category.name }}
+                                                    {{ category }}
                                                 </button>
                                             </div>
                                         </div>
@@ -3611,12 +3668,12 @@
                                                 </div>
                                         </div>
                                         <!-- 灵感内容网格 -->
-                                        <div class="flex-1 overflow-y-auto history-tasks-scroll min-h-0 p-4"
+                                        <div class="flex-1 overflow-y-auto main-scrollbar min-h-0 p-4"
                                         style="overflow-x: visible;">
-                                        <div class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-6">
+                                        <div class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-3">
                                             <!-- 灵感卡片 -->
-                                            <div v-for="item in filteredInspirationItems" :key="item.task_id"
-                                                    class="break-inside-avoid mb-6 group relative bg-dark-light rounded-xl overflow-hidden border border-gray-700/50 hover:border-laser-purple/40 transition-all duration-300 hover:shadow-laser/20">
+                                            <div v-for="item in inspirationItems" :key="item.task_id"
+                                                    class="break-inside-avoid mb-3 group relative bg-dark-light rounded-xl overflow-hidden border border-gray-700/50 hover:border-laser-purple/40 transition-all duration-300 hover:shadow-laser/20">
                                                 <!-- 视频缩略图区域 -->
                                                 <div class="cursor-pointer bg-gray-800 relative flex flex-col"
                                                 @click="previewTemplateDetail(item)"
@@ -3629,45 +3686,42 @@
                                                             preload="auto" playsinline webkit-playsinline
                                                             @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
                                                             @loadeddata="onVideoLoaded($event)"
+                                                            @ended="onVideoEnded($event)"
                                                             @error="onVideoError($event)"></video>
                                                     <!-- 图片缩略图 -->
-                                                        <img v-else="item?.inputs?.input_image"
+                                                        <img v-else
                                                         :src="getTemplateFileUrl(item.inputs.input_image,'images')"
                                                         :alt="item.params?.prompt || '模板图片'"
                                                         class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
                                                         @error="handleThumbnailError" />
-                                                    <!-- 悬浮操作按钮（下方居中） -->
+                                                        <!-- 移动端播放按钮 -->
+                                                        <button v-if="item?.outputs?.output_video"
+                                                            @click.stop="toggleVideoPlay($event)"
+                                                            class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
+                                                            <i class="fas fa-play text-sm"></i>
+                                                        </button>
+                                                    <!-- 悬浮操作按钮（下方居中，仅桌面端） -->
                                                     <div
-                                                        class="absolute bottom-3 left-1/2 transform -translate-x-1/2 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-10 w-full">
+                                                        class="hidden md:flex absolute bottom-3 left-1/2 transform -translate-x-1/2 items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-10 w-full">
                                                         <div class="flex space-x-3 pointer-events-auto">
-                                                            <button @click="applyTemplateImage(item)"
-                                                                class="w-10 h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                                            <button @click.stop="applyTemplateImage(item)"
+                                                                class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
                                                                 :title="t('applyImage')">
                                                                 <i class="fas fa-image text-sm"></i>
                                                             </button>
-                                                            <button @click="applyTemplateAudio(item)"
-                                                                class="w-10 h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                                            <button @click.stop="applyTemplateAudio(item)"
+                                                                class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
                                                                 :title="t('applyAudio')">
                                                                 <i class="fas fa-music text-sm"></i>
                                                             </button>
-                                                            <button @click="useTemplate(item)"
-                                                                class="w-10 h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                                            <button @click.stop="useTemplate(item)"
+                                                                class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
                                                                 :title="t('useTemplate')">
                                                                 <i class="fas fa-clone text-sm"></i>
                                                             </button>
                                                         </div>
                                                     </div>
 
-                                            </div>                                                <!-- 固定高度内容信息和标签，合并为一个组件，最多两行文字 -->
-                                                <div class="p-4 flex flex-col justify-between h-20">
-                                                        <div class="flex flex-wrap gap-1">
-                                                            <span v-for="tag in item.tags" :key="tag"
-                                                                class="px-2 py-1 bg-gray-700/50 text-gray-300 text-xs rounded-full">
-                                                            {{ tag }}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                        </div>
                                     </div>
 
                                     </div>
@@ -3679,35 +3733,7 @@
         </div>
 
         </div>
-        <!-- 增强的提示消息系统 -->
-        <div v-cloak>
-            <div v-if="alert.show"
-                class="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] max-w-xs w-full px-4"
-                :class="getAlertClass(alert.type)">
-                    <div
-                        class="bg-gray-800/95 backdrop-blur-sm border border-gray-700/50 rounded-lg shadow-lg transition-all duration-300 ease-out">
-                    <div class="flex items-center p-3">
-                        <div class="flex-shrink-0 mr-3">
-                            <div class="w-6 h-6 rounded-full flex items-center justify-center"
-                                :class="getAlertIconBgClass(alert.type)">
-                                <i :class="getAlertIcon(alert.type)" class="text-xs"></i>
-                            </div>
-                        </div>
-                        <div class="flex-1">
-                            <p class="text-xs font-medium text-gray-200">
-                                {{ alert.message }}
-                            </p>
-                        </div>
-                        <div class="flex-shrink-0 ml-2">
-                            <button @click="alert.show = false"
-                                    class="w-5 h-5 rounded-full flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-all duration-200">
-                                <i class="fas fa-times text-xs"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+
 
         <!-- 自定义确认对话框 -->
          <div v-cloak>
@@ -3884,7 +3910,7 @@
                 <div v-if="showTemplateDetailModal"
                     class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
                     @click="closeTemplateDetailModal">
-                    <div class="bg-secondary rounded-xl w-[80%] h-[100vh]" @click.stop>
+                    <div class="bg-secondary rounded-xl w-[95%] sm:w-[90%] md:w-[80%] h-[95vh] sm:h-[100vh]" @click.stop>
                         <!-- 弹窗头部 -->
                         <div class="flex items-center justify-between p-6 border-b border-gray-700">
                             <h3 class="text-xl font-medium text-white flex items-center">
@@ -3907,10 +3933,23 @@
                         </div>
 
                         <!-- 弹窗内容 -->
-                        <div class="flex h-[calc(100vh-120px)] overflow-y-auto main-scrollbar">
-                            <!-- 左侧输入素材区域 -->
-                            <div class="w-2/5 border-r border-gray-700">
-                                <div class="p-6 space-y-6">
+                        <div class="flex flex-col lg:flex-row h-[calc(100vh-120px)] overflow-y-auto main-scrollbar">
+                            <!-- 左侧视频播放区域 -->
+                            <div class="flex-1 lg:flex-1">
+                                <div class="p-4 lg:p-6 flex items-center justify-between">
+                                    <label class="text-sm font-medium text-white">{{ t('outputVideo') }}</label>
+                                </div>
+                                <div class="w-full h-[50vh] sm:h-[60vh] lg:h-[calc(70vh)] bg-gray-900 rounded-lg overflow-hidden mx-4 lg:mx-6">
+                                    <video
+                                    :src="getTemplateFileUrl(selectedTemplate.outputs.output_video,'videos')"
+                                    :poster="getTemplateFileUrl(selectedTemplate.inputs.input_image,'images')"
+                                        class="w-full h-full object-contain" controls
+                                        @loadeddata="onVideoLoaded($event)"></video>
+                                </div>
+                            </div>
+                            <!-- 右侧输入素材区域 -->
+                            <div class="w-full lg:w-2/5 lg:border-l border-gray-700 mt-4 lg:mt-0">
+                                <div class="p-4 lg:p-6 space-y-4 lg:space-y-6">
                                     <!-- 输入图片 -->
                                     <div v-if="selectedTemplate?.inputs?.input_image" class="space-y-3">
                                         <div class="flex items-center justify-between">
@@ -3920,7 +3959,7 @@
                                                 {{ t('applyImage') }}
                                             </button>
                                         </div>
-                                        <div class="relative w-[50%] bg-gray-800 rounded-lg overflow-hidden cursor-pointer group"
+                                        <div class="relative w-full sm:w-3/4 lg:w-[50%] bg-gray-800 rounded-lg overflow-hidden cursor-pointer group"
                                             @click="showImageZoom(getTemplateFileUrl(selectedTemplate.inputs.input_image,'images'))">
                                             <img :src="getTemplateFileUrl(selectedTemplate.inputs.input_image,'images')" :alt="'输入图片'"
                                                 class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
@@ -3967,20 +4006,6 @@
 
                                 </div>
                             </div>
-
-                            <!-- 右侧视频播放区域 -->
-                            <div class="flex-1">
-                                <div class="p-6 flex items-center justify-between">
-                                    <label class="text-sm font-medium text-white">{{ t('outputVideo') }}</label>
-                                </div>
-                                <div class="w-full h-[calc(70vh)] bg-gray-900 rounded-lg overflow-hidden">
-                                    <video
-                                    :src="getTemplateFileUrl(selectedTemplate.outputs.output_video,'videos')"
-                                    :poster="getTemplateFileUrl(selectedTemplate.inputs.input_image,'images')"
-                                        class="w-full h-full object-contain" controls
-                                        @loadeddata="onVideoLoaded($event)"></video>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -4013,7 +4038,7 @@
                     @click="closeTaskDetailModal">
                     <!-- 任务完成时的大弹窗 -->
                     <div v-if="modalTask?.status === 'SUCCEED'"
-                        class="bg-secondary rounded-xl max-w-7xl w-full max-h-[95vh] overflow-hidden" @click.stop>
+                        class="bg-secondary rounded-xl w-[95%] sm:w-[90%] md:w-[80%] h-[95vh] sm:h-[100vh]" @click.stop>
                         <!-- 弹窗头部 -->
                         <div class="flex items-center justify-between p-6 border-b border-gray-700">
                             <h3 class="text-xl font-medium text-white flex items-center">
@@ -4027,10 +4052,10 @@
                         </div>
 
                         <!-- 左右布局内容 -->
-                        <div class="flex h-[calc(100vh-120px)]">
+                        <div class="flex flex-col lg:flex-row h-[calc(100vh-120px)] main-scrollbar overflow-y-auto">
                             <!-- 左侧视频播放器 -->
-                            <div class="flex-1 p-6">
-                                <div class="h-full bg-black rounded-xl border border-laser-purple/50 overflow-hidden">
+                            <div class="flex-1 p-6 order-1 lg:order-1">
+                                <div class="h-64 lg:h-full bg-black rounded-xl border border-laser-purple/50 overflow-hidden">
                         <video
                             v-if="selectedTaskFiles.outputs.output_video && selectedTaskFiles.outputs.output_video.url"
                                         class="w-full h-full object-contain" controls preload="metadata"
@@ -4054,7 +4079,7 @@
                 </div>
 
                             <!-- 右侧任务详情 -->
-                            <div class="w-[28rem] overflow-y-auto border-l border-gray-700">
+                            <div class="w-full lg:w-[28rem] border-t lg:border-t-0 lg:border-l border-gray-700 order-2 lg:order-2">
                                 <!-- 任务操作按钮 -->
                                 <div class="flex flex-col space-y-3 items-center">
                                     <button v-if="['CREATED', 'PENDING', 'RUNNING'].includes(modalTask?.status)"
@@ -4226,7 +4251,7 @@
                     </div>
 
                     <!-- 其他状态的小弹窗 -->
-                    <div v-else class="bg-secondary rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden"
+                    <div v-else class="bg-secondary rounded-xl w-[95%] sm:w-[90%] md:w-[80%] h-[95vh] sm:h-[100vh]"
                         @click.stop>
                         <!-- 弹窗头部 -->
                         <div class="flex items-center justify-between p-6 border-b border-gray-700">
@@ -4242,7 +4267,7 @@
 
                         <!-- 弹窗内容 -->
 
-                        <div class="overflow-y-auto max-h-[calc(90vh-120px)] p-6">
+                        <div class="overflow-y-auto max-h-[calc(90vh-120px)] p-6 main-scrollbar">
                                 <!-- 任务进行中信息 -->
                             <div v-if="['CREATED', 'PENDING', 'RUNNING'].includes(modalTask?.status)"
                                 class="max-w-4xl mx-auto task-running-panel">
@@ -4283,7 +4308,7 @@
                                                 class="subtask-item">
                                                     <div class="subtask-header">
                                                     <span class="text-sm font-medium">{{ t('subtask') }} {{ index + 1 }}</span>
-                                                        <span class="subtask-status" :class="subtask.status.toLowerCase()">
+                                                        <span class="subtask-status">
                                                             {{ getSubtaskStatusText(subtask.status) }}
                                                         </span>
                                                     </div>
@@ -4551,6 +4576,36 @@
 
         </div>
     </div>
+
+            <!-- 增强的提示消息系统 -->
+            <div v-cloak>
+                <div v-if="alert.show"
+                    class="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] max-w-xs w-full px-4"
+                    :class="getAlertClass(alert.type)">
+                        <div
+                            class="bg-gray-800/95 backdrop-blur-sm border border-gray-700/50 rounded-lg shadow-lg transition-all duration-300 ease-out">
+                        <div class="flex items-center p-3">
+                            <div class="flex-shrink-0 mr-3">
+                                <div class="w-6 h-6 rounded-full flex items-center justify-center"
+                                    :class="getAlertIconBgClass(alert.type)">
+                                    <i :class="getAlertIcon(alert.type)" class="text-xs"></i>
+                                </div>
+                            </div>
+                            <div class="flex-1">
+                                <p class="text-xs font-medium text-gray-200">
+                                    {{ alert.message }}
+                                </p>
+                            </div>
+                            <div class="flex-shrink-0 ml-2">
+                                <button @click="alert.show = false"
+                                        class="w-5 h-5 rounded-full flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-all duration-200">
+                                    <i class="fas fa-times text-xs"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 </div>
 </div>
 
@@ -4567,7 +4622,15 @@
                 const loginLoading = ref(false);
                 const initLoading = ref(false);
                 const downloadLoading = ref(false);
+
+                // 录音相关状态
+                const isRecording = ref(false);
+                const mediaRecorder = ref(null);
+                const audioChunks = ref([]);
+                const recordingDuration = ref(0);
+                const recordingTimer = ref(null);
                 const alert = ref({ show: false, message: '', type: 'info' });
+
 
                 // 短信登录相关数据
                 const phoneNumber = ref('');
@@ -4611,7 +4674,7 @@
                         noHistoryTasks: '暂无历史任务',
                         templateDetail: '模板详情',
                         viewTemplateDetail: '查看模板详情',
-                        viewTaskDetail: '查看任务详情',
+                        viewTaskDetails: '查看任务详情',
                         templateInfo: '模板信息',
                         useTemplate: '使用模板',
                         model: '模型',
@@ -4629,12 +4692,13 @@
                         promptCopied: '提示词已复制到剪贴板',
                         outputVideo: '输出视频',
                         audio: '音频',
+                        optional: '（选填）',
 
                         // 页面标题
                         pageTitle: 'LightX2V服务',
                         pleaseEnterThePromptForVideoGeneration: '请输入视频生成提示词',
                         describeTheContentStyleSceneOfTheVideo: '描述视频内容、风格、场景等...',
-                        describeTheDigitalHumanImageBackgroundStyleActionRequirements: '描述数字人形象、背景风格、动作要求等...',
+                        describeTheDigitalHumanImageBackgroundStyleActionRequirements: '描述数字人表情、语气、动作等...',
                         describeTheContentActionRequirementsBasedOnTheImage: '描述基于图片的视频内容、动作要求等...',
                         loginSubtitle: '一个强大的视频生成平台',
 
@@ -4766,19 +4830,30 @@
                         all: '全部',
 
                         // 任务操作
-                        reuseTask: '复用任务',
-                        regenerateTask: '重新生成',
-                        cancelTask: '取消任务',
-                        retryTask: '重试任务',
+                        reuseTask: '复用',
+                        regenerateTask: '重试',
+                        cancelTask: '取消',
+                        retryTask: '重试',
                         downloadTask: '下载视频',
                         downloadVideo: '下载视频',
-                        deleteTask: '删除任务',
+                        deleteTask: '删除',
 
                         // 任务创建
                         createVideo: '创建视频',
                         selectTemplate: '选择模板',
                         uploadImage: '上传图片',
                         uploadAudio: '上传音频',
+                        recordAudio: '录音',
+                        recording: '录音中...',
+                        takePhoto: '拍照',
+                        retake: '重拍',
+                        usePhoto: '使用照片',
+                        upload: '上传',
+                        stopRecording: '停止录音',
+                        recordingStarted: '开始录音',
+                        recordingStopped: '录音已停止',
+                        recordingCompleted: '录音完成',
+                        recordingFailed: '录音失败',
                         enterPrompt: '输入提示词',
                         selectModel: '选择模型',
                         startGeneration: '开始生成',
@@ -4932,7 +5007,7 @@
                         noHistoryTasks: 'No history tasks',
                         templateDetail: 'Template detail',
                         viewTemplateDetail: 'View Template Detail',
-                        viewTaskDetail: 'View Task Detail',
+                        viewTaskDetails: 'View Task Details',
                         templateInfo: 'Template Info',
                         useTemplate: 'Use Template',
                         model: 'Model',
@@ -4940,12 +5015,13 @@
                         inputMaterials: 'Input Materials',
                         inputImage: 'Input Image',
                         inputAudio: 'Input Audio',
+                        optional: '(Optional)',
 
                         // 页面标题
                         pageTitle: 'LightX2V Service',
                         pleaseEnterThePromptForVideoGeneration: 'Please enter the prompt for video generation',
                         describeTheContentStyleSceneOfTheVideo: 'Describe the content, style, and scene of the video...',
-                        describeTheDigitalHumanImageBackgroundStyleActionRequirements: 'Describe the digital human image, background style, and action requirements...',
+                        describeTheDigitalHumanImageBackgroundStyleActionRequirements: 'Describe the digital human expression, tone, and action...',
                         describeTheContentActionRequirementsBasedOnTheImage: 'Describe the content and action requirements based on the image...',
                         loginSubtitle: 'A powerful video generation platform',
                         whatDoYouWantToDo: 'What do you want to do today?',
@@ -5022,12 +5098,12 @@
                         videoGeneratingFailed: 'Video Generating Failed',
                         sorryYourVideoGenerationTaskFailed: 'Sorry Your Video Generation Task Failed',
                         thisTaskHasBeenCancelledYouCanRegenerateOrViewTheMaterialsYouUploadedBefore: 'This Task Has Been Cancelled You Can Regenerate Or View The Materials You Uploaded Before',
-                        taskCancelled: 'Task Cancelled',
-                        regenerateTask: 'Regenerate Task',
-                        retryTask: 'Retry Task',
-                        downloadTask: 'Download Task',
+                        taskCancelled: 'Cancelled',
+                        regenerateTask: 'Retry',
+                        retryTask: 'Retry',
+                        downloadTask: 'Download Video',
                         downloadVideo: 'Download Video',
-                        deleteTask: 'Delete Task',
+                        deleteTask: 'Delete',
                         taskInfo: 'Task Info',
                         taskID: 'Task ID',
                         taskType: 'Task Type',
@@ -5046,13 +5122,13 @@
                         status: 'Status',
 
                         // 任务操作
-                        reuseTask: 'Reuse Task',
-                        regenerateTask: 'Regenerate Task',
-                        retryTask: 'Retry Task',
-                        downloadTask: 'Download Task',
+                        reuseTask: 'Reuse',
+                        regenerateTask: 'Retry',
+                        retryTask: 'Retry',
+                        downloadTask: 'Download Video',
                         downloadVideo: 'Download Video',
-                        deleteTask: 'Delete Task',
-                        cancelTask: 'Cancel Task',
+                        deleteTask: 'Delete',
+                        cancelTask: 'Cancel',
                         download: 'Download',
                         delete: 'Delete',
 
@@ -5061,6 +5137,17 @@
                         selectTemplate: 'Select Template',
                         uploadImage: 'Upload Image',
                         uploadAudio: 'Upload Audio',
+                        recordAudio: 'Record Audio',
+                        recording: 'Recording...',
+                        takePhoto: 'Take Photo',
+                        retake: 'Retake',
+                        usePhoto: 'Use Photo',
+                        upload: 'Upload',
+                        stopRecording: 'Stop Recording',
+                        recordingStarted: 'Recording started',
+                        recordingStopped: 'Recording stopped',
+                        recordingCompleted: 'Recording completed',
+                        recordingFailed: 'Recording failed',
                         enterPrompt: 'Enter Prompt',
                         selectModel: 'Select Model',
                         startGeneration: 'Start Generation',
@@ -5106,7 +5193,7 @@
                         uploadAudioFile: 'Upload Audio File',
                         dragDropHere: 'Drag and drop files here or click to upload',
                         supportedImageFormats: 'Supported jpg, png, webp image formats (< 10MB)',
-                        supportedAudioFormats: 'Supported mp3, m4a, wav audio formats (< 120s)',
+                        clearCharacterImageTip: 'Upload a clear character image',
                         maxFileSize: 'Max file size',
 
                         // 任务详情
@@ -5256,10 +5343,24 @@
                 const showTaskDetailModal = ref(false);
                 const modalTask = ref(null);
 
+                // 视频加载状态跟踪
+                const videoLoadedStates = ref(new Map()); // 跟踪每个视频的加载状态
+
+                // 检查视频是否已加载完成
+                const isVideoLoaded = (videoSrc) => {
+                    return videoLoadedStates.value.get(videoSrc) || false;
+                };
+
+                // 设置视频加载状态
+                const setVideoLoaded = (videoSrc, loaded) => {
+                    videoLoadedStates.value.set(videoSrc, loaded);
+                };
+
                 // 灵感广场相关数据
                 const inspirationSearchQuery = ref('');
                 const selectedInspirationCategory = ref('all');
                 const inspirationItems = ref([]);
+                const InspirationCategories = ref([]);
 
                 // 灵感广场分页相关变量
                 const inspirationPagination = ref(null);
@@ -5661,102 +5762,9 @@
                     };
                 });
 
-                // 动态生成灵感广场类别
-                const dynamicInspirationCategories = computed(() => {
-                    const categories = [{ id: 'all', name: '全部' }];
-
-                    // 从所有灵感项目中提取唯一的category
-                    const uniqueCategories = new Set();
-                    inspirationItems.value.forEach(item => {
-                        if (item.tags && item.tags.length > 0) {
-                            uniqueCategories.add(item.tags[0]);
-                        }
-                    });
-
-                    // 将唯一的category转换为类别对象
-                    Array.from(uniqueCategories).sort().forEach(category => {
-                        categories.push({
-                            id: category,
-                            name: category
-                        });
-                    });
-                    console.log(categories)
-                    return categories;
-                });
-
-                // 任务图片URL缓存
-                const taskImageUrlCache = ref(new Map());
-
-                // 任务视频URL缓存
-                const taskVideoUrlCache = ref(new Map());
 
                 // 通用URL缓存
                 const urlCache = ref(new Map());
-
-                // 获取任务图片URL（带缓存）
-                const getTaskImageUrl = (task) => {
-                    if (!task || !task.inputs) return null;
-
-                    const cacheKey = task.task_id;
-                    if (taskImageUrlCache.value.has(cacheKey)) {
-                        return taskImageUrlCache.value.get(cacheKey);
-                    }
-
-                    const imageInputs = Object.keys(task.inputs).filter(key =>
-                        key.includes('image') ||
-                        task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
-                    );
-
-                    if (imageInputs.length > 0) {
-                        const firstImageKey = imageInputs[0];
-                        // 优先从缓存获取
-                        const cachedUrl = getTaskFileUrlSync(task.task_id, firstImageKey);
-                        if (cachedUrl) {
-                            taskImageUrlCache.value.set(cacheKey, cachedUrl);
-                            return cachedUrl;
-                        }
-                        // 缓存没有则生成URL
-                        const token = localStorage.getItem('accessToken');
-                        const url = token
-                            ? `./assets/task/input?task_id=${task.task_id}&name=${firstImageKey}&token=${encodeURIComponent(token)}`
-                            : `./assets/task/input?task_id=${task.task_id}&name=${firstImageKey}`;
-
-                        taskImageUrlCache.value.set(cacheKey, url);
-                        return url;
-                    }
-
-                    return null;
-                };
-
-                // 获取任务视频URL（带缓存，同步版本）
-                const getTaskVideoUrl = (taskId, key) => {
-                    const cacheKey = `${taskId}_${key}`;
-                    if (taskVideoUrlCache.value.has(cacheKey)) {
-                        return taskVideoUrlCache.value.get(cacheKey);
-                    }
-
-                    // 优先从缓存获取
-                    const cachedUrl = getTaskFileUrlSync(taskId, key);
-                        if (cachedUrl) {
-                            taskVideoUrlCache.value.set(cacheKey, cachedUrl);
-                            return cachedUrl;
-                        }
-
-                        // 缓存没有则生成URL
-                        const token = localStorage.getItem('accessToken');
-                        const url = token
-                            ? `./assets/task/result?task_id=${taskId}&name=${key}&token=${encodeURIComponent(token)}`
-                            : `./assets/task/result?task_id=${taskId}&name=${key}`;
-
-                        // 缓存API URL
-                        setTaskFileToCache(taskId, key, {
-                            url: url,
-                            timestamp: Date.now()
-                        });
-
-                        taskVideoUrlCache.value.set(cacheKey, url);
-                        return url;
-                    };
 
                 // 通用URL缓存函数
                 const getCachedUrl = (key, urlGenerator) => {
@@ -5860,8 +5868,21 @@
                     return response;
                 };
 
+                const beforeLogin = () => {
+                    localStorage.removeItem('loginSource');
+                    localStorage.removeItem('accessToken');
+                    localStorage.removeItem('currentUser');
+                    clearAllCache();
+                    switchToLoginView();
+                    currentUser.value = {};
+                    isLoggedIn.value = false;
+                    models.value = [];
+                    tasks.value = [];
+                };
+
                 const loginWithGitHub = async () => {
                     try {
+                        beforeLogin();
                         console.log('starting login')
                         loginLoading.value = true;
                         const response = await fetch('./auth/login/github');
@@ -5875,6 +5896,9 @@
 
                 const loginWithGoogle = async () => {
                     try {
+                        beforeLogin();
+                        console.log('starting login')
+                        loginLoading.value = true;
                         const response = await fetch('./auth/login/google');
                         const data = await response.json();
                         localStorage.setItem('loginSource', 'google');
@@ -5899,6 +5923,7 @@
                     }
 
                     try {
+                        beforeLogin();
                         const response = await fetch(`./auth/login/sms?phone_number=${phoneNumber.value}`);
                         const data = await response.json();
 
@@ -5936,6 +5961,14 @@
 
                             // 登录成功后初始化数据
                             await init();
+
+                            // 登录成功后跳转到用户原本想访问的页面，如果没有则跳转到创建页面
+                            if (currentView.value === 'login') {
+                                currentView.value = 'create';
+                                updateURL('create');
+                            } else {
+                                updateURL(currentView.value);
+                            }
 
                             showAlert('登录成功', 'success');
                         } else {
@@ -6038,6 +6071,14 @@
                             // 登录成功后初始化数据
                             await init();
 
+                            // 登录成功后跳转到用户原本想访问的页面，如果没有则跳转到创建页面
+                            if (currentView.value === 'login') {
+                                currentView.value = 'create';
+                                updateURL('create');
+                            } else {
+                                updateURL(currentView.value);
+                            }
+
                             // 清除URL中的code参数
                             window.history.replaceState({}, document.title, window.location.pathname);
                         } else {
@@ -6054,7 +6095,7 @@
                     localStorage.removeItem('accessToken');
                     localStorage.removeItem('currentUser');
                     clearAllCache();
-
+                    switchToLoginView();
                     currentUser.value = {};
                     isLoggedIn.value = false;
                     models.value = [];
@@ -6177,10 +6218,30 @@
 
                     if (response.ok) {
                         const blob = await response.blob();
-                        const file = new File([blob], template.filename, { type: blob.type });
+
+                        // 根据文件扩展名确定正确的MIME类型
+                        let mimeType = blob.type;
+                        const extension = template.filename.toLowerCase().split('.').pop();
+
+                        if (extension === 'wav') {
+                            mimeType = 'audio/wav';
+                        } else if (extension === 'mp3') {
+                            mimeType = 'audio/mpeg';
+                        } else if (extension === 'm4a') {
+                            mimeType = 'audio/mp4';
+                        } else if (extension === 'ogg') {
+                            mimeType = 'audio/ogg';
+                        } else if (extension === 'webm') {
+                            mimeType = 'audio/webm';
+                        }
+
+                        console.log('文件扩展名:', extension, 'MIME类型:', mimeType);
+
+                        const file = new File([blob], template.filename, { type: mimeType });
 
                         // 缓存文件对象
                         templateFileCache.value.set(cacheKey, file);
+                        console.log('下载素材文件完成:', template.filename);
                         return file;
                     } else {
                         throw new Error('下载素材文件失败');
@@ -6223,6 +6284,7 @@
                         const reader = new FileReader();
                         reader.onload = (e) => {
                             setCurrentAudioPreview(e.target.result);
+                            updateUploadedContentStatus();
                         };
                         reader.readAsDataURL(file);
 
@@ -6367,6 +6429,91 @@
                     }
                 };
 
+                // 开始录音
+                const startRecording = async () => {
+                    try {
+                        // 请求麦克风权限
+                        const stream = await navigator.mediaDevices.getUserMedia({
+                            audio: {
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                sampleRate: 44100
+                            }
+                        });
+
+                        // 创建MediaRecorder
+                        mediaRecorder.value = new MediaRecorder(stream, {
+                            mimeType: 'audio/webm;codecs=opus'
+                        });
+
+                        audioChunks.value = [];
+
+                        // 监听数据可用事件
+                        mediaRecorder.value.ondataavailable = (event) => {
+                            if (event.data.size > 0) {
+                                audioChunks.value.push(event.data);
+                            }
+                        };
+
+                        // 监听录音停止事件
+                        mediaRecorder.value.onstop = () => {
+                            const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
+                            const audioFile = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
+
+                            // 设置到表单
+                            s2vForm.value.audioFile = audioFile;
+
+                            // 创建预览URL
+                            const audioUrl = URL.createObjectURL(audioBlob);
+                            setCurrentAudioPreview(audioUrl);
+                            updateUploadedContentStatus();
+
+                            // 停止所有音频轨道
+                            stream.getTracks().forEach(track => track.stop());
+
+                            showAlert(t('recordingCompleted'), 'success');
+                        };
+
+                        // 开始录音
+                        mediaRecorder.value.start(1000); // 每秒收集一次数据
+                        isRecording.value = true;
+                        recordingDuration.value = 0;
+
+                        // 开始计时
+                        recordingTimer.value = setInterval(() => {
+                            recordingDuration.value++;
+                        }, 1000);
+
+                        showAlert(t('recordingStarted'), 'info');
+
+                    } catch (error) {
+                        console.error('录音失败:', error);
+                        showAlert(t('recordingFailed'), 'danger');
+                    }
+                };
+
+                // 停止录音
+                const stopRecording = () => {
+                    if (mediaRecorder.value && isRecording.value) {
+                        mediaRecorder.value.stop();
+                        isRecording.value = false;
+
+                        if (recordingTimer.value) {
+                            clearInterval(recordingTimer.value);
+                            recordingTimer.value = null;
+                        }
+
+                        showAlert(t('recordingStopped'), 'info');
+                    }
+                };
+
+                // 格式化录音时长
+                const formatRecordingDuration = (seconds) => {
+                    const mins = Math.floor(seconds / 60);
+                    const secs = seconds % 60;
+                    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                };
+
                 const submitTask = async () => {
                     try {
                         const currentForm = getCurrentForm();
@@ -6383,12 +6530,16 @@
                         }
 
                         if (!currentForm.prompt || currentForm.prompt.trim().length === 0) {
-                            showAlert('请输入提示词', 'warning');
-                            return;
+                            if (selectedTaskId.value === 's2v') {
+                                currentForm.prompt = 'Make the character speak in a natural way according to the audio.';
+                            } else {
+                                showAlert('请输入提示词', 'warning');
+                                return;
+                            }
                         }
 
-                        if (currentForm.prompt.length > 500) {
-                            showAlert('提示词长度不能超过500个字符', 'warning');
+                        if (currentForm.prompt.length > 1000) {
+                            showAlert('提示词长度不能超过1000个字符', 'warning');
                             return;
                         }
 
@@ -6769,18 +6920,6 @@
                         return cachedFile.url;
                     }
                     return await getTaskFileUrlFromApi(taskId, fileKey);
-                };
-
-                // 获取任务的第一个图片键
-                const getFirstImageKey = (task) => {
-                    if (!task || !task.inputs) return null;
-
-                    const imageInputs = Object.keys(task.inputs).filter(key =>
-                        key.includes('image') ||
-                        task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
-                    );
-
-                    return imageInputs.length > 0 ? imageInputs[0] : null;
                 };
 
                 // 同步获取任务文件URL（仅从缓存获取，用于模板显示）
@@ -7164,38 +7303,6 @@
                     return statusMap[status] || 'bg-secondary';
                 };
 
-                const downloadSingleResult = async (taskId, key, outputPath) => {
-                    try {
-                        downloadLoading.value = true;
-                        const url = await getTaskFileUrl(taskId, key);
-                        if (url) {
-                            const response = await fetch(url);
-                            if (response.ok) {
-                                const blob = await response.blob();
-                                const url = window.URL.createObjectURL(blob);
-                                const a = document.createElement('a');
-                                a.href = url;
-                                // 使用原始文件名，如果没有则使用outputPath
-                                const filename = key || outputPath || `result_${taskId}`;
-                                a.download = filename;
-                                document.body.appendChild(a);
-                                a.click();
-                                document.body.removeChild(a);
-                                window.URL.revokeObjectURL(url);
-                                showAlert('文件下载成功', 'success');
-                            } else {
-                                showAlert('获取结果失败', 'danger');
-                            }
-                        } else {
-                            showAlert(t('getTaskResultFailedAlert'), 'danger');
-                        }
-                    } catch (error) {
-                        showAlert(`${t('downloadTaskResultFailedAlert')}: ${error.message}`, 'danger');
-                    } finally {
-                        downloadLoading.value = false;
-                    }
-                };
-
                 const viewSingleResult = async (taskId, key) => {
                     try {
                         downloadLoading.value = true;
@@ -7519,7 +7626,8 @@
                                         'mp4': 'audio/mp4',
                                         'aac': 'audio/aac',
                                         'ogg': 'audio/ogg',
-                                        'm4a': 'audio/mp4'
+                                        'm4a': 'audio/mp4',
+                                        'webm': 'audio/webm'
                                     };
                                     mimeType = mimeTypes[ext] || 'audio/mpeg';
                                 }
@@ -7774,7 +7882,7 @@
                     } else if (selectedTaskId.value === 'i2v') {
                         return t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentActionRequirementsBasedOnTheImage');
                     } else if (selectedTaskId.value === 's2v') {
-                        return t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheDigitalHumanImageBackgroundStyleActionRequirements');
+                        return t('optional') + ' '+ t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheDigitalHumanImageBackgroundStyleActionRequirements');
                     }
                     return t('pleaseEnterThePromptForVideoGeneration') + '...';
                 };
@@ -7907,38 +8015,6 @@
                     }
                 };
 
-                const downloadTaskInput = async (taskId, inputName, fileName) => {
-                    try {
-                        const url = await getTaskInputUrl(taskId, inputName);
-                        const response = await fetch(url);
-
-                        if (!response || !response.ok) {
-                            throw new Error(`下载失败: ${response ? response.status : '认证失败'}`);
-                        }
-
-                        const blob = await response.blob();
-                        const downloadUrl = window.URL.createObjectURL(blob);
-
-                        // 创建下载链接
-                        const link = document.createElement('a');
-                        link.href = downloadUrl;
-                        // 使用原始文件名，如果没有则使用inputName
-                        const filename = inputName || fileName || `input_${taskId}`;
-                        link.download = filename;
-                        document.body.appendChild(link);
-                        link.click();
-
-                        // 清理
-                        document.body.removeChild(link);
-                        window.URL.revokeObjectURL(downloadUrl);
-
-                        showAlert(t('fileDownloadSuccessAlert'), 'success');
-                    } catch (error) {
-                        console.error(t('downloadFailedAlert'), error);
-                        showAlert(`${t('downloadFailedAlert')}: ${error.message}`, 'danger');
-                    }
-                };
-
                 // 监听currentPage变化，同步更新pageInput
                 watch(currentTaskPage, (newPage) => {
                     taskPageInput.value = newPage;
@@ -8021,6 +8097,9 @@
                         loadTemplateFilesFromCache();
                         loadImageAudioTemplates(true);
 
+                        // 4. 初始化路由（在数据加载完成后）
+                        initRoute();
+
                         console.log('初始化完成:', {
                             currentUser: currentUser.value,
                             availableModels: models.value,
@@ -8077,7 +8156,7 @@
                                 stage: currentStage || 'single_stage',
                                 imageFile: null,
                                 audioFile: null,
-                                prompt: '',
+                                prompt: 'Make the character speak in a natural way according to the audio.',
                                 seed: Math.floor(Math.random() * 1000000)
                             };
                             break;
@@ -8602,8 +8681,17 @@
                                 await handleLoginCallback(code, source);
                                 // handleGitHubCallback内部会设置isLoggedIn.value = true
                             } else {
-                                // 没有token且不是回调，显示登录页面
+                                // 没有token且不是回调，默认显示登录界面
                                 isLoggedIn.value = false;
+                                const urlParams = new URLSearchParams(window.location.search);
+                                const view = urlParams.get('view');
+                                if (view && ['create', 'projects', 'inspiration'].includes(view)) {
+                                    // 如果URL中指定了其他页面，仍然显示登录界面，但设置currentView用于登录后跳转
+                                    currentView.value = view;
+                                } else {
+                                    // 默认显示登录界面
+                                    currentView.value = 'login';
+                                }
                             }
                         }
                     } catch (error) {
@@ -8615,6 +8703,9 @@
                         loginLoading.value = false;
                         initLoading.value = false;
                     }
+
+                    // 监听浏览器前进后退
+                    window.addEventListener('popstate', handlePopState);
                 });
 
                 // 页面卸载时清理轮询
@@ -8627,6 +8718,9 @@
 
                     // 清理提示滚动
                     stopHintRotation();
+
+                    // 清理路由事件监听器
+                    window.removeEventListener('popstate', handlePopState);
                 });
 
                 // 提示词模板管理
@@ -8634,13 +8728,33 @@
                     's2v': [
                         {
                             id: 's2v_1',
-                            title: '商务演讲',
-                            prompt: '数字人进行商务演讲，表情自然，手势得体，背景为现代化的会议室，整体风格专业商务。'
+                            title: '情绪表达',
+                            prompt: '根据音频，人物进行情绪化表达，表情丰富，能体现音频中的情绪，手势根据情绪适当调整。'
                         },
                         {
                             id: 's2v_2',
+                            title: '故事讲述',
+                            prompt: '根据音频，人物进行故事讲述，表情丰富，能体现音频中的情绪，手势根据故事情节适当调整。'
+                        },
+                        {
+                            id: 's2v_3',
+                            title: '知识讲解',
+                            prompt: '根据音频，人物进行知识讲解，表情严肃，整体风格专业得体，手势根据知识内容适当调整。'
+                        },
+                        {
+                            id: 's2v_4',
+                            title: '浮夸表演',
+                            prompt: '根据音频，人物进行浮夸表演，表情夸张，动作浮夸，整体风格夸张搞笑。'
+                        },
+                        {
+                            id: 's2v_5',
+                            title: '商务演讲',
+                            prompt: '根据音频，人物进行商务演讲，表情严肃，手势得体，整体风格专业商务。'
+                        },
+                        {
+                            id: 's2v_6',
                             title: '产品介绍',
-                            prompt: '数字人介绍产品特点，语气亲切，动作自然，背景为产品展示区，突出产品的科技感和实用性。'
+                            prompt: '数字人介绍产品特点，语气亲切热情，表情丰富，动作自然，能体现产品特点。'
                         }
                     ],
                     't2v': [
@@ -8918,6 +9032,7 @@
 
                     // 设置音频预览
                     setCurrentAudioPreview(history.data);
+                    updateUploadedContentStatus();
 
                     // 更新表单
                     const currentForm = getCurrentForm();
@@ -9132,6 +9247,7 @@
                 // 新增：视图切换方法
                 const switchToCreateView = () => {
                     currentView.value = 'create';
+                    updateURL('create');
                     // 如果之前有展开过创作区域，保持展开状态
                     if (isCreationAreaExpanded.value) {
                         // 延迟一点时间确保DOM更新完成
@@ -9146,14 +9262,60 @@
 
                 const switchToProjectsView = () => {
                     currentView.value = 'projects';
+                    updateURL('projects');
                     // 刷新任务列表
                     refreshTasks();
                 };
 
                 const switchToInspirationView = () => {
                     currentView.value = 'inspiration';
+                    updateURL('inspiration');
                     // 加载灵感数据
                     loadInspirationData();
+                };
+
+                const switchToLoginView = () => {
+                    currentView.value = 'login';
+                    updateURL('login');
+                };
+
+                // URL路由管理
+                const updateURL = (view) => {
+                    const url = new URL(window.location);
+                    url.searchParams.set('view', view);
+                    window.history.pushState({ view }, '', url);
+                };
+
+                const initRoute = () => {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const view = urlParams.get('view');
+
+                    if (view && ['create', 'projects', 'inspiration', 'login'].includes(view)) {
+                        currentView.value = view;
+                        // 注意：数据已经在init()中加载过了，这里不需要重复加载
+                        // 只需要设置当前视图即可
+                    } else {
+                        // 默认显示登录界面
+                        currentView.value = 'login';
+                        updateURL('login');
+                    }
+                };
+
+                // 监听浏览器前进后退
+                const handlePopState = (event) => {
+                    if (event.state && event.state.view) {
+                        currentView.value = event.state.view;
+                        // 根据页面加载相应的数据
+                        if (event.state.view === 'projects') {
+                            refreshTasks();
+                        } else if (event.state.view === 'inspiration') {
+                            loadInspirationData();
+                        }
+                        // login页面不需要额外数据加载
+                    } else {
+                        // 处理直接访问URL的情况
+                        initRoute();
+                    }
                 };
 
                 // 日期格式化函数
@@ -9179,6 +9341,7 @@
                         if (cachedData && cachedData.templates) {
                             console.log(`成功从缓存加载灵感模板数据${cacheKey}:`, cachedData.templates);
                             inspirationItems.value = cachedData.templates;
+                            InspirationCategories.value = cachedData.categories;
                                 // 如果有分页信息也加载
                                 if (cachedData.pagination) {
                                     inspirationPagination.value = cachedData.pagination;
@@ -9195,6 +9358,7 @@
                             const templates = data.templates || [];
 
                             inspirationItems.value = data.templates || [];
+                            InspirationCategories.value = data.categories || [];
                             inspirationPagination.value = data.pagination || null;
 
                             // 缓存模板数据
@@ -9220,21 +9384,17 @@
                         console.warn('加载模板数据失败:', error);
                     }
                 };
-                // 筛选灵感内容 - 现在数据直接从后端获取，不需要前端筛选
-                const filteredInspirationItems = computed(() => {
-                    // 直接返回从后端获取的数据，后端已经根据分类和搜索条件进行了筛选
-                    return inspirationItems.value || [];
-                });
+
 
                 // 选择分类
-                const selectInspirationCategory = async (categoryId) => {
+                const selectInspirationCategory = async (category) => {
                     // 如果点击的是当前分类，不重复请求
-                    if (selectedInspirationCategory.value === categoryId) {
+                    if (selectedInspirationCategory.value === category) {
                         return;
                     }
 
                     // 更新分类
-                    selectedInspirationCategory.value = categoryId;
+                    selectedInspirationCategory.value = category;
 
                     // 重置页码为1
                     inspirationCurrentPage.value = 1;
@@ -9273,34 +9433,220 @@
                     }, 500); // 500ms 防抖延迟
                 };
 
+                // 全局视频播放管理
+                let currentPlayingVideo = null;
+                let currentLoadingVideo = null; // 跟踪正在等待加载的视频
+
+                // 更新视频播放按钮图标
+                const updateVideoIcon = (video, isPlaying) => {
+                    // 查找视频容器中的播放按钮
+                    const container = video.closest('.relative');
+                    if (!container) return;
+
+                    // 查找移动端播放按钮
+                    const playButton = container.querySelector('button[class*="absolute"][class*="bottom-3"]');
+                    if (playButton) {
+                        const icon = playButton.querySelector('i');
+                        if (icon) {
+                            icon.className = isPlaying ? 'fas fa-pause text-sm' : 'fas fa-play text-sm';
+                        }
+                    }
+                };
+
+                // 处理视频播放结束
+                const onVideoEnded = (event) => {
+                    const video = event.target;
+                    console.log('视频播放完毕:', video.src);
+
+                    // 重置视频到开始位置
+                    video.currentTime = 0;
+
+                    // 更新播放按钮图标为播放状态
+                    updateVideoIcon(video, false);
+
+                    // 如果播放完毕的是当前播放的视频，清除引用
+                    if (currentPlayingVideo === video) {
+                        currentPlayingVideo = null;
+                        console.log('当前播放视频播放完毕');
+                    }
+                };
+
                 // 视频播放控制
                 const playVideo = (event) => {
                     const video = event.target;
-                    if (video.readyState >= 2) { // HAVE_CURRENT_DATA
-                        video.currentTime = 0; // 从头开始播放
-                        video.play().catch(e => {
-                            console.log('视频播放失败:', e);
-                            // 如果自动播放失败，可以尝试用户交互后播放
-                        });
-                    } else {
-                        // 如果视频还没加载完成，等待加载完成后再播放
-                        video.addEventListener('loadeddata', () => {
-                            video.currentTime = 0;
-                            video.play().catch(e => console.log('视频播放失败:', e));
-                        }, { once: true });
+
+                    // 检查视频是否已加载完成
+                    if (video.readyState < 2) { // HAVE_CURRENT_DATA
+                        console.log('视频还没加载完成，忽略鼠标悬停播放');
+                        return;
                     }
+
+                    // 如果当前有视频在播放，先暂停它
+                    if (currentPlayingVideo && currentPlayingVideo !== video) {
+                        currentPlayingVideo.pause();
+                        currentPlayingVideo.currentTime = 0;
+                        // 更新上一个视频的图标
+                        updateVideoIcon(currentPlayingVideo, false);
+                        console.log('暂停上一个视频');
+                    }
+
+                    // 视频已加载完成，可以播放
+                    video.currentTime = 0; // 从头开始播放
+                    video.play().then(() => {
+                        // 播放成功，更新当前播放视频
+                        currentPlayingVideo = video;
+                        console.log('开始播放新视频');
+                    }).catch(e => {
+                        console.log('视频播放失败:', e);
+                        currentPlayingVideo = null;
+                        video.pause();
+                        video.currentTime = 0;
+                    });
                 };
 
                 const pauseVideo = (event) => {
                     const video = event.target;
+
+                    // 检查视频是否已加载完成
+                    if (video.readyState < 2) { // HAVE_CURRENT_DATA
+                        console.log('视频还没加载完成，忽略鼠标离开暂停');
+                        return;
+                    }
+
                     video.pause();
                     video.currentTime = 0;
+
+                    // 更新视频图标
+                    updateVideoIcon(video, false);
+
+                    // 如果暂停的是当前播放的视频，清除引用
+                    if (currentPlayingVideo === video) {
+                        currentPlayingVideo = null;
+                        console.log('暂停当前播放视频');
+                    }
+                };
+
+                // 移动端视频播放切换
+                const toggleVideoPlay = (event) => {
+                    const button = event.target.closest('button');
+                    const video = button.parentElement.querySelector('video');
+                    const icon = button.querySelector('i');
+
+                    if (video.paused) {
+                        // 如果当前有视频在播放，先暂停它
+                        if (currentPlayingVideo && currentPlayingVideo !== video) {
+                            currentPlayingVideo.pause();
+                            currentPlayingVideo.currentTime = 0;
+                            // 更新上一个视频的图标
+                            updateVideoIcon(currentPlayingVideo, false);
+                            console.log('暂停上一个视频（移动端）');
+                        }
+
+                        // 如果当前有视频在等待加载，取消它的等待状态
+                        if (currentLoadingVideo && currentLoadingVideo !== video) {
+                            currentLoadingVideo = null;
+                            console.log('取消上一个视频的加载等待（移动端）');
+                        }
+
+                        // 检查视频是否已加载完成
+                        if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+                            // 视频已加载完成，直接播放
+                            video.currentTime = 0;
+                            video.play().then(() => {
+                                icon.className = 'fas fa-pause text-sm';
+                                currentPlayingVideo = video;
+                                console.log('开始播放新视频（移动端）');
+                            }).catch(e => {
+                                console.log('视频播放失败:', e);
+                                icon.className = 'fas fa-play text-sm';
+                                currentPlayingVideo = null;
+                            });
+                        } else {
+                            // 视频未加载完成，显示loading并等待
+                            console.log('视频还没加载完成，等待加载（移动端）');
+                            icon.className = 'fas fa-spinner fa-spin text-sm';
+                            currentLoadingVideo = video;
+
+                            // 等待视频加载完成
+                            video.addEventListener('loadeddata', () => {
+                                // 检查这个视频是否仍然是当前等待加载的视频
+                                if (currentLoadingVideo === video) {
+                                    currentLoadingVideo = null;
+                                    video.currentTime = 0;
+                                    video.play().then(() => {
+                                        icon.className = 'fas fa-pause text-sm';
+                                        currentPlayingVideo = video;
+                                        console.log('开始播放新视频（移动端-延迟加载）');
+                                    }).catch(e => {
+                                        console.log('视频播放失败:', e);
+                                        icon.className = 'fas fa-play text-sm';
+                                        currentPlayingVideo = null;
+                                    });
+                                } else {
+                                    // 这个视频的加载等待已被取消，重置图标
+                                    icon.className = 'fas fa-play text-sm';
+                                    console.log('视频加载完成但等待已被取消（移动端）');
+                                }
+                            }, { once: true });
+                    };
+                 } else {
+                        video.pause();
+                        video.currentTime = 0;
+                        icon.className = 'fas fa-play text-sm';
+
+                        // 如果暂停的是当前播放的视频，清除引用
+                        if (currentPlayingVideo === video) {
+                            currentPlayingVideo = null;
+                            console.log('暂停当前播放视频（移动端）');
+                        }
+
+                        // 如果暂停的是当前等待加载的视频，清除引用
+                        if (currentLoadingVideo === video) {
+                            currentLoadingVideo = null;
+                            console.log('取消当前等待加载的视频（移动端）');
+                        }
+                    }
+                };
+
+                // 暂停所有视频
+                const pauseAllVideos = () => {
+                    if (currentPlayingVideo) {
+                        currentPlayingVideo.pause();
+                        currentPlayingVideo.currentTime = 0;
+                        // 更新视频图标
+                        updateVideoIcon(currentPlayingVideo, false);
+                        currentPlayingVideo = null;
+                        console.log('暂停所有视频');
+                    }
+
+                    // 清理等待加载的视频状态
+                    if (currentLoadingVideo) {
+                        // 重置等待加载的视频图标
+                        const loadingContainer = currentLoadingVideo.closest('.relative');
+                        if (loadingContainer) {
+                            const loadingButton = loadingContainer.querySelector('button[class*="absolute"][class*="bottom-3"]');
+                            if (loadingButton) {
+                                const loadingIcon = loadingButton.querySelector('i');
+                                if (loadingIcon) {
+                                    loadingIcon.className = 'fas fa-play text-sm';
+                                }
+                            }
+                        }
+                        currentLoadingVideo = null;
+                        console.log('取消所有等待加载的视频');
+                    }
                 };
 
                 const onVideoLoaded = (event) => {
                     const video = event.target;
                     // 视频加载完成，准备播放
                     console.log('视频加载完成:', video.src);
+
+                    // 更新视频加载状态（使用视频的实际src）
+                    setVideoLoaded(video.src, true);
+
+                    // 触发Vue的响应式更新
+                    videoLoadedStates.value = new Map(videoLoadedStates.value);
                 };
 
                 const onVideoError = (event) => {
@@ -9619,6 +9965,14 @@
                     loginLoading,
                     initLoading,
                     downloadLoading,
+
+                    // 录音相关
+                    isRecording,
+                    recordingDuration,
+                    startRecording,
+                    stopRecording,
+                    formatRecordingDuration,
+
                     loginWithGitHub,
                     loginWithGoogle,
                     // 短信登录相关
@@ -9762,12 +10116,10 @@
                     getTemplateFileUrlAsync,
                     loadTemplateFilesFromCache,
                     saveTemplateFilesToCache,
-                    getFirstImageKey,
                     loadFromCache,
                     saveToCache,
                     clearAllCache,
                     getStatusBadgeClass,
-                    downloadSingleResult,
                     viewSingleResult,
                     cancelTask,
                     resumeTask,
@@ -9791,8 +10143,7 @@
                     getTaskInputUrl,
                     getTaskInputImage,
                     getTaskInputAudio,
-                    getTaskImageUrl,
-                    getTaskVideoUrl,
+                    getTaskFileUrl,
                     getHistoryImageUrl,
                     getUserAvatarUrl,
                     getCurrentImagePreviewUrl,
@@ -9802,7 +10153,6 @@
                     handleImageLoad,
                     handleAudioError,
                     handleAudioLoad,
-                    downloadTaskInput,
                     getTaskStatusDisplay,
                     getTaskStatusColor,
                     getTaskStatusIcon,
@@ -9848,14 +10198,17 @@
                     switchToCreateView,
                     switchToProjectsView,
                     switchToInspirationView,
+                    switchToLoginView,
+                    updateURL,
+                    initRoute,
+                    handlePopState,
                     openTaskDetailModal,
                     closeTaskDetailModal,
                     // 灵感广场相关
                     inspirationSearchQuery,
                     selectedInspirationCategory,
                     inspirationItems,
-                    dynamicInspirationCategories,
-                    filteredInspirationItems,
+                    InspirationCategories,
                     loadInspirationData,
                     selectInspirationCategory,
                     handleInspirationSearch,
@@ -9887,8 +10240,12 @@
                     // 视频播放控制
                     playVideo,
                     pauseVideo,
+                    toggleVideoPlay,
+                    pauseAllVideos,
+                    updateVideoIcon,
                     onVideoLoaded,
-                    onVideoError
+                    onVideoError,
+                    onVideoEnded
                 };
             }
         }).mount('#app');

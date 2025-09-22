@@ -23,15 +23,19 @@ from lightx2v.utils.utils import seed_all
 class BaseWorker:
     @ProfilingContext4DebugL1("Init Worker Worker Cost:")
     def __init__(self, args):
+        args.save_video_path = ""
         config = set_config(args)
-        config["mode"] = ""
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         seed_all(config.seed)
         self.rank = 0
+        self.world_size = 1
         if config.parallel:
             self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
             set_parallel_config(config)
             seed_all(config.seed)
+        # same as va_recorder rank and worker main ping rank
+        self.out_video_rank = self.world_size - 1
         torch.set_grad_enabled(False)
         self.runner = RUNNER_REGISTER[config.model_cls](config)
         # fixed config
@@ -121,7 +125,7 @@ class BaseWorker:
 
     async def save_output_video(self, tmp_video_path, output_video_path, data_manager):
         # save output video
-        if data_manager.name != "local" and self.rank == 0 and isinstance(tmp_video_path, str):
+        if data_manager.name != "local" and self.rank == self.out_video_rank and isinstance(tmp_video_path, str):
             video_data = open(tmp_video_path, "rb").read()
             await data_manager.save_bytes(video_data, output_video_path)
 

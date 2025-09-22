@@ -92,6 +92,11 @@ class WorkerClient:
             if elapse > self.offline_timeout:
                 logger.warning(f"Worker {self.identity} {self.queue} offline timeout2: {elapse:.2f} s")
                 return False
+        # fetching too long
+        elif self.status == WorkerStatus.FETCHING:
+            if elapse > self.fetching_timeout:
+                logger.warning(f"Worker {self.identity} {self.queue} fetching timeout: {elapse:.2f} s")
+                return False
         return True
 
 
@@ -111,7 +116,7 @@ class ServerMonitor:
         self.fetching_timeout = self.config.get("fetching_timeout", 1000)
 
         for queue in self.all_queues:
-            self.subtask_run_timeouts[queue] = self.config["subtask_running_timeouts"].get(queue, 60)
+            self.subtask_run_timeouts[queue] = self.config["subtask_running_timeouts"].get(queue, 3600)
         self.subtask_created_timeout = self.config["subtask_created_timeout"]
         self.subtask_pending_timeout = self.config["subtask_pending_timeout"]
         self.worker_avg_window = self.config["worker_avg_window"]

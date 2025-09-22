@@ -236,6 +236,11 @@ async def prepare_subtasks(task_id):
         await server_monitor.pending_subtasks_add(sub["queue"], sub["task_id"])
 
 
+def format_task(task):
+    task["status"] = task["status"].name
+    task["model_cls"] = model_pipelines.outer_model_name(task["model_cls"])
+
+
 @app.get("/api/v1/model/list")
 async def api_v1_model_list(user=Depends(verify_user_access)):
     try:
@@ -254,6 +259,7 @@ async def api_v1_task_submit(request: Request, user=Depends(verify_user_access))
             return error_response(msg, 400)
         params = await request.json()
         keys = [params.pop("task"), params.pop("model_cls"), params.pop("stage")]
+        keys[1] = model_pipelines.inner_model_name(keys[1])
         assert len(params["prompt"]) > 0, "valid prompt is required"
 
         # get worker infos, model input names
@@ -303,7 +309,7 @@ async def api_v1_task_query(request: Request, user=Depends(verify_user_access)):
                     task, subtasks = await task_manager.query_task(task_id, user["user_id"], only_task=False)
                     if task is not None:
                         task["subtasks"] = await server_monitor.format_subtask(subtasks)
-                        task["status"] = task["status"].name
+                        format_task(task)
                         tasks.append(task)
             return {"tasks": tasks}
 
@@ -313,7 +319,7 @@ async def api_v1_task_query(request: Request, user=Depends(verify_user_access)):
         if task is None:
             return error_response(f"Task {task_id} not found", 404)
         task["subtasks"] = await server_monitor.format_subtask(subtasks)
-        task["status"] = task["status"].name
+        format_task(task)
         return task
     except Exception as e:
         traceback.print_exc()
@@ -344,7 +350,7 @@ async def api_v1_task_list(request: Request, user=Depends(verify_user_access)):
 
         tasks = await task_manager.list_tasks(**query_params)
         for task in tasks:
-            task["status"] = task["status"].name
+            format_task(task)
 
         return {"tasks": tasks, "pagination": page_info}
     except Exception as e:
@@ -457,12 +463,18 @@ async def api_v1_task_cancel(request: Request, user=Depends(verify_user_access))
 async def api_v1_task_resume(request: Request, user=Depends(verify_user_access)):
     try:
         task_id = request.query_params["task_id"]
+
+        task = await task_manager.query_task(task_id, user_id=user["user_id"])
+        keys = [task["task_type"], task["model_cls"], task["stage"]]
+        if not model_pipelines.check_item_by_keys(keys):
+            return error_response(f"Model {keys} is not supported now, please submit a new task", 400)
+
         ret = await task_manager.resume_task(task_id, user_id=user["user_id"], all_subtask=False)
-        if ret:
+        if ret is True:
             await prepare_subtasks(task_id)
             return {"msg": "ok"}
         else:
-            return error_response(f"Task {task_id} resume failed", 400)
+            return error_response(f"Task {task_id} resume failed: {ret}", 400)
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
@@ -605,7 +617,7 @@ async def api_v1_worker_ping_subtask(request: Request, valid=Depends(verify_work
         queue = params.pop("queue")
 
         task = await task_manager.query_task(task_id)
-        if task["status"] != TaskStatus.RUNNING:
+        if task is None or task["status"] != TaskStatus.RUNNING:
             return {"msg": "delete"}
 
         assert await task_manager.ping_subtask(task_id, worker_name, identity)
@@ -714,27 +726,18 @@ async def api_v1_template_list(request: Request, valid=Depends(verify_user_acces
         if page <= total_pages:
             start_idx = (page - 1) * page_size
             end_idx = start_idx + page_size
-            all_images.sort(key=lambda x: x)
-            all_audios.sort(key=lambda x: x)
-            all_videos.sort(key=lambda x: x)
 
-            for image in all_images[start_idx:end_idx]:
-                url = await data_manager.presign_template_url("images", image)
-                if url is None:
-                    url = f"./assets/template/images/{image}"
-                paginated_image_templates.append({"filename": image, "url": url})
+            async def handle_media(media_type, media_names, paginated_media_templates):
+                media_names.sort(key=lambda x: x)
+                for media_name in media_names[start_idx:end_idx]:
+                    url = await data_manager.presign_template_url(media_type, media_name)
+                    if url is None:
+                        url = f"./assets/template/{media_type}/{media_name}"
+                    paginated_media_templates.append({"filename": media_name, "url": url})
 
-            for audio in all_audios[start_idx:end_idx]:
-                url = await data_manager.presign_template_url("audios", audio)
-                if url is None:
-                    url = f"./assets/template/audios/{audio}"
-                paginated_audio_templates.append({"filename": audio, "url": url})
-
-            for video in all_videos[start_idx:end_idx]:
-                url = await data_manager.presign_template_url("videos", video)
-                if url is None:
-                    url = f"./assets/template/videos/{video}"
-                paginated_video_templates.append({"filename": video, "url": url})
+            await handle_media("images", all_images, paginated_image_templates)
+            await handle_media("audios", all_audios, paginated_audio_templates)
+            await handle_media("videos", all_videos, paginated_video_templates)
 
         return {
             "templates": {"images": paginated_image_templates, "audios": paginated_audio_templates, "videos": paginated_video_templates},
@@ -760,6 +763,7 @@ async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_acce
         page_size = min(page_size, 100)
 
         all_templates = []
+        all_categories = set()
         template_files = await data_manager.list_template_files("tasks")
         template_files = [] if template_files is None else template_files
 
@@ -767,6 +771,8 @@ async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_acce
             try:
                 bytes_data = await data_manager.load_template_file("tasks", template_file)
                 template_data = json.loads(bytes_data)
+                template_data["task"]["model_cls"] = model_pipelines.outer_model_name(template_data["task"]["model_cls"])
+                all_categories.update(template_data["task"]["tags"])
                 if category is not None and category != "all" and category not in template_data["task"]["tags"]:
                     continue
                 if search is not None and search not in template_data["task"]["params"]["prompt"] + template_data["task"]["params"]["negative_prompt"] + template_data["task"][
@@ -787,7 +793,7 @@ async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_acce
             end_idx = start_idx + page_size
             paginated_templates = all_templates[start_idx:end_idx]
 
-        return {"templates": paginated_templates, "pagination": {"page": page, "page_size": page_size, "total": total_templates, "total_pages": total_pages}}
+        return {"templates": paginated_templates, "pagination": {"page": page, "page_size": page_size, "total": total_templates, "total_pages": total_pages}, "categories": list(all_categories)}
 
     except Exception as e:
         traceback.print_exc()

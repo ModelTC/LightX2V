@@ -102,6 +102,10 @@
             "latents": "TENSOR",
             "output_video": "VIDEO"
         },
+        "model_name_inner_to_outer": {
+            "seko_talk": "SekoTalk"
+        },
+        "model_name_outer_to_inner": {},
         "monitor": {
             "subtask_created_timeout": 1800,
             "subtask_pending_timeout": 1800,

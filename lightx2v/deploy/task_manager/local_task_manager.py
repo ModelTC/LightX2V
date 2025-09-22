@@ -273,10 +273,10 @@ class LocalTaskManager(BaseTaskManager):
         task, subtasks = self.load(task_id, user_id)
         # the task is not finished
         if task["status"] not in FinishedStatus:
-            return False
+            return "Active task cannot be resumed"
         # the task is no need to resume
         if not all_subtask and task["status"] == TaskStatus.SUCCEED:
-            return False
+            return "Succeed task cannot be resumed"
         for sub in subtasks:
             if all_subtask or sub["status"] != TaskStatus.SUCCEED:
                 self.mark_subtask_change(records, sub, None, TaskStatus.CREATED)
