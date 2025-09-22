@@ -295,7 +295,9 @@ class DefaultRunner(BaseRunner):
 
                 save_to_video(self.gen_video, self.config.save_video_path, fps=fps, method="ffmpeg")
                 logger.info(f"✅ Video saved successfully to: {self.config.save_video_path} ✅")
-        return {"video": self.gen_video}
+        if self.config.get("return_video", False):
+            return {"video": self.gen_video}
+        return {"video": None}
 
     def run_pipeline(self, save_video=True):
         if self.config["use_prompt_enhancer"]:

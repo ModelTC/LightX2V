@@ -11,7 +11,7 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.ed
     && sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list
 
 RUN apt-get update && apt-get install -y vim tmux zip unzip wget git build-essential libibverbs-dev ca-certificates \
-    curl iproute2 ffmpeg libsm6 libxext6 kmod ccache libnuma-dev \
+    curl iproute2 libsm6 libxext6 kmod ccache libnuma-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
@@ -27,6 +27,8 @@ RUN git clone https://github.com/sgl-project/sglang.git && cd sglang/sgl-kernel 
 
 RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy imageio \
     imageio-ffmpeg einops loguru qtorch ftfy easydict
+
+RUN conda install conda-forge::ffmpeg=8.0.0 -y && ln -s /opt/conda/bin/ffmpeg /usr/bin/ffmpeg
 
 RUN git clone https://github.com/Dao-AILab/flash-attention.git --recursive
 

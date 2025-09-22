@@ -1,65 +1,8 @@
-# For rtc whep, build gstreamer whith whepsrc plugin
-FROM registry.ms-sc-01.maoshanwangtech.com/ms-ccr/lightx2v:25080601-cu128-SageSm90 AS gstreamer-base
+FROM lightx2v/lightx2v:25091903-cu128 AS base
 
-RUN apt update -y \
-    && apt update -y \
-    && apt install -y libssl-dev flex bison \
-        libgtk-3-dev libpango1.0-dev libsoup2.4-dev \
-        libnice-dev libopus-dev libvpx-dev libx264-dev \
-        libsrtp2-dev libglib2.0-dev libdrm-dev
-
-RUN cd /opt \
-    && wget https://mirrors.tuna.tsinghua.edu.cn/gnu//libiconv/libiconv-1.15.tar.gz \
-    && tar zxvf libiconv-1.15.tar.gz \
-    && cd libiconv-1.15 \
-    && ./configure \
-    && make \
-    && make install
-
-RUN pip install meson
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-ENV PATH=/root/.cargo/bin:$PATH
-
-RUN cd /opt \
-    && git clone https://github.com/GStreamer/gstreamer.git -b 1.24.12 --depth 1 \
-    && cd gstreamer \
-    && meson setup builddir \
-    && meson compile -C builddir \
-    && meson install -C builddir \
-    && ldconfig
-
-RUN cd /opt \
-    && git clone https://github.com/GStreamer/gst-plugins-rs.git -b gstreamer-1.24.12 --depth 1 \
-    && cd gst-plugins-rs \
-    && cargo build --package gst-plugin-webrtchttp --release \
-    && install -m 644 target/release/libgstwebrtchttp.so $(pkg-config --variable=pluginsdir gstreamer-1.0)/
-
-# Lightx2v deploy image
-FROM registry.ms-sc-01.maoshanwangtech.com/ms-ccr/lightx2v:25080601-cu128-SageSm90
-
-RUN mkdir /workspace/lightx2v
-WORKDIR /workspace/lightx2v
-ENV PYTHONPATH=/workspace/lightx2v
-
-COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
-RUN conda install conda-forge::ffmpeg=8.0.0 -y
-RUN rm /usr/bin/ffmpeg && ln -s /opt/conda/bin/ffmpeg /usr/bin/ffmpeg
-
-RUN apt update -y \
-    && apt install -y libssl-dev \
-        libgtk-3-dev libpango1.0-dev libsoup2.4-dev \
-        libnice-dev libopus-dev libvpx-dev libx264-dev \
-        libsrtp2-dev libglib2.0-dev libdrm-dev
-
-ENV LBDIR=/usr/local/lib/x86_64-linux-gnu
-COPY --from=gstreamer-base /usr/local/bin/gst-* /usr/local/bin/
-COPY --from=gstreamer-base $LBDIR $LBDIR
-RUN ldconfig
-ENV LD_LIBRARY_PATH=$LBDIR:$LD_LIBRARY_PATH
-
-RUN gst-launch-1.0 --version
-RUN gst-inspect-1.0 whepsrc
+RUN mkdir /workspace/LightX2V
+WORKDIR /workspace/LightX2V
+ENV PYTHONPATH=/workspace/LightX2V
 
 COPY assets assets
 COPY configs configs

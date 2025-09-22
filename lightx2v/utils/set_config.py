@@ -31,6 +31,7 @@ def get_default_config():
         "tgt_h": None,
         "tgt_w": None,
         "target_shape": None,
+        "return_video": False,
     }
     return default_config
 
@@ -72,6 +73,8 @@ def set_config(args):
         if config.target_video_length % config.vae_stride[0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config.vae_stride[0]}. Rounding to the nearest number.")
             config.target_video_length = config.target_video_length // config.vae_stride[0] * config.vae_stride[0] + 1
+
+    assert not (config.save_video_path and config.return_video), "save_video_path and return_video cannot be set at the same time"
 
     return config
 

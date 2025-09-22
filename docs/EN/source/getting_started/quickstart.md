@@ -27,16 +27,16 @@ We strongly recommend using the Docker environment, which is the simplest and fa
 
 #### 1. Pull Image
 
-Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags), select a tag with the latest date, such as `25090503-cu128`:
+Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags), select a tag with the latest date, such as `25091903-cu128`:
 
 ```bash
-docker pull lightx2v/lightx2v:25090503-cu128
+docker pull lightx2v/lightx2v:25091903-cu128
 ```
 
 We recommend using the `cuda128` environment for faster inference speed. If you need to use the `cuda124` environment, you can use image versions with the `-cu124` suffix:
 
 ```bash
-docker pull lightx2v/lightx2v:25090503-cu124
+docker pull lightx2v/lightx2v:25091903-cu124
 ```
 
 #### 2. Run Container
@@ -51,10 +51,10 @@ For mainland China, if the network is unstable when pulling images, you can pull
 
 ```bash
 # cuda128
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25090503-cu128
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25091903-cu128
 
 # cuda124
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25090503-cu124
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25091903-cu124
 ```
 
 ### 🐍 Conda Environment Setup
