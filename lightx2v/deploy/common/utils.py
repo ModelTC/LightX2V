@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import os
@@ -87,6 +88,72 @@ async def fetch_resource(url, timeout):
     return content
 
 
+# check, resize, read rotate meta info
+def format_image_data(data, max_size=1280):
+    image = Image.open(io.BytesIO(data)).convert("RGB")
+    exif = image.getexif()
+    changed = False
+    w, h = image.size
+    assert w > 0 and h > 0, "image is empty"
+    logger.info(f"load image: {w}x{h}, exif: {exif}")
+
+    if w > max_size or h > max_size:
+        ratio = max_size / max(w, h)
+        w = int(w * ratio)
+        h = int(h * ratio)
+        image = image.resize((w, h))
+        logger.info(f"resize image to: {image.size}")
+        changed = True
+
+    orientation_key = 274
+    if orientation_key and orientation_key in exif:
+        orientation = exif[orientation_key]
+        if orientation == 2:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+        elif orientation == 3:
+            image = image.rotate(180, expand=True)
+        elif orientation == 4:
+            image = image.transpose(Image.FLIP_TOP_BOTTOM)
+        elif orientation == 5:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
+        elif orientation == 6:
+            image = image.rotate(270, expand=True)
+        elif orientation == 7:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
+        elif orientation == 8:
+            image = image.rotate(90, expand=True)
+
+        # reset orientation to 1
+        if orientation != 1:
+            logger.info(f"reset orientation from {orientation} to 1")
+            exif[orientation_key] = 1
+            changed = True
+
+    if not changed:
+        return data
+    output = io.BytesIO()
+    image.save(output, format=image.format or "JPEG", exif=exif.tobytes())
+    return output.getvalue()
+
+
+def format_audio_data(data):
+    if len(data) < 4:
+        raise ValueError("Audio file too short")
+    try:
+        waveform, sample_rate = torchaudio.load(io.BytesIO(data), num_frames=10)
+        logger.info(f"load audio: {waveform.size()}, {sample_rate}")
+        assert waveform.size(0) > 0, "audio is empty"
+        assert sample_rate > 0, "audio sample rate is not valid"
+    except Exception as e:
+        logger.warning(f"torchaudio failed to load audio, trying alternative method: {e}")
+        # check audio headers
+        audio_headers = [b"RIFF", b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"OggS"]
+        if not any(data.startswith(header) for header in audio_headers):
+            logger.warning("Audio file doesn't have recognized header, but continuing...")
+        logger.info(f"Audio validation passed (alternative method), size: {len(data)} bytes")
+    return data
+
+
 async def preload_data(inp, inp_type, typ, val):
     try:
         if typ == "url":
@@ -102,27 +169,10 @@ async def preload_data(inp, inp_type, typ, val):
 
         # check if valid image bytes
         if inp_type == "IMAGE":
-            image = Image.open(io.BytesIO(data))
-            logger.info(f"load image: {image.size}")
-            assert image.size[0] > 0 and image.size[1] > 0, "image is empty"
+            data = await asyncio.to_thread(format_image_data, data)
         elif inp_type == "AUDIO":
             if typ != "stream":
-                try:
-                    waveform, sample_rate = torchaudio.load(io.BytesIO(data), num_frames=10)
-                    logger.info(f"load audio: {waveform.size()}, {sample_rate}")
-                    assert waveform.size(0) > 0, "audio is empty"
-                    assert sample_rate > 0, "audio sample rate is not valid"
-                except Exception as e:
-                    logger.warning(f"torchaudio failed to load audio, trying alternative method: {e}")
-                    # 尝试使用其他方法验证音频文件
-                    # 检查文件头是否为有效的音频格式
-                    if len(data) < 4:
-                        raise ValueError("Audio file too short")
-                    # 检查常见的音频文件头
-                    audio_headers = [b"RIFF", b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"OggS"]
-                    if not any(data.startswith(header) for header in audio_headers):
-                        logger.warning("Audio file doesn't have recognized header, but continuing...")
-                    logger.info(f"Audio validation passed (alternative method), size: {len(data)} bytes")
+                data = await asyncio.to_thread(format_audio_data, data)
         else:
             raise Exception(f"cannot parse inp_type={inp_type} data")
         return data
@@ -152,3 +202,21 @@ def check_params(params, raw_inputs, raw_outputs, types):
                 assert stream_audio, "stream audio is not supported, please set env STREAM_AUDIO=1"
             elif types[x] == "VIDEO":
                 assert stream_video, "stream video is not supported, please set env STREAM_VIDEO=1"
+
+
+if __name__ == "__main__":
+    # https://github.com/recurser/exif-orientation-examples
+    exif_dir = "/data/nvme0/liuliang1/exif-orientation-examples"
+    out_dir = "/data/nvme0/liuliang1/exif-orientation-examples/outs"
+    os.makedirs(out_dir, exist_ok=True)
+
+    for base_name in ["Landscape", "Portrait"]:
+        for i in range(9):
+            fin_name = os.path.join(exif_dir, f"{base_name}_{i}.jpg")
+            fout_name = os.path.join(out_dir, f"{base_name}_{i}_formatted.jpg")
+            logger.info(f"format image: {fin_name} -> {fout_name}")
+            with open(fin_name, "rb") as f:
+                data = f.read()
+                data = format_image_data(data)
+                with open(fout_name, "wb") as f:
+                    f.write(data)

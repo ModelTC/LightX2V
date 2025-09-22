@@ -86,7 +86,7 @@ def main():
         help="The file of the source mask. Default None.",
     )
 
-    parser.add_argument("--save_video_path", type=str, default="./output_lightx2v.mp4", help="The path to save video path/file")
+    parser.add_argument("--save_video_path", type=str, default=None, help="The path to save video path/file")
     args = parser.parse_args()
 
     # set config

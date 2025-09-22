@@ -16,6 +16,8 @@ class Pipeline:
         self.model_lists = []
         self.types = {}
         self.queues = set()
+        self.model_name_inner_to_outer = self.meta.get("model_name_inner_to_outer", {})
+        self.model_name_outer_to_inner = self.meta.get("model_name_outer_to_inner", {})
         self.tidy_pipeline()
 
     def init_dict(self, base, task, model_cls):
@@ -132,6 +134,14 @@ class Pipeline:
             item = item[k]
         return item
 
+    def check_item_by_keys(self, keys):
+        item = self.data
+        for k in keys:
+            if k not in item:
+                return False
+            item = item[k]
+        return True
+
     def get_model_lists(self):
         return self.model_lists
 
@@ -143,6 +153,12 @@ class Pipeline:
 
     def get_queues(self):
         return self.queues
+
+    def inner_model_name(self, name):
+        return self.model_name_outer_to_inner.get(name, name)
+
+    def outer_model_name(self, name):
+        return self.model_name_inner_to_outer.get(name, name)
 
 
 if __name__ == "__main__":
