@@ -7,6 +7,7 @@ from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner
 from lightx2v.models.schedulers.wan.step_distill.scheduler import Wan22StepDistillScheduler, WanStepDistillScheduler
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -49,6 +50,7 @@ class MultiDistillModelStruct(MultiModelStruct):
         self.cur_model_index = -1
         logger.info(f"boundary step index: {self.boundary_step_index}")
 
+    @ProfilingContext4DebugL2("Swtich models in infer_main costs")
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
