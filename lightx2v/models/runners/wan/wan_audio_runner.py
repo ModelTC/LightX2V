@@ -594,7 +594,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         useful_length = self.segment.end_frame - self.segment.start_frame
         video_seg = self.gen_video[:, :, :useful_length].cpu()
         audio_seg = self.segment.audio_array[:, : useful_length * self._audio_processor.audio_frame_rate]
-        audio_seg = audio_seg.sum(dim=0)  # 多条音频, 混合音轨
+        audio_seg = audio_seg.sum(dim=0)  # Multiple audio tracks, mixed into one track
         video_seg = vae_to_comfyui_image_inplace(video_seg)
 
         # [Warning] Need check whether video segment interpolation works...
