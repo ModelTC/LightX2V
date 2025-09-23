@@ -307,7 +307,8 @@ class AudioProcessor:
                 if audio_array.shape[1] < audio_end - audio_start:
                     padding_len = audio_end - audio_start - audio_array.shape[1]
                     audio_array = F.pad(audio_array, (0, padding_len))
-                    end_idx = end_idx - padding_len // self.audio_frame_rate  # for really
+                    # Adjust end_idx to account for the frames added by padding
+                    end_idx = end_idx - padding_len // self.audio_frame_rate
 
             segments.append(AudioSegment(audio_array, start_idx, end_idx))
         del audio_array, audio_array_ori
