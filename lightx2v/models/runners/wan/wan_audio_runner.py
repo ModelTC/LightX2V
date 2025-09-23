@@ -267,7 +267,7 @@ class AudioProcessor:
         audio_arrays = []
         max_len = 0
 
-        for f in files:  # 第一次遍历，加载并找最大长度
+        for f in files:  # First pass: load and find the maximum length
             audio_array, ori_sr = ta.load(f)
             audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
             audio_arrays.append(audio_array)
