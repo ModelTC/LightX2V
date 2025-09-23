@@ -276,7 +276,7 @@ class AudioProcessor:
         num_files = len(audio_arrays)
         padded = torch.zeros(num_files, max_len, dtype=torch.float32)  # 申请 [N, T]，用0填充
 
-        for i, arr in enumerate(audio_arrays):  # 填充每个音频
+        for i, arr in enumerate(audio_arrays):  # Pad each audio array
             length = arr.numel()
             padded[i, :length] = arr
 
