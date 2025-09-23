@@ -4,28 +4,10 @@
 lightx2v_path=
 model_path=
 
-# check section
-if [ -z "${CUDA_VISIBLE_DEVICES}" ]; then
-    cuda_devices=0
-    echo "Warn: CUDA_VISIBLE_DEVICES is not set, using default value: ${cuda_devices}, change at shell script or set env variable."
-    export CUDA_VISIBLE_DEVICES=${cuda_devices}
-fi
+export CUDA_VISIBLE_DEVICES=0
 
-if [ -z "${lightx2v_path}" ]; then
-    echo "Error: lightx2v_path is not set. Please set this variable first."
-    exit 1
-fi
-
-if [ -z "${model_path}" ]; then
-    echo "Error: model_path is not set. Please set this variable first."
-    exit 1
-fi
-
-export TOKENIZERS_PARALLELISM=false
-
-export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
-export DTYPE=BF16
-export ENABLE_PROFILING_DEBUG=true
+# set environment variables
+source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
 --model_cls wan2.2_moe_distill \
