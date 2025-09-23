@@ -65,7 +65,6 @@ def main():
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file for audio-to-video (a2v) task")
-    parser.add_argument("--person_mask_path", type=str, default="<NONE>", help="The path to input person mask image files for multil-audio-to-video (a2v) task")
 
     parser.add_argument(
         "--src_ref_images",

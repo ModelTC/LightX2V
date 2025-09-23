@@ -1,4 +1,4 @@
-FROM lightx2v/lightx2v:25091903-cu128 AS base
+FROM lightx2v/lightx2v:25092201-cu128 AS base
 
 RUN mkdir /workspace/LightX2V
 WORKDIR /workspace/LightX2V

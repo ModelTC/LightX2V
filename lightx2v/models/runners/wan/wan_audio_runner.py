@@ -286,7 +286,7 @@ class AudioProcessor:
         """Calculate audio range for given frame range"""
         return round(start_frame * self.audio_frame_rate), round(end_frame * self.audio_frame_rate)
 
-    def segment_audio(self, audio_array: torch.tensor, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
+    def segment_audio(self, audio_array: torch.Tensor, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
         """
         Segment audio based on frame requirements
         audio_array is (N, T) tensor
@@ -362,7 +362,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return audio_segments, expected_frames
 
     def read_person_mask(self):
-        mask_path = Path(self.config["person_mask_path"])
+        mask_path_str = self.config.get("person_mask_path")
+        if not mask_path_str:
+            return None
+
+        mask_path = Path(mask_path_str)
         if not mask_path.exists():
             return None
 
@@ -459,7 +463,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = self.read_image_input(self.config["image_path"])
         person_mask_latens = self.read_person_mask()
-        self.config.person_num = person_mask_latens.size(0)
+        if person_mask_latens is not None:
+            self.config.person_num = person_mask_latens.size(0)
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
         audio_segments, expected_frames = self.read_audio_input()

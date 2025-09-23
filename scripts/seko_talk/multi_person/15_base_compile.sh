@@ -22,4 +22,3 @@ python -m lightx2v.infer \
 --image_path ${lightx2v_path}/assets/inputs/audio/multi_person/seko_input.png \
 --audio_path ${lightx2v_path}/assets/inputs/audio/multi_person \
 --save_video_path ${lightx2v_path}/save_results/seko_talk_multi_person.mp4
-
