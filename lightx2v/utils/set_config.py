@@ -32,6 +32,8 @@ def get_default_config():
         "tgt_w": None,
         "target_shape": None,
         "return_video": False,
+        "audio_num": None,
+        "person_num": None,
     }
     return default_config
 

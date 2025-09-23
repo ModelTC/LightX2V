@@ -349,6 +349,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if not isinstance(self.config["audio_path"], str):
             return [], 0
         audio_array = self._audio_processor.load_audio(self.config["audio_path"])
+        self.config.audio_num = audio_array.size(0)
 
         video_duration = self.config.get("video_duration", 5)
 
@@ -458,6 +459,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = self.read_image_input(self.config["image_path"])
         person_mask_latens = self.read_person_mask()
+        self.config.person_num = person_mask_latens.size(0)
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
         audio_segments, expected_frames = self.read_audio_input()
@@ -546,9 +548,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.prev_video = None
         if self.config.get("return_video", False):
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.config.tgt_h, self.config.tgt_w, 3), dtype=torch.float32, device="cpu")
+            self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
             self.gen_video_final = None
-        self.cut_audio_final = None
+            self.cut_audio_final = None
 
     @ProfilingContext4DebugL1("Init run segment")
     def init_run_segment(self, segment_idx, audio_array=None):
@@ -603,7 +606,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.va_recorder.pub_livestream(video_seg, audio_seg)
         elif self.config.get("return_video", False):
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
-            self.cut_audio_final = torch.cat([self.cut_audio_final, audio_seg], axis=0).float() if self.cut_audio_final is not None else audio_seg
+            self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
 
         # Update prev_video for next iteration
         self.prev_video = self.gen_video

@@ -31,4 +31,3 @@ requests
 alibabacloud_dypnsapi20170525==1.2.2
 redis==6.4.0
 tos
-av
