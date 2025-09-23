@@ -25,6 +25,7 @@ from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.utils.envs import *
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
 from lightx2v.utils.utils import best_output_size, cache_video
@@ -395,6 +396,7 @@ class MultiModelStruct:
         self.get_current_model_index()
         self.model[self.cur_model_index].infer(inputs)
 
+    @ProfilingContext4DebugL2("Swtich models in infer_main costs")
     def get_current_model_index(self):
         if self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
