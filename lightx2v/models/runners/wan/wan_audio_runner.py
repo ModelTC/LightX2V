@@ -503,13 +503,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
         vae_encode_out = self.run_vae_encoder(img)
 
         audio_num, audio_segments, expected_frames = self.read_audio_input()
-        if audio_num > 1:
-            logger.info(f"Reading person mask for {audio_num} persons")
-            person_mask_latens = self.read_person_mask()
+        person_mask_latens = self.read_person_mask()
+        self.config.person_num = 0
+        if person_mask_latens is not None:
             assert audio_num == person_mask_latens.size(0), "audio_num and person_mask_latens.size(0) must be the same"
             self.config.person_num = person_mask_latens.size(0)
-        else:
-            person_mask_latens = None
 
         text_encoder_output = self.run_text_encoder(prompt, None)
         torch.cuda.empty_cache()
