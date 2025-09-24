@@ -72,7 +72,7 @@ class VAReader:
     def start_ffmpeg_process_rtmp(self):
         """Start ffmpeg process read audio from stream"""
         ffmpeg_cmd = [
-            "/opt/conda/bin/ffmpeg",
+            "ffmpeg",
             "-i",
             self.stream_url,
             "-vn",
@@ -97,6 +97,7 @@ class VAReader:
     def start_ffmpeg_process_whep(self):
         """Start gstream process read audio from stream"""
         ffmpeg_cmd = [
+            "ffmpeg",
             "gst-launch-1.0",
             "-q",
             "whepsrc",
