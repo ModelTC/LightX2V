@@ -1,6 +1,5 @@
 import gc
 import os
-import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,27 +255,23 @@ class AudioProcessor:
         self.audio_frame_rate = audio_sr // target_fps
 
     def load_audio(self, audio_path: str):
-        """Load and resample audio"""
-        audio_path = Path(audio_path)
-        if audio_path.is_dir():
-            pattern = re.compile(r"^p\d+\.wav$")
-            files = sorted([f for f in audio_path.iterdir() if f.is_file() and pattern.match(f.name)], key=lambda x: int(re.findall(r"\d+", x.name)[0]))
-        else:
-            files = [audio_path]
+        audio_array, ori_sr = ta.load(audio_path)
+        audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
+        return audio_array
 
+    def load_multi_person_audio(self, audio_paths: List[str]):
         audio_arrays = []
         max_len = 0
 
-        for f in files:  # First pass: load and find the maximum length
-            audio_array, ori_sr = ta.load(f)
-            audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
+        for audio_path in audio_paths:
+            audio_array = self.load_audio(audio_path)
             audio_arrays.append(audio_array)
             max_len = max(max_len, audio_array.numel())
 
         num_files = len(audio_arrays)
-        padded = torch.zeros(num_files, max_len, dtype=torch.float32)  # 申请 [N, T]，用0填充
+        padded = torch.zeros(num_files, max_len, dtype=torch.float32)
 
-        for i, arr in enumerate(audio_arrays):  # Pad each audio array
+        for i, arr in enumerate(audio_arrays):
             length = arr.numel()
             padded[i, :length] = arr
 
@@ -343,67 +338,108 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.scheduler = EulerScheduler(self.config)
 
     def read_audio_input(self):
-        """Read audio input"""
+        """Read audio input - handles both single and multi-person scenarios"""
         audio_sr = self.config.get("audio_sr", 16000)
         target_fps = self.config.get("target_fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
-        if not isinstance(self.config["audio_path"], str):
+
+        # Get audio files from person objects or legacy format
+        audio_files = self._get_audio_files_from_config()
+        if not audio_files:
             return [], 0
-        audio_array = self._audio_processor.load_audio(self.config["audio_path"])
+
+        # Load audio based on single or multi-person mode
+        if len(audio_files) == 1:
+            audio_array = self._audio_processor.load_audio(audio_files[0])
+            audio_array = audio_array.unsqueeze(0)  # Add batch dimension for consistency
+        else:
+            audio_array = self._audio_processor.load_multi_person_audio(audio_files)
+
         self.config.audio_num = audio_array.size(0)
 
         video_duration = self.config.get("video_duration", 5)
-
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
 
-        return audio_segments, expected_frames
+        return audio_array.size(0), audio_segments, expected_frames
+
+    def _get_audio_files_from_config(self):
+        talk_objects = self.config.get("talk_objects")
+        if talk_objects:
+            audio_files = []
+            for idx, person in enumerate(talk_objects):
+                audio_path = person.get("audio")
+                if audio_path and Path(audio_path).is_file():
+                    audio_files.append(str(audio_path))
+                else:
+                    logger.warning(f"Person {idx} audio file {audio_path} does not exist or not specified")
+            if audio_files:
+                logger.info(f"Loaded {len(audio_files)} audio files from talk_objects")
+            return audio_files
+
+        audio_path = self.config.get("audio_path")
+        if audio_path:
+            return [audio_path]
+
+        logger.error("config audio_path or talk_objects is not specified")
+        return []
 
     def read_person_mask(self):
-        mask_path_str = self.config.get("person_mask_path")
-        if not mask_path_str:
+        mask_files = self._get_mask_files_from_config()
+        if not mask_files:
             return None
-
-        mask_path = Path(mask_path_str)
-        if not mask_path.exists():
-            return None
-
-        if mask_path.is_dir():
-            pattern = re.compile(r"^p\d+_mask\.png$")
-            files = sorted([f for f in mask_path.iterdir() if f.is_file() and pattern.match(f.name)], key=lambda x: int(re.findall(r"\d+", x.name)[0]))
-        else:
-            files = [mask_path]
 
         mask_latents = []
-        for f in files:
-            mask_img = Image.open(f).convert("RGB")
-            mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
-
-            if mask_img.shape[1] == 3:  # If it is an RGB three-channel image
-                mask_img = mask_img[:, :1]  # Only take the first channel
-            # mask_img = rearrange(mask_img, 'H W C -> 1 C H W')
-
-            mask_img, h, w = resize_image(
-                mask_img,
-                resize_mode=self.config.get("resize_mode", "adaptive"),
-                bucket_shape=self.config.get("bucket_shape", None),
-                fixed_area=self.config.get("fixed_area", None),
-                fixed_shape=self.config.get("fixed_shape", None),
-            )
-            mask_latent = torch.nn.functional.interpolate(
-                mask_img,  # (1, 1, H, W)
-                size=(h // 16, w // 16),
-                mode="bicubic",
-            )
-
-            mask_latent = (mask_latent > 0).to(torch.int8)
+        for mask_file in mask_files:
+            mask_latent = self._process_single_mask(mask_file)
             mask_latents.append(mask_latent)
 
         mask_latents = torch.cat(mask_latents, dim=0)
         return mask_latents
+
+    def _get_mask_files_from_config(self):
+        talk_objects = self.config.get("talk_objects")
+        if talk_objects:
+            mask_files = []
+            for idx, person in enumerate(talk_objects):
+                mask_path = person.get("mask")
+                if mask_path and Path(mask_path).is_file():
+                    mask_files.append(str(mask_path))
+                elif mask_path:
+                    logger.warning(f"Person {idx} mask file {mask_path} does not exist")
+            if mask_files:
+                logger.info(f"Loaded {len(mask_files)} mask files from talk_objects")
+            return mask_files
+
+        logger.error("config talk_objects is not specified")
+        return []
+
+    def _process_single_mask(self, mask_file):
+        mask_img = Image.open(mask_file).convert("RGB")
+        mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+
+        if mask_img.shape[1] == 3:  # If it is an RGB three-channel image
+            mask_img = mask_img[:, :1]  # Only take the first channel
+
+        mask_img, h, w = resize_image(
+            mask_img,
+            resize_mode=self.config.get("resize_mode", "adaptive"),
+            bucket_shape=self.config.get("bucket_shape", None),
+            fixed_area=self.config.get("fixed_area", None),
+            fixed_shape=self.config.get("fixed_shape", None),
+        )
+
+        mask_latent = torch.nn.functional.interpolate(
+            mask_img,  # (1, 1, H, W)
+            size=(h // 16, w // 16),
+            mode="bicubic",
+        )
+
+        mask_latent = (mask_latent > 0).to(torch.int8)
+        return mask_latent
 
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
@@ -463,12 +499,18 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def _run_input_encoder_local_r2v_audio(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = self.read_image_input(self.config["image_path"])
-        person_mask_latens = self.read_person_mask()
-        if person_mask_latens is not None:
-            self.config.person_num = person_mask_latens.size(0)
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
-        audio_segments, expected_frames = self.read_audio_input()
+
+        audio_num, audio_segments, expected_frames = self.read_audio_input()
+        if audio_num > 1:
+            logger.info(f"Reading person mask for {audio_num} persons")
+            person_mask_latens = self.read_person_mask()
+            assert audio_num == person_mask_latens.size(0), "audio_num and person_mask_latens.size(0) must be the same"
+            self.config.person_num = person_mask_latens.size(0)
+        else:
+            person_mask_latens = None
+
         text_encoder_output = self.run_text_encoder(prompt, None)
         torch.cuda.empty_cache()
         gc.collect()

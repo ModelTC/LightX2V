@@ -29,6 +29,24 @@ def init_runner(config):
     return runner
 
 
+def prepare_person_objects_config(args):
+    config = {}
+    if hasattr(args, "audio_list") and args.audio_list and args.mask_list:
+        audio_files = args.audio_list.split(",")
+        mask_files = args.mask_list.split(",")
+
+        assert len(audio_files) == len(mask_files), "audio_list and mask_list must have the same length"
+
+        talk_objects = []
+        for idx, audio_path in enumerate(audio_files):
+            person = {"audio": audio_path.strip()}
+            person["mask"] = mask_files[idx].strip()
+            talk_objects.append(person)
+
+        config["talk_objects"] = talk_objects
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -65,6 +83,8 @@ def main():
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file for audio-to-video (a2v) task")
+    parser.add_argument("--audio_list", type=str, default="", help="The list of input audio files for audio-to-video (a2v) task")
+    parser.add_argument("--mask_list", type=str, default="", help="The list of input mask files for audio-to-video (a2v) task")
 
     parser.add_argument(
         "--src_ref_images",
@@ -90,6 +110,10 @@ def main():
 
     # set config
     config = set_config(args)
+
+    config.update(prepare_person_objects_config(args))
+
+    logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
 
     if config.parallel:
         dist.init_process_group(backend="nccl")
