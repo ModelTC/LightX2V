@@ -1,7 +1,6 @@
 from abc import ABCMeta, abstractmethod
 
 import torch
-import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.utils.envs import *
@@ -64,18 +63,25 @@ class MMWeightTemplate(metaclass=ABCMeta):
         self.config = config
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.weight.cuda(non_blocking=non_blocking)
-        if hasattr(self, "weight_scale"):
-            self.weight_scale = self.weight_scale.cuda(non_blocking=non_blocking)
-        if hasattr(self, "bias") and self.bias is not None:
-            self.bias = self.bias.cuda(non_blocking=non_blocking)
+        self.weight = self.pin_weight.cuda(non_blocking=non_blocking)
+        if hasattr(self, "pin_weight_scale"):
+            self.weight_scale = self.pin_weight_scale.cuda(non_blocking=non_blocking)
+        if hasattr(self, "pin_bias") and self.pin_bias is not None:
+            self.bias = self.pin_bias.cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
-        self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-        if hasattr(self, "weight_scale"):
-            self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
-        if hasattr(self, "bias") and self.bias is not None:
-            self.bias = self.bias.to("cpu", non_blocking=non_blocking)
+        if hasattr(self, "pin_weight"):
+            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            if hasattr(self, "weight_scale_name"):
+                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
+            if self.bias is not None:
+                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+        else:
+            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
+            if hasattr(self, "weight_scale"):
+                self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
+            if hasattr(self, "bias") and self.bias is not None:
+                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
 
 
 @MM_WEIGHT_REGISTER("Default")
@@ -92,16 +98,16 @@ class MMWeight(MMWeightTemplate):
         elif device.type == "cpu":
             weight_shape = weight_dict[self.weight_name].t().shape
             weight_dtype = weight_dict[self.weight_name].dtype
-            self.weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-            self.weight.copy_(weight_dict[self.weight_name].t())
+            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+            self.pin_weight.copy_(weight_dict[self.weight_name].t())
 
             if self.bias_name is not None:
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
-                self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.bias.copy_(weight_dict[self.bias_name])
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
             else:
-                self.bias = None
+                self.pin_bias = None
             del weight_dict[self.weight_name]
         else:
             raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
@@ -176,10 +182,13 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         if not self.lazy_load:
             self.load_func(weight_dict)
             if self.weight_need_transpose:
-                self.weight = self.weight.t()
+                if hasattr(self, "weight"):
+                    self.weight = self.weight.t()
+                elif hasattr(self, "pin_weight"):
+                    self.pin_weight = self.pin_weight.t()
 
     def clear(self):
-        attrs = ["weight", "weight_scale", "bias", "pinned_weight", "pinned_weight_scale", "pinned_bias"]
+        attrs = ["weight", "weight_scale", "bias", "pin_weight", "pin_weight_scale", "pin_bias"]
         for attr in attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -198,15 +207,14 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         elif device.type == "cpu":
             weight_shape = weight_dict[self.weight_name].shape
             weight_dtype = weight_dict[self.weight_name].dtype
-            self.weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-            self.weight.copy_(weight_dict[self.weight_name])
+            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+            self.pin_weight.copy_(weight_dict[self.weight_name])
 
             weight_scale_shape = weight_dict[self.weight_scale_name].shape
             weight_scale_dtype = torch.float
-            self.weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
-            self.weight_scale.copy_(weight_dict[self.weight_scale_name])
-            if dist.is_initialized():
-                del weight_dict[self.weight_name]
+            self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+            self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+            del weight_dict[self.weight_name]
         else:
             raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 
@@ -227,13 +235,14 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             elif device.type == "cpu":
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
-                self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.bias.copy_(weight_dict[self.bias_name])
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
             else:
                 raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
         else:
             self.bias = None
-
+            self.pin_bias = None
+ 
     def load_int8_perchannel_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name].to(torch.float32)
@@ -251,12 +260,13 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             elif device.type == "cpu":
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
-                self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.bias.copy_(weight_dict[self.bias_name])
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
             else:
                 raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
         else:
             self.bias = None
+            self.pin_bias = None
 
     def load_fp8_perblock128_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
@@ -272,12 +282,13 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             elif device.type == "cpu":
                 bias_shape = weight_dict[self.bias_name].shape
                 bias_dtype = weight_dict[self.bias_name].dtype
-                self.bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.bias.copy_(weight_dict[self.bias_name])
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
             else:
                 raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
         else:
             self.bias = None
+            self.pin_bias = None
 
     def per_block_cast_to_fp8(self, x):
         assert x.dim() == 2
