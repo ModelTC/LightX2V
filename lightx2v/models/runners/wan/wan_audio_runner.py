@@ -1,11 +1,14 @@
 import gc
 import os
+import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 import torchaudio as ta
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -27,6 +30,9 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
+
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
 
 
 def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
@@ -192,7 +198,7 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
 class AudioSegment:
     """Data class for audio segment information"""
 
-    audio_array: np.ndarray
+    audio_array: torch.Tensor
     start_frame: int
     end_frame: int
 
@@ -248,34 +254,55 @@ class AudioProcessor:
         self.target_fps = target_fps
         self.audio_frame_rate = audio_sr // target_fps
 
-    def load_audio(self, audio_path: str) -> np.ndarray:
-        """Load and resample audio"""
+    def load_audio(self, audio_path: str):
         audio_array, ori_sr = ta.load(audio_path)
         audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
-        return audio_array.numpy()
+        return audio_array
+
+    def load_multi_person_audio(self, audio_paths: List[str]):
+        audio_arrays = []
+        max_len = 0
+
+        for audio_path in audio_paths:
+            audio_array = self.load_audio(audio_path)
+            audio_arrays.append(audio_array)
+            max_len = max(max_len, audio_array.numel())
+
+        num_files = len(audio_arrays)
+        padded = torch.zeros(num_files, max_len, dtype=torch.float32)
+
+        for i, arr in enumerate(audio_arrays):
+            length = arr.numel()
+            padded[i, :length] = arr
+
+        return padded
 
     def get_audio_range(self, start_frame: int, end_frame: int) -> Tuple[int, int]:
         """Calculate audio range for given frame range"""
         return round(start_frame * self.audio_frame_rate), round(end_frame * self.audio_frame_rate)
 
-    def segment_audio(self, audio_array: np.ndarray, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
-        """Segment audio based on frame requirements"""
+    def segment_audio(self, audio_array: torch.Tensor, expected_frames: int, max_num_frames: int, prev_frame_length: int = 5) -> List[AudioSegment]:
+        """
+        Segment audio based on frame requirements
+        audio_array is (N, T) tensor
+        """
         segments = []
         segments_idx = self.init_segments_idx(expected_frames, max_num_frames, prev_frame_length)
 
         audio_start, audio_end = self.get_audio_range(0, expected_frames)
-        audio_array_ori = audio_array[audio_start:audio_end]
+        audio_array_ori = audio_array[:, audio_start:audio_end]
 
         for idx, (start_idx, end_idx) in enumerate(segments_idx):
             audio_start, audio_end = self.get_audio_range(start_idx, end_idx)
-            audio_array = audio_array_ori[audio_start:audio_end]
+            audio_array = audio_array_ori[:, audio_start:audio_end]
 
             if idx < len(segments_idx) - 1:
                 end_idx = segments_idx[idx + 1][0]
-            else:
-                if audio_array.shape[0] < audio_end - audio_start:
-                    padding_len = audio_end - audio_start - audio_array.shape[0]
-                    audio_array = np.concatenate((audio_array, np.zeros(padding_len)), axis=0)
+            else:  # for last segments
+                if audio_array.shape[1] < audio_end - audio_start:
+                    padding_len = audio_end - audio_start - audio_array.shape[1]
+                    audio_array = F.pad(audio_array, (0, padding_len))
+                    # Adjust end_idx to account for the frames added by padding
                     end_idx = end_idx - padding_len // self.audio_frame_rate
 
             segments.append(AudioSegment(audio_array, start_idx, end_idx))
@@ -311,23 +338,108 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.scheduler = EulerScheduler(self.config)
 
     def read_audio_input(self):
-        """Read audio input"""
+        """Read audio input - handles both single and multi-person scenarios"""
         audio_sr = self.config.get("audio_sr", 16000)
         target_fps = self.config.get("target_fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
-        if not isinstance(self.config["audio_path"], str):
+
+        # Get audio files from person objects or legacy format
+        audio_files = self._get_audio_files_from_config()
+        if not audio_files:
             return [], 0
-        audio_array = self._audio_processor.load_audio(self.config["audio_path"])
+
+        # Load audio based on single or multi-person mode
+        if len(audio_files) == 1:
+            audio_array = self._audio_processor.load_audio(audio_files[0])
+            audio_array = audio_array.unsqueeze(0)  # Add batch dimension for consistency
+        else:
+            audio_array = self._audio_processor.load_multi_person_audio(audio_files)
+
+        self.config.audio_num = audio_array.size(0)
 
         video_duration = self.config.get("video_duration", 5)
-
-        audio_len = int(audio_array.shape[0] / audio_sr * target_fps)
+        audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
 
-        return audio_segments, expected_frames
+        return audio_array.size(0), audio_segments, expected_frames
+
+    def _get_audio_files_from_config(self):
+        talk_objects = self.config.get("talk_objects")
+        if talk_objects:
+            audio_files = []
+            for idx, person in enumerate(talk_objects):
+                audio_path = person.get("audio")
+                if audio_path and Path(audio_path).is_file():
+                    audio_files.append(str(audio_path))
+                else:
+                    logger.warning(f"Person {idx} audio file {audio_path} does not exist or not specified")
+            if audio_files:
+                logger.info(f"Loaded {len(audio_files)} audio files from talk_objects")
+            return audio_files
+
+        audio_path = self.config.get("audio_path")
+        if audio_path:
+            return [audio_path]
+
+        logger.error("config audio_path or talk_objects is not specified")
+        return []
+
+    def read_person_mask(self):
+        mask_files = self._get_mask_files_from_config()
+        if not mask_files:
+            return None
+
+        mask_latents = []
+        for mask_file in mask_files:
+            mask_latent = self._process_single_mask(mask_file)
+            mask_latents.append(mask_latent)
+
+        mask_latents = torch.cat(mask_latents, dim=0)
+        return mask_latents
+
+    def _get_mask_files_from_config(self):
+        talk_objects = self.config.get("talk_objects")
+        if talk_objects:
+            mask_files = []
+            for idx, person in enumerate(talk_objects):
+                mask_path = person.get("mask")
+                if mask_path and Path(mask_path).is_file():
+                    mask_files.append(str(mask_path))
+                elif mask_path:
+                    logger.warning(f"Person {idx} mask file {mask_path} does not exist")
+            if mask_files:
+                logger.info(f"Loaded {len(mask_files)} mask files from talk_objects")
+            return mask_files
+
+        logger.info("config talk_objects is not specified")
+        return None
+
+    def _process_single_mask(self, mask_file):
+        mask_img = Image.open(mask_file).convert("RGB")
+        mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+
+        if mask_img.shape[1] == 3:  # If it is an RGB three-channel image
+            mask_img = mask_img[:, :1]  # Only take the first channel
+
+        mask_img, h, w = resize_image(
+            mask_img,
+            resize_mode=self.config.get("resize_mode", "adaptive"),
+            bucket_shape=self.config.get("bucket_shape", None),
+            fixed_area=self.config.get("fixed_area", None),
+            fixed_shape=self.config.get("fixed_shape", None),
+        )
+
+        mask_latent = torch.nn.functional.interpolate(
+            mask_img,  # (1, 1, H, W)
+            size=(h // 16, w // 16),
+            mode="bicubic",
+        )
+
+        mask_latent = (mask_latent > 0).to(torch.int8)
+        return mask_latent
 
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
@@ -389,7 +501,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         img = self.read_image_input(self.config["image_path"])
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
-        audio_segments, expected_frames = self.read_audio_input()
+
+        audio_num, audio_segments, expected_frames = self.read_audio_input()
+        person_mask_latens = self.read_person_mask()
+        self.config.person_num = 0
+        if person_mask_latens is not None:
+            assert audio_num == person_mask_latens.size(0), "audio_num and person_mask_latens.size(0) must be the same"
+            self.config.person_num = person_mask_latens.size(0)
+
         text_encoder_output = self.run_text_encoder(prompt, None)
         torch.cuda.empty_cache()
         gc.collect()
@@ -401,6 +520,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             },
             "audio_segments": audio_segments,
             "expected_frames": expected_frames,
+            "person_mask_latens": person_mask_latens,
         }
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
@@ -474,15 +594,16 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.prev_video = None
         if self.config.get("return_video", False):
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.config.tgt_h, self.config.tgt_w, 3), dtype=torch.float32, device="cpu")
+            self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
             self.gen_video_final = None
-        self.cut_audio_final = None
+            self.cut_audio_final = None
 
     @ProfilingContext4DebugL1("Init run segment")
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
-            end_idx = audio_array.shape[0] // self._audio_processor.audio_frame_rate - self.prev_frame_length
+            end_idx = audio_array.shape[1] // self._audio_processor.audio_frame_rate - self.prev_frame_length
             self.segment = AudioSegment(audio_array, 0, end_idx)
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
@@ -494,8 +615,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
             self.audio_encoder = self.load_audio_encoder()
 
-        audio_features = self.audio_encoder.infer(self.segment.audio_array)
-        audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
+        features_list = []
+        for i in range(self.segment.audio_array.shape[0]):
+            feat = self.audio_encoder.infer(self.segment.audio_array[i])
+            feat = self.audio_adapter.forward_audio_proj(feat, self.model.scheduler.latents.shape[1])
+            features_list.append(feat.squeeze(0))
+        audio_features = torch.stack(features_list, dim=0)
 
         self.inputs["audio_encoder_output"] = audio_features
         self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=self.prev_frame_length)
@@ -509,8 +634,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
         video_seg = self.gen_video[:, :, :useful_length].cpu()
-        audio_seg = self.segment.audio_array[: useful_length * self._audio_processor.audio_frame_rate]
-
+        audio_seg = self.segment.audio_array[:, : useful_length * self._audio_processor.audio_frame_rate]
+        audio_seg = audio_seg.sum(dim=0)  # Multiple audio tracks, mixed into one track
         video_seg = vae_to_comfyui_image_inplace(video_seg)
 
         # [Warning] Need check whether video segment interpolation works...
@@ -527,7 +652,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.va_recorder.pub_livestream(video_seg, audio_seg)
         elif self.config.get("return_video", False):
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
-            self.cut_audio_final = np.concatenate([self.cut_audio_final, audio_seg], axis=0).astype(np.float32) if self.cut_audio_final is not None else audio_seg
+            self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
 
         # Update prev_video for next iteration
         self.prev_video = self.gen_video
@@ -637,7 +762,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self, save_video=False):
         if self.config.get("return_video", False):
-            audio_waveform = torch.from_numpy(self.cut_audio_final).unsqueeze(0).unsqueeze(0)
+            audio_waveform = self.cut_audio_final.unsqueeze(0).unsqueeze(0)
             comfyui_audio = {"waveform": audio_waveform, "sample_rate": self._audio_processor.audio_sr}
             return {"video": self.gen_video_final, "audio": comfyui_audio}
         return {"video": None, "audio": None}

@@ -51,12 +51,12 @@ class WanAudioModel(WanModel):
         self.post_infer_class = WanAudioPostInfer
         self.transformer_infer_class = WanAudioTransformerInfer
 
-    def get_graph_name(self, shape):
-        return f"graph_{shape[0]}x{shape[1]}"
+    def get_graph_name(self, shape, audio_num):
+        return f"graph_{shape[0]}x{shape[1]}_{audio_num}audio"
 
-    def start_compile(self, shape):
-        graph_name = self.get_graph_name(shape)
-        logger.info(f"[Compile] Compile shape: {shape}, graph_name: {graph_name}")
+    def start_compile(self, shape, audio_num):
+        graph_name = self.get_graph_name(shape, audio_num)
+        logger.info(f"[Compile] Compile shape: {shape}, audio_num:{audio_num}, graph_name: {graph_name}")
 
         target_video_length = self.config.get("target_video_length", 81)
         latents_length = (target_video_length - 1) // 16 * 4 + 1
@@ -72,7 +72,8 @@ class WanAudioModel(WanModel):
         new_inputs["image_encoder_output"]["clip_encoder_out"] = torch.randn(257, 1280, dtype=torch.bfloat16).cuda()
         new_inputs["image_encoder_output"]["vae_encoder_out"] = torch.randn(16, 1, latents_h, latents_w, dtype=torch.bfloat16).cuda()
 
-        new_inputs["audio_encoder_output"] = torch.randn(1, latents_length, 128, 1024, dtype=torch.bfloat16).cuda()
+        new_inputs["audio_encoder_output"] = torch.randn(audio_num, latents_length, 128, 1024, dtype=torch.bfloat16).cuda()
+        new_inputs["person_mask_latens"] = torch.zeros(audio_num, 1, (latents_h // 2), (latents_w // 2), dtype=torch.int8).cuda()
 
         new_inputs["previmg_encoder_output"] = {}
         new_inputs["previmg_encoder_output"]["prev_latents"] = torch.randn(16, latents_length, latents_h, latents_w, dtype=torch.bfloat16).cuda()
@@ -95,8 +96,10 @@ class WanAudioModel(WanModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        for shape in compile_shapes:
-            self.start_compile(shape)
+        max_audio_num_num = self.config.get("compile_max_audios", 1)
+        for audio_num in range(1, max_audio_num_num + 1):
+            for shape in compile_shapes:
+                self.start_compile(shape, audio_num)
 
         if self.cpu_offload:
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config.model_cls:
@@ -113,6 +116,34 @@ class WanAudioModel(WanModel):
             assert shape in [[480, 832], [544, 960], [720, 1280], [832, 480], [960, 544], [1280, 720], [480, 480], [576, 576], [704, 704], [960, 960]]
 
     def select_graph_for_compile(self):
-        logger.info(f"tgt_h, tgt_w : {self.config.get('tgt_h')}, {self.config.get('tgt_w')}")
-        self.select_graph("_infer_cond_uncond", f"graph_{self.config.get('tgt_h')}x{self.config.get('tgt_w')}")
+        logger.info(f"tgt_h, tgt_w : {self.config.get('tgt_h')}, {self.config.get('tgt_w')}, audio_num: {self.config.get('audio_num')}")
+        self.select_graph("_infer_cond_uncond", f"graph_{self.config.get('tgt_h')}x{self.config.get('tgt_w')}_{self.config.get('audio_num')}audio")
         logger.info(f"[Compile] Compile status: {self.get_compile_status()}")
+
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        x = pre_infer_out.x
+        person_mask_latens = pre_infer_out.adapter_output["person_mask_latens"]
+
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+
+        padding_size = (world_size - (x.shape[0] % world_size)) % world_size
+        if padding_size > 0:
+            x = F.pad(x, (0, 0, 0, padding_size))
+            if person_mask_latens is not None:
+                person_mask_latens = F.pad(person_mask_latens, (0, padding_size))
+
+        pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
+        if person_mask_latens is not None:
+            pre_infer_out.adapter_output["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
+
+        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] == "i2v":
+            embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
+            padding_size = (world_size - (embed.shape[0] % world_size)) % world_size
+            if padding_size > 0:
+                embed = F.pad(embed, (0, 0, 0, padding_size))
+                embed0 = F.pad(embed0, (0, 0, 0, 0, 0, padding_size))
+            pre_infer_out.embed = torch.chunk(embed, world_size, dim=0)[cur_rank]
+            pre_infer_out.embed0 = torch.chunk(embed0, world_size, dim=0)[cur_rank]
+        return pre_infer_out
