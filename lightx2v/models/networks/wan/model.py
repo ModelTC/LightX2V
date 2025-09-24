@@ -409,20 +409,14 @@ class WanModel(CompiledMethodsMixin):
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
         x = pre_infer_out.x
-        person_mask_latens = pre_infer_out.adapter_output["person_mask_latens"]
-
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
 
         padding_size = (world_size - (x.shape[0] % world_size)) % world_size
         if padding_size > 0:
             x = F.pad(x, (0, 0, 0, padding_size))
-            if person_mask_latens is not None:
-                person_mask_latens = F.pad(person_mask_latens, (0, padding_size))
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
-        if person_mask_latens is not None:
-            pre_infer_out.adapter_output["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
 
         if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] == "i2v":
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
