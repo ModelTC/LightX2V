@@ -94,7 +94,7 @@ class QwenImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
-        image = Image.open(self.config["image_path"])
+        _, image = self.read_image_input(self.config["image_path"])
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         text_encoder_output = self.run_text_encoder(prompt, image)
         image_encoder_output = self.run_vae_encoder(image=text_encoder_output["preprocessed_image"])
