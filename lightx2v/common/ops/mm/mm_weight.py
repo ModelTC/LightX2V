@@ -242,7 +242,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             self.bias = None
             self.pin_bias = None
- 
+
     def load_int8_perchannel_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name].to(torch.float32)
