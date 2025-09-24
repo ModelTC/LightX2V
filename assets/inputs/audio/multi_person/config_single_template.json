@@ -1,0 +1,8 @@
+{
+    "talk_objects": [
+        {
+            "audio": "p1.mp3",
+            "mask": "p1_mask.png"
+        }
+    ]
+}
