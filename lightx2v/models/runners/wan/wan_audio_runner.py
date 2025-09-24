@@ -414,8 +414,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 logger.info(f"Loaded {len(mask_files)} mask files from talk_objects")
             return mask_files
 
-        logger.error("config talk_objects is not specified")
-        return []
+        logger.info("config talk_objects is not specified")
+        return None
 
     def _process_single_mask(self, mask_file):
         mask_img = Image.open(mask_file).convert("RGB")
