@@ -56,6 +56,11 @@ class WanModel(CompiledMethodsMixin):
         else:
             self.seq_p_group = None
 
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            self.init_empty_model = True
+        else:
+            self.init_empty_model = False
+
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
 
@@ -254,7 +259,14 @@ class WanModel(CompiledMethodsMixin):
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config)
+        if not self.init_empty_model:
+            self._apply_weights()
 
+    def _apply_weights(self, weight_dict=None):
+        if weight_dict is not None:
+            self.original_weight_dict = weight_dict
+            del weight_dict
+            gc.collect()
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
