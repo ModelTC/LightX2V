@@ -5,18 +5,20 @@
     "audio_sr": 16000,
     "target_video_length": 81,
     "resize_mode": "adaptive",
-    "self_attn_1_type": "flash_attn3",
-    "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
     "seed": 42,
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,
     "cpu_offload": false,
     "use_31_block": false,
-    "parallel": {
-        "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses"
+    "mm_config": {
+        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl"
     },
-    "person_mask_path": "assets/inputs/audio/multi_person"
+    "adapter_quantized": true,
+    "adapter_quant_scheme": "fp8",
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8"
 }

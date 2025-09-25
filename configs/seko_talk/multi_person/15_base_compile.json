@@ -15,7 +15,5 @@
     "cpu_offload": false,
     "use_31_block": false,
     "compile": true,
-    "compile_shapes": [[480, 832], [720, 1280]],
-    "compile_max_audios": 3,
-    "person_mask_path": "assets/inputs/audio/multi_person"
+    "compile_shapes": [[480, 832], [720, 1280]]
 }

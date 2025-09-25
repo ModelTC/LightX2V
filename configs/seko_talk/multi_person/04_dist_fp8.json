@@ -20,5 +20,9 @@
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
     "t5_quantized": true,
-    "t5_quant_scheme": "fp8"
+    "t5_quant_scheme": "fp8",
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses"
+    }
 }
