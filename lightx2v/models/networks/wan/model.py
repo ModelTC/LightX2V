@@ -56,6 +56,11 @@ class WanModel(CompiledMethodsMixin):
         else:
             self.seq_p_group = None
 
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            self.init_empty_model = True
+        else:
+            self.init_empty_model = False
+
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
 
@@ -214,7 +219,7 @@ class WanModel(CompiledMethodsMixin):
             # TODO: implement _load_gguf_ckpt
             pass
 
-    def _init_weights(self, weight_dict=None):
+    def _init_weights(self):
         unified_dtype = GET_DTYPE() == GET_SENSITIVE_DTYPE()
         # Some layers run with float32 to achieve high accuracy
         sensitive_layer = {
@@ -228,33 +233,37 @@ class WanModel(CompiledMethodsMixin):
             "after_proj",  # vace
         }
 
-        if weight_dict is None:
-            is_weight_loader = self._should_load_weights()
-            if is_weight_loader:
-                if not self.dit_quantized or self.weight_auto_quant:
-                    # Load original weights
-                    weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
+        is_weight_loader = self._should_load_weights()
+        if is_weight_loader:
+            if not self.dit_quantized or self.weight_auto_quant:
+                # Load original weights
+                weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
+            else:
+                # Load quantized weights
+                if not self.config.get("lazy_load", False):
+                    weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
                 else:
-                    # Load quantized weights
-                    if not self.config.get("lazy_load", False):
-                        weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
-                    else:
-                        weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
+                    weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
 
-            if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
-                weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
+        if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
+            weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
 
-            if hasattr(self, "adapter_weights_dict"):
-                weight_dict.update(self.adapter_weights_dict)
+        if hasattr(self, "adapter_weights_dict"):
+            weight_dict.update(self.adapter_weights_dict)
 
-            self.original_weight_dict = weight_dict
-        else:
-            self.original_weight_dict = weight_dict
+        self.original_weight_dict = weight_dict
 
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config)
+        if not self.init_empty_model:
+            self._apply_weights()
 
+    def _apply_weights(self, weight_dict=None):
+        if weight_dict is not None:
+            self.original_weight_dict = weight_dict
+            del weight_dict
+            gc.collect()
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
