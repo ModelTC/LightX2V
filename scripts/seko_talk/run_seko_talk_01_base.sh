@@ -1,9 +1,9 @@
 #!/bin/bash
 
-lightx2v_path=/path/to/Lightx2v
-model_path=/path/to/SekoTalk-Distill
+lightx2v_path=/mtc/gushiqiao/llmc_workspace/lightx2v_latest/LightX2V
+model_path=/data/nvme0/models/Wan2.1-R2V721-Audio-14B-720P/
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

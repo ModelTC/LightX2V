@@ -787,7 +787,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return base_model
 
     def load_audio_encoder(self):
-        audio_encoder_path = os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large")
+        audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))
         audio_encoder_offload = self.config.get("audio_encoder_cpu_offload", self.config.get("cpu_offload", False))
         model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload)
         return model
