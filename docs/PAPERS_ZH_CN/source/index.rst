@@ -47,4 +47,7 @@ HuggingFace: https://huggingface.co/lightx2v
    并行推理 <papers/parallel.md>
    变分辨率推理 <papers/changing_resolution.md>
    步数蒸馏 <papers/step_distill.md>
-   自回归蒸馏 <papers/autoregressive_distill.md>
+   自回归模型 <papers/autoregressive.md>
+   vae加速 <papers/vae.md>
+   prompt增强 <papers/prompt_enhance.md>
+   强化学习 <papers/RL.md>

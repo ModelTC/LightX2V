@@ -36,7 +36,7 @@ docker pull lightx2v/lightx2v:25092201-cu128
 我们推荐使用`cuda128`环境，以获得更快的推理速度，若需要使用`cuda124`环境，可以使用带`-cu124`后缀的镜像版本：
 
 ```bash
-docker pull lightx2v/lightx2v:25091903-cu124
+docker pull lightx2v/lightx2v:25092201-cu124
 ```
 
 #### 2. 运行容器
@@ -54,7 +54,7 @@ docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --ent
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25092201-cu128
 
 # cuda124
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25091903-cu124
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25092201-cu124
 ```
 
 ### 🐍 Conda 环境搭建

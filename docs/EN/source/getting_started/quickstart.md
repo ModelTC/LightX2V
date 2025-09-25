@@ -36,7 +36,7 @@ docker pull lightx2v/lightx2v:25092201-cu128
 We recommend using the `cuda128` environment for faster inference speed. If you need to use the `cuda124` environment, you can use image versions with the `-cu124` suffix:
 
 ```bash
-docker pull lightx2v/lightx2v:25091903-cu124
+docker pull lightx2v/lightx2v:25092201-cu124
 ```
 
 #### 2. Run Container
@@ -54,7 +54,7 @@ For mainland China, if the network is unstable when pulling images, you can pull
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25092201-cu128
 
 # cuda124
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25091903-cu124
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25092201-cu124
 ```
 
 ### 🐍 Conda Environment Setup
