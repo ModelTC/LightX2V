@@ -43,7 +43,7 @@ class WanLoraWrapper:
         lora_weights = self._load_lora_file(self.lora_metadata[lora_name]["path"])
         weight_dict = self.model.original_weight_dict
         self._apply_lora_weights(weight_dict, lora_weights, alpha)
-        self.model._init_weights(weight_dict)
+        self.model._apply_weights(weight_dict)
 
         logger.info(f"Applied LoRA: {lora_name} with alpha={alpha}")
         del lora_weights
@@ -119,7 +119,7 @@ class WanLoraWrapper:
 
         logger.info(f"LoRA removed, restored {restored_count} weights")
 
-        self.model._init_weights(self.model.original_weight_dict)
+        self.model._apply_weights(self.model.original_weight_dict)
 
         torch.cuda.empty_cache()
         gc.collect()
