@@ -22,13 +22,13 @@ class DefaultRunner(BaseRunner):
         super().__init__(config)
         self.has_prompt_enhancer = False
         self.progress_callback = None
-        if self.config.task == "t2v" and self.config.get("sub_servers", {}).get("prompt_enhancer") is not None:
+        if self.config["task"] == "t2v" and self.config.get("sub_servers", {}).get("prompt_enhancer") is not None:
             self.has_prompt_enhancer = True
             if not self.check_sub_servers("prompt_enhancer"):
                 self.has_prompt_enhancer = False
                 logger.warning("No prompt enhancer server available, disable prompt enhancer.")
         if not self.has_prompt_enhancer:
-            self.config.use_prompt_enhancer = False
+            self.config["use_prompt_enhancer"] = False
         self.set_init_device()
         self.init_scheduler()
 
@@ -52,7 +52,7 @@ class DefaultRunner(BaseRunner):
             self.model.compile(self.config.get("compile_shapes", []))
 
     def set_init_device(self):
-        if self.config.cpu_offload:
+        if self.config["cpu_offload"]:
             self.init_device = torch.device("cpu")
         else:
             self.init_device = torch.device("cuda")
@@ -293,8 +293,8 @@ class DefaultRunner(BaseRunner):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"🎬 Start to save video 🎬")
 
-                save_to_video(self.gen_video, self.config.save_video_path, fps=fps, method="ffmpeg")
-                logger.info(f"✅ Video saved successfully to: {self.config.save_video_path} ✅")
+                save_to_video(self.gen_video, self.config["save_video_path"], fps=fps, method="ffmpeg")
+                logger.info(f"✅ Video saved successfully to: {self.config['save_video_path']} ✅")
         if self.config.get("return_video", False):
             return {"video": self.gen_video}
         return {"video": None}

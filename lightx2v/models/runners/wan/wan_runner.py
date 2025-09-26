@@ -42,7 +42,7 @@ class WanRunner(DefaultRunner):
 
     def load_transformer(self):
         model = WanModel(
-            self.config.model_path,
+            self.config["model_path"],
             self.config,
             self.init_device,
         )
@@ -59,7 +59,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
             # offload config
             clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
             if clip_offload:
@@ -148,13 +148,13 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
-            "parallel": self.config.parallel,
+            "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
         }
-        if self.config.task not in ["i2v", "flf2v", "vace"]:
+        if self.config["task"] not in ["i2v", "flf2v", "vace"]:
             return None
         else:
             return self.vae_cls(**vae_config)
@@ -170,7 +170,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
-            "parallel": self.config.parallel,
+            "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
@@ -192,9 +192,9 @@ class WanRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
-        if self.config.feature_caching == "NoCaching":
+        if self.config["feature_caching"] == "NoCaching":
             scheduler_class = WanScheduler
-        elif self.config.feature_caching == "TaylorSeer":
+        elif self.config["feature_caching"] == "TaylorSeer":
             scheduler_class = WanSchedulerTaylorCaching
         elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock", "Mag"]:
             scheduler_class = WanSchedulerCaching
@@ -255,18 +255,18 @@ class WanRunner(DefaultRunner):
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
         aspect_ratio = h / w
-        max_area = self.config.target_height * self.config.target_width
-        lat_h = round(np.sqrt(max_area * aspect_ratio) // self.config.vae_stride[1] // self.config.patch_size[1] * self.config.patch_size[1])
-        lat_w = round(np.sqrt(max_area / aspect_ratio) // self.config.vae_stride[2] // self.config.patch_size[2] * self.config.patch_size[2])
+        max_area = self.config["target_height"] * self.config["target_width"]
+        lat_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
+        lat_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
 
         if self.config.get("changing_resolution", False):
             assert last_frame is None
-            self.config.lat_h, self.config.lat_w = lat_h, lat_w
+            self.config["lat_h"], self.config["lat_w"] = lat_h, lat_w
             vae_encode_out_list = []
             for i in range(len(self.config["resolution_rate"])):
                 lat_h, lat_w = (
-                    int(self.config.lat_h * self.config.resolution_rate[i]) // 2 * 2,
-                    int(self.config.lat_w * self.config.resolution_rate[i]) // 2 * 2,
+                    int(self.config["lat_h"] * self.config["resolution_rate"][i]) // 2 * 2,
+                    int(self.config["lat_w"] * self.config["resolution_rate"][i]) // 2 * 2,
                 )
                 vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, lat_h, lat_w))
             vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, self.config.lat_h, self.config.lat_w))
@@ -282,16 +282,16 @@ class WanRunner(DefaultRunner):
                         round(last_frame_size[1] * last_frame_resize_ratio),
                     ]
                     last_frame = TF.center_crop(last_frame, last_frame_size)
-            self.config.lat_h, self.config.lat_w = lat_h, lat_w
+            self.config["lat_h"], self.config["lat_w"] = lat_h, lat_w
             vae_encoder_out = self.get_vae_encoder_output(first_frame, lat_h, lat_w, last_frame)
             return vae_encoder_out
 
     def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None):
-        h = lat_h * self.config.vae_stride[1]
-        w = lat_w * self.config.vae_stride[2]
+        h = lat_h * self.config["vae_stride"][1]
+        w = lat_w * self.config["vae_stride"][2]
         msk = torch.ones(
             1,
-            self.config.target_video_length,
+            self.config["target_video_length"],
             lat_h,
             lat_w,
             device=torch.device("cuda"),
@@ -312,7 +312,7 @@ class WanRunner(DefaultRunner):
             vae_input = torch.concat(
                 [
                     torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                    torch.zeros(3, self.config.target_video_length - 2, h, w),
+                    torch.zeros(3, self.config["target_video_length"] - 2, h, w),
                     torch.nn.functional.interpolate(last_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
                 ],
                 dim=1,
@@ -321,7 +321,7 @@ class WanRunner(DefaultRunner):
             vae_input = torch.concat(
                 [
                     torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                    torch.zeros(3, self.config.target_video_length - 1, h, w),
+                    torch.zeros(3, self.config["target_video_length"] - 1, h, w),
                 ],
                 dim=1,
             ).cuda()
@@ -347,25 +347,25 @@ class WanRunner(DefaultRunner):
 
     def set_target_shape(self):
         num_channels_latents = self.config.get("num_channels_latents", 16)
-        if self.config.task in ["i2v", "flf2v"]:
-            self.config.target_shape = (
+        if self.config["task"] in ["i2v", "flf2v"]:
+            self.config["target_shape"] = (
                 num_channels_latents,
-                (self.config.target_video_length - 1) // self.config.vae_stride[0] + 1,
-                self.config.lat_h,
-                self.config.lat_w,
+                (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+                self.config["lat_h"],
+                self.config["lat_w"],
             )
-        elif self.config.task == "t2v":
-            self.config.target_shape = (
+        elif self.config["task"] == "t2v":
+            self.config["target_shape"] = (
                 num_channels_latents,
-                (self.config.target_video_length - 1) // self.config.vae_stride[0] + 1,
-                int(self.config.target_height) // self.config.vae_stride[1],
-                int(self.config.target_width) // self.config.vae_stride[2],
+                (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+                int(self.config["target_height"]) // self.config["vae_stride"][1],
+                int(self.config["target_width"]) // self.config["vae_stride"][2],
             )
 
     def save_video_func(self, images):
         cache_video(
             tensor=images,
-            save_file=self.config.save_video_path,
+            save_file=self.config["save_video_path"],
             fps=self.config.get("fps", 16),
             nrow=1,
             normalize=True,

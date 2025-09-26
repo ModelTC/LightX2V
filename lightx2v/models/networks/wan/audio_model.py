@@ -2,6 +2,7 @@ import os
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
@@ -35,11 +36,11 @@ class WanAudioModel(WanModel):
                     raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
             else:
                 adapter_model_name = "audio_adapter_model.safetensors"
-            self.config.adapter_model_path = os.path.join(self.config.model_path, adapter_model_name)
+            self.config["adapter_model_path"] = os.path.join(self.config["model_path"], adapter_model_name)
 
         adapter_offload = self.config.get("cpu_offload", False)
         load_from_rank0 = self.config.get("load_from_rank0", False)
-        self.adapter_weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
+        self.adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
         if not adapter_offload:
             if not dist.is_initialized() or not load_from_rank0:
                 for key in self.adapter_weights_dict:
@@ -60,8 +61,8 @@ class WanAudioModel(WanModel):
 
         target_video_length = self.config.get("target_video_length", 81)
         latents_length = (target_video_length - 1) // 16 * 4 + 1
-        latents_h = shape[0] // self.config.vae_stride[1]
-        latents_w = shape[1] // self.config.vae_stride[2]
+        latents_h = shape[0] // self.config["vae_stride"][1]
+        latents_w = shape[1] // self.config["vae_stride"][2]
 
         new_inputs = {}
         new_inputs["text_encoder_output"] = {}
@@ -90,7 +91,7 @@ class WanAudioModel(WanModel):
         self.enable_compile_mode("_infer_cond_uncond")
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
@@ -102,7 +103,7 @@ class WanAudioModel(WanModel):
                 self.start_compile(shape, audio_num)
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()

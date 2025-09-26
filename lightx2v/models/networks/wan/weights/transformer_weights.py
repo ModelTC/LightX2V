@@ -60,7 +60,7 @@ class WanTransformerAttentionBlock(WeightModule):
 
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
-            lazy_load_path = os.path.join(self.config.dit_quantized_ckpt, f"block_{block_index}.safetensors")
+            lazy_load_path = os.path.join(self.config["dit_quantized_ckpt"], f"block_{block_index}.safetensors")
             self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
         else:
             self.lazy_load_file = None
@@ -191,7 +191,7 @@ class WanSelfAttention(WeightModule):
             self.add_module("self_attn_1", ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]())
 
         if self.config["seq_parallel"]:
-            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config.parallel.get("seq_p_attn_type", "ulysses")]())
+            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")]())
 
         if self.quant_method in ["advanced_ptq"]:
             self.add_module(
@@ -285,7 +285,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())
 
-        if self.config.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
             self.add_module(
                 "cross_attn_k_img",
                 MM_WEIGHT_REGISTER[self.mm_type](

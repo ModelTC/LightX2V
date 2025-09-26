@@ -17,7 +17,6 @@ loguru
 sgl-kernel
 qtorch
 ftfy
-easydict
 gradio
 aiohttp
 pydantic

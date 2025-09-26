@@ -33,7 +33,7 @@ class WanAudioPreInfer(WanPreInfer):
         infer_condition, latents, timestep_input = self.scheduler.infer_condition, self.scheduler.latents, self.scheduler.timestep_input
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"]
         hidden_states = latents
-        if self.config.model_cls != "wan2.2_audio":
+        if self.config["model_cls"] != "wan2.2_audio":
             prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
             hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=0)
 

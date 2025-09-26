@@ -22,9 +22,9 @@ from lightx2v.utils.utils import seed_all
 
 
 def init_runner(config):
-    seed_all(config.seed)
+    seed_all(config["seed"])
     torch.set_grad_enabled(False)
-    runner = RUNNER_REGISTER[config.model_cls](config)
+    runner = RUNNER_REGISTER[config["model_cls"]](config)
     runner.init_modules()
     return runner
 
@@ -92,7 +92,7 @@ def main():
     # set config
     config = set_config(args)
 
-    if config.parallel:
+    if config["parallel"]:
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(dist.get_rank())
         set_parallel_config(config)
