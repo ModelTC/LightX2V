@@ -62,15 +62,15 @@ class WanModel(CompiledMethodsMixin):
             self.init_empty_model = False
 
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
+        self.dit_quantized = self.config["mm_config"].get("mm_type", "Default") != "Default"
 
         if self.dit_quantized:
-            dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
-            if self.config.model_cls == "wan2.1_distill":
+            dit_quant_scheme = self.config["mm_config"].get("mm_type").split("-")[1]
+            if self.config["model_cls"] == "wan2.1_distill":
                 dit_quant_scheme = "distill_" + dit_quant_scheme
             if dit_quant_scheme == "gguf":
                 self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
-                self.config.use_gguf = True
+                self.config["use_gguf"] = True
             else:
                 self.dit_quantized_ckpt = find_hf_model_path(
                     config,
@@ -87,7 +87,7 @@ class WanModel(CompiledMethodsMixin):
             self.dit_quantized_ckpt = None
             assert not self.config.get("lazy_load", False)
 
-        self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
+        self.weight_auto_quant = self.config["mm_config"].get("weight_auto_quant", False)
         if self.dit_quantized:
             assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
 
@@ -151,7 +151,7 @@ class WanModel(CompiledMethodsMixin):
         weight_dict = {}
         for file_path in safetensors_files:
             if self.config.get("adapter_model_path", None) is not None:
-                if self.config.adapter_model_path == file_path:
+                if self.config["adapter_model_path"] == file_path:
                     continue
             file_weights = self._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
             weight_dict.update(file_weights)

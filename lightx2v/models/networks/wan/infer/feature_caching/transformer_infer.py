@@ -25,22 +25,22 @@ class WanTransformerInferCaching(WanOffloadTransformerInfer):
 class WanTransformerInferTeaCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.teacache_thresh = config.teacache_thresh
+        self.teacache_thresh = config["teacache_thresh"]
         self.accumulated_rel_l1_distance_even = 0
         self.previous_e0_even = None
         self.previous_residual_even = None
         self.accumulated_rel_l1_distance_odd = 0
         self.previous_e0_odd = None
         self.previous_residual_odd = None
-        self.use_ret_steps = config.use_ret_steps
+        self.use_ret_steps = config["use_ret_steps"]
         if self.use_ret_steps:
-            self.coefficients = self.config.coefficients[0]
+            self.coefficients = self.config["coefficients"][0]
             self.ret_steps = 5
-            self.cutoff_steps = self.config.infer_steps
+            self.cutoff_steps = self.config["infer_steps"]
         else:
-            self.coefficients = self.config.coefficients[1]
+            self.coefficients = self.config["coefficients"][1]
             self.ret_steps = 1
-            self.cutoff_steps = self.config.infer_steps - 1
+            self.cutoff_steps = self.config["infer_steps"] - 1
 
     # calculate should_calc
     @torch.no_grad()
@@ -216,7 +216,7 @@ class WanTransformerInferTaylorCaching(WanTransformerInferCaching, BaseTaylorCac
             else:
                 x = self.infer_using_cache(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
 
-        if self.config.enable_cfg:
+        if self.config["enable_cfg"]:
             self.switch_status()
 
         return x
@@ -353,7 +353,7 @@ class WanTransformerInferAdaCaching(WanTransformerInferCaching):
             else:
                 x = self.infer_using_cache(xt)
 
-        if self.config.enable_cfg:
+        if self.config["enable_cfg"]:
             self.switch_status()
 
         return x
@@ -515,7 +515,7 @@ class AdaArgs:
         # Moreg related attributes
         self.previous_moreg = 1.0
         self.moreg_strides = [1]
-        self.moreg_steps = [int(0.1 * config.infer_steps), int(0.9 * config.infer_steps)]
+        self.moreg_steps = [int(0.1 * config["infer_steps"]), int(0.9 * config["infer_steps"])]
         self.moreg_hyp = [0.385, 8, 1, 2]
         self.mograd_mul = 10
         self.spatial_dim = 1536
@@ -525,7 +525,7 @@ class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCac
     def __init__(self, config):
         super().__init__(config)
         self.cnt = 0
-        self.teacache_thresh = config.teacache_thresh
+        self.teacache_thresh = config["teacache_thresh"]
         self.accumulated_rel_l1_distance_even = 0
         self.previous_e0_even = None
         self.previous_residual_even = None
@@ -534,15 +534,15 @@ class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCac
         self.previous_residual_odd = None
         self.cache_even = {}
         self.cache_odd = {}
-        self.use_ret_steps = config.use_ret_steps
+        self.use_ret_steps = config["use_ret_steps"]
         if self.use_ret_steps:
-            self.coefficients = self.config.coefficients[0]
+            self.coefficients = self.config["coefficients"][0]
             self.ret_steps = 5 * 2
-            self.cutoff_steps = self.config.infer_steps * 2
+            self.cutoff_steps = self.config["infer_steps"] * 2
         else:
-            self.coefficients = self.config.coefficients[1]
+            self.coefficients = self.config["coefficients"][1]
             self.ret_steps = 1 * 2
-            self.cutoff_steps = self.config.infer_steps * 2 - 2
+            self.cutoff_steps = self.config["infer_steps"] * 2 - 2
 
     # 1. get taylor step_diff when there is two caching_records in scheduler
     def get_taylor_step_diff(self):
@@ -625,7 +625,7 @@ class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCac
             else:
                 x = self.infer_using_cache(x)
 
-        if self.config.enable_cfg:
+        if self.config["enable_cfg"]:
             self.switch_status()
 
         self.cnt += 1
@@ -690,12 +690,12 @@ class WanTransformerInferFirstBlock(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
 
-        self.residual_diff_threshold = config.residual_diff_threshold
+        self.residual_diff_threshold = config["residual_diff_threshold"]
         self.prev_first_block_residual_even = None
         self.prev_remaining_blocks_residual_even = None
         self.prev_first_block_residual_odd = None
         self.prev_remaining_blocks_residual_odd = None
-        self.downsample_factor = self.config.downsample_factor
+        self.downsample_factor = self.config["downsample_factor"]
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
         ori_x = x.clone()
@@ -727,7 +727,7 @@ class WanTransformerInferFirstBlock(WanTransformerInferCaching):
             else:
                 x = self.infer_using_cache(x)
 
-        if self.config.enable_cfg:
+        if self.config["enable_cfg"]:
             self.switch_status()
 
         return x
@@ -795,12 +795,12 @@ class WanTransformerInferDualBlock(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
 
-        self.residual_diff_threshold = config.residual_diff_threshold
+        self.residual_diff_threshold = config["residual_diff_threshold"]
         self.prev_front_blocks_residual_even = None
         self.prev_middle_blocks_residual_even = None
         self.prev_front_blocks_residual_odd = None
         self.prev_middle_blocks_residual_odd = None
-        self.downsample_factor = self.config.downsample_factor
+        self.downsample_factor = self.config["downsample_factor"]
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
         ori_x = x.clone()
@@ -854,7 +854,7 @@ class WanTransformerInferDualBlock(WanTransformerInferCaching):
                 context,
             )
 
-        if self.config.enable_cfg:
+        if self.config["enable_cfg"]:
             self.switch_status()
 
         return x
@@ -921,8 +921,8 @@ class WanTransformerInferDualBlock(WanTransformerInferCaching):
 class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.residual_diff_threshold = config.residual_diff_threshold
-        self.downsample_factor = self.config.downsample_factor
+        self.residual_diff_threshold = config["residual_diff_threshold"]
+        self.downsample_factor = self.config["downsample_factor"]
 
         self.block_in_cache_even = {i: None for i in range(self.blocks_num)}
         self.block_residual_cache_even = {i: None for i in range(self.blocks_num)}
@@ -992,10 +992,10 @@ class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
 class WanTransformerInferMagCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.magcache_thresh = config.magcache_thresh
-        self.K = config.magcache_K
-        self.retention_ratio = config.magcache_retention_ratio
-        self.mag_ratios = np.array(config.magcache_ratios)
+        self.magcache_thresh = config["magcache_thresh"]
+        self.K = config["magcache_K"]
+        self.retention_ratio = config["magcache_retention_ratio"]
+        self.mag_ratios = np.array(config["magcache_ratios"])
         # {True: cond_param, False: uncond_param}
         self.accumulated_err = {True: 0.0, False: 0.0}
         self.accumulated_steps = {True: 0, False: 0}
@@ -1011,10 +1011,10 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         step_index = self.scheduler.step_index
         infer_condition = self.scheduler.infer_condition
 
-        if self.config.magcache_calibration:
+        if self.config["magcache_calibration"]:
             skip_forward = False
         else:
-            if step_index >= int(self.config.infer_steps * self.retention_ratio):
+            if step_index >= int(self.config["infer_steps"] * self.retention_ratio):
                 # conditional and unconditional in one list
                 cur_mag_ratio = self.mag_ratios[0][step_index] if infer_condition else self.mag_ratios[1][step_index]
                 # magnitude ratio between current step and the cached step
@@ -1054,7 +1054,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         if self.config["cpu_offload"]:
             previous_residual = previous_residual.cpu()
 
-        if self.config.magcache_calibration and step_index >= 1:
+        if self.config["magcache_calibration"] and step_index >= 1:
             norm_ratio = ((previous_residual.norm(dim=-1) / self.residual_cache[infer_condition].norm(dim=-1)).mean()).item()
             norm_std = (previous_residual.norm(dim=-1) / self.residual_cache[infer_condition].norm(dim=-1)).std().item()
             cos_dis = (1 - F.cosine_similarity(previous_residual, self.residual_cache[infer_condition], dim=-1, eps=1e-8)).mean().item()
@@ -1083,7 +1083,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         self.accumulated_steps = {True: 0, False: 0}
         self.accumulated_ratio = {True: 1.0, False: 1.0}
         self.residual_cache = {True: None, False: None}
-        if self.config.magcache_calibration:
+        if self.config["magcache_calibration"]:
             print("norm ratio")
             print(self.norm_ratio)
             print("norm std")

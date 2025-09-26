@@ -297,13 +297,13 @@ def find_torch_model_path(config, ckpt_config_key=None, filename=None, subdir=["
         return config.get(ckpt_config_key)
 
     paths_to_check = [
-        os.path.join(config.model_path, filename),
+        os.path.join(config["model_path"], filename),
     ]
     if isinstance(subdir, list):
         for sub in subdir:
-            paths_to_check.insert(0, os.path.join(config.model_path, sub, filename))
+            paths_to_check.insert(0, os.path.join(config["model_path"], sub, filename))
     else:
-        paths_to_check.insert(0, os.path.join(config.model_path, subdir, filename))
+        paths_to_check.insert(0, os.path.join(config["model_path"], subdir, filename))
 
     for path in paths_to_check:
         if os.path.exists(path):

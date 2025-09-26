@@ -355,7 +355,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             audio_array = self._audio_processor.load_multi_person_audio(audio_files)
 
-        self.config.audio_num = audio_array.size(0)
+        self.config["audio_num"] = audio_array.size(0)
 
         video_duration = self.config.get("video_duration", 5)
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
@@ -456,20 +456,20 @@ class WanAudioRunner(WanRunner):  # type:ignore
             fixed_shape=self.config.get("fixed_shape", None),
         )
         logger.info(f"[wan_audio] resize_image target_h: {h}, target_w: {w}")
-        patched_h = h // self.config.vae_stride[1] // self.config.patch_size[1]
-        patched_w = w // self.config.vae_stride[2] // self.config.patch_size[2]
+        patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
+        patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
 
         patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
 
-        self.config.lat_h = patched_h * self.config.patch_size[1]
-        self.config.lat_w = patched_w * self.config.patch_size[2]
+        self.config["lat_h"] = patched_h * self.config["patch_size"][1]
+        self.config["lat_w"] = patched_w * self.config["patch_size"][2]
 
-        self.config.tgt_h = self.config.lat_h * self.config.vae_stride[1]
-        self.config.tgt_w = self.config.lat_w * self.config.vae_stride[2]
+        self.config["tgt_h"] = self.config["lat_h"] * self.config["vae_stride"][1]
+        self.config["tgt_w"] = self.config["lat_w"] * self.config["vae_stride"][2]
 
-        logger.info(f"[wan_audio] tgt_h: {self.config.tgt_h}, tgt_w: {self.config.tgt_w}, lat_h: {self.config.lat_h}, lat_w: {self.config.lat_w}")
+        logger.info(f"[wan_audio] tgt_h: {self.config['tgt_h']}, tgt_w: {self.config['tgt_w']}, lat_h: {self.config['lat_h']}, lat_w: {self.config['lat_w']}")
 
-        ref_img = torch.nn.functional.interpolate(ref_img, size=(self.config.tgt_h, self.config.tgt_w), mode="bicubic")
+        ref_img = torch.nn.functional.interpolate(ref_img, size=(self.config["tgt_h"], self.config["tgt_w"]), mode="bicubic")
         return ref_img
 
     def run_image_encoder(self, first_frame, last_frame=None):
@@ -504,10 +504,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         audio_num, audio_segments, expected_frames = self.read_audio_input()
         person_mask_latens = self.read_person_mask()
-        self.config.person_num = 0
+        self.config["person_num"] = 0
         if person_mask_latens is not None:
             assert audio_num == person_mask_latens.size(0), "audio_num and person_mask_latens.size(0) must be the same"
-            self.config.person_num = person_mask_latens.size(0)
+            self.config["person_num"] = person_mask_latens.size(0)
 
         text_encoder_output = self.run_text_encoder(prompt, None)
         torch.cuda.empty_cache()
@@ -528,13 +528,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
         device = torch.device("cuda")
         dtype = GET_DTYPE()
 
-        tgt_h, tgt_w = self.config.tgt_h, self.config.tgt_w
-        prev_frames = torch.zeros((1, 3, self.config.target_video_length, tgt_h, tgt_w), device=device)
+        tgt_h, tgt_w = self.config["tgt_h"], self.config["tgt_w"]
+        prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=device)
 
         if prev_video is not None:
             # Extract and process last frames
             last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
-            if self.config.model_cls != "wan2.2_audio":
+            if self.config["model_cls"] != "wan2.2_audio":
                 last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
             prev_frames[:, :, :prev_frame_length] = last_frames
             prev_len = (prev_frame_length - 1) // 4 + 1
@@ -546,7 +546,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         _, nframe, height, width = self.model.scheduler.latents.shape
         with ProfilingContext4DebugL1("vae_encoder in init run segment"):
-            if self.config.model_cls == "wan2.2_audio":
+            if self.config["model_cls"] == "wan2.2_audio":
                 if prev_video is not None:
                     prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
                 else:
@@ -563,7 +563,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         if prev_latents is not None:
             if prev_latents.shape[-2:] != (height, width):
-                logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config.tgt_h}, tgt_w={self.config.tgt_w}")
+                logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config['tgt_h']}, tgt_w={self.config['tgt_w']}")
                 prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -593,7 +593,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.scheduler.set_audio_adapter(self.audio_adapter)
         self.prev_video = None
         if self.config.get("return_video", False):
-            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.config.tgt_h, self.config.tgt_w, 3), dtype=torch.float32, device="cpu")
+            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.config["tgt_h"], self.config["tgt_w"], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
             self.gen_video_final = None
@@ -608,8 +608,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
 
-        self.config.seed = self.config.seed + segment_idx
-        torch.manual_seed(self.config.seed)
+        self.config["seed"] = self.config["seed"] + segment_idx
+        torch.manual_seed(self.config["seed"])
         # logger.info(f"Processing segment {segment_idx + 1}/{self.video_segment_num}, seed: {self.config.seed}")
 
         if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
@@ -773,11 +773,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def load_transformer(self):
         """Load transformer with LoRA support"""
-        base_model = WanAudioModel(self.config.model_path, self.config, self.init_device)
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
+        base_model = WanAudioModel(self.config["model_path"], self.config, self.init_device)
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
+            assert not self.config.get("dit_quantized", False) or self.config["mm_config"].get("weight_auto_quant", False)
             lora_wrapper = WanLoraWrapper(base_model)
-            for lora_config in self.config.lora_configs:
+            for lora_config in self.config["lora_configs"]:
                 lora_path = lora_config["path"]
                 strength = lora_config.get("strength", 1.0)
                 lora_name = lora_wrapper.load_lora(lora_path)
@@ -814,7 +814,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         audio_adapter.to(device)
         load_from_rank0 = self.config.get("load_from_rank0", False)
-        weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
+        weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
         audio_adapter.load_state_dict(weights_dict, strict=False)
         return audio_adapter.to(dtype=GET_DTYPE())
 
@@ -828,23 +828,23 @@ class WanAudioRunner(WanRunner):  # type:ignore
         """Set target shape for generation"""
         ret = {}
         num_channels_latents = 16
-        if self.config.model_cls == "wan2.2_audio":
-            num_channels_latents = self.config.num_channels_latents
+        if self.config["model_cls"] == "wan2.2_audio":
+            num_channels_latents = self.config["num_channels_latents"]
 
-        if self.config.task == "i2v":
-            self.config.target_shape = (
+        if self.config["task"] == "i2v":
+            self.config["target_shape"] = (
                 num_channels_latents,
-                (self.config.target_video_length - 1) // self.config.vae_stride[0] + 1,
-                self.config.lat_h,
-                self.config.lat_w,
+                (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+                self.config["lat_h"],
+                self.config["lat_w"],
             )
-            ret["lat_h"] = self.config.lat_h
-            ret["lat_w"] = self.config.lat_w
+            ret["lat_h"] = self.config["lat_h"]
+            ret["lat_w"] = self.config["lat_w"]
         else:
             error_msg = "t2v task is not supported in WanAudioRunner"
             assert False, error_msg
 
-        ret["target_shape"] = self.config.target_shape
+        ret["target_shape"] = self.config["target_shape"]
         return ret
 
 
