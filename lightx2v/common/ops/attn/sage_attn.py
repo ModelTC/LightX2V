@@ -51,7 +51,7 @@ class SageAttn2Weight(AttnWeightTemplate):
             )
             x = torch.cat((x1, x2), dim=1)
             x = x.view(max_seqlen_q, -1)
-        elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df", "seko_talk", "wan2.2", "wan2.1_vace", "wan2.2_moe", "wan2.2_moe_distill", "qwen_image"]:
+        elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df", "seko_talk", "wan2.2", "wan2.1_vace", "wan2.2_moe", "wan2.2_animate", "wan2.2_moe_distill", "qwen_image"]:
             if len(q.shape) == 3:
                 x = sageattn(
                     q.unsqueeze(0),
