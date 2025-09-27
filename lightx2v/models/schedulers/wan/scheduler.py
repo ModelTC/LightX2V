@@ -117,7 +117,9 @@ class WanScheduler(BaseScheduler):
         x0_pred = sample - sigma_t * model_output
         return x0_pred
 
-    def reset(self):
+    def reset(self, step_index=None):
+        if step_index is not None:
+            self.step_index = step_index
         self.model_outputs = [None] * self.solver_order
         self.timestep_list = [None] * self.solver_order
         self.last_sample = None

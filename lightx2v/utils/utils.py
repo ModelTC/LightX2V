@@ -292,6 +292,13 @@ def save_to_video(
         raise ValueError(f"Unknown save method: {method}")
 
 
+def remove_substrings_from_keys(original_dict, substr):
+    new_dict = {}
+    for key, value in original_dict.items():
+        new_dict[key.replace(substr, "")] = value
+    return new_dict
+
+
 def find_torch_model_path(config, ckpt_config_key=None, filename=None, subdir=["original", "fp8", "int8", "distill_models", "distill_fp8", "distill_int8"]):
     if ckpt_config_key and config.get(ckpt_config_key, None) is not None:
         return config.get(ckpt_config_key)
@@ -357,50 +364,72 @@ def find_gguf_model_path(config, ckpt_config_key=None, subdir=None):
     raise FileNotFoundError(f"No GGUF model files (.gguf) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
 
 
-def load_safetensors(in_path, remove_key):
+def load_safetensors(in_path, remove_key=None, include_keys=None):
+    """加载safetensors文件或目录，支持按key包含筛选或排除"""
+    include_keys = include_keys or []
     if os.path.isdir(in_path):
-        return load_safetensors_from_dir(in_path, remove_key)
+        return load_safetensors_from_dir(in_path, remove_key, include_keys)
     elif os.path.isfile(in_path):
-        return load_safetensors_from_path(in_path, remove_key)
+        return load_safetensors_from_path(in_path, remove_key, include_keys)
     else:
         raise ValueError(f"{in_path} does not exist")
 
 
-def load_safetensors_from_path(in_path, remove_key):
+def load_safetensors_from_path(in_path, remove_key=None, include_keys=None):
+    """从单个safetensors文件加载权重，支持按key筛选"""
+    include_keys = include_keys or []
     tensors = {}
     with safetensors.safe_open(in_path, framework="pt", device="cpu") as f:
         for key in f.keys():
-            if remove_key not in key:
-                tensors[key] = f.get_tensor(key)
+            # 优先处理include_keys：如果非空，只保留包含任意指定key的条目
+            if include_keys:
+                if any(inc_key in key for inc_key in include_keys):
+                    tensors[key] = f.get_tensor(key)
+            # 否则使用remove_key排除
+            else:
+                if not (remove_key and remove_key in key):
+                    tensors[key] = f.get_tensor(key)
     return tensors
 
 
-def load_safetensors_from_dir(in_dir, remove_key):
+def load_safetensors_from_dir(in_dir, remove_key=None, include_keys=None):
+    """从目录加载所有safetensors文件，支持按key筛选"""
+    include_keys = include_keys or []
     tensors = {}
-    safetensors = os.listdir(in_dir)
-    safetensors = [f for f in safetensors if f.endswith(".safetensors")]
-    for f in safetensors:
-        tensors.update(load_safetensors_from_path(os.path.join(in_dir, f), remove_key))
+    safetensors_files = os.listdir(in_dir)
+    safetensors_files = [f for f in safetensors_files if f.endswith(".safetensors")]
+    for f in safetensors_files:
+        tensors.update(load_safetensors_from_path(os.path.join(in_dir, f), remove_key, include_keys))
     return tensors
 
 
-def load_pt_safetensors(in_path, remove_key):
+def load_pt_safetensors(in_path, remove_key=None, include_keys=None):
+    """加载pt/pth或safetensors权重，支持按key筛选"""
+    include_keys = include_keys or []
     ext = os.path.splitext(in_path)[-1]
     if ext in (".pt", ".pth", ".tar"):
         state_dict = torch.load(in_path, map_location="cpu", weights_only=True)
-        for key in list(state_dict.keys()):
-            if remove_key and remove_key in key:
-                state_dict.pop(key)
+        # 处理筛选逻辑
+        keys_to_keep = []
+        for key in state_dict.keys():
+            if include_keys:
+                if any(inc_key in key for inc_key in include_keys):
+                    keys_to_keep.append(key)
+            else:
+                if not (remove_key and remove_key in key):
+                    keys_to_keep.append(key)
+        # 只保留符合条件的key
+        state_dict = {k: state_dict[k] for k in keys_to_keep}
     else:
-        state_dict = load_safetensors(in_path, remove_key)
+        state_dict = load_safetensors(in_path, remove_key, include_keys)
     return state_dict
 
 
-def load_weights(checkpoint_path, cpu_offload=False, remove_key=None, load_from_rank0=False):
+def load_weights(checkpoint_path, cpu_offload=False, remove_key=None, load_from_rank0=False, include_keys=None):
     if not dist.is_initialized() or not load_from_rank0:
         # Single GPU mode
         logger.info(f"Loading weights from {checkpoint_path}")
-        cpu_weight_dict = load_pt_safetensors(checkpoint_path, remove_key)
+        cpu_weight_dict = load_pt_safetensors(checkpoint_path, remove_key, include_keys)
         return cpu_weight_dict
 
     # Multi-GPU mode
@@ -413,9 +442,6 @@ def load_weights(checkpoint_path, cpu_offload=False, remove_key=None, load_from_
     if is_weight_loader:
         logger.info(f"Loading weights from {checkpoint_path}")
         cpu_weight_dict = load_pt_safetensors(checkpoint_path, remove_key)
-        for key in list(cpu_weight_dict.keys()):
-            if remove_key and remove_key in key:
-                cpu_weight_dict.pop(key)
 
     meta_dict = {}
     if is_weight_loader:

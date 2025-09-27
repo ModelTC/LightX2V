@@ -145,7 +145,7 @@ class BaseRunner(ABC):
     def run_segment(self, total_steps=None):
         pass
 
-    def end_run_segment(self):
+    def end_run_segment(self, segment_idx=None):
         pass
 
     def end_run(self):

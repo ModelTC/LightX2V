@@ -3,6 +3,9 @@ class WeightModule:
         self._modules = {}
         self._parameters = {}
 
+    def is_empty(self):
+        return len(self._modules) == 0 and len(self._parameters) == 0
+
     def add_module(self, name, module):
         self._modules[name] = module
         setattr(self, name, module)

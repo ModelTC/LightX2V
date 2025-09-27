@@ -40,7 +40,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"]("time_projection.1.weight", "time_projection.1.bias"),
         )
 
-        if config.task in ["i2v", "flf2v"] and config.get("use_image_encoder", True):
+        if config.task in ["i2v", "flf2v", "animate"] and config.get("use_image_encoder", True):
             self.add_module(
                 "proj_0",
                 LN_WEIGHT_REGISTER["Default"]("img_emb.proj.0.weight", "img_emb.proj.0.bias"),
@@ -72,4 +72,9 @@ class WanPreWeights(WeightModule):
             self.add_module(
                 "emb_pos",
                 TENSOR_REGISTER["Default"](f"img_emb.emb_pos"),
+            )
+        if config.task == "animate":
+            self.add_module(
+                "pose_patch_embedding",
+                CONV3D_WEIGHT_REGISTER["Default"]("pose_patch_embedding.weight", "pose_patch_embedding.bias", stride=self.patch_size),
             )
