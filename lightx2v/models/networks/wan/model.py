@@ -137,12 +137,19 @@ class WanModel(CompiledMethodsMixin):
         return False
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+
         if self.device.type == "cuda" and dist.is_initialized():
             device = torch.device("cuda:{}".format(dist.get_rank()))
         else:
             device = self.device
+
         with safe_open(file_path, framework="pt", device=str(device)) as f:
-            return {key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE())) for key in f.keys()}
+            return {
+                key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
+                for key in f.keys()
+                if not any(remove_key in key for remove_key in remove_keys)
+            }
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         safetensors_path = find_hf_model_path(self.config, self.model_path, "dit_original_ckpt", subdir="original")
@@ -158,6 +165,7 @@ class WanModel(CompiledMethodsMixin):
         return weight_dict
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
         ckpt_path = self.dit_quantized_ckpt
         index_files = [f for f in os.listdir(ckpt_path) if f.endswith(".index.json")]
         if not index_files:
@@ -175,6 +183,9 @@ class WanModel(CompiledMethodsMixin):
             with safe_open(safetensor_path, framework="pt") as f:
                 logger.info(f"Loading weights from {safetensor_path}")
                 for k in f.keys():
+                    if any(remove_key in k for remove_key in remove_keys):
+                        continue
+
                     if f.get_tensor(k).dtype in [
                         torch.float16,
                         torch.bfloat16,

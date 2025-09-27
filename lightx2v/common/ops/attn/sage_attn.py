@@ -52,13 +52,22 @@ class SageAttn2Weight(AttnWeightTemplate):
             x = torch.cat((x1, x2), dim=1)
             x = x.view(max_seqlen_q, -1)
         elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df", "seko_talk", "wan2.2", "wan2.1_vace", "wan2.2_moe", "wan2.2_moe_distill", "qwen_image"]:
-            x = sageattn(
-                q.unsqueeze(0),
-                k.unsqueeze(0),
-                v.unsqueeze(0),
-                tensor_layout="NHD",
-            )
-            x = x.view(max_seqlen_q, -1)
+            if len(q.shape) == 3:
+                x = sageattn(
+                    q.unsqueeze(0),
+                    k.unsqueeze(0),
+                    v.unsqueeze(0),
+                    tensor_layout="NHD",
+                )
+                x = x.view(max_seqlen_q, -1)
+            elif len(q.shape) == 4:
+                x = sageattn(
+                    q,
+                    k,
+                    v,
+                    tensor_layout="NHD",
+                )
+                x = x.view(q.shape[0] * max_seqlen_q, -1)
         else:
             raise NotImplementedError(f"Model class '{model_cls}' is not implemented in this attention implementation")
         return x

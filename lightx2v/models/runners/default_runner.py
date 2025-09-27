@@ -47,6 +47,8 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_t2v
         elif self.config["task"] == "vace":
             self.run_input_encoder = self._run_input_encoder_local_vace
+        elif self.config["task"] == "animate":
+            self.run_input_encoder = self._run_input_encoder_local_animate
         if self.config.get("compile", False):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
@@ -216,6 +218,14 @@ class DefaultRunner(BaseRunner):
         gc.collect()
         return self.get_encoder_output_i2v(None, vae_encoder_out, text_encoder_output)
 
+    @ProfilingContext4DebugL2("Run Text Encoder")
+    def _run_input_encoder_local_animate(self):
+        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
+        text_encoder_output = self.run_text_encoder(prompt, None)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return self.get_encoder_output_i2v(None, None, text_encoder_output, None)
+
     def init_run(self):
         self.set_target_shape()
         self.get_video_segment_num()
@@ -241,7 +251,7 @@ class DefaultRunner(BaseRunner):
                 # 3. vae decoder
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing
-                self.end_run_segment()
+                self.end_run_segment(segment_idx)
         self.end_run()
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
@@ -304,7 +314,6 @@ class DefaultRunner(BaseRunner):
             self.config["prompt_enhanced"] = self.post_prompt_enhancer()
 
         self.inputs = self.run_input_encoder()
-
         self.run_main()
 
         gen_video = self.process_images_after_vae_decoder(save_video=save_video)

@@ -630,7 +630,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.model.scheduler.reset(self.inputs["previmg_encoder_output"])
 
     @ProfilingContext4DebugL1("End run segment")
-    def end_run_segment(self):
+    def end_run_segment(self, segment_idx):
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
         video_seg = self.gen_video[:, :, :useful_length].cpu()
