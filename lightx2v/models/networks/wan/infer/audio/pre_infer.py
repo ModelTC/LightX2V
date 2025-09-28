@@ -101,7 +101,7 @@ class WanAudioPreInfer(WanPreInfer):
             del out
             torch.cuda.empty_cache()
 
-        if self.task == "i2v" and self.config.get("use_image_encoder", True):
+        if self.task in ["i2v", "s2v"] and self.config.get("use_image_encoder", True):
             context_clip = weights.proj_0.apply(clip_fea)
             if self.clean_cuda_cache:
                 del clip_fea

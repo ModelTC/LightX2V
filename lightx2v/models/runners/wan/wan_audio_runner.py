@@ -496,7 +496,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return vae_encoder_out
 
     @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_r2v_audio(self):
+    def _run_input_encoder_local_s2v(self):
         prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
         img = self.read_image_input(self.config["image_path"])
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
@@ -767,10 +767,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
             return {"video": self.gen_video_final, "audio": comfyui_audio}
         return {"video": None, "audio": None}
 
-    def init_modules(self):
-        super().init_modules()
-        self.run_input_encoder = self._run_input_encoder_local_r2v_audio
-
     def load_transformer(self):
         """Load transformer with LoRA support"""
         base_model = WanAudioModel(self.config["model_path"], self.config, self.init_device)
@@ -831,7 +827,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if self.config["model_cls"] == "wan2.2_audio":
             num_channels_latents = self.config["num_channels_latents"]
 
-        if self.config["task"] == "i2v":
+        if self.config["task"] in ["i2v", "s2v"]:
             self.config["target_shape"] = (
                 num_channels_latents,
                 (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
@@ -882,7 +878,7 @@ class Wan22AudioRunner(WanAudioRunner):
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
-        if self.config.task != "i2v":
+        if self.config.task not in ["i2v", "s2v"]:
             return None
         else:
             return Wan2_2_VAE(**vae_config)

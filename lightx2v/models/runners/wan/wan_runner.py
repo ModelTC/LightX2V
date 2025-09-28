@@ -59,7 +59,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config["task"] in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
             # offload config
             clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
             if clip_offload:
@@ -154,7 +154,7 @@ class WanRunner(DefaultRunner):
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
         }
-        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace"]:
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
         else:
             return self.vae_cls(**vae_config)
@@ -347,7 +347,7 @@ class WanRunner(DefaultRunner):
 
     def set_target_shape(self):
         num_channels_latents = self.config.get("num_channels_latents", 16)
-        if self.config["task"] in ["i2v", "flf2v", "animate"]:
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"]:
             self.config["target_shape"] = (
                 num_channels_latents,
                 (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,

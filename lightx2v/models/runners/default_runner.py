@@ -49,6 +49,8 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_vace
         elif self.config["task"] == "animate":
             self.run_input_encoder = self._run_input_encoder_local_animate
+        elif self.config["task"] == "s2v":
+            self.run_input_encoder = self._run_input_encoder_local_s2v
         if self.config.get("compile", False):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
@@ -226,13 +228,16 @@ class DefaultRunner(BaseRunner):
         gc.collect()
         return self.get_encoder_output_i2v(None, None, text_encoder_output, None)
 
+    def _run_input_encoder_local_s2v(self):
+        pass
+
     def init_run(self):
         self.set_target_shape()
         self.get_video_segment_num()
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
         self.model.scheduler.prepare(self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
     @ProfilingContext4DebugL2("Run DiT")
