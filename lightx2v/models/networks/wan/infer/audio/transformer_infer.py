@@ -22,8 +22,8 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
     @torch.no_grad()
     def infer_post_adapter(self, phase, x, pre_infer_out):
         grid_sizes = pre_infer_out.grid_sizes.tensor
-        audio_encoder_output = pre_infer_out.adapter_output["audio_encoder_output"]
-        person_mask_latens = pre_infer_out.adapter_output["person_mask_latens"]
+        audio_encoder_output = pre_infer_out.adapter_args["audio_encoder_output"]
+        person_mask_latens = pre_infer_out.adapter_args["person_mask_latens"]
         total_tokens = grid_sizes[0].prod()
         pre_frame_tokens = grid_sizes[0][1:].prod()
         n_tokens = total_tokens - pre_frame_tokens  # 去掉ref image的token数

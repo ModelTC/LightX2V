@@ -14,8 +14,8 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
     def infer_post_adapter(self, phase, x, pre_infer_out):
         if phase.is_empty():
             return x
-        T = pre_infer_out.motion_vec.shape[0]
-        x_motion = phase.pre_norm_motion.apply(pre_infer_out.motion_vec)
+        T = pre_infer_out.adapter_args.motion_vec.shape[0]
+        x_motion = phase.pre_norm_motion.apply(pre_infer_out.adapter_args.motion_vec)
         x_feat = phase.pre_norm_feat.apply(x)
         kv = phase.linear1_kv.apply(x_motion.view(-1, x_motion.shape[-1]))
         kv = kv.view(T, -1, kv.shape[-1])

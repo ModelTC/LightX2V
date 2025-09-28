@@ -128,5 +128,5 @@ class WanAudioPreInfer(WanPreInfer):
             seq_lens=seq_lens,
             freqs=self.freqs,
             context=context,
-            adapter_output={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
+            adapter_args={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
         )
