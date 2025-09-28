@@ -14,7 +14,7 @@ export SENSITIVE_LAYER_DTYPE=None
 
 torchrun --nproc-per-node 4 -m lightx2v.infer \
 --model_cls seko_talk \
---task i2v \
+--task s2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/seko_talk/seko_talk_07_dist_offload.json \
 --prompt  "The video features a male speaking to the camera with arms spread out, a slightly furrowed brow, and a focused gaze." \

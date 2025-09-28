@@ -14,7 +14,7 @@ export SENSITIVE_LAYER_DTYPE=None
 
 python -m lightx2v.infer \
 --model_cls seko_talk \
---task i2v \
+--task s2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/seko_talk/multi_person/01_base.json \
 --prompt  "The video features a man and a woman standing by a bench in the park, their expressions tense and voices raised as they argue. The man gestures with both hands, his arms swinging slightly as if to emphasize each heated word, while the woman stands with her hands on her waist, her brows furrowed in frustration. The background is a wide expanse of sunlit grass, the golden light contrasting with the sharp energy of their quarrel. Their voices seem to clash in the air, and the rhythm of their hand movements and body postures interweaves with the rising tension, creating a vivid scene of confrontation." \
