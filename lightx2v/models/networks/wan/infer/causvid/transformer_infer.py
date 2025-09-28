@@ -140,7 +140,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
     def infer_cross_attn(self, weights, x, context, block_idx):
         norm3_out = weights.norm3.apply(x)
 
-        if self.task == "i2v":
+        if self.task in ["i2v", "s2v"]:
             context_img = context[:257]
             context = context[257:]
 
@@ -169,7 +169,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
             model_cls=self.config["model_cls"],
         )
 
-        if self.task == "i2v":
+        if self.task in ["i2v", "s2v"]:
             k_img = weights.cross_attn_norm_k_img.apply(weights.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = weights.cross_attn_v_img.apply(context_img).view(-1, n, d)
 

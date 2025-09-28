@@ -19,5 +19,5 @@ class WanPreInferModuleOutput:
     seq_lens: torch.Tensor
     freqs: torch.Tensor
     context: torch.Tensor
-    motion_vec: torch.Tensor
+    # motion_vec: torch.Tensor
     adapter_output: Dict[str, Any] = field(default_factory=dict)

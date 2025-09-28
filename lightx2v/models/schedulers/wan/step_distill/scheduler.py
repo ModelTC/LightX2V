@@ -25,7 +25,7 @@ class WanStepDistillScheduler(WanScheduler):
 
         if self.config.task in ["t2v"]:
             self.seq_len = math.ceil((self.config.target_shape[2] * self.config.target_shape[3]) / (self.config.patch_size[1] * self.config.patch_size[2]) * self.config.target_shape[1])
-        elif self.config.task in ["i2v"]:
+        elif self.config.task in ["i2v", "s2v"]:
             self.seq_len = self.config.lat_h * self.config.lat_w // (self.config.patch_size[1] * self.config.patch_size[2]) * self.config.target_shape[1]
 
         self.set_denoising_timesteps(device=self.device)

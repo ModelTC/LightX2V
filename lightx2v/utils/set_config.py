@@ -105,7 +105,7 @@ def set_config(args):
                 model_config = json.load(f)
             config.update(model_config)
 
-    if config["task"] == "i2v":
+    if config["task"] in ["i2v", "s2v"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1

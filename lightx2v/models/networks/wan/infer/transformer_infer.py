@@ -203,7 +203,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             x.add_(y_out * gate_msa.squeeze())
 
         norm3_out = phase.norm3.apply(x)
-        if self.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
+        if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
             context_img = context[:257]
             context = context[257:]
         else:
@@ -211,7 +211,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             context = context.to(self.infer_dtype)
-            if self.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
+            if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
                 context_img = context_img.to(self.infer_dtype)
 
         n, d = self.num_heads, self.head_dim
@@ -234,7 +234,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             model_cls=self.config["model_cls"],
         )
 
-        if self.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True) and context_img is not None:
+        if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 
