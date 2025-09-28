@@ -23,11 +23,11 @@ class WanScheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
 
-    def prepare(self, image_encoder_output=None):
+    def prepare(self, input_info, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
 
-        self.prepare_latents(self.config["target_shape"], dtype=torch.float32)
+        self.prepare_latents(input_info.latent_shape, dtype=torch.float32)
 
         alphas = np.linspace(1, 1 / self.num_train_timesteps, self.num_train_timesteps)[::-1].copy()
         sigmas = 1.0 - alphas

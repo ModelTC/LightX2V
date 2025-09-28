@@ -92,7 +92,7 @@ def main():
     args = parser.parse_args()
 
     # set config
-    config = set_config(args)
+    config, input_info = set_config(args)
 
     if config["parallel"]:
         dist.init_process_group(backend="nccl")
@@ -103,7 +103,7 @@ def main():
 
     with ProfilingContext4DebugL1("Total Cost"):
         runner = init_runner(config)
-        runner.run_pipeline()
+        runner.run_pipeline(input_info)
 
     # Clean up distributed process group
     if dist.is_initialized():

@@ -5,6 +5,7 @@ import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
+from flax.core import FrozenDict
 from loguru import logger
 from requests.exceptions import RequestException
 
@@ -31,6 +32,7 @@ class DefaultRunner(BaseRunner):
             self.config["use_prompt_enhancer"] = False
         self.set_init_device()
         self.init_scheduler()
+        self.config = FrozenDict(self.config)
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
@@ -148,6 +150,7 @@ class DefaultRunner(BaseRunner):
     def end_run(self):
         self.model.scheduler.clear()
         del self.inputs
+        self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
                 self.model.transformer_infer.weights_stream_mgr.clear()
@@ -164,23 +167,24 @@ class DefaultRunner(BaseRunner):
         else:
             img_ori = Image.open(img_path).convert("RGB")
         img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        self.input_info.original_size = img_ori.size
         return img, img_ori
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2v(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        img, img_ori = self.read_image_input(self.config["image_path"])
+        img, img_ori = self.read_image_input(self.input_info.image_path)
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
-        vae_encode_out = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
-        text_encoder_output = self.run_text_encoder(prompt, img)
+        vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
+        self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
+        text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        text_encoder_output = self.run_text_encoder(prompt, None)
+        self.input_info.latent_shape = self.get_latent_shape_with_target_hw(self.config["target_height"], self.config["target_width"])  # Important: set latent_shape in input_info
+        text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
         return {
@@ -190,22 +194,21 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_flf2v(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        first_frame, _ = self.read_image_input(self.config["image_path"])
-        last_frame, _ = self.read_image_input(self.config["last_frame_path"])
+        first_frame, _ = self.read_image_input(self.input_info.image_path)
+        last_frame, _ = self.read_image_input(self.input_info.last_frame_path)
         clip_encoder_out = self.run_image_encoder(first_frame, last_frame) if self.config.get("use_image_encoder", True) else None
-        vae_encode_out = self.run_vae_encoder(first_frame, last_frame)
-        text_encoder_output = self.run_text_encoder(prompt, first_frame)
+        vae_encode_out, latent_shape = self.run_vae_encoder(first_frame, last_frame)
+        self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
+        text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_vace(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        src_video = self.config.get("src_video", None)
-        src_mask = self.config.get("src_mask", None)
-        src_ref_images = self.config.get("src_ref_images", None)
+        src_video = self.input_info.src_video
+        src_mask = self.input_info.src_mask
+        src_ref_images = self.input_info.src_ref_images
         src_video, src_mask, src_ref_images = self.prepare_source(
             [src_video],
             [src_mask],
@@ -214,8 +217,9 @@ class DefaultRunner(BaseRunner):
         )
         self.src_ref_images = src_ref_images
 
-        vae_encoder_out = self.run_vae_encoder(src_video, src_ref_images, src_mask)
-        text_encoder_output = self.run_text_encoder(prompt)
+        vae_encoder_out, latent_shape = self.run_vae_encoder(src_video, src_ref_images, src_mask)
+        self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
+        text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(None, vae_encoder_out, text_encoder_output)
@@ -232,16 +236,16 @@ class DefaultRunner(BaseRunner):
         pass
 
     def init_run(self):
-        self.set_target_shape()
         self.get_video_segment_num()
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
-        self.model.scheduler.prepare(self.inputs["image_encoder_output"])
+
+        self.model.scheduler.prepare(input_info=self.input_info, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
     @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self, total_steps=None):
+    def run_main(self, total_steps=None, save_video=True):
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile()
@@ -257,7 +261,9 @@ class DefaultRunner(BaseRunner):
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing
                 self.end_run_segment(segment_idx)
+        gen_video = self.process_images_after_vae_decoder(save_video=save_video)
         self.end_run()
+        return gen_video
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
@@ -314,16 +320,14 @@ class DefaultRunner(BaseRunner):
             return {"video": self.gen_video}
         return {"video": None}
 
-    def run_pipeline(self, save_video=True):
+    def run_pipeline(self, input_info, save_video=True):
+        self.input_info = input_info
+
         if self.config["use_prompt_enhancer"]:
-            self.config["prompt_enhanced"] = self.post_prompt_enhancer()
+            self.input_info["prompt_enhanced"] = self.post_prompt_enhancer()
 
         self.inputs = self.run_input_encoder()
-        self.run_main()
 
-        gen_video = self.process_images_after_vae_decoder(save_video=save_video)
-
-        torch.cuda.empty_cache()
-        gc.collect()
+        gen_video = self.run_main(save_video=save_video)
 
         return gen_video

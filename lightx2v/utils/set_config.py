@@ -5,6 +5,8 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
+from lightx2v.utils.input_info import Flf2vInputInfo, I2VInputInfo, S2VInputInfo, T2VInputInfo, VaceInputInfo
+
 
 def get_default_config():
     default_config = {
@@ -25,11 +27,6 @@ def get_default_config():
         "cfg_parallel": False,
         "enable_cfg": False,
         "use_image_encoder": True,
-        "lat_h": None,
-        "lat_w": None,
-        "tgt_h": None,
-        "tgt_w": None,
-        "target_shape": None,
         "return_video": False,
         "audio_num": None,
         "person_num": None,
@@ -38,8 +35,44 @@ def get_default_config():
 
 
 def set_config(args):
+    if args.task == "i2v":
+        input_info = I2VInputInfo(
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+        )
+    elif args.task == "t2v":
+        input_info = T2VInputInfo(
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+        )
+    elif args.task == "flf2v":
+        input_info = Flf2vInputInfo(
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            last_frame_path=args.last_frame_path,
+        )
+    elif args.task == "vace":
+        input_info = VaceInputInfo(
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            src_ref_images=args.src_ref_images,
+            src_video=args.src_video,
+            src_mask=args.src_mask,
+        )
+    elif args.task == "s2v":
+        input_info = S2VInputInfo(
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            audio_path=args.audio_path,
+        )
+    else:
+        raise ValueError(f"Unsupported task: {args.task}")
+
     config = get_default_config()
-    config.update({k: v for k, v in vars(args).items()})
+    config.update({k: v for k, v in vars(args).items() if k not in input_info.__dataclass_fields__})
 
     with open(config["config_json"], "r") as f:
         config_json = json.load(f)
@@ -90,7 +123,7 @@ def set_config(args):
 
     assert not (config["save_video_path"] and config["return_video"]), "save_video_path and return_video cannot be set at the same time"
 
-    return config
+    return config, input_info
 
 
 def set_parallel_config(config):
