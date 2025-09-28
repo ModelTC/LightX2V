@@ -124,7 +124,7 @@ class WanAudioModel(WanModel):
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
         x = pre_infer_out.x
-        person_mask_latens = pre_infer_out.adapter_output["person_mask_latens"]
+        person_mask_latens = pre_infer_out.adapter_args["person_mask_latens"]
 
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
@@ -137,7 +137,7 @@ class WanAudioModel(WanModel):
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
         if person_mask_latens is not None:
-            pre_infer_out.adapter_output["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
+            pre_infer_out.adapter_args["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
 
         if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v"]:
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0

@@ -363,18 +363,15 @@ class WanAnimateRunner(WanRunner):
             self.config,
             self.init_device,
         )
-        motion_encoder, face_encoder = self.load_encoder()
+        motion_encoder, face_encoder = self.load_encoders()
         model.set_animate_encoders(motion_encoder, face_encoder)
         return model
 
-    def load_encoder(self):
-        motion_encoder = Generator(size=512, style_dim=512, motion_dim=20).eval().requires_grad_(False).to(GET_DTYPE())
-        face_encoder = FaceEncoder(in_dim=512, hidden_dim=5120, num_heads=4).eval().requires_grad_(False).to(GET_DTYPE())
+    def load_encoders(self):
+        motion_encoder = Generator(size=512, style_dim=512, motion_dim=20).eval().requires_grad_(False).to(GET_DTYPE()).cuda()
+        face_encoder = FaceEncoder(in_dim=512, hidden_dim=5120, num_heads=4).eval().requires_grad_(False).to(GET_DTYPE()).cuda()
         motion_weight_dict = remove_substrings_from_keys(load_weights(self.config["model_path"], include_keys=["motion_encoder"]), "motion_encoder.")
         face_weight_dict = remove_substrings_from_keys(load_weights(self.config["model_path"], include_keys=["face_encoder"]), "face_encoder.")
         motion_encoder.load_state_dict(motion_weight_dict)
         face_encoder.load_state_dict(face_weight_dict)
-        if not self.config["cpu_offload"]:
-            motion_encoder = motion_encoder.cuda()
-            face_encoder = face_encoder.cuda()
         return motion_encoder, face_encoder

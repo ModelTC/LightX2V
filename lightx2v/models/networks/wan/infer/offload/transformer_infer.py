@@ -217,7 +217,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.phase_params["c_gate_msa"],
             )
             if hasattr(cur_phase, "after_proj"):
-                pre_infer_out.adapter_output["hints"].append(cur_phase.after_proj.apply(x))
+                pre_infer_out.adapter_args["hints"].append(cur_phase.after_proj.apply(x))
         elif cur_phase_idx == 3:
             x = self.infer_post_adapter(cur_phase, x, pre_infer_out)
         return x

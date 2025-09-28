@@ -131,5 +131,5 @@ class WanPreInfer:
             seq_lens=seq_lens,
             freqs=self.freqs,
             context=context,
-            motion_vec=motion_vec,
+            adapter_args={"motion_vec": motion_vec},
         )
