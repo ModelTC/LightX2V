@@ -27,7 +27,7 @@ def get_default_config():
         "cfg_parallel": False,
         "enable_cfg": False,
         "use_image_encoder": True,
-        "return_video": False,
+        "return_result_tensor": False,
     }
     return default_config
 
@@ -124,7 +124,7 @@ def set_config(args):
     #     else:
     #         logger.info(f"audio_path is a file: {config['audio_path']}")
 
-    assert not (config["save_result_path"] and config["return_video"]), "save_result_path and return_video cannot be set at the same time"
+    assert not (config["save_result_path"] and config["return_result_tensor"]), "save_result_path and return_result_tensor cannot be set at the same time"
 
     return config, input_info
 

@@ -301,7 +301,7 @@ class DefaultRunner(BaseRunner):
                 target_fps=target_fps,
             )
 
-        if self.config.get("return_video", False):
+        if self.config.get("return_result_tensor", False):
             return {"video": self.gen_video}
         elif self.config.get("save_result_path", None) is not None:
             if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
