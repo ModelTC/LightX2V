@@ -41,7 +41,7 @@ class WanPreInfer:
         else:
             context = inputs["text_encoder_output"]["context_null"]
 
-        if self.task in ["i2v", "flf2v"]:
+        if self.task in ["i2v", "flf2v", "animate"]:
             if self.config.get("use_image_encoder", True):
                 clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
 
@@ -61,6 +61,12 @@ class WanPreInfer:
 
         # embeddings
         x = weights.patch_embedding.apply(x.unsqueeze(0))
+
+        if hasattr(self, "after_patch_embedding"):
+            x, motion_vec = self.after_patch_embedding(weights, x, inputs["image_encoder_output"]["pose_latents"], inputs["image_encoder_output"]["face_pixel_values"])
+        else:
+            motion_vec = None
+
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
         seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
@@ -94,7 +100,7 @@ class WanPreInfer:
             del out
             torch.cuda.empty_cache()
 
-        if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
+        if self.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
             if self.task == "flf2v":
                 _, n, d = clip_fea.shape
                 clip_fea = clip_fea.view(2 * n, d)
@@ -125,4 +131,5 @@ class WanPreInfer:
             seq_lens=seq_lens,
             freqs=self.freqs,
             context=context,
+            motion_vec=motion_vec,
         )
