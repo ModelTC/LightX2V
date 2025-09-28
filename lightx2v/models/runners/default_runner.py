@@ -100,21 +100,17 @@ class DefaultRunner(BaseRunner):
         return len(available_servers) > 0
 
     def set_inputs(self, inputs):
-        self.config["prompt"] = inputs.get("prompt", "")
-        self.config["use_prompt_enhancer"] = False
-        if self.has_prompt_enhancer:
-            self.config["use_prompt_enhancer"] = inputs.get("use_prompt_enhancer", False)  # Reset use_prompt_enhancer from clinet side.
-        self.config["negative_prompt"] = inputs.get("negative_prompt", "")
-        self.config["image_path"] = inputs.get("image_path", "")
-        self.config["save_video_path"] = inputs.get("save_video_path", "")
-        self.config["infer_steps"] = inputs.get("infer_steps", self.config.get("infer_steps", 5))
-        self.config["target_video_length"] = inputs.get("target_video_length", self.config.get("target_video_length", 81))
-        self.config["seed"] = inputs.get("seed", self.config.get("seed", 42))
-        self.config["audio_path"] = inputs.get("audio_path", "")  # for wan-audio
-        self.config["video_duration"] = inputs.get("video_duration", 5)  # for wan-audio
-
-        # self.config["sample_shift"] = inputs.get("sample_shift", self.config.get("sample_shift", 5))
-        # self.config["sample_guide_scale"] = inputs.get("sample_guide_scale", self.config.get("sample_guide_scale", 5))
+        self.input_info.seed = inputs.get("seed", 42)
+        self.input_info.prompt = inputs.get("prompt", "")
+        self.input_info.prompt_enhanced = inputs.get("prompt_enhanced", "")
+        self.input_info.negative_prompt = inputs.get("negative_prompt", "")
+        if "image_path" in self.input_info.__dataclass_fields__:
+            self.input_info.image_path = inputs.get("image_path", "")
+        if "audio_path" in self.input_info.__dataclass_fields__:
+            self.input_info.audio_path = inputs.get("audio_path", "")
+        if "video_path" in self.input_info.__dataclass_fields__:
+            self.input_info.video_path = inputs.get("video_path", "")
+        self.input_info.save_result_path = inputs.get("save_result_path", "")
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
