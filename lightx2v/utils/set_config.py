@@ -107,19 +107,19 @@ def set_config(args):
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
-    if config["audio_path"]:
-        if os.path.isdir(config["audio_path"]):
-            logger.info(f"audio_path is a directory, loading config.json from {config['audio_path']}")
-            audio_config_path = os.path.join(config["audio_path"], "config.json")
-            assert os.path.exists(audio_config_path), "config.json not found in audio_path"
-            with open(audio_config_path, "r") as f:
-                audio_config = json.load(f)
-            for talk_object in audio_config["talk_objects"]:
-                talk_object["audio"] = os.path.join(config["audio_path"], talk_object["audio"])
-                talk_object["mask"] = os.path.join(config["audio_path"], talk_object["mask"])
-            config.update(audio_config)
-        else:
-            logger.info(f"audio_path is a file: {config['audio_path']}")
+    # if config["audio_path"]:
+    #     if os.path.isdir(config["audio_path"]):
+    #         logger.info(f"audio_path is a directory, loading config.json from {config['audio_path']}")
+    #         audio_config_path = os.path.join(config["audio_path"], "config.json")
+    #         assert os.path.exists(audio_config_path), "config.json not found in audio_path"
+    #         with open(audio_config_path, "r") as f:
+    #             audio_config = json.load(f)
+    #         for talk_object in audio_config["talk_objects"]:
+    #             talk_object["audio"] = os.path.join(config["audio_path"], talk_object["audio"])
+    #             talk_object["mask"] = os.path.join(config["audio_path"], talk_object["mask"])
+    #         config.update(audio_config)
+    #     else:
+    #         logger.info(f"audio_path is a file: {config['audio_path']}")
 
     assert not (config["save_video_path"] and config["return_video"]), "save_video_path and return_video cannot be set at the same time"
 

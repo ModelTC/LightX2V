@@ -73,7 +73,7 @@ class WanPreWeights(WeightModule):
                 "emb_pos",
                 TENSOR_REGISTER["Default"](f"img_emb.emb_pos"),
             )
-        if config.task == "animate":
+        if config["task"] == "animate":
             self.add_module(
                 "pose_patch_embedding",
                 CONV3D_WEIGHT_REGISTER["Default"]("pose_patch_embedding.weight", "pose_patch_embedding.bias", stride=self.patch_size),
