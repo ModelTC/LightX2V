@@ -108,7 +108,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         if hasattr(block.compute_phases[2], "after_proj"):
-            pre_infer_out.adapter_output["hints"].append(block.compute_phases[2].after_proj.apply(x))
+            pre_infer_out.adapter_args["hints"].append(block.compute_phases[2].after_proj.apply(x))
 
         if self.has_post_adapter:
             x = self.infer_post_adapter(block.compute_phases[3], x, pre_infer_out)

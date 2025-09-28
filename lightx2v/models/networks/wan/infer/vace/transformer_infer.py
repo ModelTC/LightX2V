@@ -20,7 +20,7 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         return c
 
     def infer_vace_blocks(self, vace_blocks, pre_infer_out):
-        pre_infer_out.adapter_output["hints"] = []
+        pre_infer_out.adapter_args["hints"] = []
         self.infer_state = "vace"
         if hasattr(self, "weights_stream_mgr"):
             self.weights_stream_mgr.init(self.vace_blocks_num, self.phases_num, self.offload_ratio)
@@ -33,5 +33,5 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)
         if self.infer_state == "base" and self.block_idx in self.vace_blocks_mapping:
             hint_idx = self.vace_blocks_mapping[self.block_idx]
-            x = x + pre_infer_out.adapter_output["hints"][hint_idx] * pre_infer_out.adapter_output.get("context_scale", 1.0)
+            x = x + pre_infer_out.adapter_args["hints"][hint_idx] * pre_infer_out.adapter_args.get("context_scale", 1.0)
         return x
