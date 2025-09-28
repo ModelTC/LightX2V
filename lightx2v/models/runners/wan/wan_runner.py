@@ -28,7 +28,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
-from lightx2v.utils.utils import best_output_size, cache_video
+from lightx2v.utils.utils import best_output_size
 
 
 @RUNNER_REGISTER("wan2.1")
@@ -380,16 +380,6 @@ class WanRunner(DefaultRunner):
             int(target_w) // self.config["vae_stride"][2],
         ]
         return latent_shape
-
-    def save_video_func(self, images):
-        cache_video(
-            tensor=images,
-            save_file=self.config["save_result_path"],
-            fps=self.config.get("fps", 16),
-            nrow=1,
-            normalize=True,
-            value_range=(-1, 1),
-        )
 
 
 class MultiModelStruct:

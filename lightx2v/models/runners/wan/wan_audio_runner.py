@@ -589,7 +589,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         super().init_run()
         self.scheduler.set_audio_adapter(self.audio_adapter)
         self.prev_video = None
-        if self.config.get("return_result_tensor", False):
+        if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
@@ -647,7 +647,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         if self.va_recorder:
             self.va_recorder.pub_livestream(video_seg, audio_seg)
-        elif self.config.get("return_result_tensor", False):
+        elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
 
@@ -758,7 +758,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self):
-        if self.config.get("return_result_tensor", False):
+        if self.input_info.return_result_tensor:
             audio_waveform = self.cut_audio_final.unsqueeze(0).unsqueeze(0)
             comfyui_audio = {"waveform": audio_waveform, "sample_rate": self._audio_processor.audio_sr}
             return {"video": self.gen_video_final, "audio": comfyui_audio}

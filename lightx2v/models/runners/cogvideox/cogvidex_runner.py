@@ -1,6 +1,3 @@
-import imageio
-import numpy as np
-
 from lightx2v.models.input_encoders.hf.t5_v1_1_xxl.model import T5EncoderModel_v1_1_xxl
 from lightx2v.models.networks.cogvideox.model import CogvideoxModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -72,9 +69,3 @@ class CogvideoxRunner(DefaultRunner):
             )
             ret["target_shape"] = self.config.target_shape
         return ret
-
-    def save_video_func(self, images):
-        with imageio.get_writer(self.config.save_result_path, fps=16) as writer:
-            for pil_image in images:
-                frame_np = np.array(pil_image, dtype=np.uint8)
-                writer.append_data(frame_np)

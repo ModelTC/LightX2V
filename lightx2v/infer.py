@@ -89,6 +89,7 @@ def main():
     )
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     args = parser.parse_args()
 
     seed_all(args.seed)

@@ -8,6 +8,7 @@ class T2VInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     latent_shape: list = field(default_factory=list)
     target_shape: int = field(default_factory=int)
@@ -21,6 +22,7 @@ class I2VInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
@@ -37,6 +39,7 @@ class Flf2vInputInfo:
     image_path: str = field(default_factory=str)
     last_frame_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
@@ -54,6 +57,7 @@ class VaceInputInfo:
     src_video: str = field(default_factory=str)
     src_mask: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
@@ -70,6 +74,7 @@ class S2VInputInfo:
     image_path: str = field(default_factory=str)
     audio_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)

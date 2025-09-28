@@ -3,8 +3,6 @@ from abc import ABC
 import torch
 import torch.distributed as dist
 
-from lightx2v.utils.utils import save_videos_grid
-
 
 class BaseRunner(ABC):
     """Abstract base class for all Runners
@@ -110,16 +108,6 @@ class BaseRunner(ABC):
             Dictionary containing target shape information
         """
         return {}
-
-    def save_video_func(self, images):
-        """Save video implementation
-
-        Subclasses can override this method to customize save logic
-
-        Args:
-            images: Image sequence to save
-        """
-        save_videos_grid(images, self.config.get("save_result_path", "./output.mp4"), n_rows=1, fps=self.config.get("fps", 8))
 
     def load_vae_decoder(self):
         """Load VAE decoder

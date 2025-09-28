@@ -102,7 +102,8 @@ class DefaultRunner(BaseRunner):
     def set_inputs(self, inputs):
         self.input_info.seed = inputs.get("seed", 42)
         self.input_info.prompt = inputs.get("prompt", "")
-        self.input_info.prompt_enhanced = inputs.get("prompt_enhanced", "")
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = inputs.get("prompt_enhanced", "")
         self.input_info.negative_prompt = inputs.get("negative_prompt", "")
         if "image_path" in self.input_info.__dataclass_fields__:
             self.input_info.image_path = inputs.get("image_path", "")
@@ -222,8 +223,7 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Text Encoder")
     def _run_input_encoder_local_animate(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        text_encoder_output = self.run_text_encoder(prompt, None)
+        text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(None, None, text_encoder_output, None)
@@ -301,9 +301,9 @@ class DefaultRunner(BaseRunner):
                 target_fps=target_fps,
             )
 
-        if self.config.get("return_result_tensor", False):
+        if self.input_info.return_result_tensor:
             return {"video": self.gen_video}
-        elif self.config.get("save_result_path", None) is not None:
+        elif self.input_info.save_result_path is not None:
             if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
                 fps = self.config["video_frame_interpolation"]["target_fps"]
             else:
@@ -312,15 +312,16 @@ class DefaultRunner(BaseRunner):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"🎬 Start to save video 🎬")
 
-                save_to_video(self.gen_video, self.config["save_result_path"], fps=fps, method="ffmpeg")
-                logger.info(f"✅ Video saved successfully to: {self.config['save_result_path']} ✅")
+                print(f"self.input_info.save_result_path: {self.input_info.save_result_path}")
+                save_to_video(self.gen_video, self.input_info.save_result_path, fps=fps, method="ffmpeg")
+                logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
         if self.config["use_prompt_enhancer"]:
-            self.input_info["prompt_enhanced"] = self.post_prompt_enhancer()
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
 
         self.inputs = self.run_input_encoder()
 

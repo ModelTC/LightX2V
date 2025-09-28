@@ -14,7 +14,6 @@ from lightx2v.models.schedulers.hunyuan.scheduler import HunyuanScheduler
 from lightx2v.models.video_encoders.hf.hunyuan.hunyuan_vae import HunyuanVAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import save_videos_grid
 
 
 @RUNNER_REGISTER("hunyuan")
@@ -152,6 +151,3 @@ class HunyuanRunner(DefaultRunner):
             int(self.config.target_width) // vae_scale_factor,
         )
         return {"target_height": self.config.target_height, "target_width": self.config.target_width, "target_shape": self.config.target_shape}
-
-    def save_video_func(self, images):
-        save_videos_grid(images, self.config.save_result_path, fps=self.config.get("fps", 24))
