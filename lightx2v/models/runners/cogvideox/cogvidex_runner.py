@@ -74,7 +74,7 @@ class CogvideoxRunner(DefaultRunner):
         return ret
 
     def save_video_func(self, images):
-        with imageio.get_writer(self.config.save_video_path, fps=16) as writer:
+        with imageio.get_writer(self.config.save_result_path, fps=16) as writer:
             for pil_image in images:
                 frame_np = np.array(pil_image, dtype=np.uint8)
                 writer.append_data(frame_np)

@@ -23,7 +23,7 @@ from lightx2v.utils.utils import seed_all
 class BaseWorker:
     @ProfilingContext4DebugL1("Init Worker Worker Cost:")
     def __init__(self, args):
-        args.save_video_path = ""
+        args.save_result_path = ""
         config = set_config(args)
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         seed_all(config.seed)
@@ -49,7 +49,7 @@ class BaseWorker:
         self.runner.config["prompt"] = params["prompt"]
         self.runner.config["negative_prompt"] = params.get("negative_prompt", "")
         self.runner.config["image_path"] = params.get("image_path", "")
-        self.runner.config["save_video_path"] = params.get("save_video_path", "")
+        self.runner.config["save_result_path"] = params.get("save_result_path", "")
         self.runner.config["seed"] = params.get("seed", self.fixed_config.get("seed", 42))
         self.runner.config["audio_path"] = params.get("audio_path", "")
 
@@ -92,7 +92,7 @@ class BaseWorker:
         if stream_video_path is not None:
             tmp_video_path = stream_video_path
 
-        params["save_video_path"] = tmp_video_path
+        params["save_result_path"] = tmp_video_path
         return tmp_video_path, output_video_path
 
     async def prepare_dit_inputs(self, inputs, data_manager):

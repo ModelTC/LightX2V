@@ -154,4 +154,4 @@ class HunyuanRunner(DefaultRunner):
         return {"target_height": self.config.target_height, "target_width": self.config.target_width, "target_shape": self.config.target_shape}
 
     def save_video_func(self, images):
-        save_videos_grid(images, self.config.save_video_path, fps=self.config.get("fps", 24))
+        save_videos_grid(images, self.config.save_result_path, fps=self.config.get("fps", 24))

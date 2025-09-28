@@ -257,7 +257,7 @@ for op_name, is_installed in available_attn_ops:
 def run_inference(
     prompt,
     negative_prompt,
-    save_video_path,
+    save_result_path,
     torch_compile,
     infer_steps,
     num_frames,
@@ -381,7 +381,7 @@ def run_inference(
                 ],
             ]
 
-    save_video_path = generate_unique_filename(output_dir)
+    save_result_path = generate_unique_filename(output_dir)
 
     is_dit_quant = dit_quant_scheme != "bf16"
     is_t5_quant = t5_quant_scheme != "bf16"
@@ -518,7 +518,7 @@ def run_inference(
         prompt=prompt,
         negative_prompt=negative_prompt,
         image_path=image_path,
-        save_video_path=save_video_path,
+        save_result_path=save_result_path,
     )
 
     config.update({k: v for k, v in vars(args).items()})
@@ -563,7 +563,7 @@ def run_inference(
 
     cleanup_memory()
 
-    return save_video_path
+    return save_result_path
 
 
 def handle_lazy_load_change(lazy_load_enabled):
@@ -1022,7 +1022,7 @@ def main():
                                 info="Total number of frames in the video. More frames result in longer videos.",
                             )
 
-                        save_video_path = gr.Textbox(
+                        save_result_path = gr.Textbox(
                             label="Output Video Path",
                             value=generate_unique_filename(output_dir),
                             info="Must include .mp4 extension. If left blank or using the default value, a unique filename will be automatically generated.",
@@ -1232,7 +1232,7 @@ def main():
                 inputs=[
                     prompt,
                     negative_prompt,
-                    save_video_path,
+                    save_result_path,
                     torch_compile,
                     infer_steps,
                     num_frames,
@@ -1273,7 +1273,7 @@ def main():
                 inputs=[
                     prompt,
                     negative_prompt,
-                    save_video_path,
+                    save_result_path,
                     torch_compile,
                     infer_steps,
                     num_frames,

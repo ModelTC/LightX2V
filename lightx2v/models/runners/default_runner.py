@@ -303,7 +303,7 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("return_video", False):
             return {"video": self.gen_video}
-        elif self.config.get("save_video_path", None) is not None:
+        elif self.config.get("save_result_path", None) is not None:
             if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
                 fps = self.config["video_frame_interpolation"]["target_fps"]
             else:
@@ -312,8 +312,8 @@ class DefaultRunner(BaseRunner):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"🎬 Start to save video 🎬")
 
-                save_to_video(self.gen_video, self.config["save_video_path"], fps=fps, method="ffmpeg")
-                logger.info(f"✅ Video saved successfully to: {self.config['save_video_path']} ✅")
+                save_to_video(self.gen_video, self.config["save_result_path"], fps=fps, method="ffmpeg")
+                logger.info(f"✅ Video saved successfully to: {self.config['save_result_path']} ✅")
             return {"video": None}
 
     def run_pipeline(self, input_info):

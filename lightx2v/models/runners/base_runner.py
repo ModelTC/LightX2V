@@ -119,7 +119,7 @@ class BaseRunner(ABC):
         Args:
             images: Image sequence to save
         """
-        save_videos_grid(images, self.config.get("save_video_path", "./output.mp4"), n_rows=1, fps=self.config.get("fps", 8))
+        save_videos_grid(images, self.config.get("save_result_path", "./output.mp4"), n_rows=1, fps=self.config.get("fps", 8))
 
     def load_vae_decoder(self):
         """Load VAE decoder

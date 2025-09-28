@@ -204,7 +204,7 @@ class QwenImageRunner(DefaultRunner):
 
         images = self.run_vae_decoder(latents, generator)
         image = images[0]
-        image.save(f"{self.config.save_video_path}")
+        image.save(f"{self.config.save_result_path}")
 
         del latents, generator
         torch.cuda.empty_cache()

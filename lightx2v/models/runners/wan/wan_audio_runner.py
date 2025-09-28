@@ -666,7 +666,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return rank, world_size
 
     def init_va_recorder(self):
-        output_video_path = self.config.get("save_video_path", None)
+        output_video_path = self.config.get("save_result_path", None)
         self.va_recorder = None
         if isinstance(output_video_path, dict):
             output_video_path = output_video_path["data"]

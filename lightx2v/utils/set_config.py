@@ -124,7 +124,7 @@ def set_config(args):
     #     else:
     #         logger.info(f"audio_path is a file: {config['audio_path']}")
 
-    assert not (config["save_video_path"] and config["return_video"]), "save_video_path and return_video cannot be set at the same time"
+    assert not (config["save_result_path"] and config["return_video"]), "save_result_path and return_video cannot be set at the same time"
 
     return config, input_info
 

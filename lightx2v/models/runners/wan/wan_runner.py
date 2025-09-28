@@ -384,7 +384,7 @@ class WanRunner(DefaultRunner):
     def save_video_func(self, images):
         cache_video(
             tensor=images,
-            save_file=self.config["save_video_path"],
+            save_file=self.config["save_result_path"],
             fps=self.config.get("fps", 16),
             nrow=1,
             normalize=True,

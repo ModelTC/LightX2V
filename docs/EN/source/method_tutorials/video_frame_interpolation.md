@@ -67,7 +67,7 @@ python lightx2v/infer.py \
     --model_path /path/to/model \
     --config_json ./configs/video_frame_interpolation/wan_t2v.json \
     --prompt "A beautiful sunset over the ocean" \
-    --save_video_path ./output.mp4
+    --save_result_path ./output.mp4
 ```
 
 ### Configuration Parameters
@@ -136,7 +136,7 @@ python lightx2v/infer.py \
     --model_path ./models/wan2.1 \
     --config_json ./wan_t2v_vfi_32fps.json \
     --prompt "A cat playing in the garden" \
-    --save_video_path ./output_32fps.mp4
+    --save_result_path ./output_32fps.mp4
 ```
 
 ### Higher Frame Rate Enhancement
@@ -170,7 +170,7 @@ python lightx2v/infer.py \
     --config_json ./wan_i2v_vfi_60fps.json \
     --image_path ./input.jpg \
     --prompt "Smooth camera movement" \
-    --save_video_path ./output_60fps.mp4
+    --save_result_path ./output_60fps.mp4
 ```
 
 ## Performance Considerations

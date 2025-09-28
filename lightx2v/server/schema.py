@@ -10,7 +10,7 @@ class TaskRequest(BaseModel):
     negative_prompt: str = Field("", description="Negative prompt")
     image_path: str = Field("", description="Base64 encoded image or URL")
     num_fragments: int = Field(1, description="Number of fragments")
-    save_video_path: str = Field("", description="Save video path (optional, defaults to task_id.mp4)")
+    save_result_path: str = Field("", description="Save video path (optional, defaults to task_id.mp4)")
     infer_steps: int = Field(5, description="Inference steps")
     target_video_length: int = Field(81, description="Target video length")
     seed: int = Field(42, description="Random seed")
@@ -19,8 +19,8 @@ class TaskRequest(BaseModel):
 
     def __init__(self, **data):
         super().__init__(**data)
-        if not self.save_video_path:
-            self.save_video_path = f"{self.task_id}.mp4"
+        if not self.save_result_path:
+            self.save_result_path = f"{self.task_id}.mp4"
 
     def get(self, key, default=None):
         return getattr(self, key, default)
@@ -33,7 +33,7 @@ class TaskStatusMessage(BaseModel):
 class TaskResponse(BaseModel):
     task_id: str
     task_status: str
-    save_video_path: str
+    save_result_path: str
 
 
 class StopTaskResponse(BaseModel):
