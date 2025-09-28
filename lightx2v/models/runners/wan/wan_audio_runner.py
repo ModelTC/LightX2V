@@ -1,4 +1,5 @@
 import gc
+import json
 import os
 import warnings
 from dataclasses import dataclass
@@ -337,16 +338,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         """Initialize consistency model scheduler"""
         self.scheduler = EulerScheduler(self.config)
 
-    def read_audio_input(self):
+    def read_audio_input(self, audio_path):
         """Read audio input - handles both single and multi-person scenarios"""
         audio_sr = self.config.get("audio_sr", 16000)
         target_fps = self.config.get("target_fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
 
         # Get audio files from person objects or legacy format
-        audio_files = self._get_audio_files_from_config()
-        if not audio_files:
-            return [], 0
+        audio_files, mask_files = self.get_audio_files_from_audio_path(audio_path)
 
         # Load audio based on single or multi-person mode
         if len(audio_files) == 1:
@@ -355,8 +354,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             audio_array = self._audio_processor.load_multi_person_audio(audio_files)
 
-        self.config["audio_num"] = audio_array.size(0)
-
         video_duration = self.config.get("video_duration", 5)
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
@@ -364,28 +361,33 @@ class WanAudioRunner(WanRunner):  # type:ignore
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
 
-        return audio_array.size(0), audio_segments, expected_frames
+        # Mask latent for multi-person s2v
+        if mask_files is not None:
+            mask_latents = [self.process_single_mask(mask_file) for mask_file in mask_files]
+            mask_latents = torch.cat(mask_latents, dim=0)
+        else:
+            mask_latents = None
 
-    def _get_audio_files_from_config(self):
-        talk_objects = self.config.get("talk_objects")
-        if talk_objects:
+        return audio_segments, expected_frames, mask_latents
+
+    def get_audio_files_from_audio_path(self, audio_path):
+        if os.path.isdir(audio_path):
             audio_files = []
-            for idx, person in enumerate(talk_objects):
-                audio_path = person.get("audio")
-                if audio_path and Path(audio_path).is_file():
-                    audio_files.append(str(audio_path))
-                else:
-                    logger.warning(f"Person {idx} audio file {audio_path} does not exist or not specified")
-            if audio_files:
-                logger.info(f"Loaded {len(audio_files)} audio files from talk_objects")
-            return audio_files
+            mask_files = []
+            logger.info(f"audio_path is a directory, loading config.json from {audio_path}")
+            audio_config_path = os.path.join(audio_path, "config.json")
+            assert os.path.exists(audio_config_path), "config.json not found in audio_path"
+            with open(audio_config_path, "r") as f:
+                audio_config = json.load(f)
+            for talk_object in audio_config["talk_objects"]:
+                audio_files.append(os.path.join(audio_path, talk_object["audio"]))
+                mask_files.append(os.path.join(audio_path, talk_object["mask"]))
+        else:
+            logger.info(f"audio_path is a file without mask: {audio_path}")
+            audio_files = [audio_path]
+            mask_files = None
 
-        audio_path = self.config.get("audio_path")
-        if audio_path:
-            return [audio_path]
-
-        logger.error("config audio_path or talk_objects is not specified")
-        return []
+        return audio_files, mask_files
 
     def read_person_mask(self):
         mask_files = self._get_mask_files_from_config()
@@ -417,7 +419,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         logger.info("config talk_objects is not specified")
         return None
 
-    def _process_single_mask(self, mask_file):
+    def process_single_mask(self, mask_file):
         mask_img = Image.open(mask_file).convert("RGB")
         mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
 
@@ -461,16 +463,16 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
 
-        self.config["lat_h"] = patched_h * self.config["patch_size"][1]
-        self.config["lat_w"] = patched_w * self.config["patch_size"][2]
+        latent_h = patched_h * self.config["patch_size"][1]
+        latent_w = patched_w * self.config["patch_size"][2]
 
-        self.config["tgt_h"] = self.config["lat_h"] * self.config["vae_stride"][1]
-        self.config["tgt_w"] = self.config["lat_w"] * self.config["vae_stride"][2]
+        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+        target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
 
-        logger.info(f"[wan_audio] tgt_h: {self.config['tgt_h']}, tgt_w: {self.config['tgt_w']}, lat_h: {self.config['lat_h']}, lat_w: {self.config['lat_w']}")
+        logger.info(f"[wan_audio] target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
 
-        ref_img = torch.nn.functional.interpolate(ref_img, size=(self.config["tgt_h"], self.config["tgt_w"]), mode="bicubic")
-        return ref_img
+        ref_img = torch.nn.functional.interpolate(ref_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
+        return ref_img, latent_shape, target_shape
 
     def run_image_encoder(self, first_frame, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -497,19 +499,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        img = self.read_image_input(self.config["image_path"])
+        img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
+        self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
 
-        audio_num, audio_segments, expected_frames = self.read_audio_input()
-        person_mask_latens = self.read_person_mask()
-        self.config["person_num"] = 0
-        if person_mask_latens is not None:
-            assert audio_num == person_mask_latens.size(0), "audio_num and person_mask_latens.size(0) must be the same"
-            self.config["person_num"] = person_mask_latens.size(0)
-
-        text_encoder_output = self.run_text_encoder(prompt, None)
+        audio_segments, expected_frames, person_mask_latens = self.read_audio_input(self.input_info.audio_path)
+        text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
         return {
@@ -528,7 +525,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         device = torch.device("cuda")
         dtype = GET_DTYPE()
 
-        tgt_h, tgt_w = self.config["tgt_h"], self.config["tgt_w"]
+        tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
         prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=device)
 
         if prev_video is not None:
@@ -563,7 +560,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         if prev_latents is not None:
             if prev_latents.shape[-2:] != (height, width):
-                logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={self.config['tgt_h']}, tgt_w={self.config['tgt_w']}")
+                logger.warning(f"Size mismatch: prev_latents {prev_latents.shape} vs scheduler latents (H={height}, W={width}). Config tgt_h={tgt_h}, tgt_w={tgt_w}")
                 prev_latents = torch.nn.functional.interpolate(prev_latents, size=(height, width), mode="bilinear", align_corners=False)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -593,7 +590,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.scheduler.set_audio_adapter(self.audio_adapter)
         self.prev_video = None
         if self.config.get("return_video", False):
-            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.config["tgt_h"], self.config["tgt_w"], 3), dtype=torch.float32, device="cpu")
+            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
             self.gen_video_final = None
@@ -608,8 +605,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
 
-        self.config["seed"] = self.config["seed"] + segment_idx
-        torch.manual_seed(self.config["seed"])
+        self.input_info.seed = self.input_info.seed + segment_idx
+        torch.manual_seed(self.input_info.seed)
         # logger.info(f"Processing segment {segment_idx + 1}/{self.video_segment_num}, seed: {self.config.seed}")
 
         if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
@@ -627,7 +624,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         # Reset scheduler for non-first segments
         if segment_idx > 0:
-            self.model.scheduler.reset(self.inputs["previmg_encoder_output"])
+            self.model.scheduler.reset(self.input_info.seed, self.input_info.latent_shape, self.inputs["previmg_encoder_output"])
 
     @ProfilingContext4DebugL1("End run segment")
     def end_run_segment(self, segment_idx):
@@ -760,7 +757,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 self.va_recorder = None
 
     @ProfilingContext4DebugL1("Process after vae decoder")
-    def process_images_after_vae_decoder(self, save_video=False):
+    def process_images_after_vae_decoder(self):
         if self.config.get("return_video", False):
             audio_waveform = self.cut_audio_final.unsqueeze(0).unsqueeze(0)
             comfyui_audio = {"waveform": audio_waveform, "sample_rate": self._audio_processor.audio_sr}
@@ -842,6 +839,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         ret["target_shape"] = self.config["target_shape"]
         return ret
+
+    def get_latent_shape_with_lat_hw(self, latent_h, latent_w):
+        latent_shape = [
+            self.config.get("num_channels_latents", 16),
+            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            latent_h,
+            latent_w,
+        ]
+        return latent_shape
 
 
 @RUNNER_REGISTER("wan2.2_audio")

@@ -32,7 +32,6 @@ class DefaultRunner(BaseRunner):
             self.config["use_prompt_enhancer"] = False
         self.set_init_device()
         self.init_scheduler()
-        self.config = FrozenDict(self.config)
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
@@ -53,6 +52,7 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_animate
         elif self.config["task"] == "s2v":
             self.run_input_encoder = self._run_input_encoder_local_s2v
+        self.config = FrozenDict(self.config)
         if self.config.get("compile", False):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
@@ -240,12 +240,12 @@ class DefaultRunner(BaseRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
 
-        self.model.scheduler.prepare(input_info=self.input_info, image_encoder_output=self.inputs["image_encoder_output"])
+        self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
     @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self, total_steps=None, save_video=True):
+    def run_main(self, total_steps=None):
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile()
@@ -261,7 +261,7 @@ class DefaultRunner(BaseRunner):
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing
                 self.end_run_segment(segment_idx)
-        gen_video = self.process_images_after_vae_decoder(save_video=save_video)
+        gen_video = self.process_images_after_vae_decoder()
         self.end_run()
         return gen_video
 
@@ -292,7 +292,7 @@ class DefaultRunner(BaseRunner):
                     logger.info(f"Enhanced prompt: {enhanced_prompt}")
                     return enhanced_prompt
 
-    def process_images_after_vae_decoder(self, save_video=True):
+    def process_images_after_vae_decoder(self):
         self.gen_video = vae_to_comfyui_image(self.gen_video)
 
         if "video_frame_interpolation" in self.config:
@@ -305,7 +305,9 @@ class DefaultRunner(BaseRunner):
                 target_fps=target_fps,
             )
 
-        if save_video:
+        if self.config.get("return_video", False):
+            return {"video": self.gen_video}
+        elif self.config.get("save_video_path", None) is not None:
             if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
                 fps = self.config["video_frame_interpolation"]["target_fps"]
             else:
@@ -316,11 +318,9 @@ class DefaultRunner(BaseRunner):
 
                 save_to_video(self.gen_video, self.config["save_video_path"], fps=fps, method="ffmpeg")
                 logger.info(f"✅ Video saved successfully to: {self.config['save_video_path']} ✅")
-        if self.config.get("return_video", False):
-            return {"video": self.gen_video}
-        return {"video": None}
+            return {"video": None}
 
-    def run_pipeline(self, input_info, save_video=True):
+    def run_pipeline(self, input_info):
         self.input_info = input_info
 
         if self.config["use_prompt_enhancer"]:
@@ -328,6 +328,6 @@ class DefaultRunner(BaseRunner):
 
         self.inputs = self.run_input_encoder()
 
-        gen_video = self.run_main(save_video=save_video)
+        gen_video = self.run_main()
 
         return gen_video

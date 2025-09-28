@@ -19,16 +19,16 @@ class WanScheduler4ChangingResolution:
             config["changing_resolution_steps"] = [config.infer_steps // 2]
         assert len(config["resolution_rate"]) == len(config["changing_resolution_steps"])
 
-    def prepare_latents(self, target_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(self.config.seed)
+    def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
+        self.generator = torch.Generator(device=self.device).manual_seed(seed)
         self.latents_list = []
         for i in range(len(self.config["resolution_rate"])):
             self.latents_list.append(
                 torch.randn(
-                    target_shape[0],
-                    target_shape[1],
-                    int(target_shape[2] * self.config["resolution_rate"][i]) // 2 * 2,
-                    int(target_shape[3] * self.config["resolution_rate"][i]) // 2 * 2,
+                    latent_shape[0],
+                    latent_shape[1],
+                    int(latent_shape[2] * self.config["resolution_rate"][i]) // 2 * 2,
+                    int(latent_shape[3] * self.config["resolution_rate"][i]) // 2 * 2,
                     dtype=dtype,
                     device=self.device,
                     generator=self.generator,
@@ -38,10 +38,10 @@ class WanScheduler4ChangingResolution:
         # add original resolution latents
         self.latents_list.append(
             torch.randn(
-                target_shape[0],
-                target_shape[1],
-                target_shape[2],
-                target_shape[3],
+                latent_shape[0],
+                latent_shape[1],
+                latent_shape[2],
+                latent_shape[3],
                 dtype=dtype,
                 device=self.device,
                 generator=self.generator,

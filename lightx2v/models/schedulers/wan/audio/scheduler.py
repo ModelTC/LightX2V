@@ -55,13 +55,13 @@ class EulerScheduler(WanScheduler):
                 dim=1,
             )
 
-    def prepare_latents(self, target_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(self.config["seed"])
+    def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
+        self.generator = torch.Generator(device=self.device).manual_seed(seed)
         self.latents = torch.randn(
-            target_shape[0],
-            target_shape[1],
-            target_shape[2],
-            target_shape[3],
+            latent_shape[0],
+            latent_shape[1],
+            latent_shape[2],
+            latent_shape[3],
             dtype=dtype,
             device=self.device,
             generator=self.generator,
@@ -71,8 +71,8 @@ class EulerScheduler(WanScheduler):
             if self.prev_latents is not None:
                 self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
 
-    def prepare(self, previmg_encoder_output=None):
-        self.prepare_latents(self.config["target_shape"], dtype=torch.float32)
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         timesteps = np.linspace(self.num_train_timesteps, 0, self.infer_steps + 1, dtype=np.float32)
 
         self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=self.device)
@@ -93,11 +93,11 @@ class EulerScheduler(WanScheduler):
         if self.config["model_cls"] == "wan2.2_audio" and self.prev_latents is not None:
             self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
 
-    def reset(self, previmg_encoder_output=None):
+    def reset(self, seed, latent_shape, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2_audio":
-            self.prev_latents = previmg_encoder_output["prev_latents"]
-            self.prev_len = previmg_encoder_output["prev_len"]
-        self.prepare_latents(self.config["target_shape"], dtype=torch.float32)
+            self.prev_latents = image_encoder_output["prev_latents"]
+            self.prev_len = image_encoder_output["prev_len"]
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
     def unsqueeze_to_ndim(self, in_tensor, tgt_n_dim):
         if in_tensor.ndim > tgt_n_dim:

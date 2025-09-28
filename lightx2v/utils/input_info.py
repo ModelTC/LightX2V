@@ -3,14 +3,17 @@ from dataclasses import dataclass, field
 
 @dataclass
 class T2VInputInfo:
+    seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     latent_shape: list = field(default_factory=list)
+    target_shape: int = field(default_factory=int)
 
 
 @dataclass
 class I2VInputInfo:
+    seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
@@ -18,10 +21,12 @@ class I2VInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
+    target_shape: int = field(default_factory=int)
 
 
 @dataclass
 class Flf2vInputInfo:
+    seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
@@ -30,10 +35,12 @@ class Flf2vInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
+    target_shape: int = field(default_factory=int)
 
 
 @dataclass
 class VaceInputInfo:
+    seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
@@ -43,10 +50,12 @@ class VaceInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
+    target_shape: int = field(default_factory=int)
 
 
 @dataclass
 class S2VInputInfo:
+    seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
@@ -55,3 +64,4 @@ class S2VInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
+    target_shape: int = field(default_factory=int)

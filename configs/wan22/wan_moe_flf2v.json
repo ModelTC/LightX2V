@@ -6,11 +6,13 @@
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
-    "seed": 42,
     "sample_shift": 16,
     "enable_cfg": true,
     "cpu_offload": true,
-    "sample_guide_scale": [3.5, 3.5],
+    "sample_guide_scale": [
+        3.5,
+        3.5
+    ],
     "offload_granularity": "model",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,

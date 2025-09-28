@@ -28,8 +28,6 @@ def get_default_config():
         "enable_cfg": False,
         "use_image_encoder": True,
         "return_video": False,
-        "audio_num": None,
-        "person_num": None,
     }
     return default_config
 
@@ -37,17 +35,20 @@ def get_default_config():
 def set_config(args):
     if args.task == "i2v":
         input_info = I2VInputInfo(
+            seed=args.seed,
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
         )
     elif args.task == "t2v":
         input_info = T2VInputInfo(
+            seed=args.seed,
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
         )
     elif args.task == "flf2v":
         input_info = Flf2vInputInfo(
+            seed=args.seed,
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
@@ -55,6 +56,7 @@ def set_config(args):
         )
     elif args.task == "vace":
         input_info = VaceInputInfo(
+            seed=args.seed,
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             src_ref_images=args.src_ref_images,
@@ -63,6 +65,7 @@ def set_config(args):
         )
     elif args.task == "s2v":
         input_info = S2VInputInfo(
+            seed=args.seed,
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,

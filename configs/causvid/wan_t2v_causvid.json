@@ -6,7 +6,6 @@
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
-    "seed": 42,
     "sample_guide_scale": 6,
     "sample_shift": 8,
     "enable_cfg": false,
@@ -16,5 +15,15 @@
     "num_frame_per_block": 3,
     "num_blocks": 7,
     "frame_seq_length": 1560,
-    "denoising_step_list": [999, 934, 862, 756, 603, 410, 250, 140, 74]
+    "denoising_step_list": [
+        999,
+        934,
+        862,
+        756,
+        603,
+        410,
+        250,
+        140,
+        74
+    ]
 }

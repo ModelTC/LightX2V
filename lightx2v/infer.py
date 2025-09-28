@@ -23,7 +23,6 @@ from lightx2v.utils.utils import seed_all
 
 
 def init_runner(config):
-    seed_all(config["seed"])
     torch.set_grad_enabled(False)
     runner = RUNNER_REGISTER[config["model_cls"]](config)
     runner.init_modules()
@@ -32,6 +31,7 @@ def init_runner(config):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
     parser.add_argument(
         "--model_cls",
         type=str,
@@ -90,6 +90,8 @@ def main():
 
     parser.add_argument("--save_video_path", type=str, default=None, help="The path to save video path/file")
     args = parser.parse_args()
+
+    seed_all(args.seed)
 
     # set config
     config, input_info = set_config(args)

@@ -23,11 +23,11 @@ class WanScheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
 
-    def prepare(self, input_info, image_encoder_output=None):
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
 
-        self.prepare_latents(input_info.latent_shape, dtype=torch.float32)
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
         alphas = np.linspace(1, 1 / self.num_train_timesteps, self.num_train_timesteps)[::-1].copy()
         sigmas = 1.0 - alphas
@@ -48,13 +48,13 @@ class WanScheduler(BaseScheduler):
 
         self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
 
-    def prepare_latents(self, target_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(self.config["seed"])
+    def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
+        self.generator = torch.Generator(device=self.device).manual_seed(seed)
         self.latents = torch.randn(
-            target_shape[0],
-            target_shape[1],
-            target_shape[2],
-            target_shape[3],
+            latent_shape[0],
+            latent_shape[1],
+            latent_shape[2],
+            latent_shape[3],
             dtype=dtype,
             device=self.device,
             generator=self.generator,
@@ -117,7 +117,7 @@ class WanScheduler(BaseScheduler):
         x0_pred = sample - sigma_t * model_output
         return x0_pred
 
-    def reset(self, step_index=None):
+    def reset(self, seed, latent_shape, step_index=None):
         if step_index is not None:
             self.step_index = step_index
         self.model_outputs = [None] * self.solver_order
@@ -126,7 +126,7 @@ class WanScheduler(BaseScheduler):
         self.noise_pred = None
         self.this_order = None
         self.lower_order_nums = 0
-        self.prepare_latents(self.config["target_shape"], dtype=torch.float32)
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         gc.collect()
         torch.cuda.empty_cache()
 

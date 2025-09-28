@@ -327,7 +327,7 @@ class WanAnimateRunner(WanRunner):
         )
 
         if start != 0:
-            self.model.scheduler.reset()
+            self.model.scheduler.reset(self.input_info.seed, self.input_info.latent_shape)
 
     def end_run_segment(self, segment_idx):
         if segment_idx != 0:
