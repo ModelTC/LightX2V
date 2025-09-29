@@ -1,3 +1,5 @@
+import gc
+
 import torch
 from loguru import logger
 
@@ -45,6 +47,17 @@ class WanSFRunner(WanRunner):
 
     def get_video_segment_num(self):
         self.video_segment_num = self.scheduler.num_blocks
+
+    @ProfilingContext4DebugL1("Run VAE Decoder")
+    def run_vae_decoder(self, latents):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_decoder = self.load_vae_decoder()
+        images = self.vae_decoder.decode(latents.to(GET_DTYPE()), use_cache=True)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_decoder
+            torch.cuda.empty_cache()
+            gc.collect()
+        return images
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
