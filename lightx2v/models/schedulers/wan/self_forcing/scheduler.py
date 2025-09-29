@@ -9,24 +9,24 @@ class WanSFScheduler(WanScheduler):
         super().__init__(config)
         self.device = torch.device("cuda")
         self.dtype = torch.bfloat16
-        self.num_frame_per_block = self.config.sf_config.num_frame_per_block
-        self.num_output_frames = self.config.sf_config.num_output_frames
+        self.num_frame_per_block = self.config["sf_config"]["num_frame_per_block"]
+        self.num_output_frames = self.config["sf_config"]["num_output_frames"]
         self.num_blocks = self.num_output_frames // self.num_frame_per_block
-        self.denoising_step_list = self.config.sf_config.denoising_step_list
+        self.denoising_step_list = self.config["sf_config"]["denoising_step_list"]
         self.all_num_frames = [self.num_frame_per_block] * self.num_blocks
         self.num_input_frames = 0
         self.denoising_strength = 1.0
         self.sigma_max = 1.0
         self.sigma_min = 0
-        self.sf_shift = self.config.sf_config.shift
+        self.sf_shift = self.config["sf_config"]["shift"]
         self.inverse_timesteps = False
         self.extra_one_step = True
         self.reverse_sigmas = False
-        self.num_inference_steps = self.config.sf_config.num_inference_steps
+        self.num_inference_steps = self.config["sf_config"]["num_inference_steps"]
         self.context_noise = 0
 
-    def prepare(self, image_encoder_output=None):
-        self.latents = torch.randn(self.config.target_shape, device=self.device, dtype=self.dtype)
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.latents = torch.randn(latent_shape, device=self.device, dtype=self.dtype)
 
         timesteps = []
         for frame_block_idx, current_num_frames in enumerate(self.all_num_frames):
@@ -39,7 +39,7 @@ class WanSFScheduler(WanScheduler):
             timesteps.append(frame_steps)
         self.timesteps = timesteps
 
-        self.noise_pred = torch.zeros(self.config.target_shape, device=self.device, dtype=self.dtype)
+        self.noise_pred = torch.zeros(latent_shape, device=self.device, dtype=self.dtype)
 
         sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min) * self.denoising_strength
         if self.extra_one_step:

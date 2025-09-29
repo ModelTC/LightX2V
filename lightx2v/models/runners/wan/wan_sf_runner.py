@@ -94,5 +94,6 @@ class WanSFRunner(WanRunner):
                 self.model.infer(self.inputs)
 
         self.gen_video = torch.cat(gen_videos, dim=0)
-
+        gen_video = self.process_images_after_vae_decoder()
         self.end_run()
+        return gen_video

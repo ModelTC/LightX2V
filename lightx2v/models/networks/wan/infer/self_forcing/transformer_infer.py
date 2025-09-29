@@ -39,12 +39,12 @@ class WanSFTransformerInfer(WanTransformerInfer):
         else:
             self.device = torch.device("cuda")
         self.dtype = torch.bfloat16
-        sf_config = self.config.sf_config
-        self.local_attn_size = sf_config.local_attn_size
+        sf_config = self.config["sf_config"]
+        self.local_attn_size = sf_config["local_attn_size"]
         self.max_attention_size = 32760 if self.local_attn_size == -1 else self.local_attn_size * 1560
-        self.num_frame_per_block = sf_config.num_frame_per_block
-        self.num_transformer_blocks = sf_config.num_transformer_blocks
-        self.frame_seq_length = sf_config.frame_seq_length
+        self.num_frame_per_block = sf_config["num_frame_per_block"]
+        self.num_transformer_blocks = sf_config["num_transformer_blocks"]
+        self.frame_seq_length = sf_config["frame_seq_length"]
         self._initialize_kv_cache(self.device, self.dtype)
         self._initialize_crossattn_cache(self.device, self.dtype)
 

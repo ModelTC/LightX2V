@@ -316,7 +316,6 @@ class DefaultRunner(BaseRunner):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"🎬 Start to save video 🎬")
 
-                print(f"self.input_info.save_result_path: {self.input_info.save_result_path}")
                 save_to_video(self.gen_video, self.input_info.save_result_path, fps=fps, method="ffmpeg")
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
