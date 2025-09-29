@@ -1,3 +1,4 @@
+import inspect
 from dataclasses import dataclass, field
 
 
@@ -80,3 +81,73 @@ class S2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: int = field(default_factory=int)
+
+
+def set_input_info(args):
+    if args.task == "t2v":
+        input_info = T2VInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    elif args.task == "i2v":
+        input_info = I2VInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    elif args.task == "flf2v":
+        input_info = Flf2vInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            last_frame_path=args.last_frame_path,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    elif args.task == "vace":
+        input_info = VaceInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            src_ref_images=args.src_ref_images,
+            src_video=args.src_video,
+            src_mask=args.src_mask,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    elif args.task == "s2v":
+        input_info = S2VInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            audio_path=args.audio_path,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    else:
+        raise ValueError(f"Unsupported task: {args.task}")
+    return input_info
+
+
+def get_all_input_info_keys():
+    all_keys = set()
+
+    current_module = inspect.currentframe().f_globals
+
+    for name, obj in current_module.items():
+        if inspect.isclass(obj) and name.endswith("InputInfo") and hasattr(obj, "__dataclass_fields__"):
+            all_keys.update(obj.__dataclass_fields__.keys())
+
+    return all_keys
+
+
+# 创建包含所有InputInfo字段的集合
+ALL_INPUT_INFO_KEYS = get_all_input_info_keys()
