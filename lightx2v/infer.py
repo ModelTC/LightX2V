@@ -60,7 +60,7 @@ def main():
 
     parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--sf_model_path", type=str, required=True)
+    parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
 
