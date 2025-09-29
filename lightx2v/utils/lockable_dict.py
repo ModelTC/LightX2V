@@ -5,7 +5,7 @@ from typing import Any, Iterable, Mapping
 class LockableDict(dict):
     """
     A lockable/unlockable dictionary. After locking, any in-place modifications will raise TypeError.
-    By default auto_wrap=True, which recursively converts nested dict objects in dict/list/tuple/set 
+    By default auto_wrap=True, which recursively converts nested dict objects in dict/list/tuple/set
     to LockableDict, so that recursive locking works consistently both internally and externally.
     """
 
@@ -50,11 +50,13 @@ class LockableDict(dict):
         if prev and recursive:
             # First temporarily unlock all child nodes as well
             stack: list[LockableDict] = []
+
             def _collect(node: "LockableDict"):
                 for v in node.values():
                     if isinstance(v, LockableDict):
                         stack.append(v)
                         _collect(v)
+
             _collect(self)
             self._locked = False
             for n in stack:

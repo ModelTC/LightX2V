@@ -546,7 +546,6 @@ class WanVAE_(nn.Module):
             self.temperal_upsample,
             dropout,
         )
-        self.clear_cache()
 
     def forward(self, x):
         mu, log_var = self.encode(x)
