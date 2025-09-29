@@ -74,6 +74,8 @@ class S2VInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     audio_path: str = field(default_factory=str)
+    audio_num: int = field(default_factory=int)
+    with_mask: bool = field(default_factory=lambda: False)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related

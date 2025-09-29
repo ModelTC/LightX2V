@@ -244,7 +244,7 @@ class DefaultRunner(BaseRunner):
     def run_main(self, total_steps=None):
         self.init_run()
         if self.config.get("compile", False):
-            self.model.select_graph_for_compile()
+            self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(f"segment end2end {segment_idx + 1}/{self.video_segment_num}"):

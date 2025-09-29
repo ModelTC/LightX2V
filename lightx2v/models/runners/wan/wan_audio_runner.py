@@ -367,7 +367,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             mask_latents = None
 
-        return audio_segments, expected_frames, mask_latents
+        return audio_segments, expected_frames, mask_latents, len(audio_files)
 
     def get_audio_files_from_audio_path(self, audio_path):
         if os.path.isdir(audio_path):
@@ -474,7 +474,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
 
-        audio_segments, expected_frames, person_mask_latens = self.read_audio_input(self.input_info.audio_path)
+        audio_segments, expected_frames, person_mask_latens, audio_num = self.read_audio_input(self.input_info.audio_path)
+        self.input_info.audio_num = audio_num
+        self.input_info.with_mask = person_mask_latens is not None
         text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
@@ -688,7 +690,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             self.init_run()
             if self.config.get("compile", False):
-                self.model.select_graph_for_compile()
+                self.model.select_graph_for_compile(self.input_info)
             self.video_segment_num = "unlimited"
 
             fetch_timeout = self.va_reader.segment_duration + 1
