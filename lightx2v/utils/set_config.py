@@ -6,6 +6,7 @@ from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
+from lightx2v.utils.lockable_dict import LockableDict
 
 
 def get_default_config():
@@ -28,6 +29,7 @@ def get_default_config():
         "enable_cfg": False,
         "use_image_encoder": True,
     }
+    default_config = LockableDict(default_config)
     return default_config
 
 

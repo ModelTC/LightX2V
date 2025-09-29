@@ -5,7 +5,6 @@ import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
-from flax.core import FrozenDict
 from loguru import logger
 from requests.exceptions import RequestException
 
@@ -52,7 +51,7 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_animate
         elif self.config["task"] == "s2v":
             self.run_input_encoder = self._run_input_encoder_local_s2v
-        self.config = FrozenDict(self.config)
+        self.config.lock()  # lock config to avoid modification
         if self.config.get("compile", False):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
@@ -112,6 +111,11 @@ class DefaultRunner(BaseRunner):
         if "video_path" in self.input_info.__dataclass_fields__:
             self.input_info.video_path = inputs.get("video_path", "")
         self.input_info.save_result_path = inputs.get("save_result_path", "")
+
+    def set_config(self, config_modify):
+        logger.info(f"modify config: {config_modify}")
+        with self.config.temporarily_unlocked():
+            self.config.update(config_modify)
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
