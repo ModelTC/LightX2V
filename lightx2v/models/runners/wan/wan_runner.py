@@ -392,7 +392,7 @@ class MultiModelStruct:
     def get_current_model_index(self):
         if self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[0]
+            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
@@ -402,7 +402,7 @@ class MultiModelStruct:
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[1]
+            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)
@@ -426,20 +426,20 @@ class Wan22MoeRunner(WanRunner):
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
         high_noise_model = WanModel(
-            os.path.join(self.config.model_path, "high_noise_model"),
+            os.path.join(self.config["model_path"], "high_noise_model"),
             self.config,
             self.init_device,
         )
         low_noise_model = WanModel(
-            os.path.join(self.config.model_path, "low_noise_model"),
+            os.path.join(self.config["model_path"], "low_noise_model"),
             self.config,
             self.init_device,
         )
 
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
+            assert not self.config.get("dit_quantized", False) or self.config["mm_config"].get("weight_auto_quant", False)
 
-            for lora_config in self.config.lora_configs:
+            for lora_config in self.config["lora_configs"]:
                 lora_path = lora_config["path"]
                 strength = lora_config.get("strength", 1.0)
                 base_name = os.path.basename(lora_path)
@@ -456,7 +456,7 @@ class Wan22MoeRunner(WanRunner):
                 else:
                     raise ValueError(f"Unsupported LoRA path: {lora_path}")
 
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config.boundary)
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
 
 
 @RUNNER_REGISTER("wan2.2")

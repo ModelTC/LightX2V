@@ -367,7 +367,7 @@ class WanModel(CompiledMethodsMixin):
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
@@ -400,7 +400,7 @@ class WanModel(CompiledMethodsMixin):
             self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
