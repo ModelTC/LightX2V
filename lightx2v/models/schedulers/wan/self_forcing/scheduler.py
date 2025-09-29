@@ -56,6 +56,8 @@ class WanSFScheduler(WanScheduler):
         self.timesteps_sf = self.sigmas_sf * self.num_train_timesteps
         self.timesteps_sf = self.timesteps_sf.to(self.device)
 
+        self.stream_output = None
+
     def step_pre(self, seg_index, step_index, is_rerun=False):
         self.step_index = step_index
         self.seg_index = seg_index
@@ -99,3 +101,4 @@ class WanSFScheduler(WanScheduler):
             self.latents[:, self.seg_index * self.num_frame_per_block : min((self.seg_index + 1) * self.num_frame_per_block, self.num_output_frames)] = sample_next.transpose(0, 1)
         else:
             self.latents[:, self.seg_index * self.num_frame_per_block : min((self.seg_index + 1) * self.num_frame_per_block, self.num_output_frames)] = x0_pred.transpose(0, 1)
+            self.stream_output = x0_pred.transpose(0, 1)

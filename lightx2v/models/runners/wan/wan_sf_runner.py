@@ -53,6 +53,7 @@ class WanSFRunner(WanRunner):
             self.model.select_graph_for_compile()
 
         total_blocks = self.scheduler.num_blocks
+        gen_videos = []
         for seg_index in range(self.video_segment_num):
             logger.info(f"==> segment_index: {seg_index + 1} / {total_blocks}")
 
@@ -69,6 +70,9 @@ class WanSFRunner(WanRunner):
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
 
+            latents = self.model.scheduler.stream_output
+            gen_videos.append(self.run_vae_decoder(latents))
+
             # rerun with timestep zero to update KV cache using clean context
             with ProfilingContext4DebugL1("step_pre_in_rerun"):
                 self.model.scheduler.step_pre(seg_index=seg_index, step_index=step_index, is_rerun=True)
@@ -76,11 +80,6 @@ class WanSFRunner(WanRunner):
             with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
                 self.model.infer(self.inputs)
 
-        latents = self.model.scheduler.latents
-        # la = torch.split(latents, 3, dim=1)
-        # print((la[2]-la[3]).sum())
-        # breakpoint()
-
-        self.gen_video = self.run_vae_decoder(latents)
+        self.gen_video = torch.cat(gen_videos, dim=0)
 
         self.end_run()
