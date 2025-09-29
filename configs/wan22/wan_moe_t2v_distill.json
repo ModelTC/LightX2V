@@ -17,9 +17,14 @@
     "denoising_step_list": [1000, 750, 500, 250],
     "lora_configs": [
         {
+            "name": "high_noise_model",
+            "path": "Wan2.2-I2V-A14B/loras/high_noise_model/high_noise_model.safetensors",
+            "strength": 0.0625
+        },
+        {
             "name": "low_noise_model",
-            "path": "Wan2.1-T2V-14B/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
-            "strength": 1.0
+            "path": "Wan2.2-I2V-A14B/loras/low_noise_model/low_noise_model.safetensors",
+            "strength": 0.125
         }
     ]
 }
