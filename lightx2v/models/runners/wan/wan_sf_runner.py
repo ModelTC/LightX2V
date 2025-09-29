@@ -13,8 +13,6 @@ from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
-torch.manual_seed(42)
-
 
 @RUNNER_REGISTER("wan2.1_sf")
 class WanSFRunner(WanRunner):
