@@ -48,6 +48,7 @@ class Flf2vInputInfo:
     target_shape: int = field(default_factory=int)
 
 
+# Need Check
 @dataclass
 class VaceInputInfo:
     seed: int = field(default_factory=int)
@@ -76,6 +77,23 @@ class S2VInputInfo:
     audio_path: str = field(default_factory=str)
     audio_num: int = field(default_factory=int)
     with_mask: bool = field(default_factory=lambda: False)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: int = field(default_factory=int)
+
+
+# Need Check
+@dataclass
+class AnimateInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -131,6 +149,15 @@ def set_input_info(args):
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
             audio_path=args.audio_path,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    elif args.task == "animate":
+        input_info = AnimateInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
         )
