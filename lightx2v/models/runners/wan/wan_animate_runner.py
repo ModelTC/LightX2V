@@ -11,7 +11,7 @@ try:
     from decord import VideoReader
 except ImportError:
     VideoReader = None
-    logger.info("Need install decord")
+    logger.info("If you need run animate model, please install decord.")
 
 
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
