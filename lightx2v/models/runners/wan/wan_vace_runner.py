@@ -10,7 +10,9 @@ from lightx2v.models.networks.wan.vace_model import WanVaceModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.1_vace")
@@ -88,6 +90,7 @@ class WanVaceRunner(WanRunner):
                         src_ref_images[i][j] = ref_img.to(device)
         return src_video, src_mask, src_ref_images
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_encode_duration, labels=["WanVaceRunner"])
     def run_vae_encoder(self, frames, ref_images, masks):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_encoder = self.load_vae_encoder()
@@ -160,6 +163,7 @@ class WanVaceRunner(WanRunner):
         self.config.target_shape = target_shape
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_decode_duration, labels=["WanVaceRunner"])
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()

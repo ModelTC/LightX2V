@@ -7,6 +7,8 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.cogvideox.scheduler import CogvideoxXDPMScheduler
 from lightx2v.models.video_encoders.hf.cogvideox.model import CogvideoxVAE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 
 
 @RUNNER_REGISTER("cogvideox")
@@ -33,7 +35,9 @@ class CogvideoxRunner(DefaultRunner):
     def init_scheduler(self):
         self.scheduler = CogvideoxXDPMScheduler(self.config)
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_text_encode_duration, labels=["CogvideoxRunner"])
     def run_text_encoder(self, text, img):
+        monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         text_encoder_output = {}
         n_prompt = self.config.get("negative_prompt", "")
         context = self.text_encoders[0].infer([text], self.config)

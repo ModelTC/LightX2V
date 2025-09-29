@@ -26,8 +26,10 @@ from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
 
@@ -359,6 +361,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         video_duration = self.config.get("video_duration", 5)
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
+        monitor_cli.lightx2v_input_audio_len.observe(audio_len)
+
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
 
         # Segment audio
@@ -472,6 +476,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ref_img = torch.nn.functional.interpolate(ref_img, size=(self.config.tgt_h, self.config.tgt_w), mode="bicubic")
         return ref_img
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_img_encode_duration, labels=["WanAudioRunner"])
     def run_image_encoder(self, first_frame, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.image_encoder = self.load_image_encoder()
@@ -482,6 +487,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             gc.collect()
         return clip_encoder_out
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_encode_duration, labels=["WanAudioRunner"])
     def run_vae_encoder(self, img):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_encoder = self.load_vae_encoder()
