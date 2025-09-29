@@ -1,0 +1,26 @@
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "flash_attn2",
+    "cross_attn_1_type": "flash_attn2",
+    "cross_attn_2_type": "flash_attn2",
+    "seed": 0,
+    "sample_guide_scale": 6,
+    "sample_shift": 8,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "sf_config": {
+        "sf_type": "dmd",
+        "local_attn_size": -1,
+        "shift": 5.0,
+        "num_frame_per_block": 3,
+        "num_transformer_blocks": 30,
+        "frame_seq_length": 1560,
+        "num_output_frames": 21,
+        "num_inference_steps": 1000,
+        "denoising_step_list": [1000.0000,  937.5000,  833.3333,  625.0000]
+    }
+}

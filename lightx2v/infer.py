@@ -13,6 +13,7 @@ from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAu
 from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.utils.envs import *
@@ -43,6 +44,7 @@ def main():
             "wan2.1_causvid",
             "wan2.1_skyreels_v2_df",
             "wan2.1_vace",
+            "wan2.1_sf",
             "cogvideox",
             "seko_talk",
             "wan2.2_moe",
@@ -58,6 +60,7 @@ def main():
 
     parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--sf_model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
 
