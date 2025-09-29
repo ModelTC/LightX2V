@@ -8,10 +8,12 @@ from PIL import Image
 from loguru import logger
 from requests.exceptions import RequestException
 
+from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
 
 from .base_runner import BaseRunner
@@ -161,6 +163,8 @@ class DefaultRunner(BaseRunner):
             img_ori = img_path
         else:
             img_ori = Image.open(img_path).convert("RGB")
+        width, height = img_ori.size
+        monitor_cli.lightx2v_input_image_len.observe(width*height)
         img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
         return img, img_ori
 
@@ -243,18 +247,21 @@ class DefaultRunner(BaseRunner):
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(f"segment end2end {segment_idx + 1}/{self.video_segment_num}"):
-                self.check_stop()
-                # 1. default do nothing
-                self.init_run_segment(segment_idx)
-                # 2. main inference loop
-                latents = self.run_segment(total_steps=total_steps)
-                # 3. vae decoder
-                self.gen_video = self.run_vae_decoder(latents)
-                # 4. default do nothing
-                self.end_run_segment(segment_idx)
+                with MetricsProfilingContext(monitor_cli.lightx2v_run_pre_step_dit_duration, labels=[segment_idx+1,
+                                                                                                     self.video_segment_num]):
+                    self.check_stop()
+                    # 1. default do nothing
+                    self.init_run_segment(segment_idx)
+                    # 2. main inference loop
+                    latents = self.run_segment(total_steps=total_steps)
+                    # 3. vae decoder
+                    self.gen_video = self.run_vae_decoder(latents)
+                    # 4. default do nothing
+                    self.end_run_segment(segment_idx)
         self.end_run()
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_decode_duration, labels=["DefaultRunner"])
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
@@ -309,7 +316,9 @@ class DefaultRunner(BaseRunner):
             return {"video": self.gen_video}
         return {"video": None}
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_worker_request_duration, labels=["DefaultRunner"])
     def run_pipeline(self, save_video=True):
+        monitor_cli.lightx2v_worker_request_count.inc()
         if self.config["use_prompt_enhancer"]:
             self.config["prompt_enhanced"] = self.post_prompt_enhancer()
 
@@ -321,4 +330,5 @@ class DefaultRunner(BaseRunner):
         torch.cuda.empty_cache()
         gc.collect()
 
+        monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video

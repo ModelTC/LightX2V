@@ -13,8 +13,10 @@ from lightx2v.models.networks.wan.animate_model import WanAnimateModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import load_weights, remove_substrings_from_keys
+from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.2_animate")
@@ -143,6 +145,7 @@ class WanAnimateRunner(WanRunner):
         )
         return {"image_encoder_output": {"clip_encoder_out": clip_encoder_out, "vae_encoder_out": vae_encoder_out, "pose_latents": pose_latents, "face_pixel_values": face_pixel_values}}
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_encode_duration, labels=["WanAnimateRunner"])
     def run_vae_encoder(
         self,
         conditioning_pixel_values,
@@ -259,6 +262,7 @@ class WanAnimateRunner(WanRunner):
         super().init_run()
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_decode_duration, labels=["WanAnimateRunner"])
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
@@ -347,6 +351,7 @@ class WanAnimateRunner(WanRunner):
         self.config.lat_t = self.config.target_video_length // 4 + 1
         self.config.target_shape = [16, self.config.lat_t + 1, self.config.lat_h, self.config.lat_w]
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_img_encode_duration, labels=["WanAnimateRunner"])
     def run_image_encoder(self, img):  # CHW
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.image_encoder = self.load_image_encoder()

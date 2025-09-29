@@ -26,9 +26,11 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
 from lightx2v.utils.utils import best_output_size, cache_video
+from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.1")
@@ -206,7 +208,9 @@ class WanRunner(DefaultRunner):
         else:
             self.scheduler = scheduler_class(self.config)
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_text_encode_duration, labels=["WanRunner"])
     def run_text_encoder(self, text, img=None):
+        monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
         n_prompt = self.config.get("negative_prompt", "")
@@ -239,6 +243,7 @@ class WanRunner(DefaultRunner):
 
         return text_encoder_output
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_img_encode_duration, labels=["WanRunner"])
     def run_image_encoder(self, first_frame, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.image_encoder = self.load_image_encoder()
@@ -252,6 +257,7 @@ class WanRunner(DefaultRunner):
             gc.collect()
         return clip_encoder_out
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_encode_duration, labels=["WanRunner"])
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
         aspect_ratio = h / w
@@ -477,6 +483,7 @@ class Wan22DenseRunner(WanRunner):
         self.vae_name = "Wan2.2_VAE.pth"
         self.tiny_vae_name = "taew2_2.pth"
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_vae_encode_duration, labels=["Wan22DenseRunner"])
     def run_vae_encoder(self, img):
         max_area = self.config.target_height * self.config.target_width
         ih, iw = img.height, img.width

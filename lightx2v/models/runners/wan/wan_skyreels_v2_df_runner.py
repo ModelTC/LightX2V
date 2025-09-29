@@ -11,7 +11,9 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.df.skyreels_v2_df_scheduler import WanSkyreelsV2DFScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+from lightx2v.utils.metrics_profiler import MetricsProfilingContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.1_skyreels_v2_df")
@@ -22,6 +24,7 @@ class WanSkyreelsV2DFRunner(WanRunner):  # Diffustion foring for SkyReelsV2 DF I
     def init_scheduler(self):
         self.scheduler = WanSkyreelsV2DFScheduler(self.config)
 
+    @MetricsProfilingContext(monitor_cli.lightx2v_run_img_encode_duration, labels=["WanSkyreelsV2DFRunner"])
     def run_image_encoder(self, config, image_encoder, vae_model):
         img = Image.open(config.image_path).convert("RGB")
         img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
