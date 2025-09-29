@@ -46,6 +46,8 @@ class LocalTaskManager(BaseTaskManager):
         task, subtasks = info["task"], info["subtasks"]
         if user_id is not None and task["user_id"] != user_id:
             raise Exception(f"Task {task_id} is not belong to user {user_id}")
+        if task["tag"] == "delete":
+            raise Exception(f"Task {task_id} is deleted")
         self.parse_dict(task)
         if only_task:
             return task
@@ -92,6 +94,8 @@ class LocalTaskManager(BaseTaskManager):
                 if "start_ping_t" in kwargs and kwargs["start_ping_t"] > task["ping_t"]:
                     continue
                 if "end_ping_t" in kwargs and kwargs["end_ping_t"] < task["ping_t"]:
+                    continue
+                if not kwargs.get("include_delete", False) and task["tag"] == "delete":
                     continue
 
                 # 如果不是查询子任务，则添加子任务信息到任务中
@@ -292,14 +296,14 @@ class LocalTaskManager(BaseTaskManager):
 
     @class_try_catch_async
     async def delete_task(self, task_id, user_id=None):
-        task = self.load(task_id, user_id, only_task=True)
+        task, subtasks = self.load(task_id, user_id)
         # only allow to delete finished tasks
         if task["status"] not in FinishedStatus:
             return False
         # delete task file
-        task_file = self.get_task_filename(task_id)
-        if os.path.exists(task_file):
-            os.remove(task_file)
+        task["tag"] = "delete"
+        task["update_t"] = current_time()
+        self.save(task, subtasks)
         return True
 
     @class_try_catch_async

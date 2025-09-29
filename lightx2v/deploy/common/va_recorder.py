@@ -30,6 +30,7 @@ class VARecorder:
         self.width = None
         self.height = None
         self.stoppable_t = None
+        self.realtime = True
 
         # ffmpeg process for mix video and audio data and push to livestream
         self.ffmpeg_process = None
@@ -93,6 +94,7 @@ class VARecorder:
             self.video_conn, _ = self.video_socket.accept()
             logger.info(f"Video connection established from {self.video_conn.getpeername()}")
             fail_time, max_fail_time = 0, 10
+            packet_secs = 1.0 / self.fps
             while True:
                 try:
                     if self.video_queue is None:
@@ -101,9 +103,18 @@ class VARecorder:
                     if data is None:
                         logger.info("Video thread received stop signal")
                         break
+
                     # Convert to numpy and scale to [0, 255], convert RGB to BGR for OpenCV/FFmpeg
-                    frames = (data * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
-                    self.video_conn.send(frames.tobytes())
+                    if not self.realtime:
+                        frames = (data * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+                        self.video_conn.send(frames.tobytes())
+                    else:
+                        for i in range(data.shape[0]):
+                            t0 = time.time()
+                            frame = (data[i] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+                            self.video_conn.send(frame.tobytes())
+                            time.sleep(max(0, packet_secs - (time.time() - t0)))
+
                     fail_time = 0
                 except:  # noqa
                     logger.error(f"Send video data error: {traceback.format_exc()}")
@@ -223,12 +234,22 @@ class VARecorder:
         ffmpeg_cmd = [
             "ffmpeg",
             "-re",
+            "-fflags",
+            "nobuffer",
+            "-analyzeduration",
+            "0",
+            "-probesize",
+            "32",
+            "-flush_packets",
+            "1",
             "-f",
             "s16le",
             "-ar",
             str(self.sample_rate),
             "-ac",
             "1",
+            "-ch_layout",
+            "mono",
             "-i",
             f"tcp://127.0.0.1:{self.audio_port}",
             "-f",
@@ -278,6 +299,15 @@ class VARecorder:
         except Exception as e:
             logger.error(f"Failed to start FFmpeg: {e}")
 
+    def start(self, width: int, height: int):
+        self.set_video_size(width, height)
+        duration = 1.0
+        self.pub_livestream(
+            torch.zeros((int(self.fps * duration), height, width, 3), dtype=torch.float16),
+            np.zeros(int(self.sample_rate * duration), dtype=np.float16)
+        )
+        time.sleep(duration)
+
     def set_video_size(self, width: int, height: int):
         if self.width is not None and self.height is not None:
             assert self.width == width and self.height == height, "Video size already set"
@@ -291,6 +321,7 @@ class VARecorder:
             self.start_ffmpeg_process_whip()
         else:
             self.start_ffmpeg_process_local()
+            self.realtime = False
         self.audio_thread = threading.Thread(target=self.audio_worker)
         self.video_thread = threading.Thread(target=self.video_worker)
         self.audio_thread.start()

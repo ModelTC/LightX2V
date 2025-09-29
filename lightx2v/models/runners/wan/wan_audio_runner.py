@@ -19,6 +19,7 @@ from torchvision.transforms.functional import resize
 
 from lightx2v.deploy.common.va_reader import VAReader
 from lightx2v.deploy.common.va_recorder import VARecorder
+from lightx2v.deploy.common.va_x64_recorder import VAX64Recorder
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
@@ -680,11 +681,21 @@ class WanAudioRunner(WanRunner):  # type:ignore
             audio_sr = self.config.get("audio_sr", 16000)
             if "video_frame_interpolation" in self.config and self.vfi_model is not None:
                 record_fps = self.config["video_frame_interpolation"]["target_fps"]
-            self.va_recorder = VARecorder(
-                livestream_url=output_video_path,
-                fps=record_fps,
-                sample_rate=audio_sr,
-            )
+
+            whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
+            if whip_shared_path and output_video_path.startswith("http"):
+                self.va_recorder = VAX64Recorder(
+                    whip_shared_path=whip_shared_path,
+                    livestream_url=output_video_path,
+                    fps=record_fps,
+                    sample_rate=audio_sr,
+                )
+            else:
+                self.va_recorder = VARecorder(
+                    livestream_url=output_video_path,
+                    fps=record_fps,
+                    sample_rate=audio_sr,
+                )
 
     def init_va_reader(self):
         audio_path = self.config.get("audio_path", None)
@@ -715,10 +726,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
             if self.va_reader is None:
                 return super().run_main(total_steps)
 
+            self.va_reader.start()
             rank, world_size = self.get_rank_and_world_size()
             if rank == world_size - 1:
                 assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
-            self.va_reader.start()
+                self.va_recorder.start(self.config.tgt_w, self.config.tgt_h)
+            if world_size > 1:
+                dist.barrier()
 
             self.init_run()
             if self.config.get("compile", False):
@@ -756,7 +770,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 self.va_reader.stop()
                 self.va_reader = None
             if self.va_recorder:
-                self.va_recorder.stop(wait=False)
+                self.va_recorder.stop()
                 self.va_recorder = None
 
     @ProfilingContext4DebugL1("Process after vae decoder")

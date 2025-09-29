@@ -492,16 +492,6 @@ async def api_v1_task_delete(request: Request, user=Depends(verify_user_access))
         if task["status"] not in FinishedStatus:
             return error_response("Only finished tasks can be deleted", 400)
 
-        # delete input files
-        for _, input_filename in task["inputs"].items():
-            await data_manager.delete_bytes(input_filename)
-            logger.info(f"Deleted input file: {input_filename}")
-
-        # delete output files
-        for _, output_filename in task["outputs"].items():
-            await data_manager.delete_bytes(output_filename)
-            logger.info(f"Deleted output file: {output_filename}")
-
         # delete task record
         success = await task_manager.delete_task(task_id, user["user_id"])
         if success:

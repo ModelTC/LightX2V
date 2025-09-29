@@ -6,6 +6,8 @@ import time
 import traceback
 from datetime import datetime
 
+import tempfile
+import subprocess
 import httpx
 import torchaudio
 from PIL import Image
@@ -136,21 +138,32 @@ def format_image_data(data, max_size=1280):
     return output.getvalue()
 
 
+def media_to_wav(data):
+    with tempfile.NamedTemporaryFile() as fin:
+        fin.write(data)
+        fin.flush()
+        cmd = [
+            "ffmpeg",
+            "-i", fin.name,
+            '-f', 'wav',
+            '-acodec', 'pcm_s16le',
+            '-ar', '44100',
+            '-ac', '2',
+            "pipe:1"
+        ]
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert p.returncode == 0, f"media to wav failed: {p.stderr.decode()}"
+        return p.stdout
+
+
 def format_audio_data(data):
     if len(data) < 4:
         raise ValueError("Audio file too short")
-    try:
-        waveform, sample_rate = torchaudio.load(io.BytesIO(data), num_frames=10)
-        logger.info(f"load audio: {waveform.size()}, {sample_rate}")
-        assert waveform.size(0) > 0, "audio is empty"
-        assert sample_rate > 0, "audio sample rate is not valid"
-    except Exception as e:
-        logger.warning(f"torchaudio failed to load audio, trying alternative method: {e}")
-        # check audio headers
-        audio_headers = [b"RIFF", b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"OggS"]
-        if not any(data.startswith(header) for header in audio_headers):
-            logger.warning("Audio file doesn't have recognized header, but continuing...")
-        logger.info(f"Audio validation passed (alternative method), size: {len(data)} bytes")
+    data = media_to_wav(data)
+    waveform, sample_rate = torchaudio.load(io.BytesIO(data), num_frames=10)
+    logger.info(f"load audio: {waveform.size()}, {sample_rate}")
+    assert waveform.numel() > 0, "audio is empty"
+    assert sample_rate > 0, "audio sample rate is not valid"
     return data
 
 
