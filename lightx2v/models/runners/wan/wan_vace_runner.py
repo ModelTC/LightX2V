@@ -154,10 +154,10 @@ class WanVaceRunner(WanRunner):
 
         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(cat_latents, result_masks)]
 
-    def set_target_shape(self):
-        target_shape = self.latent_shape
-        target_shape[0] = int(target_shape[0] / 2)
-        self.config.target_shape = target_shape
+    def set_input_info_latent_shape(self):
+        latent_shape = self.latent_shape
+        latent_shape[0] = int(latent_shape[0] / 2)
+        return latent_shape
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):

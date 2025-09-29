@@ -179,10 +179,10 @@ class FileService:
 
         return file_path
 
-    def get_output_path(self, save_video_path: str) -> Path:
-        video_path = Path(save_video_path)
+    def get_output_path(self, save_result_path: str) -> Path:
+        video_path = Path(save_result_path)
         if not video_path.is_absolute():
-            return self.output_video_dir / save_video_path
+            return self.output_video_dir / save_result_path
         return video_path
 
     async def cleanup(self):
@@ -260,7 +260,7 @@ class TorchrunInferenceWorker:
                 return {
                     "task_id": task_data["task_id"],
                     "status": "success",
-                    "save_video_path": task_data.get("video_path", task_data["save_video_path"]),
+                    "save_result_path": task_data.get("video_path", task_data["save_result_path"]),
                     "message": "Inference completed",
                 }
             else:
@@ -418,9 +418,9 @@ class VideoGenerationService:
 
                 logger.info(f"Task {message.task_id} audio path: {task_data['audio_path']}")
 
-            actual_save_path = self.file_service.get_output_path(message.save_video_path)
-            task_data["save_video_path"] = str(actual_save_path)
-            task_data["video_path"] = message.save_video_path
+            actual_save_path = self.file_service.get_output_path(message.save_result_path)
+            task_data["save_result_path"] = str(actual_save_path)
+            task_data["video_path"] = message.save_result_path
 
             result = await self.inference_service.submit_task_async(task_data)
 
@@ -434,7 +434,7 @@ class VideoGenerationService:
                 return TaskResponse(
                     task_id=message.task_id,
                     task_status="completed",
-                    save_video_path=message.save_video_path,  # Return original path
+                    save_result_path=message.save_result_path,  # Return original path
                 )
             else:
                 error_msg = result.get("error", "Inference failed")

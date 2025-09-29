@@ -3,8 +3,6 @@ from abc import ABC
 import torch
 import torch.distributed as dist
 
-from lightx2v.utils.utils import save_videos_grid
-
 
 class BaseRunner(ABC):
     """Abstract base class for all Runners
@@ -15,6 +13,7 @@ class BaseRunner(ABC):
     def __init__(self, config):
         self.config = config
         self.vae_encoder_need_img_original = False
+        self.input_info = None
 
     def load_transformer(self):
         """Load transformer model
@@ -100,26 +99,6 @@ class BaseRunner(ABC):
         """Initialize scheduler"""
         pass
 
-    def set_target_shape(self):
-        """Set target shape
-
-        Subclasses can override this method to provide specific implementation
-
-        Returns:
-            Dictionary containing target shape information
-        """
-        return {}
-
-    def save_video_func(self, images):
-        """Save video implementation
-
-        Subclasses can override this method to customize save logic
-
-        Args:
-            images: Image sequence to save
-        """
-        save_videos_grid(images, self.config.get("save_video_path", "./output.mp4"), n_rows=1, fps=self.config.get("fps", 8))
-
     def load_vae_decoder(self):
         """Load VAE decoder
 
@@ -146,7 +125,7 @@ class BaseRunner(ABC):
         pass
 
     def end_run_segment(self, segment_idx=None):
-        pass
+        self.gen_video_final = self.gen_video
 
     def end_run(self):
         pass

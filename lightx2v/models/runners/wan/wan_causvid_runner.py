@@ -50,7 +50,7 @@ class WanCausVidRunner(WanRunner):
         self.scheduler = WanStepDistillScheduler(self.config)
 
     def set_target_shape(self):
-        if self.config.task == "i2v":
+        if self.config.task in ["i2v", "s2v"]:
             self.config.target_shape = (16, self.config.num_frame_per_block, self.config.lat_h, self.config.lat_w)
             # i2v需根据input shape重置frame_seq_length
             frame_seq_length = (self.config.lat_h // 2) * (self.config.lat_w // 2)

@@ -25,7 +25,7 @@ class TaskInfo:
     start_time: datetime = field(default_factory=datetime.now)
     end_time: Optional[datetime] = None
     error: Optional[str] = None
-    save_video_path: Optional[str] = None
+    save_result_path: Optional[str] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
 
@@ -54,7 +54,7 @@ class TaskManager:
                 raise RuntimeError(f"Task queue is full (max {self.max_queue_size} tasks)")
 
             task_id = getattr(message, "task_id", str(uuid.uuid4()))
-            task_info = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message=message, save_video_path=getattr(message, "save_video_path", None))
+            task_info = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message=message, save_result_path=getattr(message, "save_result_path", None))
 
             self._tasks[task_id] = task_info
             self.total_tasks += 1
@@ -76,7 +76,7 @@ class TaskManager:
 
             return task
 
-    def complete_task(self, task_id: str, save_video_path: Optional[str] = None):
+    def complete_task(self, task_id: str, save_result_path: Optional[str] = None):
         with self._lock:
             if task_id not in self._tasks:
                 logger.warning(f"Task {task_id} not found for completion")
@@ -85,8 +85,8 @@ class TaskManager:
             task = self._tasks[task_id]
             task.status = TaskStatus.COMPLETED
             task.end_time = datetime.now()
-            if save_video_path:
-                task.save_video_path = save_video_path
+            if save_result_path:
+                task.save_result_path = save_result_path
 
             self.completed_tasks += 1
 
@@ -138,7 +138,7 @@ class TaskManager:
         if not task:
             return None
 
-        return {"task_id": task.task_id, "status": task.status.value, "start_time": task.start_time, "end_time": task.end_time, "error": task.error, "save_video_path": task.save_video_path}
+        return {"task_id": task.task_id, "status": task.status.value, "start_time": task.start_time, "end_time": task.end_time, "error": task.error, "save_result_path": task.save_result_path}
 
     def get_all_tasks(self):
         with self._lock:

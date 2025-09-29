@@ -6,14 +6,44 @@
     "target_video_length": 81,
     "resize_mode": "adaptive",
     "bucket_shape": {
-        "0.667": [[480, 832], [544, 960]],
-        "1.500": [[832, 480], [960, 544]],
-        "1.000": [[480, 480], [576, 576], [704, 704]]
+        "0.667": [
+            [
+                480,
+                832
+            ],
+            [
+                544,
+                960
+            ]
+        ],
+        "1.500": [
+            [
+                832,
+                480
+            ],
+            [
+                960,
+                544
+            ]
+        ],
+        "1.000": [
+            [
+                480,
+                480
+            ],
+            [
+                576,
+                576
+            ],
+            [
+                704,
+                704
+            ]
+        ]
     },
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
-    "seed": 42,
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,

@@ -14,8 +14,8 @@ class WanSFModel(WanModel):
         self.to_cuda()
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
-        sf_confg = self.config.sf_config
-        file_path = os.path.join(self.config.sf_model_path, f"checkpoints/self_forcing_{sf_confg.sf_type}.pt")
+        sf_confg = self.config["sf_config"]
+        file_path = os.path.join(self.config["sf_model_path"], f"checkpoints/self_forcing_{sf_confg['sf_type']}.pt")
         _weight_dict = torch.load(file_path)["generator_ema"]
         weight_dict = {}
         for k, v in _weight_dict.items():

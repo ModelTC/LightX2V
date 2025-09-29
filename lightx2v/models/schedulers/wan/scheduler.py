@@ -1,4 +1,3 @@
-import gc
 from typing import List, Optional, Union
 
 import numpy as np
@@ -12,22 +11,22 @@ class WanScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.device = torch.device("cuda")
-        self.infer_steps = self.config.infer_steps
-        self.target_video_length = self.config.target_video_length
-        self.sample_shift = self.config.sample_shift
+        self.infer_steps = self.config["infer_steps"]
+        self.target_video_length = self.config["target_video_length"]
+        self.sample_shift = self.config["sample_shift"]
         self.shift = 1
         self.num_train_timesteps = 1000
         self.disable_corrector = []
         self.solver_order = 2
         self.noise_pred = None
-        self.sample_guide_scale = self.config.sample_guide_scale
-        self.caching_records_2 = [True] * self.config.infer_steps
+        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.caching_records_2 = [True] * self.config["infer_steps"]
 
-    def prepare(self, image_encoder_output=None):
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
 
-        self.prepare_latents(self.config.target_shape, dtype=torch.float32)
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
         alphas = np.linspace(1, 1 / self.num_train_timesteps, self.num_train_timesteps)[::-1].copy()
         sigmas = 1.0 - alphas
@@ -48,18 +47,18 @@ class WanScheduler(BaseScheduler):
 
         self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
 
-    def prepare_latents(self, target_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(self.config.seed)
+    def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
+        self.generator = torch.Generator(device=self.device).manual_seed(seed)
         self.latents = torch.randn(
-            target_shape[0],
-            target_shape[1],
-            target_shape[2],
-            target_shape[3],
+            latent_shape[0],
+            latent_shape[1],
+            latent_shape[2],
+            latent_shape[3],
             dtype=dtype,
             device=self.device,
             generator=self.generator,
         )
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.mask = masks_like(self.latents, zero=True)
             self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents
 
@@ -117,7 +116,7 @@ class WanScheduler(BaseScheduler):
         x0_pred = sample - sigma_t * model_output
         return x0_pred
 
-    def reset(self, step_index=None):
+    def reset(self, seed, latent_shape, step_index=None):
         if step_index is not None:
             self.step_index = step_index
         self.model_outputs = [None] * self.solver_order
@@ -126,9 +125,7 @@ class WanScheduler(BaseScheduler):
         self.noise_pred = None
         self.this_order = None
         self.lower_order_nums = 0
-        self.prepare_latents(self.config.target_shape, dtype=torch.float32)
-        gc.collect()
-        torch.cuda.empty_cache()
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
     def multistep_uni_p_bh_update(
         self,
@@ -325,7 +322,7 @@ class WanScheduler(BaseScheduler):
     def step_pre(self, step_index):
         super().step_pre(step_index)
         self.timestep_input = torch.stack([self.timesteps[self.step_index]])
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.timestep_input = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
 
     def step_post(self):
@@ -367,5 +364,5 @@ class WanScheduler(BaseScheduler):
             self.lower_order_nums += 1
 
         self.latents = prev_sample
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents

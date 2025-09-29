@@ -8,7 +8,6 @@
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
-    "seed": 42,
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,
@@ -26,5 +25,46 @@
     "t5_quantized": true,
     "t5_quant_scheme": "fp8",
     "compile": true,
-    "compile_shapes": [[480, 832], [544, 960], [720, 1280], [832, 480], [960, 544], [1280, 720], [480, 480], [576, 576], [704, 704], [960, 960]]
+    "compile_shapes": [
+        [
+            480,
+            832
+        ],
+        [
+            544,
+            960
+        ],
+        [
+            720,
+            1280
+        ],
+        [
+            832,
+            480
+        ],
+        [
+            960,
+            544
+        ],
+        [
+            1280,
+            720
+        ],
+        [
+            480,
+            480
+        ],
+        [
+            576,
+            576
+        ],
+        [
+            704,
+            704
+        ],
+        [
+            960,
+            960
+        ]
+    ]
 }

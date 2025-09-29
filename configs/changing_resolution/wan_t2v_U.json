@@ -7,12 +7,17 @@
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
-    "seed": 42,
     "sample_guide_scale": 6,
     "sample_shift": 8,
     "enable_cfg": true,
     "cpu_offload": false,
     "changing_resolution": true,
-    "resolution_rate": [1.0, 0.75],
-    "changing_resolution_steps": [10, 35]
+    "resolution_rate": [
+        1.0,
+        0.75
+    ],
+    "changing_resolution_steps": [
+        10,
+        35
+    ]
 }

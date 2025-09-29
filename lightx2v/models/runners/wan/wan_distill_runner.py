@@ -17,28 +17,28 @@ class WanDistillRunner(WanRunner):
         super().__init__(config)
 
     def load_transformer(self):
-        if self.config.get("lora_configs") and self.config.lora_configs:
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
             model = WanModel(
-                self.config.model_path,
+                self.config["model_path"],
                 self.config,
                 self.init_device,
             )
             lora_wrapper = WanLoraWrapper(model)
-            for lora_config in self.config.lora_configs:
+            for lora_config in self.config["lora_configs"]:
                 lora_path = lora_config["path"]
                 strength = lora_config.get("strength", 1.0)
                 lora_name = lora_wrapper.load_lora(lora_path)
                 lora_wrapper.apply_lora(lora_name, strength)
                 logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
         else:
-            model = WanDistillModel(self.config.model_path, self.config, self.init_device)
+            model = WanDistillModel(self.config["model_path"], self.config, self.init_device)
         return model
 
     def init_scheduler(self):
-        if self.config.feature_caching == "NoCaching":
+        if self.config["feature_caching"] == "NoCaching":
             self.scheduler = WanStepDistillScheduler(self.config)
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 
 
 class MultiDistillModelStruct(MultiModelStruct):
@@ -54,7 +54,7 @@ class MultiDistillModelStruct(MultiModelStruct):
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[0]
+            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
@@ -64,7 +64,7 @@ class MultiDistillModelStruct(MultiModelStruct):
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[1]
+            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)
@@ -81,8 +81,8 @@ class Wan22MoeDistillRunner(WanDistillRunner):
 
     def load_transformer(self):
         use_high_lora, use_low_lora = False, False
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            for lora_config in self.config.lora_configs:
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
+            for lora_config in self.config["lora_configs"]:
                 if lora_config.get("name", "") == "high_noise_model":
                     use_high_lora = True
                 elif lora_config.get("name", "") == "low_noise_model":
@@ -90,12 +90,12 @@ class Wan22MoeDistillRunner(WanDistillRunner):
 
         if use_high_lora:
             high_noise_model = WanModel(
-                os.path.join(self.config.model_path, "high_noise_model"),
+                os.path.join(self.config["model_path"], "high_noise_model"),
                 self.config,
                 self.init_device,
             )
             high_lora_wrapper = WanLoraWrapper(high_noise_model)
-            for lora_config in self.config.lora_configs:
+            for lora_config in self.config["lora_configs"]:
                 if lora_config.get("name", "") == "high_noise_model":
                     lora_path = lora_config["path"]
                     strength = lora_config.get("strength", 1.0)
@@ -104,19 +104,19 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                     logger.info(f"High noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
             high_noise_model = Wan22MoeDistillModel(
-                os.path.join(self.config.model_path, "distill_models", "high_noise_model"),
+                os.path.join(self.config["model_path"], "distill_models", "high_noise_model"),
                 self.config,
                 self.init_device,
             )
 
         if use_low_lora:
             low_noise_model = WanModel(
-                os.path.join(self.config.model_path, "low_noise_model"),
+                os.path.join(self.config["model_path"], "low_noise_model"),
                 self.config,
                 self.init_device,
             )
             low_lora_wrapper = WanLoraWrapper(low_noise_model)
-            for lora_config in self.config.lora_configs:
+            for lora_config in self.config["lora_configs"]:
                 if lora_config.get("name", "") == "low_noise_model":
                     lora_path = lora_config["path"]
                     strength = lora_config.get("strength", 1.0)
@@ -125,15 +125,15 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                     logger.info(f"Low noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
             low_noise_model = Wan22MoeDistillModel(
-                os.path.join(self.config.model_path, "distill_models", "low_noise_model"),
+                os.path.join(self.config["model_path"], "distill_models", "low_noise_model"),
                 self.config,
                 self.init_device,
             )
 
-        return MultiDistillModelStruct([high_noise_model, low_noise_model], self.config, self.config.boundary_step_index)
+        return MultiDistillModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary_step_index"])
 
     def init_scheduler(self):
-        if self.config.feature_caching == "NoCaching":
+        if self.config["feature_caching"] == "NoCaching":
             self.scheduler = Wan22StepDistillScheduler(self.config)
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")

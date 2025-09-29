@@ -30,6 +30,7 @@ class WanSFVAE:
 
         # init model
         self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0).eval().requires_grad_(False).to(device).to(dtype)
+        self.model.clear_cache()
 
     def to_cpu(self):
         self.model.encoder = self.model.encoder.to("cpu")

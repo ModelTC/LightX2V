@@ -17,6 +17,7 @@ from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import set_input_info
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
@@ -24,15 +25,15 @@ from lightx2v.utils.utils import seed_all
 
 
 def init_runner(config):
-    seed_all(config.seed)
     torch.set_grad_enabled(False)
-    runner = RUNNER_REGISTER[config.model_cls](config)
+    runner = RUNNER_REGISTER[config["model_cls"]](config)
     runner.init_modules()
     return runner
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
     parser.add_argument(
         "--model_cls",
         type=str,
@@ -58,7 +59,7 @@ def main():
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
@@ -91,13 +92,16 @@ def main():
         help="The file of the source mask. Default None.",
     )
 
-    parser.add_argument("--save_video_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     args = parser.parse_args()
+
+    seed_all(args.seed)
 
     # set config
     config = set_config(args)
 
-    if config.parallel:
+    if config["parallel"]:
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(dist.get_rank())
         set_parallel_config(config)
@@ -106,7 +110,8 @@ def main():
 
     with ProfilingContext4DebugL1("Total Cost"):
         runner = init_runner(config)
-        runner.run_pipeline()
+        input_info = set_input_info(args)
+        runner.run_pipeline(input_info)
 
     # Clean up distributed process group
     if dist.is_initialized():

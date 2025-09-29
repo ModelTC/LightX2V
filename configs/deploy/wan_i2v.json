@@ -6,16 +6,25 @@
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
-    "seed": 42,
     "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": true,
     "cpu_offload": false,
     "sub_servers": {
-        "dit": ["http://localhost:9000"],
-        "prompt_enhancer": ["http://localhost:9001"],
-        "text_encoders": ["http://localhost:9002"],
-        "image_encoder": ["http://localhost:9003"],
-        "vae_model": ["http://localhost:9004"]
+        "dit": [
+            "http://localhost:9000"
+        ],
+        "prompt_enhancer": [
+            "http://localhost:9001"
+        ],
+        "text_encoders": [
+            "http://localhost:9002"
+        ],
+        "image_encoder": [
+            "http://localhost:9003"
+        ],
+        "vae_model": [
+            "http://localhost:9004"
+        ]
     }
 }

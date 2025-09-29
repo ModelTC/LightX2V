@@ -13,7 +13,7 @@ source ${lightx2v_path}/scripts/base/base.sh
 # Start API server with distributed inference service
 python -m lightx2v.server \
 --model_cls seko_talk \
---task i2v \
+--task s2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/seko_talk/seko_talk_05_offload_fp8_4090.json \
 --port 8000

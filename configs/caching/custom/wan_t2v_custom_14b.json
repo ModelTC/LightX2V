@@ -7,15 +7,26 @@
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
-    "seed": 42,
     "sample_guide_scale": 6,
     "sample_shift": 8,
     "enable_cfg": true,
     "cpu_offload": false,
     "feature_caching": "Custom",
     "coefficients": [
-        [-3.03318725e05, 4.90537029e04, -2.65530556e03, 5.87365115e01, -3.15583525e-01],
-        [-5784.54975374, 5449.50911966, -1811.16591783, 256.27178429, -13.02252404]
+        [
+            -3.03318725e05,
+            4.90537029e04,
+            -2.65530556e03,
+            5.87365115e01,
+            -3.15583525e-01
+        ],
+        [
+            -5784.54975374,
+            5449.50911966,
+            -1811.16591783,
+            256.27178429,
+            -13.02252404
+        ]
     ],
     "use_ret_steps": false,
     "teacache_thresh": 0.26
