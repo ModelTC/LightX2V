@@ -346,23 +346,6 @@ class WanRunner(DefaultRunner):
             "image_encoder_output": image_encoder_output,
         }
 
-    def set_target_shape(self):
-        num_channels_latents = self.config.get("num_channels_latents", 16)
-        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"]:
-            self.config["target_shape"] = (
-                num_channels_latents,
-                (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-                self.config["lat_h"],
-                self.config["lat_w"],
-            )
-        elif self.config["task"] == "t2v":
-            self.config["target_shape"] = (
-                num_channels_latents,
-                (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-                int(self.config["target_height"]) // self.config["vae_stride"][1],
-                int(self.config["target_width"]) // self.config["vae_stride"][2],
-            )
-
     def get_latent_shape_with_lat_hw(self, latent_h, latent_w):
         latent_shape = [
             self.config.get("num_channels_latents", 16),

@@ -99,16 +99,6 @@ class BaseRunner(ABC):
         """Initialize scheduler"""
         pass
 
-    def set_target_shape(self):
-        """Set target shape
-
-        Subclasses can override this method to provide specific implementation
-
-        Returns:
-            Dictionary containing target shape information
-        """
-        return {}
-
     def load_vae_decoder(self):
         """Load VAE decoder
 

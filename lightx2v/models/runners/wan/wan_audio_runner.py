@@ -3,7 +3,6 @@ import json
 import os
 import warnings
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -388,36 +387,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
             mask_files = None
 
         return audio_files, mask_files
-
-    def read_person_mask(self):
-        mask_files = self._get_mask_files_from_config()
-        if not mask_files:
-            return None
-
-        mask_latents = []
-        for mask_file in mask_files:
-            mask_latent = self._process_single_mask(mask_file)
-            mask_latents.append(mask_latent)
-
-        mask_latents = torch.cat(mask_latents, dim=0)
-        return mask_latents
-
-    def _get_mask_files_from_config(self):
-        talk_objects = self.config.get("talk_objects")
-        if talk_objects:
-            mask_files = []
-            for idx, person in enumerate(talk_objects):
-                mask_path = person.get("mask")
-                if mask_path and Path(mask_path).is_file():
-                    mask_files.append(str(mask_path))
-                elif mask_path:
-                    logger.warning(f"Person {idx} mask file {mask_path} does not exist")
-            if mask_files:
-                logger.info(f"Loaded {len(mask_files)} mask files from talk_objects")
-            return mask_files
-
-        logger.info("config talk_objects is not specified")
-        return None
 
     def process_single_mask(self, mask_file):
         mask_img = Image.open(mask_file).convert("RGB")
@@ -816,29 +785,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         with ProfilingContext4DebugL2("Load audio encoder and adapter"):
             self.audio_encoder = self.load_audio_encoder()
             self.audio_adapter = self.load_audio_adapter()
-
-    def set_target_shape(self):
-        """Set target shape for generation"""
-        ret = {}
-        num_channels_latents = 16
-        if self.config["model_cls"] == "wan2.2_audio":
-            num_channels_latents = self.config["num_channels_latents"]
-
-        if self.config["task"] in ["i2v", "s2v"]:
-            self.config["target_shape"] = (
-                num_channels_latents,
-                (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-                self.config["lat_h"],
-                self.config["lat_w"],
-            )
-            ret["lat_h"] = self.config["lat_h"]
-            ret["lat_w"] = self.config["lat_w"]
-        else:
-            error_msg = "t2v task is not supported in WanAudioRunner"
-            assert False, error_msg
-
-        ret["target_shape"] = self.config["target_shape"]
-        return ret
 
     def get_latent_shape_with_lat_hw(self, latent_h, latent_w):
         latent_shape = [
