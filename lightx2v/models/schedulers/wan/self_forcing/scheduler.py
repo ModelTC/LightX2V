@@ -13,6 +13,7 @@ class WanSFScheduler(WanScheduler):
         self.num_output_frames = self.config["sf_config"]["num_output_frames"]
         self.num_blocks = self.num_output_frames // self.num_frame_per_block
         self.denoising_step_list = self.config["sf_config"]["denoising_step_list"]
+        self.infer_steps = len(self.denoising_step_list)
         self.all_num_frames = [self.num_frame_per_block] * self.num_blocks
         self.num_input_frames = 0
         self.denoising_strength = 1.0
@@ -91,7 +92,7 @@ class WanSFScheduler(WanScheduler):
         x0_pred = x0_pred.to(original_dtype)
 
         # add noise
-        if self.step_index < len(self.denoising_step_list) - 1:
+        if self.step_index < self.infer_steps - 1:
             timestep_next = self.timesteps[self.seg_index][self.step_index + 1] * torch.ones(self.num_frame_per_block, device=self.device, dtype=torch.long)
             timestep_id_next = torch.argmin((self.timesteps_sf.unsqueeze(0) - timestep_next.unsqueeze(1)).abs(), dim=1)
             sigma_next = self.sigmas_sf[timestep_id_next].reshape(-1, 1, 1, 1)

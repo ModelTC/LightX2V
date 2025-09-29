@@ -9,6 +9,7 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_sf import WanSFVAE
 from lightx2v.utils.envs import *
+from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -59,41 +60,37 @@ class WanSFRunner(WanRunner):
             gc.collect()
         return images
 
-    @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self, total_steps=None):
-        self.init_run()
-        if self.config.get("compile", False):
-            self.model.select_graph_for_compile()
+    def init_run(self):
+        super().init_run()
 
-        total_blocks = self.scheduler.num_blocks
-        gen_videos = []
-        for seg_index in range(self.video_segment_num):
-            logger.info(f"==> segment_index: {seg_index + 1} / {total_blocks}")
+    @ProfilingContext4DebugL1("End run segment")
+    def end_run_segment(self, segment_idx=None):
+        with ProfilingContext4DebugL1("step_pre_in_rerun"):
+            self.model.scheduler.step_pre(seg_index=segment_idx, step_index=self.model.scheduler.infer_steps - 1, is_rerun=True)
+        with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
+            self.model.infer(self.inputs)
+        self.gen_video_final = torch.cat([self.gen_video_final, self.gen_video], dim=0) if self.gen_video_final is not None else self.gen_video
 
-            total_steps = len(self.scheduler.denoising_step_list)
-            for step_index in range(total_steps):
-                logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+    @peak_memory_decorator
+    def run_segment(self, total_steps=None):
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
+        for step_index in range(total_steps):
+            # only for single segment, check stop signal every step
+            if self.video_segment_num == 1:
+                self.check_stop()
+            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
-                with ProfilingContext4DebugL1("step_pre"):
-                    self.model.scheduler.step_pre(seg_index=seg_index, step_index=step_index, is_rerun=False)
+            with ProfilingContext4DebugL1("step_pre"):
+                self.model.scheduler.step_pre(seg_index=self.segment_idx, step_index=step_index, is_rerun=False)
 
-                with ProfilingContext4DebugL1("🚀 infer_main"):
-                    self.model.infer(self.inputs)
-
-                with ProfilingContext4DebugL1("step_post"):
-                    self.model.scheduler.step_post()
-
-            latents = self.model.scheduler.stream_output
-            gen_videos.append(self.run_vae_decoder(latents))
-
-            # rerun with timestep zero to update KV cache using clean context
-            with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                self.model.scheduler.step_pre(seg_index=seg_index, step_index=step_index, is_rerun=True)
-
-            with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
+            with ProfilingContext4DebugL1("🚀 infer_main"):
                 self.model.infer(self.inputs)
 
-        self.gen_video = torch.cat(gen_videos, dim=0)
-        gen_video = self.process_images_after_vae_decoder()
-        self.end_run()
-        return gen_video
+            with ProfilingContext4DebugL1("step_post"):
+                self.model.scheduler.step_post()
+
+            if self.progress_callback:
+                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+
+        return self.model.scheduler.stream_output

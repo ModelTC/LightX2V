@@ -125,7 +125,7 @@ class BaseRunner(ABC):
         pass
 
     def end_run_segment(self, segment_idx=None):
-        pass
+        self.gen_video_final = self.gen_video
 
     def end_run(self):
         pass

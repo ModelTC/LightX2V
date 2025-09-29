@@ -236,6 +236,7 @@ class DefaultRunner(BaseRunner):
         pass
 
     def init_run(self):
+        self.gen_video_final = None
         self.get_video_segment_num()
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
@@ -261,9 +262,9 @@ class DefaultRunner(BaseRunner):
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing
                 self.end_run_segment(segment_idx)
-        gen_video = self.process_images_after_vae_decoder()
+        gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
-        return gen_video
+        return {"video": gen_video_final}
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
@@ -293,20 +294,20 @@ class DefaultRunner(BaseRunner):
                     return enhanced_prompt
 
     def process_images_after_vae_decoder(self):
-        self.gen_video = vae_to_comfyui_image(self.gen_video)
+        self.gen_video_final = vae_to_comfyui_image(self.gen_video_final)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
             target_fps = self.config["video_frame_interpolation"]["target_fps"]
             logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {target_fps}")
-            self.gen_video = self.vfi_model.interpolate_frames(
-                self.gen_video,
+            self.gen_video_final = self.vfi_model.interpolate_frames(
+                self.gen_video_final,
                 source_fps=self.config.get("fps", 16),
                 target_fps=target_fps,
             )
 
         if self.input_info.return_result_tensor:
-            return {"video": self.gen_video}
+            return {"video": self.gen_video_final}
         elif self.input_info.save_result_path is not None:
             if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
                 fps = self.config["video_frame_interpolation"]["target_fps"]
@@ -316,7 +317,7 @@ class DefaultRunner(BaseRunner):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 logger.info(f"🎬 Start to save video 🎬")
 
-                save_to_video(self.gen_video, self.input_info.save_result_path, fps=fps, method="ffmpeg")
+                save_to_video(self.gen_video_final, self.input_info.save_result_path, fps=fps, method="ffmpeg")
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 
@@ -328,6 +329,6 @@ class DefaultRunner(BaseRunner):
 
         self.inputs = self.run_input_encoder()
 
-        gen_video = self.run_main()
+        gen_video_final = self.run_main()
 
-        return gen_video
+        return gen_video_final
