@@ -5,16 +5,12 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
-from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner  # noqa: F401
-from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import set_input_info
@@ -40,13 +36,9 @@ def main():
         required=True,
         choices=[
             "wan2.1",
-            "hunyuan",
             "wan2.1_distill",
-            "wan2.1_causvid",
-            "wan2.1_skyreels_v2_df",
             "wan2.1_vace",
             "wan2.1_sf",
-            "cogvideox",
             "seko_talk",
             "wan2.2_moe",
             "wan2.2",
