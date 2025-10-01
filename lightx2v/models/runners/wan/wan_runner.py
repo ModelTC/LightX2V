@@ -8,8 +8,8 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
-from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
-from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
+from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
+from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
