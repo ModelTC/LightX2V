@@ -575,9 +575,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
-            end_idx = audio_array.shape[1] // self._audio_processor.audio_frame_rate - self.prev_frame_length
-            audio_tensor = torch.Tensor(audio_array).float()
-            logger.warning(f"init run segment audio_tensor: {audio_tensor.shape} {audio_tensor.dtype}")
+            end_idx = audio_array.shape[0] // self._audio_processor.audio_frame_rate - self.prev_frame_length
+            audio_tensor = torch.Tensor(audio_array).float().unsqueeze(0)
             self.segment = AudioSegment(audio_tensor, 0, end_idx)
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
@@ -671,7 +670,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 )
 
     def init_va_reader(self):
-        audio_path = self.config.get("audio_path", None)
+        audio_path = self.input_info.audio_path
         self.va_reader = None
         if isinstance(audio_path, dict):
             assert audio_path["type"] == "stream", f"unexcept audio_path: {audio_path}"
@@ -703,7 +702,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             rank, world_size = self.get_rank_and_world_size()
             if rank == world_size - 1:
                 assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
-                self.va_recorder.start(self.config.tgt_w, self.config.tgt_h)
+                self.va_recorder.start(self.input_info.target_shape[1], self.input_info.target_shape[0])
             if world_size > 1:
                 dist.barrier()
 
@@ -733,7 +732,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     self.init_run_segment(segment_idx, audio_array)
                     latents = self.run_segment(total_steps=None)
                     self.gen_video = self.run_vae_decoder(latents)
-                    self.end_run_segment()
+                    self.end_run_segment(segment_idx)
                     segment_idx += 1
 
         finally:

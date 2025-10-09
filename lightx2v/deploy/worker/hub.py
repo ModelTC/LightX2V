@@ -18,49 +18,45 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
+from lightx2v.utils.input_info import set_input_info
 
 
 class BaseWorker:
     @ProfilingContext4DebugL1("Init Worker Worker Cost:")
     def __init__(self, args):
-        args.save_video_path = ""
-        args.audio_path = ""
-        args.save_result_path = ""
         config = set_config(args)
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
-        seed_all(config.seed)
+        seed_all(args.seed)
         self.rank = 0
         self.world_size = 1
-        if config.parallel:
+        if config["parallel"]:
             self.rank = dist.get_rank()
             self.world_size = dist.get_world_size()
             set_parallel_config(config)
-            seed_all(config.seed)
         # same as va_recorder rank and worker main ping rank
         self.out_video_rank = self.world_size - 1
         torch.set_grad_enabled(False)
-        self.runner = RUNNER_REGISTER[config.model_cls](config)
-        # fixed config
-        self.fixed_config = copy.deepcopy(self.runner.config)
+        self.runner = RUNNER_REGISTER[config["model_cls"]](config)
+        self.input_info = set_input_info(args)
 
-    def update_config(self, kwargs):
+    def update_input_info(self, kwargs):
         for k, v in kwargs.items():
-            setattr(self.runner.config, k, v)
+            setattr(self.input_info, k, v)
 
     def set_inputs(self, params):
-        self.runner.config["prompt"] = params["prompt"]
-        self.runner.config["negative_prompt"] = params.get("negative_prompt", "")
-        self.runner.config["image_path"] = params.get("image_path", "")
-        self.runner.config["save_result_path"] = params.get("save_result_path", "")
-        self.runner.config["seed"] = params.get("seed", self.fixed_config.get("seed", 42))
-        self.runner.config["audio_path"] = params.get("audio_path", "")
+        self.input_info.prompt = params["prompt"]
+        self.input_info.negative_prompt = params.get("negative_prompt", "")
+        self.input_info.image_path = params.get("image_path", "")
+        self.input_info.save_result_path = params.get("save_result_path", "")
+        self.input_info.seed = params.get("seed", self.input_info.seed)
+        self.input_info.audio_path = params.get("audio_path", "")
 
     async def prepare_input_image(self, params, inputs, tmp_dir, data_manager):
         input_image_path = inputs.get("input_image", "")
         tmp_image_path = os.path.join(tmp_dir, input_image_path)
 
         # prepare tmp image
-        if self.runner.config.task == "i2v":
+        if "image_path" in self.input_info.__dataclass_fields__:
             img_data = await data_manager.load_bytes(input_image_path)
             with open(tmp_image_path, "wb") as fout:
                 fout.write(img_data)
@@ -103,7 +99,7 @@ class BaseWorker:
         text_encoder_output = await data_manager.load_object(text_out, device)
         image_encoder_output = None
 
-        if self.runner.config.task == "i2v":
+        if "image_path" in self.input_info.__dataclass_fields__:
             clip_path = inputs["clip_encoder_output"]
             vae_path = inputs["vae_encoder_output"]
             clip_encoder_out = await data_manager.load_object(clip_path, device)
@@ -113,7 +109,7 @@ class BaseWorker:
                 "vae_encoder_out": vae_encoder_out["vals"],
             }
             # apploy the config changes by vae encoder
-            self.update_config(vae_encoder_out["kwargs"])
+            self.update_input_info(vae_encoder_out["kwargs"])
 
         self.runner.inputs = {
             "text_encoder_output": text_encoder_output,
@@ -132,7 +128,7 @@ class BaseWorker:
             await data_manager.save_bytes(video_data, output_video_path)
 
     def is_audio_model(self):
-        return "audio" in self.runner.config.model_cls or "seko_talk" in self.runner.config.model_cls
+        return "audio" in self.runner.config["model_cls"] or "seko_talk" in self.runner.config["model_cls"]
 
 
 class RunnerThread(threading.Thread):
@@ -209,7 +205,7 @@ class PipelineWorker(BaseWorker):
             self.runner.stop_signal = False
 
             future = asyncio.Future()
-            self.thread = RunnerThread(asyncio.get_running_loop(), future, self.run_func, self.rank)
+            self.thread = RunnerThread(asyncio.get_running_loop(), future, self.run_func, self.rank, input_info=self.input_info)
             self.thread.start()
             status, _ = await future
             if not status:
@@ -235,7 +231,7 @@ class TextEncoderWorker(BaseWorker):
         if self.runner.config["use_prompt_enhancer"]:
             prompt = self.runner.config["prompt_enhanced"]
 
-        if self.runner.config.task == "i2v" and not self.is_audio_model():
+        if self.runner.config["task"] == "i2v" and not self.is_audio_model():
             img = await data_manager.load_image(input_image_path)
             img = self.runner.read_image_input(img)
             if isinstance(img, tuple):
@@ -294,9 +290,9 @@ class VaeEncoderWorker(BaseWorker):
         vals = self.runner.run_vae_encoder(img)
         out = {"vals": vals, "kwargs": {}}
 
-        for key in ["lat_h", "lat_w", "tgt_h", "tgt_w"]:
-            if hasattr(self.runner.config, key):
-                out["kwargs"][key] = int(getattr(self.runner.config, key))
+        for key in ["original_shape", "resized_shape", "latent_shape", "target_shape"]:
+            if hasattr(self.input_info, key):
+                out["kwargs"][key] = getattr(self.input_info, key)
 
         if self.rank == 0:
             await data_manager.save_object(out, outputs["vae_encoder_output"])

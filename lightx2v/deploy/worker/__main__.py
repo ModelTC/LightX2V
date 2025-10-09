@@ -290,6 +290,23 @@ async def shutdown(loop):
     loop.call_later(2, force_exit)
 
 
+# align args like infer.py
+def align_args(args):
+    args.seed = 42
+    args.sf_model_path = ""
+    args.use_prompt_enhancer = False
+    args.prompt = ""
+    args.negative_prompt = ""
+    args.image_path = ""
+    args.last_frame_path = ""
+    args.audio_path = ""
+    args.src_ref_images = None
+    args.src_video = None
+    args.src_mask = None
+    args.save_result_path = ""
+    args.return_result_tensor = False
+
+
 # =========================
 # Main Entry
 # =========================
@@ -319,6 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_url", type=str, default=dft_data_url)
 
     args = parser.parse_args()
+    align_args(args)
     if args.identity == "":
         # TODO: spec worker instance identity by k8s env
         args.identity = "worker-" + str(uuid.uuid4())[:8]
