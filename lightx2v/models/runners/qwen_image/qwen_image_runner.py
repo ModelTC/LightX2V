@@ -10,8 +10,10 @@ from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
+from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.server.metrics import monitor_cli
 
 
 def calculate_dimensions(target_area, ratio):
@@ -106,7 +108,15 @@ class QwenImageRunner(DefaultRunner):
             "image_encoder_output": image_encoder_output,
         }
 
+    @ProfilingContext4DebugL1(
+        "Run Text Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_text_encode_duration,
+        metrics_labels=["QwenImageRunner"]
+    )
     def run_text_encoder(self, text, image=None):
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         text_encoder_output = {}
         if self.config["task"] == "t2i":
             prompt_embeds, prompt_embeds_mask, _, _ = self.text_encoders[0].infer([text])
@@ -120,6 +130,12 @@ class QwenImageRunner(DefaultRunner):
             text_encoder_output["image_info"] = image_info
         return text_encoder_output
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_labels=["QwenImageRunner"]
+    )
     def run_vae_encoder(self, image):
         image_latents = self.vae.encode_vae_image(image)
         return {"image_latents": image_latents}
@@ -183,7 +199,12 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
-    @ProfilingContext4DebugL1("Run VAE Decoder")
+    @ProfilingContext4DebugL1(
+        "Run VAE Decoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
+        metrics_labels=["QwenImageRunner"],
+    )
     def _run_vae_decoder_local(self, latents, generator):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae()

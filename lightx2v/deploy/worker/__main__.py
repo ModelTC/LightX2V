@@ -15,6 +15,7 @@ from loguru import logger
 from lightx2v.deploy.data_manager import LocalDataManager, S3DataManager
 from lightx2v.deploy.task_manager import TaskStatus
 from lightx2v.deploy.worker.hub import DiTWorker, ImageEncoderWorker, PipelineWorker, SegmentDiTWorker, TextEncoderWorker, VaeDecoderWorker, VaeEncoderWorker
+from lightx2v.server.metrics import metrics
 
 RUNNER_MAP = {
     "pipeline": PipelineWorker,
@@ -205,6 +206,8 @@ async def main(args):
         args.task_name = args.task
     worker_keys = [args.task_name, args.model_name, args.stage, args.worker]
 
+    metrics.server_process(args.metric_port)
+
     data_manager = None
     if args.data_url.startswith("/"):
         data_manager = LocalDataManager(args.data_url, None)
@@ -311,6 +314,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_batch", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--ping_interval", type=int, default=10)
+
+    parser.add_argument("--metric_port", type=int, default=8001)
 
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)

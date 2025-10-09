@@ -26,6 +26,7 @@ from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -355,6 +356,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         video_duration = self.config.get("video_duration", 5)
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_input_audio_len.observe(audio_len)
+
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
 
         # Segment audio
@@ -443,6 +447,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ref_img = torch.nn.functional.interpolate(ref_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
         return ref_img, latent_shape, target_shape
 
+    @ProfilingContext4DebugL1(
+        "Run Image Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_img_encode_duration,
+        metrics_labels=["WanAudioRunner"],
+    )
     def run_image_encoder(self, first_frame, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.image_encoder = self.load_image_encoder()
@@ -453,6 +463,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             gc.collect()
         return clip_encoder_out
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_labels=["WanAudioRunner"],
+    )
     def run_vae_encoder(self, img):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_encoder = self.load_vae_encoder()

@@ -29,6 +29,7 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
 from lightx2v.utils.utils import best_output_size
+from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.1")
@@ -206,11 +207,19 @@ class WanRunner(DefaultRunner):
         else:
             self.scheduler = scheduler_class(self.config)
 
+    @ProfilingContext4DebugL1(
+        "Run Text Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_text_encode_duration,
+        metrics_labels=["WanRunner"],
+    )
     def run_text_encoder(self, input_info):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
 
         prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
         neg_prompt = input_info.negative_prompt
 
         if self.config["cfg_parallel"]:
@@ -241,6 +250,12 @@ class WanRunner(DefaultRunner):
 
         return text_encoder_output
 
+    @ProfilingContext4DebugL1(
+        "Run Image Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_img_encode_duration,
+        metrics_labels=["WanRunner"],
+    )
     def run_image_encoder(self, first_frame, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.image_encoder = self.load_image_encoder()
@@ -254,6 +269,12 @@ class WanRunner(DefaultRunner):
             gc.collect()
         return clip_encoder_out
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_labels=["WanRunner"],
+    )
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
         aspect_ratio = h / w
@@ -469,6 +490,12 @@ class Wan22DenseRunner(WanRunner):
         self.vae_name = "Wan2.2_VAE.pth"
         self.tiny_vae_name = "taew2_2.pth"
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_labels=["Wan22DenseRunner"],
+    )
     def run_vae_encoder(self, img):
         max_area = self.config.target_height * self.config.target_width
         ih, iw = img.height, img.width

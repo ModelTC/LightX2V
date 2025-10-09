@@ -10,12 +10,21 @@ from lightx2v.utils.envs import *
 
 
 class _ProfilingContext:
-    def __init__(self, name):
+    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None):
+        """
+        recorder_mode = 0: disable recorder
+        recorder_mode = 1: enable recorder
+        recorder_mode = 2: enable recorder and force disable logger
+        """
         self.name = name
         if dist.is_initialized():
             self.rank_info = f"Rank {dist.get_rank()}"
         else:
             self.rank_info = "Single GPU"
+        self.enable_recorder = recorder_mode > 0
+        self.enable_logger = recorder_mode <= 1
+        self.metrics_func = metrics_func
+        self.metrics_labels = metrics_labels
 
     def __enter__(self):
         torch.cuda.synchronize()
@@ -25,7 +34,13 @@ class _ProfilingContext:
     def __exit__(self, exc_type, exc_val, exc_tb):
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - self.start_time
-        logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
+        if self.enable_recorder and self.metrics_func:
+            if self.metrics_labels:
+                metrics_func.labels(self.metrics_labels).observe(elapsed)
+            else:
+                metrics_func.observe(elapsed)
+        if self.enable_logger:
+            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
         return False
 
     async def __aenter__(self):
@@ -36,7 +51,13 @@ class _ProfilingContext:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - self.start_time
-        logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
+        if self.enable_recorder and self.metrics_func:
+            if self.metrics_labels:
+                metrics_func.labels(self.metrics_labels).observe(elapsed)
+            else:
+                metrics_func.observe(elapsed)
+        if self.enable_logger:
+            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
         return False
 
     def __call__(self, func):
