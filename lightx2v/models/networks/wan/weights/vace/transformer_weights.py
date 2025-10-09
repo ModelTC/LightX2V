@@ -14,7 +14,7 @@ class WanVaceTransformerWeights(WanTransformerWeights):
         super().__init__(config)
         self.patch_size = (1, 2, 2)
         self.vace_blocks = WeightModuleList(
-            [WanVaceTransformerAttentionBlock(self.config.vace_layers[i], i, self.task, self.mm_type, self.config, "vace_blocks") for i in range(len(self.config.vace_layers))]
+            [WanVaceTransformerAttentionBlock(self.config["vace_layers"][i], i, self.task, self.mm_type, self.config, "vace_blocks") for i in range(len(self.config["vace_layers"]))]
         )
         self.add_module("vace_blocks", self.vace_blocks)
 

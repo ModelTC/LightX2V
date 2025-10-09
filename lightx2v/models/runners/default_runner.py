@@ -214,7 +214,7 @@ class DefaultRunner(BaseRunner):
             [src_video],
             [src_mask],
             [None if src_ref_images is None else src_ref_images.split(",")],
-            (self.config.target_width, self.config.target_height),
+            (self.config["target_width"], self.config["target_height"]),
         )
         self.src_ref_images = src_ref_images
 
