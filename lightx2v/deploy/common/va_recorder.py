@@ -304,7 +304,7 @@ class VARecorder:
         duration = 1.0
         self.pub_livestream(
             torch.zeros((int(self.fps * duration), height, width, 3), dtype=torch.float16),
-            np.zeros(int(self.sample_rate * duration), dtype=np.float16)
+            torch.zeros(int(self.sample_rate * duration), dtype=torch.float16)
         )
         time.sleep(duration)
 

@@ -24,6 +24,7 @@ class BaseWorker:
     @ProfilingContext4DebugL1("Init Worker Worker Cost:")
     def __init__(self, args):
         args.save_video_path = ""
+        args.audio_path = ""
         config = set_config(args)
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         seed_all(config.seed)

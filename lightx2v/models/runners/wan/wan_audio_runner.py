@@ -347,7 +347,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         # Get audio files from person objects or legacy format
         audio_files = self._get_audio_files_from_config()
         if not audio_files:
-            return [], 0
+            return 0, [], 0
 
         # Load audio based on single or multi-person mode
         if len(audio_files) == 1:
@@ -382,7 +382,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             return audio_files
 
         audio_path = self.config.get("audio_path")
-        if audio_path:
+        if isinstance(audio_path, str):
             return [audio_path]
 
         logger.error("config audio_path or talk_objects is not specified")
@@ -605,7 +605,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.segment_idx = segment_idx
         if audio_array is not None:
             end_idx = audio_array.shape[1] // self._audio_processor.audio_frame_rate - self.prev_frame_length
-            self.segment = AudioSegment(audio_array, 0, end_idx)
+            audio_tensor = torch.Tensor(audio_array).float()
+            logger.warning(f"init run segment audio_tensor: {audio_tensor.shape} {audio_tensor.dtype}")
+            self.segment = AudioSegment(audio_tensor, 0, end_idx)
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
 
