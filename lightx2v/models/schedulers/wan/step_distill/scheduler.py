@@ -9,25 +9,16 @@ from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 class WanStepDistillScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.denoising_step_list = config.denoising_step_list
+        self.denoising_step_list = config["denoising_step_list"]
         self.infer_steps = len(self.denoising_step_list)
-        self.sample_shift = self.config.sample_shift
+        self.sample_shift = self.config["sample_shift"]
 
         self.num_train_timesteps = 1000
         self.sigma_max = 1.0
         self.sigma_min = 0.0
 
-    def prepare(self, image_encoder_output):
-        self.generator = torch.Generator(device=self.device)
-        self.generator.manual_seed(self.config.seed)
-
-        self.prepare_latents(self.config.target_shape, dtype=torch.float32)
-
-        if self.config.task in ["t2v"]:
-            self.seq_len = math.ceil((self.config.target_shape[2] * self.config.target_shape[3]) / (self.config.patch_size[1] * self.config.patch_size[2]) * self.config.target_shape[1])
-        elif self.config.task in ["i2v"]:
-            self.seq_len = self.config.lat_h * self.config.lat_w // (self.config.patch_size[1] * self.config.patch_size[2]) * self.config.target_shape[1]
-
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         self.set_denoising_timesteps(device=self.device)
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
@@ -40,8 +31,8 @@ class WanStepDistillScheduler(WanScheduler):
         self.timesteps = self.timesteps[self.denoising_step_index].to(device)
         self.sigmas = self.sigmas[self.denoising_step_index].to("cpu")
 
-    def reset(self):
-        self.prepare_latents(self.config.target_shape, dtype=torch.float32)
+    def reset(self, seed, latent_shape, step_index=None):
+        self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
     def add_noise(self, original_samples, noise, sigma):
         sample = (1 - sigma) * original_samples + sigma * noise
@@ -61,7 +52,7 @@ class WanStepDistillScheduler(WanScheduler):
 class Wan22StepDistillScheduler(WanStepDistillScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.boundary_step_index = config.boundary_step_index
+        self.boundary_step_index = config["boundary_step_index"]
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
         super().set_denoising_timesteps(device)
@@ -75,19 +66,10 @@ class Wan22StepDistillScheduler(WanStepDistillScheduler):
     def step_post(self):
         flow_pred = self.noise_pred.to(torch.float32)
         sigma = self.sigmas[self.step_index].item()
+        noisy_image_or_video = self.latents.to(torch.float32) - flow_pred * sigma
         # self.latent: x_t
-        if self.step_index < self.boundary_step_index:
-            # noisy_image_or_video: x_500
-            alpha, beta = self.calculate_alpha_beta_high(sigma)
-            noisy_image_or_video = (self.latents.to(torch.float32) - beta * (1 - self.sigma_bound) * flow_pred) / (alpha + beta)
-            if self.step_index < self.boundary_step_index - 1:
-                sigma_n = self.sigmas[self.step_index + 1].item()
-                alpha_n, beta_n = self.calculate_alpha_beta_high(sigma_n)
-                noisy_image_or_video = (alpha_n + beta_n) * noisy_image_or_video + (1 - self.sigma_bound) * beta_n * flow_pred
-        else:
-            # noisy_image_or_video: x_0
-            noisy_image_or_video = self.latents.to(torch.float32) - flow_pred * sigma
-            if self.step_index < self.infer_steps - 1:
-                sigma_n = self.sigmas[self.step_index + 1].item()
-                noisy_image_or_video = noisy_image_or_video + flow_pred * sigma_n
+        if self.step_index < self.infer_steps - 1:
+            sigma_n = self.sigmas[self.step_index + 1].item()
+            noisy_image_or_video = noisy_image_or_video + flow_pred * sigma_n
+
         self.latents = noisy_image_or_video.to(self.latents.dtype)

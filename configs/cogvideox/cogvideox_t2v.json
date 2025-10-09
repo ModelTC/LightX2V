@@ -1,5 +1,4 @@
 {
-    "seed": 42,
     "text_len": 226,
     "num_videos_per_prompt": 1,
     "target_video_length": 81,

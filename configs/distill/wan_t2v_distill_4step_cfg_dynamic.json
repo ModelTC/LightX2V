@@ -7,12 +7,16 @@
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
-    "seed": 42,
     "sample_guide_scale": 6,
     "sample_shift": 5,
     "enable_cfg": false,
     "enable_dynamic_cfg": true,
     "cfg_scale": 4.0,
     "cpu_offload": false,
-    "denoising_step_list": [1000, 750, 500, 250]
+    "denoising_step_list": [
+        1000,
+        750,
+        500,
+        250
+    ]
 }

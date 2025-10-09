@@ -67,7 +67,7 @@ python lightx2v/infer.py \
     --model_path /path/to/model \
     --config_json ./configs/video_frame_interpolation/wan_t2v.json \
     --prompt "美丽的海上日落" \
-    --save_video_path ./output.mp4
+    --save_result_path ./output.mp4
 ```
 
 ### 配置参数说明
@@ -136,7 +136,7 @@ python lightx2v/infer.py \
     --model_path ./models/wan2.1 \
     --config_json ./wan_t2v_vfi_32fps.json \
     --prompt "一只小猫在花园里玩耍" \
-    --save_video_path ./output_32fps.mp4
+    --save_result_path ./output_32fps.mp4
 ```
 
 ### 更高帧率增强
@@ -170,7 +170,7 @@ python lightx2v/infer.py \
     --config_json ./wan_i2v_vfi_60fps.json \
     --image_path ./input.jpg \
     --prompt "平滑的相机运动" \
-    --save_video_path ./output_60fps.mp4
+    --save_result_path ./output_60fps.mp4
 ```
 
 ## 性能考虑

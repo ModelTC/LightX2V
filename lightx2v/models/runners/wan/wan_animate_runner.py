@@ -5,7 +5,14 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from decord import VideoReader
+from loguru import logger
+
+try:
+    from decord import VideoReader
+except ImportError:
+    VideoReader = None
+    logger.info("If you need run animate model, please install decord.")
+
 
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
@@ -327,7 +334,7 @@ class WanAnimateRunner(WanRunner):
         )
 
         if start != 0:
-            self.model.scheduler.reset()
+            self.model.scheduler.reset(self.input_info.seed, self.input_info.latent_shape)
 
     def end_run_segment(self, segment_idx):
         if segment_idx != 0:

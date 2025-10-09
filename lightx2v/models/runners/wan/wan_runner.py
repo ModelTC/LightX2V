@@ -8,8 +8,8 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
-from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
-from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
+from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
+from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -28,7 +28,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
-from lightx2v.utils.utils import best_output_size, cache_video
+from lightx2v.utils.utils import best_output_size
 
 
 @RUNNER_REGISTER("wan2.1")
@@ -42,7 +42,7 @@ class WanRunner(DefaultRunner):
 
     def load_transformer(self):
         model = WanModel(
-            self.config.model_path,
+            self.config["model_path"],
             self.config,
             self.init_device,
         )
@@ -59,7 +59,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
             # offload config
             clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
             if clip_offload:
@@ -148,13 +148,13 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
-            "parallel": self.config.parallel,
+            "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
         }
-        if self.config.task not in ["i2v", "flf2v", "animate", "vace"]:
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
         else:
             return self.vae_cls(**vae_config)
@@ -170,7 +170,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
-            "parallel": self.config.parallel,
+            "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
@@ -192,9 +192,9 @@ class WanRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
-        if self.config.feature_caching == "NoCaching":
+        if self.config["feature_caching"] == "NoCaching":
             scheduler_class = WanScheduler
-        elif self.config.feature_caching == "TaylorSeer":
+        elif self.config["feature_caching"] == "TaylorSeer":
             scheduler_class = WanSchedulerTaylorCaching
         elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock", "Mag"]:
             scheduler_class = WanSchedulerCaching
@@ -206,26 +206,28 @@ class WanRunner(DefaultRunner):
         else:
             self.scheduler = scheduler_class(self.config)
 
-    def run_text_encoder(self, text, img=None):
+    def run_text_encoder(self, input_info):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
-        n_prompt = self.config.get("negative_prompt", "")
+
+        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        neg_prompt = input_info.negative_prompt
 
         if self.config["cfg_parallel"]:
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
-                context = self.text_encoders[0].infer([text])
+                context = self.text_encoders[0].infer([prompt])
                 context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
                 text_encoder_output = {"context": context}
             else:
-                context_null = self.text_encoders[0].infer([n_prompt])
+                context_null = self.text_encoders[0].infer([neg_prompt])
                 context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
                 text_encoder_output = {"context_null": context_null}
         else:
-            context = self.text_encoders[0].infer([text])
+            context = self.text_encoders[0].infer([prompt])
             context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-            context_null = self.text_encoders[0].infer([n_prompt])
+            context_null = self.text_encoders[0].infer([neg_prompt])
             context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
             text_encoder_output = {
                 "context": context,
@@ -255,22 +257,22 @@ class WanRunner(DefaultRunner):
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
         aspect_ratio = h / w
-        max_area = self.config.target_height * self.config.target_width
-        lat_h = round(np.sqrt(max_area * aspect_ratio) // self.config.vae_stride[1] // self.config.patch_size[1] * self.config.patch_size[1])
-        lat_w = round(np.sqrt(max_area / aspect_ratio) // self.config.vae_stride[2] // self.config.patch_size[2] * self.config.patch_size[2])
+        max_area = self.config["target_height"] * self.config["target_width"]
+        latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
+        latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)  # Important: latent_shape is used to set the input_info
 
         if self.config.get("changing_resolution", False):
             assert last_frame is None
-            self.config.lat_h, self.config.lat_w = lat_h, lat_w
             vae_encode_out_list = []
             for i in range(len(self.config["resolution_rate"])):
-                lat_h, lat_w = (
-                    int(self.config.lat_h * self.config.resolution_rate[i]) // 2 * 2,
-                    int(self.config.lat_w * self.config.resolution_rate[i]) // 2 * 2,
+                latent_h_tmp, latent_w_tmp = (
+                    int(latent_h * self.config["resolution_rate"][i]) // 2 * 2,
+                    int(latent_w * self.config["resolution_rate"][i]) // 2 * 2,
                 )
-                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, lat_h, lat_w))
-            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, self.config.lat_h, self.config.lat_w))
-            return vae_encode_out_list
+                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp))
+            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w))
+            return vae_encode_out_list, latent_shape
         else:
             if last_frame is not None:
                 first_frame_size = first_frame.shape[2:]
@@ -282,16 +284,15 @@ class WanRunner(DefaultRunner):
                         round(last_frame_size[1] * last_frame_resize_ratio),
                     ]
                     last_frame = TF.center_crop(last_frame, last_frame_size)
-            self.config.lat_h, self.config.lat_w = lat_h, lat_w
-            vae_encoder_out = self.get_vae_encoder_output(first_frame, lat_h, lat_w, last_frame)
-            return vae_encoder_out
+            vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame)
+            return vae_encoder_out, latent_shape
 
     def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None):
-        h = lat_h * self.config.vae_stride[1]
-        w = lat_w * self.config.vae_stride[2]
+        h = lat_h * self.config["vae_stride"][1]
+        w = lat_w * self.config["vae_stride"][2]
         msk = torch.ones(
             1,
-            self.config.target_video_length,
+            self.config["target_video_length"],
             lat_h,
             lat_w,
             device=torch.device("cuda"),
@@ -312,7 +313,7 @@ class WanRunner(DefaultRunner):
             vae_input = torch.concat(
                 [
                     torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                    torch.zeros(3, self.config.target_video_length - 2, h, w),
+                    torch.zeros(3, self.config["target_video_length"] - 2, h, w),
                     torch.nn.functional.interpolate(last_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
                 ],
                 dim=1,
@@ -321,7 +322,7 @@ class WanRunner(DefaultRunner):
             vae_input = torch.concat(
                 [
                     torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                    torch.zeros(3, self.config.target_video_length - 1, h, w),
+                    torch.zeros(3, self.config["target_video_length"] - 1, h, w),
                 ],
                 dim=1,
             ).cuda()
@@ -345,32 +346,23 @@ class WanRunner(DefaultRunner):
             "image_encoder_output": image_encoder_output,
         }
 
-    def set_target_shape(self):
-        num_channels_latents = self.config.get("num_channels_latents", 16)
-        if self.config.task in ["i2v", "flf2v", "animate"]:
-            self.config.target_shape = (
-                num_channels_latents,
-                (self.config.target_video_length - 1) // self.config.vae_stride[0] + 1,
-                self.config.lat_h,
-                self.config.lat_w,
-            )
-        elif self.config.task == "t2v":
-            self.config.target_shape = (
-                num_channels_latents,
-                (self.config.target_video_length - 1) // self.config.vae_stride[0] + 1,
-                int(self.config.target_height) // self.config.vae_stride[1],
-                int(self.config.target_width) // self.config.vae_stride[2],
-            )
+    def get_latent_shape_with_lat_hw(self, latent_h, latent_w):
+        latent_shape = [
+            self.config.get("num_channels_latents", 16),
+            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            latent_h,
+            latent_w,
+        ]
+        return latent_shape
 
-    def save_video_func(self, images):
-        cache_video(
-            tensor=images,
-            save_file=self.config.save_video_path,
-            fps=self.config.get("fps", 16),
-            nrow=1,
-            normalize=True,
-            value_range=(-1, 1),
-        )
+    def get_latent_shape_with_target_hw(self, target_h, target_w):
+        latent_shape = [
+            self.config.get("num_channels_latents", 16),
+            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            int(target_h) // self.config["vae_stride"][1],
+            int(target_w) // self.config["vae_stride"][2],
+        ]
+        return latent_shape
 
 
 class MultiModelStruct:
@@ -400,7 +392,7 @@ class MultiModelStruct:
     def get_current_model_index(self):
         if self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[0]
+            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
@@ -410,7 +402,7 @@ class MultiModelStruct:
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config.sample_guide_scale[1]
+            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)
@@ -434,20 +426,20 @@ class Wan22MoeRunner(WanRunner):
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
         high_noise_model = WanModel(
-            os.path.join(self.config.model_path, "high_noise_model"),
+            os.path.join(self.config["model_path"], "high_noise_model"),
             self.config,
             self.init_device,
         )
         low_noise_model = WanModel(
-            os.path.join(self.config.model_path, "low_noise_model"),
+            os.path.join(self.config["model_path"], "low_noise_model"),
             self.config,
             self.init_device,
         )
 
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
+            assert not self.config.get("dit_quantized", False) or self.config["mm_config"].get("weight_auto_quant", False)
 
-            for lora_config in self.config.lora_configs:
+            for lora_config in self.config["lora_configs"]:
                 lora_path = lora_config["path"]
                 strength = lora_config.get("strength", 1.0)
                 base_name = os.path.basename(lora_path)
@@ -464,7 +456,7 @@ class Wan22MoeRunner(WanRunner):
                 else:
                     raise ValueError(f"Unsupported LoRA path: {lora_path}")
 
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config.boundary)
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
 
 
 @RUNNER_REGISTER("wan2.2")

@@ -6,7 +6,6 @@
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
-    "seed": 442,
     "sample_guide_scale": 5,
     "sample_shift": 3,
     "enable_cfg": true,

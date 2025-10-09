@@ -13,7 +13,6 @@ einops
 loguru
 qtorch
 ftfy
-easydict
 gradio
 aiohttp
 pydantic

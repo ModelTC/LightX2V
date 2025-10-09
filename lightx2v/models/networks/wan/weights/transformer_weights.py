@@ -60,7 +60,7 @@ class WanTransformerAttentionBlock(WeightModule):
 
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
-            lazy_load_path = os.path.join(self.config.dit_quantized_ckpt, f"block_{block_index}.safetensors")
+            lazy_load_path = os.path.join(self.config["dit_quantized_ckpt"], f"block_{block_index}.safetensors")
             self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
         else:
             self.lazy_load_file = None
@@ -113,6 +113,11 @@ class WanSelfAttention(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
 
+        if self.config.get("sf_config", False):
+            self.attn_rms_type = "self_forcing"
+        else:
+            self.attn_rms_type = "sgl-kernel"
+
         self.add_module(
             "modulation",
             TENSOR_REGISTER["Default"](
@@ -136,6 +141,7 @@ class WanSelfAttention(WeightModule):
                 self.lazy_load_file,
             ),
         )
+
         self.add_module(
             "self_attn_k",
             MM_WEIGHT_REGISTER[self.mm_type](
@@ -165,7 +171,7 @@ class WanSelfAttention(WeightModule):
         )
         self.add_module(
             "self_attn_norm_q",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](
+            RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
                 self.lazy_load,
                 self.lazy_load_file,
@@ -173,7 +179,7 @@ class WanSelfAttention(WeightModule):
         )
         self.add_module(
             "self_attn_norm_k",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](
+            RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
                 self.lazy_load,
                 self.lazy_load_file,
@@ -191,7 +197,7 @@ class WanSelfAttention(WeightModule):
             self.add_module("self_attn_1", ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]())
 
         if self.config["seq_parallel"]:
-            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config.parallel.get("seq_p_attn_type", "ulysses")]())
+            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")]())
 
         if self.quant_method in ["advanced_ptq"]:
             self.add_module(
@@ -221,6 +227,11 @@ class WanCrossAttention(WeightModule):
         self.config = config
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
+
+        if self.config.get("sf_config", False):
+            self.attn_rms_type = "self_forcing"
+        else:
+            self.attn_rms_type = "sgl-kernel"
 
         self.add_module(
             "norm3",
@@ -269,7 +280,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_q",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](
+            RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
                 self.lazy_load,
                 self.lazy_load_file,
@@ -277,7 +288,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_k",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](
+            RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
                 self.lazy_load,
                 self.lazy_load_file,
@@ -285,7 +296,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())
 
-        if self.config.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
             self.add_module(
                 "cross_attn_k_img",
                 MM_WEIGHT_REGISTER[self.mm_type](
@@ -306,7 +317,7 @@ class WanCrossAttention(WeightModule):
             )
             self.add_module(
                 "cross_attn_norm_k_img",
-                RMS_WEIGHT_REGISTER["sgl-kernel"](
+                RMS_WEIGHT_REGISTER[self.attn_rms_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
                     self.lazy_load,
                     self.lazy_load_file,

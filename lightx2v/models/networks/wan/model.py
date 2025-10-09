@@ -62,15 +62,15 @@ class WanModel(CompiledMethodsMixin):
             self.init_empty_model = False
 
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
+        self.dit_quantized = self.config["mm_config"].get("mm_type", "Default") != "Default"
 
         if self.dit_quantized:
-            dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
-            if self.config.model_cls == "wan2.1_distill":
+            dit_quant_scheme = self.config["mm_config"].get("mm_type").split("-")[1]
+            if self.config["model_cls"] == "wan2.1_distill":
                 dit_quant_scheme = "distill_" + dit_quant_scheme
             if dit_quant_scheme == "gguf":
                 self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
-                self.config.use_gguf = True
+                self.config["use_gguf"] = True
             else:
                 self.dit_quantized_ckpt = find_hf_model_path(
                     config,
@@ -87,7 +87,7 @@ class WanModel(CompiledMethodsMixin):
             self.dit_quantized_ckpt = None
             assert not self.config.get("lazy_load", False)
 
-        self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
+        self.weight_auto_quant = self.config["mm_config"].get("weight_auto_quant", False)
         if self.dit_quantized:
             assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
 
@@ -158,7 +158,7 @@ class WanModel(CompiledMethodsMixin):
         weight_dict = {}
         for file_path in safetensors_files:
             if self.config.get("adapter_model_path", None) is not None:
-                if self.config.adapter_model_path == file_path:
+                if self.config["adapter_model_path"] == file_path:
                     continue
             file_weights = self._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
             weight_dict.update(file_weights)
@@ -367,7 +367,7 @@ class WanModel(CompiledMethodsMixin):
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
@@ -400,7 +400,7 @@ class WanModel(CompiledMethodsMixin):
             self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
@@ -441,7 +441,7 @@ class WanModel(CompiledMethodsMixin):
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
 
-        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] == "i2v":
+        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v"]:
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
 
             padding_size = (world_size - (embed.shape[0] % world_size)) % world_size

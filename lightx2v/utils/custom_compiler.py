@@ -56,12 +56,14 @@ def compiled_method(compile_options: Optional[Dict] = None):
 
         def _select_graph(graph_name: str):
             if graph_name not in state["compiled_graphs"]:
-                raise ValueError(f"Graph '{graph_name}' not found. Available graphs: {list(state['compiled_graphs'].keys())}")
-
-            logger.info(f"[Compile] Selecting graph '{graph_name}' for {func_name}")
-            state["selected_graph"] = graph_name
-            state["selected_compiled"] = state["compiled_graphs"][graph_name]
-            logger.info(f"[Compile] {func_name} will now use graph '{graph_name}' for inference")
+                logger.warning(f"[Compile] Graph '{graph_name}' not found. Available graphs: {list(state['compiled_graphs'].keys())}, returning to original function.")
+                state["selected_graph"] = None
+                state["selected_compiled"] = None
+            else:
+                logger.info(f"[Compile] Selecting graph '{graph_name}' for {func_name}")
+                state["selected_graph"] = graph_name
+                state["selected_compiled"] = state["compiled_graphs"][graph_name]
+                logger.info(f"[Compile] {func_name} will now use graph '{graph_name}' for inference")
 
         def _unselect_graph():
             logger.info(f"[Compile] Unselecting graph for {func_name}, returning to original function")

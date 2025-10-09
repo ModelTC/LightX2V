@@ -2,6 +2,7 @@ import os
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
@@ -35,11 +36,11 @@ class WanAudioModel(WanModel):
                     raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
             else:
                 adapter_model_name = "audio_adapter_model.safetensors"
-            self.config.adapter_model_path = os.path.join(self.config.model_path, adapter_model_name)
+            self.config["adapter_model_path"] = os.path.join(self.config["model_path"], adapter_model_name)
 
         adapter_offload = self.config.get("cpu_offload", False)
         load_from_rank0 = self.config.get("load_from_rank0", False)
-        self.adapter_weights_dict = load_weights(self.config.adapter_model_path, cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
+        self.adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
         if not adapter_offload:
             if not dist.is_initialized() or not load_from_rank0:
                 for key in self.adapter_weights_dict:
@@ -51,17 +52,17 @@ class WanAudioModel(WanModel):
         self.post_infer_class = WanAudioPostInfer
         self.transformer_infer_class = WanAudioTransformerInfer
 
-    def get_graph_name(self, shape, audio_num):
-        return f"graph_{shape[0]}x{shape[1]}_{audio_num}audio"
+    def get_graph_name(self, shape, audio_num, with_mask=True):
+        return f"graph_{shape[0]}x{shape[1]}_audio_num_{audio_num}_mask_{with_mask}"
 
-    def start_compile(self, shape, audio_num):
-        graph_name = self.get_graph_name(shape, audio_num)
+    def start_compile(self, shape, audio_num, with_mask=True):
+        graph_name = self.get_graph_name(shape, audio_num, with_mask)
         logger.info(f"[Compile] Compile shape: {shape}, audio_num:{audio_num}, graph_name: {graph_name}")
 
         target_video_length = self.config.get("target_video_length", 81)
         latents_length = (target_video_length - 1) // 16 * 4 + 1
-        latents_h = shape[0] // self.config.vae_stride[1]
-        latents_w = shape[1] // self.config.vae_stride[2]
+        latents_h = shape[0] // self.config["vae_stride"][1]
+        latents_w = shape[1] // self.config["vae_stride"][2]
 
         new_inputs = {}
         new_inputs["text_encoder_output"] = {}
@@ -73,7 +74,11 @@ class WanAudioModel(WanModel):
         new_inputs["image_encoder_output"]["vae_encoder_out"] = torch.randn(16, 1, latents_h, latents_w, dtype=torch.bfloat16).cuda()
 
         new_inputs["audio_encoder_output"] = torch.randn(audio_num, latents_length, 128, 1024, dtype=torch.bfloat16).cuda()
-        new_inputs["person_mask_latens"] = torch.zeros(audio_num, 1, (latents_h // 2), (latents_w // 2), dtype=torch.int8).cuda()
+        if with_mask:
+            new_inputs["person_mask_latens"] = torch.zeros(audio_num, 1, (latents_h // 2), (latents_w // 2), dtype=torch.int8).cuda()
+        else:
+            assert audio_num == 1, "audio_num must be 1 when with_mask is False"
+            new_inputs["person_mask_latens"] = None
 
         new_inputs["previmg_encoder_output"] = {}
         new_inputs["previmg_encoder_output"]["prev_latents"] = torch.randn(16, latents_length, latents_h, latents_w, dtype=torch.bfloat16).cuda()
@@ -90,19 +95,21 @@ class WanAudioModel(WanModel):
         self.enable_compile_mode("_infer_cond_uncond")
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        max_audio_num_num = self.config.get("compile_max_audios", 1)
+        max_audio_num_num = self.config.get("compile_max_audios", 3)
         for audio_num in range(1, max_audio_num_num + 1):
             for shape in compile_shapes:
-                self.start_compile(shape, audio_num)
+                self.start_compile(shape, audio_num, with_mask=True)
+                if audio_num == 1:
+                    self.start_compile(shape, audio_num, with_mask=False)
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config.model_cls:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
@@ -115,9 +122,10 @@ class WanAudioModel(WanModel):
         for shape in compile_shapes:
             assert shape in [[480, 832], [544, 960], [720, 1280], [832, 480], [960, 544], [1280, 720], [480, 480], [576, 576], [704, 704], [960, 960]]
 
-    def select_graph_for_compile(self):
-        logger.info(f"tgt_h, tgt_w : {self.config.get('tgt_h')}, {self.config.get('tgt_w')}, audio_num: {self.config.get('audio_num')}")
-        self.select_graph("_infer_cond_uncond", f"graph_{self.config.get('tgt_h')}x{self.config.get('tgt_w')}_{self.config.get('audio_num')}audio")
+    def select_graph_for_compile(self, input_info):
+        logger.info(f"target_h, target_w : {input_info.target_shape[0]}, {input_info.target_shape[1]}, audio_num: {input_info.audio_num}")
+        graph_name = self.get_graph_name(input_info.target_shape, input_info.audio_num, with_mask=input_info.with_mask)
+        self.select_graph("_infer_cond_uncond", graph_name)
         logger.info(f"[Compile] Compile status: {self.get_compile_status()}")
 
     @torch.no_grad()
@@ -138,7 +146,7 @@ class WanAudioModel(WanModel):
         if person_mask_latens is not None:
             pre_infer_out.adapter_args["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
 
-        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] == "i2v":
+        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v"]:
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
             padding_size = (world_size - (embed.shape[0] % world_size)) % world_size
             if padding_size > 0:

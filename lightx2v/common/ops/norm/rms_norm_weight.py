@@ -136,3 +136,15 @@ class RMSWeightFP32(RMSWeight):
         hidden_states = hidden_states.to(input_dtype)
 
         return hidden_states
+
+
+@RMS_WEIGHT_REGISTER("self_forcing")
+class RMSWeightSF(RMSWeight):
+    def __init__(self, weight_name, lazy_load=False, lazy_load_file=None, eps=1e-6):
+        super().__init__(weight_name, lazy_load, lazy_load_file, eps)
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+
+    def apply(self, x):
+        return self._norm(x.float()).type_as(x) * self.weight

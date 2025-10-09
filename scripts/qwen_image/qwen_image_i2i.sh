@@ -36,4 +36,4 @@ python -m lightx2v.infer \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i.json \
     --prompt "Change the rabbit's color to purple, with a flash light background." \
     --image_path input.jpg \
-    --save_video_path ${lightx2v_path}/save_results/qwen_image_i2i.png
+    --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i.png

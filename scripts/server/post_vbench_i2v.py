@@ -14,13 +14,13 @@ def create_i2v_messages(img_files, output_path):
     for img_path in img_files:
         file_name = os.path.basename(img_path)
         prompt = os.path.splitext(file_name)[0]
-        save_video_path = os.path.join(output_path, f"{prompt}.mp4")
+        save_result_path = os.path.join(output_path, f"{prompt}.mp4")
 
         message = {
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "image_path": img_path,
-            "save_video_path": save_video_path,
+            "save_result_path": save_result_path,
         }
         messages.append(message)
 

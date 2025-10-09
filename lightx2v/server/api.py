@@ -114,7 +114,7 @@ class ApiServer:
                 return TaskResponse(
                     task_id=task_id,
                     task_status="pending",
-                    save_video_path=message.save_video_path,
+                    save_result_path=message.save_result_path,
                 )
             except RuntimeError as e:
                 raise HTTPException(status_code=503, detail=str(e))
@@ -126,7 +126,7 @@ class ApiServer:
         async def create_task_form(
             image_file: UploadFile = File(...),
             prompt: str = Form(default=""),
-            save_video_path: str = Form(default=""),
+            save_result_path: str = Form(default=""),
             use_prompt_enhancer: bool = Form(default=False),
             negative_prompt: str = Form(default=""),
             num_fragments: int = Form(default=1),
@@ -166,7 +166,7 @@ class ApiServer:
                 negative_prompt=negative_prompt,
                 image_path=image_path,
                 num_fragments=num_fragments,
-                save_video_path=save_video_path,
+                save_result_path=save_result_path,
                 infer_steps=infer_steps,
                 target_video_length=target_video_length,
                 seed=seed,
@@ -183,7 +183,7 @@ class ApiServer:
                 return TaskResponse(
                     task_id=task_id,
                     task_status="pending",
-                    save_video_path=message.save_video_path,
+                    save_result_path=message.save_result_path,
                 )
             except RuntimeError as e:
                 raise HTTPException(status_code=503, detail=str(e))
@@ -228,13 +228,13 @@ class ApiServer:
                 if task_status.get("status") != TaskStatus.COMPLETED.value:
                     raise HTTPException(status_code=404, detail="Task not completed")
 
-                save_video_path = task_status.get("save_video_path")
-                if not save_video_path:
+                save_result_path = task_status.get("save_result_path")
+                if not save_result_path:
                     raise HTTPException(status_code=404, detail="Task result file does not exist")
 
-                full_path = Path(save_video_path)
+                full_path = Path(save_result_path)
                 if not full_path.is_absolute():
-                    full_path = self.file_service.output_video_dir / save_video_path
+                    full_path = self.file_service.output_video_dir / save_result_path
 
                 return self._stream_file_response(full_path)
 
@@ -364,7 +364,7 @@ class ApiServer:
             result = await self.video_service.generate_video_with_stop_event(message, task_info.stop_event)
 
             if result:
-                task_manager.complete_task(task_id, result.save_video_path)
+                task_manager.complete_task(task_id, result.save_result_path)
                 logger.info(f"Task {task_id} completed successfully")
             else:
                 if task_info.stop_event.is_set():
