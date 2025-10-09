@@ -20,8 +20,8 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
         kv = phase.linear1_kv.apply(x_motion.view(-1, x_motion.shape[-1]))
         kv = kv.view(T, -1, kv.shape[-1])
         q = phase.linear1_q.apply(x_feat)
-        k, v = rearrange(kv, "L N (K H D) -> K L N H D", K=2, H=self.config.num_heads)
-        q = rearrange(q, "S (H D) -> S H D", H=self.config.num_heads)
+        k, v = rearrange(kv, "L N (K H D) -> K L N H D", K=2, H=self.config["num_heads"])
+        q = rearrange(q, "S (H D) -> S H D", H=self.config["num_heads"])
 
         q = phase.q_norm.apply(q).view(T, q.shape[0] // T, q.shape[1], q.shape[2])
         k = phase.k_norm.apply(k)

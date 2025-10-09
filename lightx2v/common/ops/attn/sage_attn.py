@@ -36,38 +36,15 @@ class SageAttn2Weight(AttnWeightTemplate):
         model_cls=None,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-        if model_cls == "hunyuan":
-            x1 = sageattn(
-                q[: cu_seqlens_q[1]].unsqueeze(0),
-                k[: cu_seqlens_kv[1]].unsqueeze(0),
-                v[: cu_seqlens_kv[1]].unsqueeze(0),
-                tensor_layout="NHD",
-            )
-            x2 = sageattn(
-                q[cu_seqlens_q[1] :].unsqueeze(0),
-                k[cu_seqlens_kv[1] :].unsqueeze(0),
-                v[cu_seqlens_kv[1] :].unsqueeze(0),
-                tensor_layout="NHD",
-            )
-            x = torch.cat((x1, x2), dim=1)
-            x = x.view(max_seqlen_q, -1)
-        elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df", "seko_talk", "wan2.2", "wan2.1_vace", "wan2.2_moe", "wan2.2_animate", "wan2.2_moe_distill", "qwen_image"]:
-            if len(q.shape) == 3:
-                x = sageattn(
-                    q.unsqueeze(0),
-                    k.unsqueeze(0),
-                    v.unsqueeze(0),
-                    tensor_layout="NHD",
-                )
-                x = x.view(max_seqlen_q, -1)
-            elif len(q.shape) == 4:
-                x = sageattn(
-                    q,
-                    k,
-                    v,
-                    tensor_layout="NHD",
-                )
-                x = x.view(q.shape[0] * max_seqlen_q, -1)
-        else:
-            raise NotImplementedError(f"Model class '{model_cls}' is not implemented in this attention implementation")
+        if len(q.shape) == 3:
+            bs = 1
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        elif len(q.shape) == 4:
+            bs = q.shape[0]
+        x = sageattn(
+            q,
+            k,
+            v,
+            tensor_layout="NHD",
+        ).view(bs * max_seqlen_q, -1)
         return x

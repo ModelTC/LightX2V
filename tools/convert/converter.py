@@ -345,6 +345,7 @@ def quantize_model(
     weights,
     w_bit=8,
     target_keys=["attn", "ffn"],
+    adapter_keys=None,
     key_idx=2,
     ignore_key=None,
     linear_dtype=torch.int8,
@@ -375,18 +376,21 @@ def quantize_model(
 
             tensor = weights[key]
 
-            # Skip non-tensors, small tensors, and non-2D tensors
+            # Skip non-tensors and non-2D tensors
             if not isinstance(tensor, torch.Tensor) or tensor.dim() != 2:
                 if tensor.dtype != non_linear_dtype:
                     weights[key] = tensor.to(non_linear_dtype)
                 continue
 
             # Check if key matches target modules
+
             parts = key.split(".")
+
             if len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
-                if tensor.dtype != non_linear_dtype:
-                    weights[key] = tensor.to(non_linear_dtype)
-                continue
+                if adapter_keys is not None and not any(adapter_key in parts for adapter_key in adapter_keys):
+                    if tensor.dtype != non_linear_dtype:
+                        weights[key] = tensor.to(non_linear_dtype)
+                    continue
 
             try:
                 # Quantize tensor and store results
@@ -511,6 +515,7 @@ def convert_weights(args):
             converted_weights,
             w_bit=args.bits,
             target_keys=args.target_keys,
+            adapter_keys=args.adapter_keys,
             key_idx=args.key_idx,
             ignore_key=args.ignore_key,
             linear_dtype=args.linear_dtype,
@@ -535,6 +540,8 @@ def convert_weights(args):
                 match = block_pattern.search(key)
                 if match:
                     block_idx = match.group(1)
+                    if args.model_type == "wan_animate_dit" and "face_adapter" in key:
+                        block_idx = str(int(block_idx) * 5)
                     block_groups[block_idx][key] = tensor
                 else:
                     non_block_weights[key] = tensor
@@ -635,7 +642,7 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip"],
+        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit"],
         default="wan_dit",
         help="Model type",
     )
@@ -684,6 +691,7 @@ def main():
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
                 "ignore_key": ["ca", "audio"],
             },
+            "wan_animate_dit": {"key_idx": 2, "target_keys": ["self_attn", "cross_attn", "ffn"], "adapter_keys": ["linear1_kv", "linear1_q", "linear2"], "ignore_key": None},
             "hunyuan_dit": {
                 "key_idx": 2,
                 "target_keys": [
@@ -710,6 +718,7 @@ def main():
         }
 
         args.target_keys = model_type_keys_map[args.model_type]["target_keys"]
+        args.adapter_keys = model_type_keys_map[args.model_type]["adapter_keys"] if "adapter_keys" in model_type_keys_map[args.model_type] else None
         args.key_idx = model_type_keys_map[args.model_type]["key_idx"]
         args.ignore_key = model_type_keys_map[args.model_type]["ignore_key"]
 

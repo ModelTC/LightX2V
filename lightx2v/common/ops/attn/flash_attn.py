@@ -34,6 +34,10 @@ class FlashAttn2Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         model_cls=None,
     ):
+        if len(q.shape) == 3:
+            bs = 1
+        elif len(q.shape) == 4:
+            bs = q.shape[0]
         x = flash_attn_varlen_func(
             q,
             k,
@@ -42,7 +46,7 @@ class FlashAttn2Weight(AttnWeightTemplate):
             cu_seqlens_kv,
             max_seqlen_q,
             max_seqlen_kv,
-        ).reshape(max_seqlen_q, -1)
+        ).reshape(bs * max_seqlen_q, -1)
         return x
 
 
@@ -63,23 +67,16 @@ class FlashAttn3Weight(AttnWeightTemplate):
         model_cls=None,
     ):
         if len(q.shape) == 3:
-            x = flash_attn_varlen_func_v3(
-                q,
-                k,
-                v,
-                cu_seqlens_q,
-                cu_seqlens_kv,
-                max_seqlen_q,
-                max_seqlen_kv,
-            ).reshape(max_seqlen_q, -1)
+            bs = 1
         elif len(q.shape) == 4:
-            x = flash_attn_varlen_func_v3(
-                q,
-                k,
-                v,
-                cu_seqlens_q,
-                cu_seqlens_kv,
-                max_seqlen_q,
-                max_seqlen_kv,
-            ).reshape(q.shape[0] * max_seqlen_q, -1)
+            bs = q.shape[0]
+        x = flash_attn_varlen_func_v3(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_kv,
+            max_seqlen_q,
+            max_seqlen_kv,
+        ).reshape(bs * max_seqlen_q, -1)
         return x
