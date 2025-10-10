@@ -16,9 +16,6 @@ from safetensors import safe_open
 from safetensors import torch as st
 from tqdm import tqdm
 
-SCALE_SUFFIX = "_scale"
-COMFYUI_SCALE_SUFFIX = ".scale_weight"
-
 
 def get_key_mapping_rules(direction, model_type):
     if model_type == "wan_dit":
@@ -346,16 +343,7 @@ def quantize_tensor(w, w_bit=8, dtype=torch.int8):
     return w_q, scales
 
 
-def quantize_model(
-    weights,
-    w_bit=8,
-    target_keys=["attn", "ffn"],
-    adapter_keys=None,
-    key_idx=2,
-    ignore_key=None,
-    linear_dtype=torch.int8,
-    non_linear_dtype=torch.float,
-):
+def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=None, key_idx=2, ignore_key=None, linear_dtype=torch.int8, non_linear_dtype=torch.float, comfyui_mode=False):
     """
     Quantize model weights in-place
 
@@ -403,7 +391,10 @@ def quantize_model(
 
                 # Replace original tensor and store scales
                 weights[key] = w_q
-                weights[key + COMFYUI_SCALE_SUFFIX] = scales
+                if comfyui_mode:
+                    weights[key.replace(".weight", ".scale_weight")] = scales
+                else:
+                    weights[key + "_scale"] = scales
 
                 total_quantized += 1
                 total_size += tensor.numel() * tensor.element_size() / (1024**2)  # MB
@@ -701,6 +692,7 @@ def convert_weights(args):
             ignore_key=args.ignore_key,
             linear_dtype=args.linear_dtype,
             non_linear_dtype=args.non_linear_dtype,
+            comfyui_mode=args.comfyui_mode,
         )
 
     os.makedirs(args.output, exist_ok=True)
@@ -855,6 +847,7 @@ def main():
     parser.add_argument("-b", "--save_by_block", action="store_true")
 
     # Quantization
+    parser.add_argument("--comfyui_mode", action="store_true")
     parser.add_argument("--quantized", action="store_true")
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
     parser.add_argument(
