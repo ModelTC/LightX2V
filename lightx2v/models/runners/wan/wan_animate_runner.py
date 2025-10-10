@@ -22,6 +22,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import load_weights, remove_substrings_from_keys
+from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.2_animate")
@@ -150,6 +151,12 @@ class WanAnimateRunner(WanRunner):
         )
         return {"image_encoder_output": {"clip_encoder_out": clip_encoder_out, "vae_encoder_out": vae_encoder_out, "pose_latents": pose_latents, "face_pixel_values": face_pixel_values}}
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_labels=["WanAnimateRunner"],
+    )
     def run_vae_encoder(
         self,
         conditioning_pixel_values,
@@ -269,7 +276,12 @@ class WanAnimateRunner(WanRunner):
         self.prepare_input()
         super().init_run()
 
-    @ProfilingContext4DebugL1("Run VAE Decoder")
+    @ProfilingContext4DebugL1(
+        "Run VAE Decoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
+        metrics_labels=["WanAnimateRunner"],
+    )
     def run_vae_decoder(self, latents):
         if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             self.vae_decoder = self.load_vae_decoder()
@@ -351,6 +363,12 @@ class WanAnimateRunner(WanRunner):
         gc.collect()
         super().process_images_after_vae_decoder()
 
+    @ProfilingContext4DebugL1(
+        "Run Image Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_img_encode_duration,
+        metrics_labels=["WanAnimateRunner"],
+    )
     def run_image_encoder(self, img):  # CHW
         if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             self.image_encoder = self.load_image_encoder()

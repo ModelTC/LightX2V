@@ -41,3 +41,10 @@ def GET_SENSITIVE_DTYPE():
     if RUNNING_FLAG == "None":
         return GET_DTYPE()
     return DTYPE_MAP[RUNNING_FLAG]
+
+@lru_cache(maxsize=None)
+def GET_RECORDER_MODE():
+    RECORDER_MODE = int(os.getenv("RECORDER_MODE", "0"))
+    return RECORDER_MODE
+
+
