@@ -683,17 +683,22 @@ def convert_weights(args):
             load_loras(path, converted_weights, alpha, key_mapping_rules)
 
     if args.quantized:
-        converted_weights = quantize_model(
-            converted_weights,
-            w_bit=args.bits,
-            target_keys=args.target_keys,
-            adapter_keys=args.adapter_keys,
-            key_idx=args.key_idx,
-            ignore_key=args.ignore_key,
-            linear_dtype=args.linear_dtype,
-            non_linear_dtype=args.non_linear_dtype,
-            comfyui_mode=args.comfyui_mode,
-        )
+        if args.full_quantized and args.comfyui_mode:
+            logger.info("Quant all tensors...")
+            for k in converted_weights.keys():
+                converted_weights[k] = converted_weights[k].float().to(args.linear_dtype)
+        else:
+            converted_weights = quantize_model(
+                converted_weights,
+                w_bit=args.bits,
+                target_keys=args.target_keys,
+                adapter_keys=args.adapter_keys,
+                key_idx=args.key_idx,
+                ignore_key=args.ignore_key,
+                linear_dtype=args.linear_dtype,
+                non_linear_dtype=args.non_linear_dtype,
+                comfyui_mode=args.comfyui_mode,
+            )
 
     os.makedirs(args.output, exist_ok=True)
 
@@ -848,6 +853,7 @@ def main():
 
     # Quantization
     parser.add_argument("--comfyui_mode", action="store_true")
+    parser.add_argument("--full_quantized", action="store_true")
     parser.add_argument("--quantized", action="store_true")
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
     parser.add_argument(
