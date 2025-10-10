@@ -311,7 +311,7 @@ class WanAnimateRunner(WanRunner):
                 dtype=GET_DTYPE(),
             )  # c t h w
         else:
-            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach()  # c t h w
+            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach().cuda()  # c t h w
 
         bg_pixel_values, mask_pixel_values = None, None
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
