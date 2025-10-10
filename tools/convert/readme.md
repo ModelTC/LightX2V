@@ -72,6 +72,31 @@ python converter.py \
     --quantized
 ```
 
+### QWen-Image DIT
+
+```bash
+python converter.py \
+    --source /path/to/Qwen-Image-Edit/transformer \
+    --output /Path/To/output \
+    --output_ext .safetensors \
+    --output_name qwen_int8 \
+    --linear_dtype torch.int8 \
+    --model_type qwen_image_dit \
+    --quantized \
+    --save_by_block
+```
+
+```bash
+python converter.py \
+    --source /path/to/Qwen-Image-Edit/transformer \
+    --output /Path/To/output \
+    --output_ext .safetensors \
+    --output_name qwen_fp8 \
+    --linear_dtype torch.float8_e4m3fn \
+    --model_type qwen_image_dit \
+    --quantized \
+    --save_by_block
+```
 
 ### Wan T5EncoderModel
 
