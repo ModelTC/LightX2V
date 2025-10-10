@@ -18,11 +18,11 @@ from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import load_weights, remove_substrings_from_keys
-from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.2_animate")

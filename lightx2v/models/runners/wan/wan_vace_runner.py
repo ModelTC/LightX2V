@@ -8,10 +8,10 @@ from PIL import Image
 from lightx2v.models.input_encoders.hf.vace.vace_processor import VaceVideoProcessor
 from lightx2v.models.networks.wan.vace_model import WanVaceModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.server.metrics import monitor_cli
 
 
 @RUNNER_REGISTER("wan2.1_vace")
