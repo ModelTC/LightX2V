@@ -17,13 +17,13 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 class WanVaceRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
-        assert self.config.task == "vace"
+        assert self.config["task"] == "vace"
         self.vid_proc = VaceVideoProcessor(
-            downsample=tuple([x * y for x, y in zip(self.config.vae_stride, self.config.patch_size)]),
+            downsample=tuple([x * y for x, y in zip(self.config["vae_stride"], self.config["patch_size"])]),
             min_area=720 * 1280,
             max_area=720 * 1280,
-            min_fps=self.config.get("fps", 16),
-            max_fps=self.config.get("fps", 16),
+            min_fps=self.config["fps"] if "fps" in self.config else 16,
+            max_fps=self.config["fps"] if "fps" in self.config else 16,
             zero_start=True,
             seq_len=75600,
             keep_last=True,
@@ -31,7 +31,7 @@ class WanVaceRunner(WanRunner):
 
     def load_transformer(self):
         model = WanVaceModel(
-            self.config.model_path,
+            self.config["model_path"],
             self.config,
             self.init_device,
         )
@@ -57,7 +57,7 @@ class WanVaceRunner(WanRunner):
                 src_mask[i] = torch.clamp((src_mask[i][:1, :, :, :] + 1) / 2, min=0, max=1)
                 image_sizes.append(src_video[i].shape[2:])
             elif sub_src_video is None:
-                src_video[i] = torch.zeros((3, self.config.target_video_length, image_size[0], image_size[1]), device=device)
+                src_video[i] = torch.zeros((3, self.config["target_video_length"], image_size[0], image_size[1]), device=device)
                 src_mask[i] = torch.ones_like(src_video[i], device=device)
                 image_sizes.append(image_size)
             else:
@@ -89,7 +89,7 @@ class WanVaceRunner(WanRunner):
         return src_video, src_mask, src_ref_images
 
     def run_vae_encoder(self, frames, ref_images, masks):
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+        if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             self.vae_encoder = self.load_vae_encoder()
         if ref_images is None:
             ref_images = [None] * len(frames)
@@ -118,11 +118,11 @@ class WanVaceRunner(WanRunner):
                 latent = torch.cat([*ref_latent, latent], dim=1)
             cat_latents.append(latent)
         self.latent_shape = list(cat_latents[0].shape)
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+        if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             del self.vae_encoder
             torch.cuda.empty_cache()
             gc.collect()
-        return self.get_vae_encoder_output(cat_latents, masks, ref_images)
+        return self.get_vae_encoder_output(cat_latents, masks, ref_images), self.set_input_info_latent_shape()
 
     def get_vae_encoder_output(self, cat_latents, masks, ref_images):
         if ref_images is None:
@@ -133,15 +133,15 @@ class WanVaceRunner(WanRunner):
         result_masks = []
         for mask, refs in zip(masks, ref_images):
             c, depth, height, width = mask.shape
-            new_depth = int((depth + 3) // self.config.vae_stride[0])
-            height = 2 * (int(height) // (self.config.vae_stride[1] * 2))
-            width = 2 * (int(width) // (self.config.vae_stride[2] * 2))
+            new_depth = int((depth + 3) // self.config["vae_stride"][0])
+            height = 2 * (int(height) // (self.config["vae_stride"][1] * 2))
+            width = 2 * (int(width) // (self.config["vae_stride"][2] * 2))
 
             # reshape
             mask = mask[0, :, :, :]
-            mask = mask.view(depth, height, self.config.vae_stride[1], width, self.config.vae_stride[1])  # depth, height, 8, width, 8
+            mask = mask.view(depth, height, self.config["vae_stride"][1], width, self.config["vae_stride"][1])  # depth, height, 8, width, 8
             mask = mask.permute(2, 4, 0, 1, 3)  # 8, 8, depth, height, width
-            mask = mask.reshape(self.config.vae_stride[1] * self.config.vae_stride[2], depth, height, width)  # 8*8, depth, height, width
+            mask = mask.reshape(self.config["vae_stride"][1] * self.config["vae_stride"][2], depth, height, width)  # 8*8, depth, height, width
 
             # interpolation
             mask = F.interpolate(mask.unsqueeze(0), size=(new_depth, height, width), mode="nearest-exact").squeeze(0)
@@ -161,7 +161,7 @@ class WanVaceRunner(WanRunner):
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+        if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             self.vae_decoder = self.load_vae_decoder()
 
         if self.src_ref_images is not None:
@@ -172,7 +172,7 @@ class WanVaceRunner(WanRunner):
 
         images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
 
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+        if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             del self.vae_decoder
             torch.cuda.empty_cache()
             gc.collect()

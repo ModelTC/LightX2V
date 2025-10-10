@@ -5,8 +5,8 @@ from lightx2v.utils.envs import *
 class WanVaceTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
-        self.vace_blocks_num = len(self.config.vace_layers)
-        self.vace_blocks_mapping = {orig_idx: seq_idx for seq_idx, orig_idx in enumerate(self.config.vace_layers)}
+        self.vace_blocks_num = len(self.config["vace_layers"])
+        self.vace_blocks_mapping = {orig_idx: seq_idx for seq_idx, orig_idx in enumerate(self.config["vace_layers"])}
 
     def infer(self, weights, pre_infer_out):
         pre_infer_out.c = self.vace_pre_process(weights.vace_patch_embedding, pre_infer_out.vace_context)

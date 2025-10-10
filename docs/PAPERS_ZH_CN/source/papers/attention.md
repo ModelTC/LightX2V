@@ -103,3 +103,11 @@
 ### VSA: Faster Video Diffusion with Trainable Sparse Attention
 
 [paper](https://arxiv.org/abs/2505.13389) [code](https://github.com/hao-ai-lab/FastVideo)
+
+### QuantSparse: Comprehensively Compressing Video Diffusion Transformer with Model Quantization and Attention Sparsification
+
+[paper](https://arxiv.org/abs/2509.23681)
+
+### SLA: Beyond Sparsity in Diffusion Transformers via Fine-Tunable Sparse-Linear Attention
+
+[paper](https://arxiv.org/abs/2509.24006)
