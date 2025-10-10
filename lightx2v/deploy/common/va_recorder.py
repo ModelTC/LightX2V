@@ -13,6 +13,12 @@ import torchaudio as ta
 from loguru import logger
 
 
+def pseudo_random(a, b):
+    x = str(time.time()).split('.')[1]
+    y = int(float('0.' + x) * 1000000)
+    return a + (y % (b - a + 1))
+
+
 class VARecorder:
     def __init__(
         self,
@@ -23,7 +29,7 @@ class VARecorder:
         self.livestream_url = livestream_url
         self.fps = fps
         self.sample_rate = sample_rate
-        self.audio_port = random.choice(range(32000, 40000))
+        self.audio_port = pseudo_random(32000, 40000)
         self.video_port = self.audio_port + 1
         logger.info(f"VARecorder audio port: {self.audio_port}, video port: {self.video_port}")
 

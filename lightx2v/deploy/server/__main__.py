@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -73,9 +73,9 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# 添加icon目录的静态文件服务
-icon_dir = os.path.join(os.path.dirname(__file__), "static", "icon")
-app.mount("/icon", StaticFiles(directory=icon_dir), name="icon")
+# 添加assets目录的静态文件服务
+assets_dir = os.path.join(os.path.dirname(__file__), "static", "assets")
+app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 security = HTTPBearer()
 
 
@@ -299,7 +299,6 @@ async def api_v1_task_submit(request: Request, user=Depends(verify_user_access))
 @app.get("/api/v1/task/query")
 async def api_v1_task_query(request: Request, user=Depends(verify_user_access)):
     try:
-        # 检查是否有task_ids参数（批量查询）
         if "task_ids" in request.query_params:
             task_ids = request.query_params["task_ids"].split(",")
             tasks = []
@@ -629,7 +628,8 @@ async def api_v1_monitor_metrics():
 
 
 @app.get("/api/v1/template/asset_url/{template_type}/{filename}")
-async def api_v1_template_asset_url(template_type: str, filename: str, valid=Depends(verify_user_access)):
+async def api_v1_template_asset_url(template_type: str, filename: str):
+    """get template asset URL - no authentication required"""
     try:
         url = await data_manager.presign_template_url(template_type, filename)
         if url is None:
@@ -643,8 +643,8 @@ async def api_v1_template_asset_url(template_type: str, filename: str, valid=Dep
 
 # Template API endpoints
 @app.get("/assets/template/{template_type}/{filename}")
-async def assets_template(template_type: str, filename: str, valid=Depends(verify_user_access_from_query)):
-    """get template file"""
+async def assets_template(template_type: str, filename: str):
+    """get template file - no authentication required"""
     try:
         if not await data_manager.template_file_exists(template_type, filename):
             return error_response(f"template file {template_type} {filename} not found", 404)
@@ -685,8 +685,8 @@ async def assets_template(template_type: str, filename: str, valid=Depends(verif
 
 
 @app.get("/api/v1/template/list")
-async def api_v1_template_list(request: Request, valid=Depends(verify_user_access)):
-    """get template file list (support pagination)"""
+async def api_v1_template_list(request: Request):
+    """get template file list (support pagination) - no authentication required"""
     try:
         # check page params
         page = int(request.query_params.get("page", 1))
@@ -739,8 +739,8 @@ async def api_v1_template_list(request: Request, valid=Depends(verify_user_acces
 
 
 @app.get("/api/v1/template/tasks")
-async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_access)):
-    """get template task list (support pagination)"""
+async def api_v1_template_tasks(request: Request):
+    """get template task list (support pagination) - no authentication required"""
     try:
         # check page params
         page = int(request.query_params.get("page", 1))
@@ -763,9 +763,9 @@ async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_acce
                 template_data = json.loads(bytes_data)
                 template_data["task"]["model_cls"] = model_pipelines.outer_model_name(template_data["task"]["model_cls"])
                 all_categories.update(template_data["task"]["tags"])
-                if category is not None and category != "all" and category not in template_data["task"]["tags"]:
+                if category and category not in template_data["task"]["tags"]:
                     continue
-                if search is not None and search not in template_data["task"]["params"]["prompt"] + template_data["task"]["params"]["negative_prompt"] + template_data["task"][
+                if search and search not in template_data["task"]["params"]["prompt"] + template_data["task"]["params"]["negative_prompt"] + template_data["task"][
                     "model_cls"
                 ] + template_data["task"]["stage"] + template_data["task"]["task_type"] + ",".join(template_data["task"]["tags"]):
                     continue
@@ -788,6 +788,130 @@ async def api_v1_template_tasks(request: Request, valid=Depends(verify_user_acce
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
+
+
+@app.get("/api/v1/template/{template_id}")
+async def api_v1_template_get(template_id: str, user=None):
+    try:
+        template_files = await data_manager.list_template_files("tasks")
+        template_files = [] if template_files is None else template_files
+
+        for template_file in template_files:
+            try:
+                bytes_data = await data_manager.load_template_file("tasks", template_file)
+                template_data = json.loads(bytes_data)
+                if template_data["task"]["task_id"] == template_id:
+                    return template_data["task"]
+            except Exception as e:
+                logger.warning(f"Failed to load template file {template_file}: {e}")
+                continue
+        return error_response("Template not found", 404)
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.post("/api/v1/share/create")
+async def api_v1_share_create(request: Request, user=Depends(verify_user_access)):
+    try:
+        params = await request.json()
+        task_id = params["task_id"]
+        valid_days = params.get("valid_days", 7)
+        auth_type = params.get("auth_type", "public")
+        auth_value = params.get("auth_value", "")
+        share_type = params.get("share_type", "task")
+        assert auth_type == "public", "Only public share is supported now"
+
+        if share_type == "template":
+            template = await api_v1_template_get(task_id, user)
+            assert isinstance(template, dict) and template["task_id"] == task_id, f"Template {task_id} not found"
+        else:
+            task = await task_manager.query_task(task_id, user["user_id"], only_task=True)
+            assert task, f"Task {task_id} not found"
+
+        if auth_type == "user_id":
+            assert auth_value != "", "Target user is required for auth_type = user_id"
+            target_user = await task_manager.query_user(auth_value)
+            assert target_user and target_user["user_id"] == auth_value, f"Target user {auth_value} not found"
+
+        share_id = await task_manager.create_share(task_id, user["user_id"], share_type, valid_days, auth_type, auth_value)
+        return {"share_id": share_id, "share_url": f"/share/{share_id}"}
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.get("/api/v1/share/{share_id}")
+async def api_v1_share_get(share_id: str):
+    try:
+        share_data = await task_manager.query_share(share_id)
+        assert share_data, f"Share {share_id} not found or expired or deleted"
+        task_id = share_data["task_id"]
+        share_type = share_data["share_type"]
+        assert share_data["auth_type"] == "public", "Only public share is supported now"
+
+        if share_type == "template":
+            task = await api_v1_template_get(task_id, None)
+            assert isinstance(task, dict) and task["task_id"] == task_id, f"Template {task_id} not found"
+        else:
+            task = await task_manager.query_task(task_id, only_task=True)
+            assert task, f"Task {task_id} not found"
+
+        user_info = await task_manager.query_user(share_data["user_id"])
+        username = user_info.get("username", "用户") if user_info else "用户"
+
+        share_info = {
+            "task_id": task_id,
+            "share_type": share_type,
+            "user_id": share_data["user_id"],
+            "username": username,
+            "task_type": task["task_type"],
+            "model_cls": task["model_cls"],
+            "stage": task["stage"],
+            "prompt": task["params"].get("prompt", ""),
+            "negative_prompt": task["params"].get("negative_prompt", ""),
+            "inputs": task["inputs"],
+            "outputs": task["outputs"],
+            "create_t": task["create_t"],
+            "valid_days": share_data["valid_days"],
+            "valid_t": share_data["valid_t"],
+            "auth_type": share_data["auth_type"],
+            "auth_value": share_data["auth_value"],
+            "output_video_url": None,
+            "input_urls": {},
+        }
+
+        for input_name, input_filename in task["inputs"].items():
+            if share_type == "template":
+                template_type = "images" if "image" in input_name else "audios"
+                input_url = await data_manager.presign_template_url(template_type, input_filename)
+            else:
+                input_url = await data_manager.presign_url(input_filename)
+            share_info["input_urls"][input_name] = input_url
+
+        for output_name, output_filename in task["outputs"].items():
+            if share_type == "template":
+                assert "video" in output_name, "Only video output is supported for template share"
+                output_url = await data_manager.presign_template_url("videos", output_filename)
+            else:
+                output_url = await data_manager.presign_url(output_filename)
+            share_info["output_video_url"] = output_url
+
+        return share_info
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+# 所有未知路由 fallback 到 index.html (必须在所有API路由之后)
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def vue_fallback(full_path: str):
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
 
 
 # =========================

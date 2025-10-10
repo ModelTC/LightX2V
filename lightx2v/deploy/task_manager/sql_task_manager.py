@@ -17,6 +17,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
         self.table_subtasks = "subtasks"
         self.table_users = "users"
         self.table_versions = "versions"
+        self.table_shares = "shares"
         self.pool = None
         self.metrics_monitor = metrics_monitor
 
@@ -29,7 +30,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
 
     def fmt_dict(self, data):
         super().fmt_dict(data)
-        for k in ["create_t", "update_t", "ping_t"]:
+        for k in ["create_t", "update_t", "ping_t", "valid_t"]:
             if k in data and isinstance(data[k], float):
                 data[k] = datetime.fromtimestamp(data[k])
         for k in ["params", "extra_info", "inputs", "outputs", "previous"]:
@@ -41,7 +42,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
         for k in ["params", "extra_info", "inputs", "outputs", "previous"]:
             if k in data:
                 data[k] = json.loads(data[k])
-        for k in ["create_t", "update_t", "ping_t"]:
+        for k in ["create_t", "update_t", "ping_t", "valid_t"]:
             if k in data:
                 data[k] = data[k].timestamp()
 
@@ -69,7 +70,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
     async def upgrade_db(self):
         versions = [
             (1, "Init tables", self.upgrade_v1),
-            # (2, "Add new fields or indexes", self.upgrade_v2),
+            (2, "Add shares table", self.upgrade_v2),
         ]
         logger.info(f"upgrade_db: {self.db_url}")
         cur_ver = await self.query_version()
@@ -161,6 +162,38 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{self.table_subtasks}_task_id ON {self.table_subtasks}(task_id)")
                 await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{self.table_subtasks}_worker_name ON {self.table_subtasks}(worker_name)")
                 await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{self.table_subtasks}_status ON {self.table_subtasks}(status)")
+
+                # update version
+                await conn.execute(f"INSERT INTO {self.table_versions} (version, description, create_t) VALUES ($1, $2, $3)", version, description, datetime.now())
+                return True
+        except:  # noqa
+            logger.error(f"upgrade_v1 error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    async def upgrade_v2(self, version, description):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                # create shares table
+                await conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.table_shares} (
+                        share_id VARCHAR(128) PRIMARY KEY,
+                        task_id VARCHAR(128),
+                        user_id VARCHAR(256),
+                        share_type VARCHAR(32),
+                        create_t TIMESTAMPTZ,
+                        update_t TIMESTAMPTZ,
+                        valid_days INTEGER,
+                        valid_t TIMESTAMPTZ,
+                        auth_type VARCHAR(32),
+                        auth_value VARCHAR(256),
+                        extra_info JSONB,
+                        tag VARCHAR(64),
+                        FOREIGN KEY (user_id) REFERENCES {self.table_users}(user_id) ON DELETE CASCADE
+                    )
+                """)
 
                 # update version
                 await conn.execute(f"INSERT INTO {self.table_versions} (version, description, create_t) VALUES ($1, $2, $3)", version, description, datetime.now())
@@ -760,6 +793,53 @@ class PostgresSQLTaskManager(BaseTaskManager):
         except:  # noqa
             logger.error(f"delete_task error: {traceback.format_exc()}")
             return False
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def insert_share(self, share_info):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                self.fmt_dict(share_info)
+                await conn.execute(
+                    f"""INSERT INTO {self.table_shares}
+                    (share_id, task_id, user_id, share_type, create_t, update_t,
+                        valid_days, valid_t, auth_type, auth_value, extra_info, tag)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    """,
+                    share_info["share_id"],
+                    share_info["task_id"],
+                    share_info["user_id"],
+                    share_info["share_type"],
+                    share_info["create_t"],
+                    share_info["update_t"],
+                    share_info["valid_days"],
+                    share_info["valid_t"],
+                    share_info["auth_type"],
+                    share_info["auth_value"],
+                    share_info["extra_info"],
+                    share_info["tag"],
+                )
+                return True
+        except:  # noqa
+            logger.error(f"create_share_link error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def query_share(self, share_id):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                row = await conn.fetchrow(f"SELECT * FROM {self.table_shares} WHERE share_id = $1 AND tag != 'delete' AND valid_t >= $2", share_id, datetime.now())
+                share = dict(row)
+                self.parse_dict(share)
+                return share
+        except:  # noqa
+            logger.error(f"query_share error: {traceback.format_exc()}")
+            return None
         finally:
             await self.release_conn(conn)
 

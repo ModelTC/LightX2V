@@ -21,13 +21,13 @@ class LocalTaskManager(BaseTaskManager):
 
     def fmt_dict(self, data):
         super().fmt_dict(data)
-        for k in ["create_t", "update_t", "ping_t"]:
+        for k in ["create_t", "update_t", "ping_t", "valid_t"]:
             if k in data:
                 data[k] = time2str(data[k])
 
     def parse_dict(self, data):
         super().parse_dict(data)
-        for k in ["create_t", "update_t", "ping_t"]:
+        for k in ["create_t", "update_t", "ping_t", "valid_t"]:
             if k in data:
                 data[k] = str2time(data[k])
 
@@ -95,7 +95,7 @@ class LocalTaskManager(BaseTaskManager):
                     continue
                 if "end_ping_t" in kwargs and kwargs["end_ping_t"] < task["ping_t"]:
                     continue
-                if not kwargs.get("include_delete", False) and task["tag"] == "delete":
+                if not kwargs.get("include_delete", False) and task.get("tag", "") == "delete":
                     continue
 
                 # 如果不是查询子任务，则添加子任务信息到任务中
@@ -305,6 +305,30 @@ class LocalTaskManager(BaseTaskManager):
         task["update_t"] = current_time()
         self.save(task, subtasks)
         return True
+
+    def get_share_filename(self, share_id):
+        return os.path.join(self.local_dir, f"share_{share_id}.json")
+
+    @class_try_catch_async
+    async def insert_share(self, share_info):
+        fpath = self.get_share_filename(share_info["share_id"])
+        self.fmt_dict(share_info)
+        with open(fpath, "w") as fout:
+            fout.write(json.dumps(share_info, indent=4, ensure_ascii=False))
+        return True
+
+    @class_try_catch_async
+    async def query_share(self, share_id):
+        fpath = self.get_share_filename(share_id)
+        if not os.path.exists(fpath):
+            return None
+        data = json.load(open(fpath))
+        self.parse_dict(data)
+        if data["tag"] == "delete":
+            raise Exception(f"Share {share_id} is deleted")
+        if data["valid_t"] < current_time():
+            raise Exception(f"Share {share_id} has expired")
+        return data
 
     @class_try_catch_async
     async def insert_user_if_not_exists(self, user_info):

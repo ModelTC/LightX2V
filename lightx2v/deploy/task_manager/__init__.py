@@ -66,6 +66,12 @@ class BaseTaskManager:
     async def delete_task(self, task_id, user_id=None):
         raise NotImplementedError
 
+    async def insert_share(self, share_info):
+        raise NotImplementedError
+
+    async def query_share(self, share_id):
+        raise NotImplementedError
+
     def fmt_dict(self, data):
         for k in ["status"]:
             if k in data:
@@ -75,6 +81,29 @@ class BaseTaskManager:
         for k in ["status"]:
             if k in data:
                 data[k] = TaskStatus[data[k]]
+
+    async def create_share(self, task_id, user_id, share_type, valid_days, auth_type, auth_value):
+        assert share_type in ["task", "template"], f"do not support {share_type} share type!"
+        assert auth_type in ["public", "login", "user_id"], f"do not support {auth_type} auth type!"
+        assert valid_days > 0, f"valid_days must be greater than 0!"
+        share_id = str(uuid.uuid4())
+        cur_t = current_time()
+        share_info = {
+            "share_id": share_id,
+            "task_id": task_id,
+            "user_id": user_id,
+            "share_type": share_type,
+            "create_t": cur_t,
+            "update_t": cur_t,
+            "valid_days": valid_days,
+            "valid_t": cur_t + valid_days * 24 * 3600,
+            "auth_type": auth_type,
+            "auth_value": auth_value,
+            "extra_info": "",
+            "tag": "",
+        }
+        assert await self.insert_share(share_info), f"create share {share_info} failed"
+        return share_id
 
     async def create_user(self, user_info):
         assert user_info["source"] in ["github", "google", "phone"], f"do not support {user_info['source']} user!"
