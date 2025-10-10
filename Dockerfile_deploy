@@ -1,4 +1,11 @@
-FROM lightx2v/lightx2v:25092201-cu128 AS base
+FROM node:alpine3.21 AS frontend_builder
+COPY lightx2v /opt/lightx2v
+
+RUN cd /opt/lightx2v/deploy/server/frontend \
+    && npm install \
+    && npm run build
+
+FROM lightx2v:25092201-cu128 AS base
 
 RUN mkdir /workspace/LightX2V
 WORKDIR /workspace/LightX2V
@@ -8,3 +15,5 @@ COPY assets assets
 COPY configs configs
 COPY lightx2v lightx2v
 COPY lightx2v_kernel lightx2v_kernel
+
+COPY --from=frontend_builder /opt/lightx2v/deploy/server/frontend/dist lightx2v/deploy/server/frontend/dist
