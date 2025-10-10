@@ -19,6 +19,7 @@ from torchvision.transforms.functional import resize
 
 from lightx2v.deploy.common.va_reader import VAReader
 from lightx2v.deploy.common.va_recorder import VARecorder
+from lightx2v.deploy.common.va_x64_recorder import VAX64Recorder
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
@@ -343,6 +344,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         target_fps = self.config.get("target_fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
 
+        if not isinstance(audio_path, str):
+            return [], 0, None, 0
+
         # Get audio files from person objects or legacy format
         audio_files, mask_files = self.get_audio_files_from_audio_path(audio_path)
 
@@ -571,8 +575,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
-            end_idx = audio_array.shape[1] // self._audio_processor.audio_frame_rate - self.prev_frame_length
-            self.segment = AudioSegment(audio_array, 0, end_idx)
+            end_idx = audio_array.shape[0] // self._audio_processor.audio_frame_rate - self.prev_frame_length
+            audio_tensor = torch.Tensor(audio_array).float().unsqueeze(0)
+            self.segment = AudioSegment(audio_tensor, 0, end_idx)
         else:
             self.segment = self.inputs["audio_segments"][segment_idx]
 
@@ -648,14 +653,24 @@ class WanAudioRunner(WanRunner):  # type:ignore
             audio_sr = self.config.get("audio_sr", 16000)
             if "video_frame_interpolation" in self.config and self.vfi_model is not None:
                 record_fps = self.config["video_frame_interpolation"]["target_fps"]
-            self.va_recorder = VARecorder(
-                livestream_url=output_video_path,
-                fps=record_fps,
-                sample_rate=audio_sr,
-            )
+
+            whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
+            if whip_shared_path and output_video_path.startswith("http"):
+                self.va_recorder = VAX64Recorder(
+                    whip_shared_path=whip_shared_path,
+                    livestream_url=output_video_path,
+                    fps=record_fps,
+                    sample_rate=audio_sr,
+                )
+            else:
+                self.va_recorder = VARecorder(
+                    livestream_url=output_video_path,
+                    fps=record_fps,
+                    sample_rate=audio_sr,
+                )
 
     def init_va_reader(self):
-        audio_path = self.config.get("audio_path", None)
+        audio_path = self.input_info.audio_path
         self.va_reader = None
         if isinstance(audio_path, dict):
             assert audio_path["type"] == "stream", f"unexcept audio_path: {audio_path}"
@@ -683,10 +698,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
             if self.va_reader is None:
                 return super().run_main(total_steps)
 
+            self.va_reader.start()
             rank, world_size = self.get_rank_and_world_size()
             if rank == world_size - 1:
                 assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
-            self.va_reader.start()
+                self.va_recorder.start(self.input_info.target_shape[1], self.input_info.target_shape[0])
+            if world_size > 1:
+                dist.barrier()
 
             self.init_run()
             if self.config.get("compile", False):
@@ -714,7 +732,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     self.init_run_segment(segment_idx, audio_array)
                     latents = self.run_segment(total_steps=None)
                     self.gen_video = self.run_vae_decoder(latents)
-                    self.end_run_segment()
+                    self.end_run_segment(segment_idx)
                     segment_idx += 1
 
         finally:
@@ -724,7 +742,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 self.va_reader.stop()
                 self.va_reader = None
             if self.va_recorder:
-                self.va_recorder.stop(wait=False)
+                self.va_recorder.stop()
                 self.va_recorder = None
 
     @ProfilingContext4DebugL1("Process after vae decoder")
