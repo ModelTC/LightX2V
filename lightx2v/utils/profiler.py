@@ -36,9 +36,9 @@ class _ProfilingContext:
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
-                metrics_func.labels(self.metrics_labels).observe(elapsed)
+                self.metrics_func.labels(self.metrics_labels).observe(elapsed)
             else:
-                metrics_func.observe(elapsed)
+                self.metrics_func.observe(elapsed)
         if self.enable_logger:
             logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
         return False
@@ -53,9 +53,9 @@ class _ProfilingContext:
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
-                metrics_func.labels(self.metrics_labels).observe(elapsed)
+                self.metrics_func.labels(self.metrics_labels).observe(elapsed)
             else:
-                metrics_func.observe(elapsed)
+                self.metrics_func.observe(elapsed)
         if self.enable_logger:
             logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
         return False
@@ -103,15 +103,15 @@ class _NullContext:
 class _ProfilingContextL1(_ProfilingContext):
     """Level 1 profiling context with Level1_Log prefix."""
 
-    def __init__(self, name):
-        super().__init__(f"Level1_Log {name}")
+    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None):
+        super().__init__(f"Level1_Log {name}", recorder_mode, metrics_func, metrics_labels)
 
 
 class _ProfilingContextL2(_ProfilingContext):
     """Level 2 profiling context with Level2_Log prefix."""
 
-    def __init__(self, name):
-        super().__init__(f"Level2_Log {name}")
+    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None):
+        super().__init__(f"Level2_Log {name}", recorder_mode, metrics_func, metrics_labels)
 
 
 """
