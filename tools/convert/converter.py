@@ -642,7 +642,7 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit"],
+        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit"],
         default="wan_dit",
         help="Model type",
     )
@@ -686,6 +686,11 @@ def main():
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
         model_type_keys_map = {
+            "qwen_image_dit": {
+                "key_idx": 2,
+                "target_keys": ["attn", "img_mlp", "txt_mlp"],
+                "ignore_key": None,
+            },
             "wan_dit": {
                 "key_idx": 2,
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
