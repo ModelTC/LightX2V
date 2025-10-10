@@ -1,10 +1,5 @@
-import queue
-import random
-import os
 import ctypes
-import signal
-import socket
-import subprocess
+import queue
 import threading
 import time
 import traceback
@@ -60,7 +55,7 @@ class VAX64Recorder:
 
                     for i in range(images.shape[0]):
                         t0 = time.time()
-                        cur_audio = audios[i * audio_chunk: (i + 1) * audio_chunk].flatten()
+                        cur_audio = audios[i * audio_chunk : (i + 1) * audio_chunk].flatten()
                         audio_ptr = cur_audio.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
                         self.whip_shared_lib.pushRawAudioFrame(self.whip_shared_handle, audio_ptr, audio_samples)
 

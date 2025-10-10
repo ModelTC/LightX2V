@@ -4,11 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import topMenu from '../components/TopBar.vue'
 import Loading from '../components/Loading.vue'
-import { 
-    isLoading, 
-    selectedTaskId, 
-    getCurrentForm, 
-    setCurrentImagePreview, 
+import {
+    isLoading,
+    selectedTaskId,
+    getCurrentForm,
+    setCurrentImagePreview,
     setCurrentAudioPreview,
     getTemplateFileUrl,
     isCreationAreaExpanded,
@@ -34,19 +34,19 @@ const videoError = ref(false)
 const fetchShareData = async () => {
     try {
         const response = await fetch(`/api/v1/share/${shareId.value}`)
-        
+
         if (!response.ok) {
             throw new Error('分享不存在或已过期')
         }
-        
+
         const data = await response.json()
         shareData.value = data
-        
+
         // 设置视频URL
         if (data.output_video_url) {
             videoUrl.value = data.output_video_url
         }
-        
+
         // 设置输入素材URL
         if (data.input_urls) {
             inputUrls.value = data.input_urls
@@ -102,7 +102,7 @@ const onVideoError = () => {
 // 获取图片素材
 const getImageMaterials = () => {
     if (!inputUrls.value) return []
-    const imageMaterials = Object.entries(inputUrls.value).filter(([name, url]) => 
+    const imageMaterials = Object.entries(inputUrls.value).filter(([name, url]) =>
         name.includes('image') && url
     )
     console.log('图片素材:', imageMaterials)
@@ -112,7 +112,7 @@ const getImageMaterials = () => {
 // 获取音频素材
 const getAudioMaterials = () => {
     if (!inputUrls.value) return []
-    const audioMaterials = Object.entries(inputUrls.value).filter(([name, url]) => 
+    const audioMaterials = Object.entries(inputUrls.value).filter(([name, url]) =>
         name.includes('audio') && url
     )
     console.log('音频素材:', audioMaterials)
@@ -124,7 +124,7 @@ const handleImageError = (event, inputName, url) => {
     console.log('图片加载失败:', inputName, url)
     console.log('错误详情:', event)
     console.log('图片元素:', event.target)
-    
+
     // 尝试移除crossorigin属性重新加载
     const img = event.target
     if (img.crossOrigin) {
@@ -175,7 +175,7 @@ const createSimilar = async () => {
                 // 对于任务，使用分享数据中的URL
                 imageUrl = shareData.value.input_urls?.input_image || shareData.value.input_urls?.[Object.keys(shareData.value.input_urls).find(key => key.includes('image'))]
             }
-            
+
             if (imageUrl) {
                 currentForm.imageUrl = imageUrl
                 setCurrentImagePreview(imageUrl) // 直接使用URL作为预览
@@ -209,7 +209,7 @@ const createSimilar = async () => {
                 // 对于任务，使用分享数据中的URL
                 audioUrl = shareData.value.input_urls?.input_audio || shareData.value.input_urls?.[Object.keys(shareData.value.input_urls).find(key => key.includes('audio'))]
             }
-            
+
             if (audioUrl) {
                 currentForm.audioUrl = audioUrl
                 setCurrentAudioPreview(audioUrl) // 直接使用URL作为预览
@@ -277,7 +277,7 @@ onMounted(async () => {
     <div class="landing-page">
         <!-- TopBar -->
         <topMenu />
-        
+
         <!-- 主要内容区域 -->
         <div class="main-content main-scrollbar overflow-y-auto">
             <!-- 错误状态 -->
@@ -307,7 +307,7 @@ onMounted(async () => {
                             </div>
                             <p class="loading-text">{{ t('loadingVideo') }}...</p>
                         </div>
-                        
+
                         <!-- 视频播放器 -->
                         <video
                             v-if="videoUrl"
@@ -322,7 +322,7 @@ onMounted(async () => {
                             @error="onVideoError">
                             {{ t('browserNotSupported') }}
                         </video>
-                        
+
                         <!-- 视频错误状态 -->
                         <div v-if="videoError" class="video-error">
                             <i class="fas fa-exclamation-triangle"></i>
@@ -338,12 +338,12 @@ onMounted(async () => {
                         <h1 class="main-title">
                             {{ getShareTitle() }}
                         </h1>
-                        
+
                         <!-- 描述 -->
                         <p class="main-description">
                             {{ getShareDescription() }}
                         </p>
-                        
+
                         <!-- 特性列表 -->
                         <div class="features-list">
                             <div class="feature-item">
@@ -359,21 +359,21 @@ onMounted(async () => {
                                 <span class="feature-text">{{ t('customizableCharacter') }}</span>
                             </div>
                         </div>
-                        
+
                         <!-- 操作按钮 -->
                         <div class="action-buttons">
                             <button @click="createSimilar" class="primary-button">
                                 <i class="fas fa-magic mr-2"></i>
                                 {{ getShareButtonText() }}
                             </button>
-                            
+
                             <!-- 详细信息按钮 -->
                             <button @click="showDetails = !showDetails" class="secondary-button">
                                 <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="mr-2"></i>
                                 {{ showDetails ? t('hideDetails') : t('showDetails') }}
                             </button>
                         </div>
-                        
+
                         <!-- 技术信息 -->
                         <div class="tech-info">
                             <p class="tech-text">
@@ -397,7 +397,7 @@ onMounted(async () => {
                         {{ t('inputMaterials') }}
                     </h2>
                 </div>
-                
+
                 <!-- 三个并列的分块卡片 -->
                 <div class="materials-cards">
                     <!-- 图片卡片 -->
@@ -410,7 +410,7 @@ onMounted(async () => {
                             <div v-if="getImageMaterials().length > 0" class="image-grid">
                                 <div v-for="[inputName, url] in getImageMaterials()" :key="inputName" class="image-item">
                                     <div class="image-container">
-                                        <img :src="url" :alt="inputName" class="image-preview" 
+                                        <img :src="url" :alt="inputName" class="image-preview"
                                              @load="console.log('图片加载成功:', inputName, url)"
                                              @error="handleImageError($event, inputName, url)">
                                         <div class="image-placeholder" v-if="!url">
@@ -990,15 +990,15 @@ onMounted(async () => {
         gap: 3rem;
         padding: 0 1.5rem;
     }
-    
+
     .main-title {
         font-size: 2.5rem;
     }
-    
+
     .video-container {
         max-width: 400px;
     }
-    
+
     /* 卡片响应式 */
     .materials-cards {
         grid-template-columns: 1fr;
@@ -1010,47 +1010,47 @@ onMounted(async () => {
     .main-content {
         padding: 1rem 0;
     }
-    
+
     .content-grid {
         grid-template-columns: 1fr;
         gap: 2rem;
         padding: 0 1rem;
     }
-    
+
     .main-title {
         font-size: 2rem;
     }
-    
+
     .main-description {
         font-size: 1.125rem;
     }
-    
+
     .video-container {
         max-width: 300px;
     }
-    
+
     .info-content {
         padding: 1rem 0;
     }
-    
+
     .details-content {
         padding: 0 1rem;
     }
-    
+
     /* 移动端卡片调整 */
     .materials-cards {
         gap: 1rem;
     }
-    
+
     .card-content {
         padding: 1rem;
         min-height: 150px;
     }
-    
+
     .image-grid {
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     }
-    
+
     .materials-title {
         font-size: 1.25rem;
     }

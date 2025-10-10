@@ -22,38 +22,38 @@ const routes = [
       requiresAuth: true
     },
     children: [
-      { 
-        path: '/generate', 
-        name: 'Generate', 
-        component: Generate, 
+      {
+        path: '/generate',
+        name: 'Generate',
+        component: Generate,
         meta: { requiresAuth: true },
         props: route => ({ query: route.query })
       },
-      { 
-        path: '/projects', 
-        name: 'Projects', 
-        component: Projects, 
+      {
+        path: '/projects',
+        name: 'Projects',
+        component: Projects,
         meta: { requiresAuth: true },
         props: route => ({ query: route.query })
       },
-      { 
-        path: '/inspirations', 
-        name: 'Inspirations', 
-        component: Inspirations, 
+      {
+        path: '/inspirations',
+        name: 'Inspirations',
+        component: Inspirations,
         meta: { requiresAuth: true },
         props: route => ({ query: route.query })
       },
-      { 
-        path: '/task/:taskId', 
-        name: 'TaskDetail', 
-        component: Projects, 
+      {
+        path: '/task/:taskId',
+        name: 'TaskDetail',
+        component: Projects,
         meta: { requiresAuth: true },
         props: route => ({ taskId: route.params.taskId, query: route.query })
       },
-      { 
-        path: '/template/:templateId', 
-        name: 'TemplateDetail', 
-        component: Inspirations, 
+      {
+        path: '/template/:templateId',
+        name: 'TemplateDetail',
+        component: Inspirations,
         meta: { requiresAuth: true },
         props: route => ({ templateId: route.params.templateId, query: route.query })
       },
@@ -77,7 +77,7 @@ router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('accessToken')
   console.log('路由守卫 - token:', token)
   console.log('路由守卫 - to.path:', to.path)
-  
+
   // 如果是不需要登录的页面，直接放行
   if (to.meta.requiresAuth === false) {
     console.log('不需要登录的页面，直接放行')
@@ -90,7 +90,7 @@ router.beforeEach((to, from, next) => {
     }
     return;
   }
-  
+
   // 需要登录的页面
   if (!token) { // 未登录
     console.log('需要登录但未登录，跳转到登录页')

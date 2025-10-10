@@ -1,7 +1,7 @@
 <script setup>
-import { showPromptModal, 
-        promptModalTab, 
-        getPromptTemplates, 
+import { showPromptModal,
+        promptModalTab,
+        getPromptTemplates,
         selectPromptTemplate,
         promptHistory,
         selectPromptHistory } from '../utils/other'

@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import ctypes
 import gc
 import json
@@ -14,11 +13,11 @@ from loguru import logger
 
 from lightx2v.deploy.common.utils import class_try_catch_async
 from lightx2v.infer import init_runner  # noqa
+from lightx2v.utils.input_info import set_input_info
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
-from lightx2v.utils.input_info import set_input_info
 
 
 class BaseWorker:

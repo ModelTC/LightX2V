@@ -53,7 +53,7 @@ const goToHome = () => {
                                         :alt="currentUser.username" class="size-10">
                                     </avatar>
                                     <i v-else class="fi fi-rr-circle-user text-2xl"></i>
-                                    
+
                             </div>
                             <div class="user-details">
                                 <span v-if="currentUser">

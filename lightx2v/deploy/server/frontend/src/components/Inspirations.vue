@@ -81,7 +81,7 @@ watch([inspirationSearchQuery, selectedInspirationCategory, inspirationCurrentPa
     if (inspirationCurrentPage.value > 1) {
         query.page = inspirationCurrentPage.value.toString()
     }
-    
+
     // 更新URL但不触发路由监听
     router.replace({ query })
 })
@@ -169,7 +169,7 @@ onMounted(() => {
                                                             <button v-if="page !== '...'" @click="goToInspirationPage(page)"
                                                                 :class="[
                                                                     'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20 focus:outline-offset-0',
-                                                                    page === inspirationCurrentPage 
+                                                                    page === inspirationCurrentPage
                                                                         ? 'z-10 text-white focus-visible:outline-2 focus-visible:outline-offset-2 bg-laser-purple focus-visible:outline-laser-purple'
                                                                         : 'text-gray-200 inset-ring inset-ring-gray-700 hover:bg-white/5'
                                                                 ]"
@@ -219,7 +219,7 @@ onMounted(() => {
                                                         class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
                                                         @error="handleThumbnailError" />
                                                         <!-- 移动端播放按钮 -->
-                                                        <button v-if="item?.outputs?.output_video" 
+                                                        <button v-if="item?.outputs?.output_video"
                                                             @click.stop="toggleVideoPlay($event)"
                                                             class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
                                                             <i class="fas fa-play text-sm"></i>

@@ -16,7 +16,7 @@ import {
             initLoading,
             downloadLoading,
             isLoading,
-            
+
             // 录音相关
             isRecording,
             recordingDuration,

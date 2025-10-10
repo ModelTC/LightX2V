@@ -124,12 +124,12 @@ onUnmounted(() => {
                                         <h1 class="main-title">
                                             {{ t('template') }}
                                         </h1>
-                                        
+
                                         <!-- 描述 -->
                                         <p class="main-description">
                                             {{ t('templateDescription') }}
                                         </p>
-                                        
+
                                         <!-- 特性列表 -->
                                         <div class="features-list justify-between">
                                             <div class="feature-item cursor-pointer" @click="applyTemplateImage(selectedTemplate)">
@@ -141,25 +141,25 @@ onUnmounted(() => {
                                                 <span>{{ t('onlyUseAudio') }}</span>
                                             </div>
                                         </div>
-                                        
+
                                         <!-- 操作按钮 -->
                                         <div class="action-buttons">
                                             <button @click="useTemplate(selectedTemplate)" class="primary-button">
                                                 <i class="fas fa-magic mr-2"></i>
                                                 {{ t('useTemplate') }}
                                             </button>
-                                            
+
                                             <button @click="copyShareLink(selectedTemplate?.task_id, 'template')" class="secondary-button">
                                                 <i class="fas fa-share-alt mr-2"></i>
                                                 {{ t('shareTemplate') }}
                                             </button>
-                                            
+
                                             <button @click="showDetails = !showDetails" class="secondary-button">
                                                 <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="mr-2"></i>
                                                 {{ showDetails ? t('hideDetails') : t('showDetails') }}
                                             </button>
                                         </div>
-                                        
+
                                         <!-- 技术信息 -->
                                         <div class="tech-info">
                                             <p class="tech-text">{{ t('poweredByLightX2V') }}</p>
@@ -179,7 +179,7 @@ onUnmounted(() => {
                                         {{ t('inputMaterials') }}
                                     </h2>
                                 </div>
-                                
+
                                 <!-- 三个并列的分块卡片 -->
                                 <div class="materials-cards">
                                     <!-- 图片卡片 -->
@@ -188,9 +188,9 @@ onUnmounted(() => {
                                             <i class="fas fa-image card-icon"></i>
                                             <h3 class="card-title">{{ t('image') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="selectedTemplate?.inputs?.input_image" 
+                                                <button v-if="selectedTemplate?.inputs?.input_image"
                                                         @click="applyTemplateImage(selectedTemplate)"
-                                                        class="action-btn use-btn" 
+                                                        class="action-btn use-btn"
                                                         :title="t('applyImage')">
                                                     <i class="fas fa-magic"></i>
                                                 </button>
@@ -217,9 +217,9 @@ onUnmounted(() => {
                                             <i class="fas fa-music card-icon"></i>
                                             <h3 class="card-title">{{ t('audio') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="selectedTemplate?.inputs?.input_audio" 
+                                                <button v-if="selectedTemplate?.inputs?.input_audio"
                                                         @click="applyTemplateAudio(selectedTemplate)"
-                                                        class="action-btn use-btn" 
+                                                        class="action-btn use-btn"
                                                         :title="t('applyAudio')">
                                                     <i class="fas fa-magic"></i>
                                                 </button>
@@ -244,15 +244,15 @@ onUnmounted(() => {
                                             <i class="fas fa-file-alt card-icon"></i>
                                             <h3 class="card-title">{{ t('prompt') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="selectedTemplate?.params?.prompt" 
+                                                <button v-if="selectedTemplate?.params?.prompt"
                                                         @click="copyPrompt(selectedTemplate?.params?.prompt)"
-                                                        class="action-btn copy-btn" 
+                                                        class="action-btn copy-btn"
                                                         :title="t('copy')">
                                                     <i class="fas fa-copy"></i>
                                                 </button>
-                                                <button v-if="selectedTemplate?.params?.prompt" 
+                                                <button v-if="selectedTemplate?.params?.prompt"
                                                         @click="applyTemplatePrompt(selectedTemplate)"
-                                                        class="action-btn use-btn" 
+                                                        class="action-btn use-btn"
                                                         :title="t('applyPrompt')">
                                                     <i class="fas fa-magic"></i>
                                                 </button>
@@ -753,15 +753,15 @@ onUnmounted(() => {
         gap: 3rem;
         padding: 0 1.5rem;
     }
-    
+
     .main-title {
         font-size: 2.5rem;
     }
-    
+
     .video-container {
         max-width: 400px;
     }
-    
+
     /* 卡片响应式 */
     .materials-cards {
         grid-template-columns: 1fr;
@@ -773,47 +773,47 @@ onUnmounted(() => {
     .main-content {
         padding: 1rem 0;
     }
-    
+
     .content-grid {
         grid-template-columns: 1fr;
         gap: 2rem;
         padding: 0 1rem;
     }
-    
+
     .main-title {
         font-size: 2rem;
     }
-    
+
     .main-description {
         font-size: 1.125rem;
     }
-    
+
     .video-container {
         max-width: 300px;
     }
-    
+
     .info-content {
         padding: 1rem 0;
     }
-    
+
     .details-content {
         padding: 0 1rem;
     }
-    
+
     /* 移动端卡片调整 */
     .materials-cards {
         gap: 1rem;
     }
-    
+
     .card-content {
         padding: 1rem;
         min-height: 150px;
     }
-    
+
     .image-grid {
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     }
-    
+
     .materials-title {
         font-size: 1.25rem;
     }

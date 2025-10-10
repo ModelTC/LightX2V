@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -765,9 +765,9 @@ async def api_v1_template_tasks(request: Request):
                 all_categories.update(template_data["task"]["tags"])
                 if category and category not in template_data["task"]["tags"]:
                     continue
-                if search and search not in template_data["task"]["params"]["prompt"] + template_data["task"]["params"]["negative_prompt"] + template_data["task"][
-                    "model_cls"
-                ] + template_data["task"]["stage"] + template_data["task"]["task_type"] + ",".join(template_data["task"]["tags"]):
+                if search and search not in template_data["task"]["params"]["prompt"] + template_data["task"]["params"]["negative_prompt"] + template_data["task"]["model_cls"] + template_data["task"][
+                    "stage"
+                ] + template_data["task"]["task_type"] + ",".join(template_data["task"]["tags"]):
                     continue
                 all_templates.append(template_data["task"])
             except Exception as e:
@@ -904,6 +904,7 @@ async def api_v1_share_get(share_id: str):
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
+
 
 # 所有未知路由 fallback 到 index.html (必须在所有API路由之后)
 @app.get("/{full_path:path}", response_class=HTMLResponse)

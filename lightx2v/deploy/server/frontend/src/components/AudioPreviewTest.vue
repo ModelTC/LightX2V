@@ -1,12 +1,12 @@
 <template>
   <div class="p-6">
     <h2 class="text-xl font-bold text-white mb-4">音频预览测试</h2>
-    
+
     <!-- 测试音频模板预览 -->
     <div class="mb-6">
       <h3 class="text-lg text-white mb-2">音频模板预览测试</h3>
       <div class="space-y-2">
-        <div v-for="template in audioTemplates" :key="template.filename" 
+        <div v-for="template in audioTemplates" :key="template.filename"
              class="flex items-center gap-4 p-3 bg-dark-light rounded-lg">
           <span class="text-white">{{ template.filename }}</span>
           <button @click="previewAudioTemplate(template)"
@@ -24,7 +24,7 @@
     <div class="mb-6">
       <h3 class="text-lg text-white mb-2">音频历史预览测试</h3>
       <div class="space-y-2">
-        <div v-for="history in audioHistory" :key="history.filename" 
+        <div v-for="history in audioHistory" :key="history.filename"
              class="flex items-center gap-4 p-3 bg-dark-light rounded-lg">
           <span class="text-white">{{ history.filename }}</span>
           <button @click="previewAudioHistory(history)"
@@ -58,7 +58,7 @@
 </template>
 
 <script setup>
-import { 
+import {
   audioTemplates,
   audioHistory,
   previewAudioTemplate,

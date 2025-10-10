@@ -4,8 +4,8 @@ import router from './router'
 import { init, handleLoginCallback, handleClickOutside, validateToken } from './utils/other'
 import { initLanguage } from './utils/i18n'
 import { startHintRotation, stopHintRotation } from './utils/other'
-import { currentUser, 
-  isLoading, 
+import { currentUser,
+  isLoading,
   applyMobileStyles,
   isLoggedIn,
   loginLoading,
@@ -47,7 +47,7 @@ onMounted(async () => {
     // 检查是否有登录回调参数
     const urlParams = new URLSearchParams(window.location.search)
     const code = urlParams.get('code')
-    
+
     if (code) {
       // 处理登录回调
       isLoading.value = true

@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 
-import { 
+import {
     getTemplateFileUrl,
     getHistoryImageUrl,
     goToTemplatePage,
@@ -141,7 +141,7 @@ import {
                                                             <button v-if="page !== '...'" @click="goToTemplatePage(page)"
                                                                 :class="[
                                                                     'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20 focus:outline-offset-0',
-                                                                    page === templateCurrentPage 
+                                                                    page === templateCurrentPage
                                                                         ? 'z-10 text-white focus-visible:outline-2 focus-visible:outline-offset-2 bg-laser-purple focus-visible:outline-laser-purple'
                                                                         : 'text-gray-200 inset-ring inset-ring-gray-700 hover:bg-white/5'
                                                                 ]"
@@ -262,7 +262,7 @@ import {
                                                                                                     <button v-if="page !== '...'" @click="goToTemplatePage(page)"
                                                                                                         :class="[
                                                                                                             'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20 focus:outline-offset-0',
-                                                                                                            page === templateCurrentPage 
+                                                                                                            page === templateCurrentPage
                                                                                                                 ? 'z-10 text-white focus-visible:outline-2 focus-visible:outline-offset-2 bg-laser-purple focus-visible:outline-laser-purple'
                                                                                                                 : 'text-gray-200 inset-ring inset-ring-gray-700 hover:bg-white/5'
                                                                                                         ]"

@@ -1,5 +1,4 @@
 import queue
-import random
 import signal
 import socket
 import subprocess
@@ -14,8 +13,8 @@ from loguru import logger
 
 
 def pseudo_random(a, b):
-    x = str(time.time()).split('.')[1]
-    y = int(float('0.' + x) * 1000000)
+    x = str(time.time()).split(".")[1]
+    y = int(float("0." + x) * 1000000)
     return a + (y % (b - a + 1))
 
 
@@ -308,10 +307,7 @@ class VARecorder:
     def start(self, width: int, height: int):
         self.set_video_size(width, height)
         duration = 1.0
-        self.pub_livestream(
-            torch.zeros((int(self.fps * duration), height, width, 3), dtype=torch.float16),
-            torch.zeros(int(self.sample_rate * duration), dtype=torch.float16)
-        )
+        self.pub_livestream(torch.zeros((int(self.fps * duration), height, width, 3), dtype=torch.float16), torch.zeros(int(self.sample_rate * duration), dtype=torch.float16))
         time.sleep(duration)
 
     def set_video_size(self, width: int, height: int):

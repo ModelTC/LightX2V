@@ -2,12 +2,12 @@ import asyncio
 import base64
 import io
 import os
+import subprocess
+import tempfile
 import time
 import traceback
 from datetime import datetime
 
-import tempfile
-import subprocess
 import httpx
 import torchaudio
 from PIL import Image
@@ -142,15 +142,7 @@ def media_to_wav(data):
     with tempfile.NamedTemporaryFile() as fin:
         fin.write(data)
         fin.flush()
-        cmd = [
-            "ffmpeg",
-            "-i", fin.name,
-            '-f', 'wav',
-            '-acodec', 'pcm_s16le',
-            '-ar', '44100',
-            '-ac', '2',
-            "pipe:1"
-        ]
+        cmd = ["ffmpeg", "-i", fin.name, "-f", "wav", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", "pipe:1"]
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert p.returncode == 0, f"media to wav failed: {p.stderr.decode()}"
         return p.stdout

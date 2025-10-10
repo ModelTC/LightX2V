@@ -32,7 +32,7 @@ import {
             loginLoading,
             initLoading,
             downloadLoading,
-            
+
             // 录音相关
             isRecording,
             recordingDuration,
@@ -303,7 +303,7 @@ const router = useRouter()
 const handleDownloadTask = async (task) => {
     try {
         console.log('开始下载任务文件:', { taskId: task.task_id, outputs: task.outputs })
-        
+
         // 处理文件名，确保有正确的后缀名
         let fileName = task.outputs?.output_video || 'video.mp4'
         if (fileName && typeof fileName === 'string') {
@@ -315,29 +315,29 @@ const handleDownloadTask = async (task) => {
                 console.log('添加后缀名:', fileName)
             }
         }
-        
+
         // 先尝试从缓存获取
         let fileData = getTaskFileFromCache(task.task_id, 'output_video')
         console.log('缓存中的文件数据:', fileData)
-        
+
         if (fileData && fileData.blob) {
             // 缓存中有blob数据，直接使用
             console.log('使用缓存中的文件数据')
             downloadFile({ ...fileData, name: fileName })
             return
         }
-        
+
         if (fileData && fileData.url) {
             // 缓存中有URL，使用URL下载
             console.log('使用缓存中的URL下载:', fileData.url)
             try {
                 const response = await fetch(fileData.url)
                 console.log('文件响应状态:', response.status, response.ok)
-                
+
                 if (response.ok) {
                     const blob = await response.blob()
                     console.log('文件blob大小:', blob.size)
-                    
+
                     const downloadData = {
                         blob: blob,
                         name: fileName
@@ -352,21 +352,21 @@ const handleDownloadTask = async (task) => {
                 console.error('使用缓存URL下载失败:', error)
             }
         }
-        
+
         if (!fileData) {
             console.log('缓存中没有文件，尝试异步获取...')
             // 缓存中没有，尝试异步获取
             const url = await getTaskFileUrl(task.task_id, 'output_video')
             console.log('获取到的文件URL:', url)
-            
+
             if (url) {
                 const response = await fetch(url)
                 console.log('文件响应状态:', response.status, response.ok)
-                
+
                 if (response.ok) {
                     const blob = await response.blob()
                     console.log('文件blob大小:', blob.size)
-                    
+
                     fileData = {
                         blob: blob,
                         name: fileName
@@ -379,7 +379,7 @@ const handleDownloadTask = async (task) => {
                 console.error('无法获取文件URL')
             }
         }
-        
+
         if (fileData && fileData.blob) {
             console.log('开始下载文件:', fileData.name)
             downloadFile(fileData)
@@ -429,7 +429,7 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
     if (currentTaskPage.value > 1) {
         query.page = currentTaskPage.value.toString()
     }
-    
+
     // 更新URL但不触发路由监听
     router.replace({ query })
 })
@@ -515,7 +515,7 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                                             <button v-if="page !== '...'" @click="goToPage(page)"
                                                                 :class="[
                                                                     'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20 focus:outline-offset-0',
-                                                                    page === currentTaskPage 
+                                                                    page === currentTaskPage
                                                                         ? 'z-10 text-white focus-visible:outline-2 focus-visible:outline-offset-2 bg-laser-purple focus-visible:outline-laser-purple'
                                                                         : 'text-gray-200 inset-ring inset-ring-gray-700 hover:bg-white/5'
                                                                 ]"
@@ -570,15 +570,15 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                                                     @loadeddata="onVideoLoaded($event)"
                                                                     @ended="onVideoEnded($event)"
                                                                 @error="onVideoError($event)"></video>
-                                                                
+
                                                         <!-- 其他状态：显示输入图片或占位符 -->
                                                         <img v-else="task.inputs?.input_image"
                                                         :src="getTaskFileUrlSync(task.task_id, 'input_image')"
                                                         class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
                                                         @error="handleThumbnailError" />
-                                                        
+
                                                         <!-- 移动端播放按钮 -->
-                                                        <button v-if="task.status === 'SUCCEED'" 
+                                                        <button v-if="task.status === 'SUCCEED'"
                                                         @click.stop="toggleVideoPlay($event)"
                                                         class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
                                                         <i class="fas fa-play text-sm"></i>

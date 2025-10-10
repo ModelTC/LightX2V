@@ -57,13 +57,13 @@ const updateScreenSize = () => {
 // 随机列布局相关函数（用于网格布局）
 const generateRandomColumnLayout = (templates) => {
   if (!templates || templates.length === 0) return { columns: [], templates: [] }
-  
+
   const numColumns = props.columns
-  
+
   // 生成随机列宽（总和为100%）
   const columnWidths = []
   let remainingWidth = 100
-  
+
   for (let i = 0; i < numColumns; i++) {
     if (i === numColumns - 1) {
       columnWidths.push(remainingWidth)
@@ -75,14 +75,14 @@ const generateRandomColumnLayout = (templates) => {
       remainingWidth -= Math.round(width)
     }
   }
-  
+
   // 生成每列的起始位置
   const columnStartPositions = []
   for (let i = 0; i < numColumns; i++) {
     const startPosition = Math.random() * 20
     columnStartPositions.push(Math.round(startPosition))
   }
-  
+
   // 计算每列的起始left位置
   const columnLeftPositions = []
   let currentLeft = 0
@@ -90,14 +90,14 @@ const generateRandomColumnLayout = (templates) => {
     columnLeftPositions.push(currentLeft)
     currentLeft += columnWidths[i]
   }
-  
+
   // 将模版分配到各列
   const columnTemplates = Array.from({ length: numColumns }, () => [])
   templates.forEach((template, index) => {
     const columnIndex = index % numColumns
     columnTemplates[columnIndex].push(template)
   })
-  
+
   // 生成列配置
   const columns = columnWidths.map((width, index) => ({
     width: `${width}%`,
@@ -105,7 +105,7 @@ const generateRandomColumnLayout = (templates) => {
     top: `${columnStartPositions[index]}%`,
     templates: columnTemplates[index]
   }))
-  
+
   return { columns, templates }
 }
 
@@ -152,7 +152,7 @@ onMounted(() => {
                  class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
                  @error="handleThumbnailError" />
             <!-- 移动端播放按钮 -->
-            <button v-if="item?.outputs?.output_video" 
+            <button v-if="item?.outputs?.output_video"
                     @click.stop="toggleVideoPlay($event)"
                     class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
               <i class="fas fa-play text-sm"></i>
@@ -224,7 +224,7 @@ onMounted(() => {
                    class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
                    @error="handleThumbnailError" />
               <!-- 移动端播放按钮 -->
-              <button v-if="item?.outputs?.output_video" 
+              <button v-if="item?.outputs?.output_video"
                       @click.stop="toggleVideoPlay($event)"
                       class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
                 <i class="fas fa-play text-sm"></i>

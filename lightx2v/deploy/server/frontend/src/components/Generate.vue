@@ -35,7 +35,7 @@ const refreshRandomTemplates = async () => {
 // 随机列布局相关函数
 const generateRandomColumnLayout = (templates) => {
     if (!templates || templates.length === 0) return { columns: [], templates: [] }
-    
+
     // 响应式列数控制
     const getColumnCount = () => {
         if (screenSize.value === 'large') {
@@ -46,13 +46,13 @@ const generateRandomColumnLayout = (templates) => {
             return Math.floor(Math.random() * 2) + 2 // 2, 3列
         }
     }
-    
+
     const numColumns = getColumnCount()
-    
+
     // 生成随机列宽（总和为100%）
     const columnWidths = []
     let remainingWidth = 100
-    
+
     for (let i = 0; i < numColumns; i++) {
         if (i === numColumns - 1) {
             // 最后一列使用剩余宽度
@@ -66,7 +66,7 @@ const generateRandomColumnLayout = (templates) => {
             remainingWidth -= Math.round(width)
         }
     }
-    
+
     // 生成每列的起始位置（距离顶部的距离）
     const columnStartPositions = []
     for (let i = 0; i < numColumns; i++) {
@@ -74,7 +74,7 @@ const generateRandomColumnLayout = (templates) => {
         const startPosition = Math.random() * 20
         columnStartPositions.push(Math.round(startPosition))
     }
-    
+
     // 计算每列的起始left位置
     const columnLeftPositions = []
     let currentLeft = 0
@@ -82,14 +82,14 @@ const generateRandomColumnLayout = (templates) => {
         columnLeftPositions.push(currentLeft)
         currentLeft += columnWidths[i]
     }
-    
+
     // 将模版分配到各列
     const columnTemplates = Array.from({ length: numColumns }, () => [])
     templates.forEach((template, index) => {
         const columnIndex = index % numColumns
         columnTemplates[columnIndex].push(template)
     })
-    
+
     // 生成列配置
     const columns = columnWidths.map((width, index) => ({
         width: `${width}%`,
@@ -97,7 +97,7 @@ const generateRandomColumnLayout = (templates) => {
         top: `${columnStartPositions[index]}%`,
         templates: columnTemplates[index]
     }))
-    
+
     return { columns, templates }
 }
 
@@ -221,7 +221,7 @@ watch(() => route.query, (newQuery) => {
         // 展开创建区域
         expandCreationArea()
     }
-    
+
     // 注意：分享数据导入功能已移至 Share.vue 中的 createSimilar 函数
     // 这里不再需要处理分享数据导入
 }, { immediate: true })
@@ -238,7 +238,7 @@ watch([selectedTaskId, isCreationAreaExpanded, selectedModel], () => {
     if (selectedModel.value) {
         query.model = selectedModel.value
     }
-    
+
     // 更新URL但不触发路由监听
     router.replace({ query })
 })
@@ -257,16 +257,16 @@ onMounted(async () => {
     if (query.expanded === 'true') {
         expandCreationArea()
     }
-    
+
     // 初始化屏幕尺寸
     updateScreenSize()
-    
+
     // 添加屏幕尺寸监听器
     resizeHandler = () => {
         updateScreenSize()
     }
     window.addEventListener('resize', resizeHandler)
-    
+
     // 加载精选模版数据
     await loadFeaturedTemplates(true)
     // 获取随机精选模版
@@ -299,23 +299,23 @@ const handleImageDrop = (e) => {
     e.preventDefault()
     e.stopPropagation()
     isDragOver.value = false
-    
+
     const files = Array.from(e.dataTransfer.files)
     const imageFile = files.find(file => file.type.startsWith('image/'))
-    
+
     if (imageFile) {
         // 创建FileList对象来模拟input[type="file"]的change事件
         const dataTransfer = new DataTransfer()
         dataTransfer.items.add(imageFile)
         const fileList = dataTransfer.files
-        
+
         // 创建模拟的change事件
         const event = {
             target: {
                 files: fileList
             }
         }
-        
+
         handleImageUpload(event)
         showAlert('图片拖拽上传成功', 'success')
     } else {
@@ -327,23 +327,23 @@ const handleAudioDrop = (e) => {
     e.preventDefault()
     e.stopPropagation()
     isDragOver.value = false
-    
+
     const files = Array.from(e.dataTransfer.files)
     const audioFile = files.find(file => file.type.startsWith('audio/'))
-    
+
     if (audioFile) {
         // 创建FileList对象来模拟input[type="file"]的change事件
         const dataTransfer = new DataTransfer()
         dataTransfer.items.add(audioFile)
         const fileList = dataTransfer.files
-        
+
         // 创建模拟的change事件
         const event = {
             target: {
                 files: fileList
             }
         }
-        
+
         handleAudioUpload(event)
         showAlert('音频拖拽上传成功', 'success')
     } else {
@@ -384,7 +384,7 @@ onUnmounted(() => {
                                         />
 
                                         <!-- 模型选择下拉菜单 -->
-                                        <ModelDropdown 
+                                        <ModelDropdown
                                             :available-models="availableModelClasses"
                                             :selected-model="getCurrentForm().model_cls"
                                             @select-model="selectModel"
@@ -495,7 +495,7 @@ onUnmounted(() => {
                                                         <div class="flex flex-col items-center space-y-2">
                                                             <button
                                                                 class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
-                                                                @click="triggerImageUpload" 
+                                                                @click="triggerImageUpload"
                                                                 :title="t('uploadImage')">
                                                                 <i class="fas fa-upload text-lg"></i>
                                                             </button>
@@ -569,7 +569,7 @@ onUnmounted(() => {
                                                     <div class="flex flex-col items-center space-y-2">
                                                         <button
                                                             class="w-12 h-12 flex items-center justify-center bg-white/15 text-white p-3 rounded-full transition-all duration-200 hover:scale-110 shadow-lg"
-                                                            @click="triggerAudioUpload" 
+                                                            @click="triggerAudioUpload"
                                                             :title="t('uploadAudio')">
                                                             <i class="fas fa-upload text-lg"></i>
                                                         </button>
@@ -669,7 +669,7 @@ onUnmounted(() => {
                         </div>
                 </div>
                         </div>
-                    
+
 
                     <!-- 精选模版区域 -->
                     <div v-if="currentFeaturedTemplates.length > 0" class="flex-1 flex flex-col min-h-0 border-t lg:border-t-0 lg:border-l border-gray-700/30">
@@ -680,16 +680,16 @@ onUnmounted(() => {
                                 <div class="flex items-center gap-3 lg:gap-4">
                                     <h2 class="text-2xl lg:text-3xl font-bold text-white">{{ t('discover') }}</h2>
                                     <!-- 随机图标按钮 -->
-                                    <button @click="refreshRandomTemplates" 
+                                    <button @click="refreshRandomTemplates"
                                             :disabled="featuredTemplatesLoading"
                                             class="w-8 h-8 lg:w-10 lg:h-10 flex items-center justify-center bg-laser-purple/20 hover:bg-laser-purple/40 text-laser-purple rounded-full transition-all duration-300 hover:scale-110"
                                             :title="t('refreshRandomTemplates')">
-                                        <i class="fas fa-random text-sm lg:text-lg" 
+                                        <i class="fas fa-random text-sm lg:text-lg"
                                            :class="{ 'animate-spin': featuredTemplatesLoading }"></i>
                                     </button>
                                 </div>
                                 <!-- 右侧：更多按钮 -->
-                                <button @click="switchToInspirationView()" 
+                                <button @click="switchToInspirationView()"
                                     class="flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-white hover:bg-gray-600/20 rounded transition-all duration-200"
                                     :title="t('viewMore')">
                                 <span class="text-sm">{{ t('more') }}</span>
@@ -732,7 +732,7 @@ onUnmounted(() => {
                                         class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
                                         @error="handleThumbnailError" />
                                         <!-- 移动端播放按钮 -->
-                                        <button v-if="item?.outputs?.output_video" 
+                                        <button v-if="item?.outputs?.output_video"
                                             @click.stop="toggleVideoPlay($event)"
                                             class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
                                             <i class="fas fa-play text-sm"></i>
@@ -786,7 +786,7 @@ onUnmounted(() => {
     justify-content: center;
     min-width: 200px;
     letter-spacing: 0.025em;
-    
+
     /* 简约阴影 */
     box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
 }

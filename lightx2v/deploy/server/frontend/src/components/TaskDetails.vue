@@ -74,7 +74,7 @@ const handleKeydown = (event) => {
 const handleDownloadFile = async (taskId, fileKey, fileName) => {
     try {
         console.log('开始下载文件:', { taskId, fileKey, fileName })
-        
+
         // 处理文件名，确保有正确的后缀名
         let finalFileName = fileName
         if (fileName && typeof fileName === 'string') {
@@ -90,29 +90,29 @@ const handleDownloadFile = async (taskId, fileKey, fileName) => {
             // 没有文件名，使用默认名称
             finalFileName = `${fileKey}.${getFileExtension(fileKey)}`
         }
-        
+
         // 先尝试从缓存获取
         let fileData = getTaskFileFromCache(taskId, fileKey)
         console.log('缓存中的文件数据:', fileData)
-        
+
         if (fileData && fileData.blob) {
             // 缓存中有blob数据，直接使用
             console.log('使用缓存中的文件数据')
             downloadFile({ ...fileData, name: finalFileName })
             return
         }
-        
+
         if (fileData && fileData.url) {
             // 缓存中有URL，使用URL下载
             console.log('使用缓存中的URL下载:', fileData.url)
             try {
                 const response = await fetch(fileData.url)
                 console.log('文件响应状态:', response.status, response.ok)
-                
+
                 if (response.ok) {
                     const blob = await response.blob()
                     console.log('文件blob大小:', blob.size)
-                    
+
                     const downloadData = {
                         blob: blob,
                         name: finalFileName
@@ -127,21 +127,21 @@ const handleDownloadFile = async (taskId, fileKey, fileName) => {
                 console.error('使用缓存URL下载失败:', error)
             }
         }
-        
+
         if (!fileData) {
             console.log('缓存中没有文件，尝试异步获取...')
             // 缓存中没有，尝试异步获取
             const url = await getTaskFileUrl(taskId, fileKey)
             console.log('获取到的文件URL:', url)
-            
+
             if (url) {
                 const response = await fetch(url)
                 console.log('文件响应状态:', response.status, response.ok)
-                
+
                 if (response.ok) {
                     const blob = await response.blob()
                     console.log('文件blob大小:', blob.size)
-                    
+
                     fileData = {
                         blob: blob,
                         name: finalFileName
@@ -154,7 +154,7 @@ const handleDownloadFile = async (taskId, fileKey, fileName) => {
                 console.error('无法获取文件URL')
             }
         }
-        
+
         if (fileData && fileData.blob) {
             console.log('开始下载文件:', fileData.name)
             downloadFile(fileData)
@@ -307,12 +307,12 @@ onUnmounted(() => {
                                                 <span v-else>{{ t('taskDetails') }}</span>
                                             </h1>
                                         </div>
-                                        
+
                                         <!-- 描述 -->
                                         <p class="main-description">
                                             {{ t('taskCompletedSuccessfully') }}
                                         </p>
-                                        
+
                                         <div class="features-list justify-between">
                                             <div class="feature-item">
                                                 <i class="fas fa-toolbox feature-icon"></i>
@@ -327,7 +327,7 @@ onUnmounted(() => {
                                                 <span>{{ t('timeCost')}}{{ Math.round(modalTask.extra_info?.active_elapse || 0) }}s</span>
                                             </div>
                                         </div>
-                                        
+
                                         <!-- 操作按钮 -->
                                         <div class="action-buttons">
                                             <button v-if="modalTask?.outputs?.output_video"
@@ -339,7 +339,7 @@ onUnmounted(() => {
                                                 <i class="fas fa-magic mr-2"></i>
                                                 {{ t('reuseTask') }}
                                             </button>
-                                            
+
                                             <button
                                                     @click="copyShareLink(modalTask.task_id, 'task')" class="secondary-button">
                                                 <i class="fas fa-share-alt mr-2"></i>
@@ -347,18 +347,18 @@ onUnmounted(() => {
                                         </button>
 
                                             <button
-                                                    @click="deleteTask(modalTask.task_id, true); closeTaskDetailModal()" 
+                                                    @click="deleteTask(modalTask.task_id, true); closeTaskDetailModal()"
                                                     class="secondary-button">
                                                 <i class="fas fa-trash mr-2"></i>
                                                 {{ t('deleteTask') }}
                                             </button>
-                                            
+
                                             <button @click="showDetails = !showDetails" class="secondary-button">
                                                 <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="mr-2"></i>
                                                 {{ showDetails ? t('hideDetails') : t('showDetails') }}
                                             </button>
                                         </div>
-                                        
+
                                         <!-- 技术信息 -->
                                         <div class="tech-info">
                                             <p class="tech-text">
@@ -380,7 +380,7 @@ onUnmounted(() => {
                                         <i class="fas fa-upload mr-2"></i>
                                         {{ t('inputMaterials') }}
                                     </h2>
-                                
+
                                 <!-- 三个并列的分块卡片 -->
                                 <div class="materials-cards">
                                     <!-- 图片卡片 -->
@@ -389,9 +389,9 @@ onUnmounted(() => {
                                             <i class="fas fa-image card-icon"></i>
                                             <h3 class="card-title">{{ t('image') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="getImageMaterials().length > 0" 
+                                                <button v-if="getImageMaterials().length > 0"
                                                         @click="handleDownloadFile(modalTask.task_id, 'input_image', modalTask.inputs.input_image)"
-                                                        class="action-btn download-btn" 
+                                                        class="action-btn download-btn"
                                                         :title="t('download')">
                                                     <i class="fas fa-download"></i>
                                                 </button>
@@ -418,9 +418,9 @@ onUnmounted(() => {
                                             <i class="fas fa-music card-icon"></i>
                                             <h3 class="card-title">{{ t('audio') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="getAudioMaterials().length > 0" 
+                                                <button v-if="getAudioMaterials().length > 0"
                                                         @click="handleDownloadFile(modalTask.task_id, 'input_audio', modalTask.inputs.input_audio)"
-                                                        class="action-btn download-btn" 
+                                                        class="action-btn download-btn"
                                                         :title="t('download')">
                                                     <i class="fas fa-download"></i>
                                                 </button>
@@ -445,9 +445,9 @@ onUnmounted(() => {
                                             <i class="fas fa-file-alt card-icon"></i>
                                             <h3 class="card-title">{{ t('prompt') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="modalTask?.params?.prompt" 
+                                                <button v-if="modalTask?.params?.prompt"
                                                         @click="copyPrompt(modalTask?.params?.prompt)"
-                                                        class="action-btn copy-btn" 
+                                                        class="action-btn copy-btn"
                                                         :title="t('copy')">
                                                     <i class="fas fa-copy"></i>
                                                 </button>
@@ -535,13 +535,13 @@ onUnmounted(() => {
                                         <!-- 进度条 -->
                                         <div v-if="['CREATED', 'PENDING', 'RUNNING'].includes(modalTask?.status)">
                                             <div v-for="(subtask, index) in (modalTask.subtasks || [])" :key="index">
-                                                
+
                                                 <!-- PENDING状态：显示排队信息 -->
                                                 <div v-if="subtask.status === 'PENDING'" class="queue-info">
                                                     <div v-if="subtask.estimated_pending_order !== null" class="queue-visualization">
                                                         <div class="queue-people">
-                                                            <i v-for="n in Math.min(subtask.estimated_pending_order, 10)" 
-                                                               :key="n" 
+                                                            <i v-for="n in Math.min(subtask.estimated_pending_order, 10)"
+                                                               :key="n"
                                                                class="fas fa-user queue-person"></i>
                                                             <span v-if="subtask.estimated_pending_order > 10" class="queue-more">
                                                                 +{{ subtask.estimated_pending_order - 10 }}
@@ -552,7 +552,7 @@ onUnmounted(() => {
                                                         </span>
                                                     </div>
                                                 </div>
-                                                
+
                                                 <!-- RUNNING状态：显示进度条 -->
                                                 <div v-else-if="subtask.status === 'RUNNING'" class="progress-container">
                                                     <div class="minimal-progress-bar">
@@ -599,7 +599,7 @@ onUnmounted(() => {
                                                 {{ t('thisTaskHasBeenCancelledYouCanRegenerateOrViewTheMaterialsYouUploadedBefore') }}
                                             </span>
                                         </p>
-                                        
+
                                         <div class="features-list justify-between">
                                             <div class="feature-item">
                                                 <i class="fas fa-toolbox feature-icon"></i>
@@ -615,38 +615,38 @@ onUnmounted(() => {
                                         <div class="action-buttons">
                                             <!-- 进行中状态 -->
                                             <button v-if="['CREATED', 'PENDING', 'RUNNING'].includes(modalTask?.status)"
-                                                    @click="cancelTask(modalTask.task_id, true); closeTaskDetailModal()" 
+                                                    @click="cancelTask(modalTask.task_id, true); closeTaskDetailModal()"
                                                     class="primary-button">
                                                 <i class="fas fa-times mr-2"></i>
                                                 {{ t('cancelTask') }}
                                             </button>
-                                            
+
                                             <!-- 失败状态 -->
                                             <button v-if="modalTask?.status === 'FAILED'"
-                                                    @click="resumeTask(modalTask.task_id, true); closeTaskDetailModal()" 
+                                                    @click="resumeTask(modalTask.task_id, true); closeTaskDetailModal()"
                                                     class="primary-button">
                                                 <i class="fas fa-redo mr-2"></i>
                                                 {{ t('retryTask') }}
                                             </button>
-                                            
+
                                             <!-- 取消状态 -->
                                             <button v-if="modalTask?.status === 'CANCEL'"
-                                                    @click="resumeTask(modalTask.task_id, true); closeTaskDetailModal()" 
+                                                    @click="resumeTask(modalTask.task_id, true); closeTaskDetailModal()"
                                                     class="primary-button">
                                                 <i class="fas fa-redo mr-2"></i>
                                                 {{ t('regenerateTask') }}
                                             </button>
-                                            
+
                                             <!-- 通用按钮 -->
                                             <button v-if="['SUCCEED', 'FAILED', 'CANCEL','CREATED', 'PENDING', 'RUNNING'].includes(modalTask?.status)"
-                                                    @click="reuseTask(modalTask); closeTaskDetailModal()" 
+                                                    @click="reuseTask(modalTask); closeTaskDetailModal()"
                                                     class="secondary-button">
                                                 <i class="fas fa-copy mr-2"></i>
                                                 {{ t('reuseTask') }}
                                             </button>
-                                            
+
                                             <button v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(modalTask?.status)"
-                                                    @click="deleteTask(modalTask.task_id, true); closeTaskDetailModal()" 
+                                                    @click="deleteTask(modalTask.task_id, true); closeTaskDetailModal()"
                                                     class="secondary-button">
                                                 <i class="fas fa-trash mr-2"></i>
                                                 {{ t('deleteTask') }}
@@ -657,7 +657,7 @@ onUnmounted(() => {
                                                 {{ showDetails ? t('hideDetails') : t('showDetails') }}
                                             </button>
                                         </div>
-                                        
+
                                         <!-- 技术信息 -->
                                         <div class="tech-info">
                                             <p class="tech-text">
@@ -681,7 +681,7 @@ onUnmounted(() => {
                                         {{ t('inputMaterials') }}
                                     </h2>
                                 </div>
-                                
+
                                 <!-- 三个并列的分块卡片 -->
                                 <div class="materials-cards">
                                     <!-- 图片卡片 -->
@@ -690,9 +690,9 @@ onUnmounted(() => {
                                             <i class="fas fa-image card-icon"></i>
                                             <h3 class="card-title">{{ t('image') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="getImageMaterials().length > 0" 
+                                                <button v-if="getImageMaterials().length > 0"
                                                         @click="handleDownloadFile(modalTask.task_id, 'input_image', modalTask.inputs.input_image)"
-                                                        class="action-btn download-btn" 
+                                                        class="action-btn download-btn"
                                                         :title="t('download')">
                                                     <i class="fas fa-download"></i>
                                                 </button>
@@ -719,9 +719,9 @@ onUnmounted(() => {
                                             <i class="fas fa-music card-icon"></i>
                                             <h3 class="card-title">{{ t('audio') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="getAudioMaterials().length > 0" 
+                                                <button v-if="getAudioMaterials().length > 0"
                                                         @click="handleDownloadFile(modalTask.task_id, 'input_audio', modalTask.inputs.input_audio)"
-                                                        class="action-btn download-btn" 
+                                                        class="action-btn download-btn"
                                                         :title="t('download')">
                                                     <i class="fas fa-download"></i>
                                                 </button>
@@ -746,9 +746,9 @@ onUnmounted(() => {
                                             <i class="fas fa-file-alt card-icon"></i>
                                             <h3 class="card-title">{{ t('prompt') }}</h3>
                                             <div class="card-actions">
-                                                <button v-if="modalTask?.params?.prompt" 
+                                                <button v-if="modalTask?.params?.prompt"
                                                         @click="copyPrompt(modalTask?.params?.prompt)"
-                                                        class="action-btn copy-btn" 
+                                                        class="action-btn copy-btn"
                                                         :title="t('copy')">
                                                     <i class="fas fa-copy"></i>
                                                 </button>
@@ -1470,15 +1470,15 @@ onUnmounted(() => {
         gap: 3rem;
         padding: 0 1.5rem;
     }
-    
+
     .main-title {
         font-size: 2.5rem;
     }
-    
+
     .video-container {
         max-width: 400px;
     }
-    
+
     /* 卡片响应式 */
     .materials-cards {
         grid-template-columns: 1fr;
@@ -1490,57 +1490,57 @@ onUnmounted(() => {
     .main-content {
         padding: 1rem 0;
     }
-    
+
     .content-grid {
         grid-template-columns: 1fr;
         gap: 2rem;
         padding: 0 1rem;
     }
-    
+
     .main-title {
         font-size: 2rem;
     }
-    
+
     .main-description {
         font-size: 1.125rem;
     }
-    
+
     .video-container {
         max-width: 300px;
     }
-    
+
     .info-content {
         padding: 1rem 0;
     }
-    
+
     .details-content {
         padding: 0 1rem;
     }
-    
+
     /* 移动端卡片调整 */
     .materials-cards {
         gap: 1rem;
     }
-    
+
     .card-content {
         padding: 1rem;
         min-height: 150px;
     }
-    
+
     .image-grid {
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     }
-    
+
     .materials-title {
         font-size: 1.25rem;
     }
-    
+
     /* 移动端进度条调整 */
     .subtask-progress {
         padding: 0.75rem;
         margin-bottom: 1rem;
     }
-    
+
     .progress-info {
         flex-direction: column;
         gap: 0.5rem;

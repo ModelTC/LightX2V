@@ -99,7 +99,7 @@
             // 模板文件缓存系统
             const templateFileCache = ref(new Map());
             const templateFileCacheLoaded = ref(false);
-            
+
             // 防重复获取的状态管理
             const templateUrlFetching = ref(new Set()); // 正在获取的URL集合
             const taskUrlFetching = ref(new Map()); // 正在获取的任务URL集合
@@ -669,7 +669,7 @@
 
                         // 登录成功后初始化数据
                         await init();
-                        
+
                         router.push('/generate');
                         console.log('login with sms success');
                         isLoggedIn.value = true;
@@ -761,10 +761,10 @@
 
                         // 在进入新页面前显示loading
                         isLoading.value = true;
-                        
+
                         // 登录成功后初始化数据
                         await init();
-                        
+
                         // 检查是否有分享数据需要导入
                         const shareData = localStorage.getItem('shareData');
                         if (shareData) {
@@ -783,7 +783,7 @@
                             }
                             localStorage.removeItem('shareData');
                         }
-                        
+
                         // 默认跳转到生成页面
                         router.push('/generate');
                         console.log('login with callback success');
@@ -803,7 +803,7 @@
             const logout = () => {
                 localStorage.removeItem('accessToken');
                 localStorage.removeItem('currentUser');
-                
+
                 clearAllCache();
                 switchToLoginView();
                 isLoggedIn.value = false;
@@ -933,11 +933,11 @@
 
                 if (response.ok) {
                     const blob = await response.blob();
-                    
+
                     // 根据文件扩展名确定正确的MIME类型
                     let mimeType = blob.type;
                     const extension = template.filename.toLowerCase().split('.').pop();
-                    
+
                     if (extension === 'wav') {
                         mimeType = 'audio/wav';
                     } else if (extension === 'mp3') {
@@ -949,9 +949,9 @@
                     } else if (extension === 'webm') {
                         mimeType = 'audio/webm';
                     }
-                    
+
                     console.log('文件扩展名:', extension, 'MIME类型:', mimeType);
-                    
+
                     const file = new File([blob], template.filename, { type: mimeType });
 
                     // 缓存文件对象
@@ -1161,76 +1161,76 @@
             const startRecording = async () => {
                 try {
                     console.log('开始录音...');
-                    
+
                     // 检查浏览器支持
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                         throw new Error('浏览器不支持录音功能');
                     }
-                    
+
                     if (!window.MediaRecorder) {
                         throw new Error('浏览器不支持MediaRecorder');
                     }
-                    
+
                     console.log('浏览器支持检查通过，请求麦克风权限...');
-                    
+
                     // 请求麦克风权限
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                    const stream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             echoCancellation: true,
                             noiseSuppression: true,
                             sampleRate: 44100
-                        } 
+                        }
                     });
-                    
+
                     // 创建MediaRecorder
                     mediaRecorder.value = new MediaRecorder(stream, {
                         mimeType: 'audio/webm;codecs=opus'
                     });
-                    
+
                     audioChunks.value = [];
-                    
+
                     // 监听数据可用事件
                     mediaRecorder.value.ondataavailable = (event) => {
                         if (event.data.size > 0) {
                             audioChunks.value.push(event.data);
                         }
                     };
-                    
+
                     // 监听录音停止事件
                     mediaRecorder.value.onstop = () => {
                         const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
                         const audioFile = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
-                        
+
                         // 设置到表单
                         s2vForm.value.audioFile = audioFile;
-                        
+
                         // 创建预览URL
                         const audioUrl = URL.createObjectURL(audioBlob);
                         setCurrentAudioPreview(audioUrl);
                         updateUploadedContentStatus();
-                        
+
                         // 停止所有音频轨道
                         stream.getTracks().forEach(track => track.stop());
-                        
+
                         showAlert(t('recordingCompleted'), 'success');
                     };
-                    
+
                     // 开始录音
                     mediaRecorder.value.start(1000); // 每秒收集一次数据
                     isRecording.value = true;
                     recordingDuration.value = 0;
-                    
+
                     // 开始计时
                     recordingTimer.value = setInterval(() => {
                         recordingDuration.value++;
                     }, 1000);
-                    
+
                     showAlert(t('recordingStarted'), 'info');
-                    
+
                 } catch (error) {
                     console.error('录音失败:', error);
                     let errorMessage = t('recordingFailed');
-                    
+
                     if (error.name === 'NotAllowedError') {
                         errorMessage = '麦克风权限被拒绝，请在浏览器设置中允许麦克风访问';
                     } else if (error.name === 'NotFoundError') {
@@ -1240,26 +1240,26 @@
                     } else if (error.message) {
                         errorMessage = error.message;
                     }
-                    
+
                     showAlert(errorMessage, 'danger');
                 }
             };
-            
+
             // 停止录音
             const stopRecording = () => {
                 if (mediaRecorder.value && isRecording.value) {
                     mediaRecorder.value.stop();
                     isRecording.value = false;
-                    
+
                     if (recordingTimer.value) {
                         clearInterval(recordingTimer.value);
                         recordingTimer.value = null;
                     }
-                    
+
                     showAlert(t('recordingStopped'), 'info');
                 }
             };
-            
+
             // 格式化录音时长
             const formatRecordingDuration = (seconds) => {
                 const mins = Math.floor(seconds / 60);
@@ -1569,7 +1569,7 @@
                     console.warn('getTemplateFileUrl: fileKey为空', { fileKey, fileType });
                     return null;
                 }
-                
+
                 // 先从缓存获取
                 const cachedFile = getTemplateFileFromCache(fileKey);
                 if (cachedFile) {
@@ -1587,30 +1587,30 @@
             // 创建响应式的模板文件URL（用于首屏渲染）
             const createTemplateFileUrlRef = (fileKey, fileType) => {
                 const urlRef = ref(null);
-                
+
                 // 检查参数有效性
                 if (!fileKey) {
                     console.warn('createTemplateFileUrlRef: fileKey为空', { fileKey, fileType });
                     return urlRef;
                 }
-                
+
                 // 先从缓存获取
                 const cachedFile = getTemplateFileFromCache(fileKey);
                 if (cachedFile) {
                     urlRef.value = cachedFile.url;
                     return urlRef;
                 }
-                
+
                 // 检查是否正在获取中，避免重复请求
                 const fetchKey = `${fileKey}_${fileType}`;
                 if (templateUrlFetching.value.has(fetchKey)) {
                     console.log('createTemplateFileUrlRef: 正在获取中，跳过重复请求', { fileKey, fileType });
                     return urlRef;
                 }
-                
+
                 // 标记为正在获取
                 templateUrlFetching.value.add(fetchKey);
-                
+
                 // 如果缓存中没有，异步获取
                 getTemplateFileUrlFromApi(fileKey, fileType).then(url => {
                     if (url) {
@@ -1624,27 +1624,27 @@
                     // 移除获取状态
                     templateUrlFetching.value.delete(fetchKey);
                 });
-                
+
                 return urlRef;
             };
 
             // 创建响应式的任务文件URL（用于首屏渲染）
             const createTaskFileUrlRef = (taskId, fileKey) => {
                 const urlRef = ref(null);
-                
+
                 // 检查参数有效性
                 if (!taskId || !fileKey) {
                     console.warn('createTaskFileUrlRef: 参数为空', { taskId, fileKey });
                     return urlRef;
                 }
-                
+
                 // 先从缓存获取
                 const cachedFile = getTaskFileFromCache(taskId, fileKey);
                 if (cachedFile) {
                     urlRef.value = cachedFile.url;
                     return urlRef;
                 }
-                
+
                 // 如果缓存中没有，异步获取
                 getTaskFileUrl(taskId, fileKey).then(url => {
                     if (url) {
@@ -1655,7 +1655,7 @@
                 }).catch(error => {
                     console.warn('获取任务文件URL失败:', error);
                 });
-                
+
                 return urlRef;
             };
 
@@ -1666,14 +1666,14 @@
                     console.warn('getTemplateFileUrlAsync: fileKey为空', { fileKey, fileType });
                     return null;
                 }
-                
+
                 // 先从缓存获取
                 const cachedFile = getTemplateFileFromCache(fileKey);
                 if (cachedFile) {
                     console.log('getTemplateFileUrlAsync: 从缓存获取', { fileKey, url: cachedFile.url });
                     return cachedFile.url;
                 }
-                
+
                 // 检查是否正在获取中，避免重复请求
                 const fetchKey = `${fileKey}_${fileType}`;
                 if (templateUrlFetching.value.has(fetchKey)) {
@@ -1692,10 +1692,10 @@
                         }, 100);
                     });
                 }
-                
+
                 // 标记为正在获取
                 templateUrlFetching.value.add(fetchKey);
-                
+
                 // 如果缓存中没有，异步获取
                 try {
                     const url = await getTemplateFileUrlFromApi(fileKey, fileType);
@@ -2266,9 +2266,9 @@
                         showAlert(t('taskNotFoundAlert'), 'danger');
                         return;
                     }
-                    
+
                     const task = await taskResponse.json();
-                    
+
                     // 如果任务已完成，则删除并重新生成
                     if (task.status === 'SUCCEED') {
                         // 显示确认对话框
@@ -2296,24 +2296,24 @@
                             // 设置任务类型
                             selectedTaskId.value = task.task_type;
                             console.log('selectedTaskId.value', selectedTaskId.value);
-        
+
                             // 获取当前表单
                             const currentForm = getCurrentForm();
-        
+
                             // 设置模型
                             if (task.params && task.params.model_cls) {
                                 currentForm.model_cls = task.params.model_cls;
                             }
-        
+
                             // 设置prompt
                             if (task.params && task.params.prompt) {
                                 currentForm.prompt = task.params.prompt;
                             }
-        
+
                             // 尝试从localStorage获取任务历史数据
                             const taskHistory = JSON.parse(localStorage.getItem('taskHistory') || '[]');
                             const historyItem = taskHistory.find(item => item.task_id === task.task_id);
-        
+
                             if (historyItem) {
                                 // 从localStorage恢复图片和音频
                                 if (historyItem.imageFile && historyItem.imageFile.blob) {
@@ -2322,7 +2322,7 @@
                                     currentForm.imageFile = imageFile;
                                     setCurrentImagePreview(URL.createObjectURL(imageFile));
                                 }
-        
+
                                 if (historyItem.audioFile && historyItem.audioFile.blob) {
                                     // 重新创建File对象
                                     let mimeType = historyItem.audioFile.type;
@@ -2361,7 +2361,7 @@
                                     // 使用现有的函数获取图片和音频URL
                                     const imageUrl = await getTaskInputImage(task);
                                     const audioUrl = await getTaskInputAudio(task);
-        
+
                                     // 加载图片文件
                                     if (imageUrl) {
                                         try {
@@ -2380,7 +2380,7 @@
                                             console.warn('Failed to load image file:', error);
                                         }
                                     }
-        
+
                                     // 加载音频文件
                                     if (audioUrl) {
                                         try {
@@ -2391,7 +2391,7 @@
                                                     key.includes('audio') ||
                                                     task.inputs[key].toString().toLowerCase().match(/\.(mp3|wav|mp4|aac|ogg|m4a)$/)
                                                 )] || 'audio.wav';
-        
+
                                                 // 根据文件扩展名确定正确的MIME类型
                                                 let mimeType = blob.type;
                                                 if (!mimeType || mimeType === 'application/octet-stream') {
@@ -2406,7 +2406,7 @@
                                                     };
                                                     mimeType = mimeTypes[ext] || 'audio/mpeg';
                                                 }
-        
+
                                                 const file = new File([blob], filename, { type: mimeType });
                                                 currentForm.audioFile = file;
                                                 console.log('复用任务 - 从后端加载音频文件:', {
@@ -2423,7 +2423,7 @@
                                                 };
                                                 reader.readAsDataURL(file);
                                             }
-        
+
                                         } catch (error) {
                                             console.warn('Failed to load audio file:', error);
                                         }
@@ -2432,9 +2432,9 @@
                                     console.warn('Failed to load task data from backend:', error);
                                 }
                             }
-        
+
                             showAlert(t('taskMaterialReuseSuccessAlert'), 'success');
-        
+
                         } catch (error) {
                             console.error('Failed to resume task:', error);
                             showAlert(t('loadTaskDataFailedAlert'), 'danger');
@@ -2447,7 +2447,7 @@
 
                         submitTask();
 
-                        
+
                         return; // 不需要继续执行后续的API调用
                     } else {
                         // 对于未完成的任务，使用原有的恢复逻辑
@@ -3140,7 +3140,7 @@
                     getPromptHistory();
                     loadTaskFilesFromCache();
                     loadTemplateFilesFromCache();
-                    
+
                     // 异步加载模板数据，不阻塞首屏渲染
                     setTimeout(() => {
                         loadImageAudioTemplates(true);
@@ -3519,7 +3519,7 @@
                 };
                 return statusMap[status] || status;
             };
-            
+
 
             const formatEstimatedTime = computed(() => {
                 return (formattedEstimatedTime) => {
@@ -3548,7 +3548,7 @@
                         estimatedTime.value = remaining;
                         formattedEstimatedTime.value = `${t('remaining')} ${formatDuration(remaining)}`;
                     }
-                    
+
                     // 如果没有estimated_running_secs，尝试使用elapses计算
                     if (Object.keys(elapses).length > 0) {
                         const totalElapsed = Object.values(elapses).reduce((sum, time) => sum + (time || 0), 0);
@@ -3556,7 +3556,7 @@
                             formattedEstimatedTime.value = `${t('running')} ${formatDuration(totalElapsed)}`;
                         }
                     }
-                    
+
                     return t('calculating');
                 }
 
@@ -3804,7 +3804,7 @@
                 console.log('开始保存任务历史:', { taskType, formData });
                 console.log('formData.imageFile:', formData.imageFile);
                 console.log('formData.audioFile:', formData.audioFile);
-                
+
                 const historyItem = {
                     id: Date.now(),
                     timestamp: new Date().toISOString(),
@@ -3889,7 +3889,7 @@
                         const sameTaskType = item.taskType === historyItem.taskType;
                         const sameImage = (item.imageFile?.name || '') === (historyItem.imageFile?.name || '');
                         const sameAudio = (item.audioFile?.name || '') === (historyItem.audioFile?.name || '');
-                        
+
                         return samePrompt && sameTaskType && sameImage && sameAudio;
                     });
 
@@ -3911,10 +3911,10 @@
                         } catch (storageError) {
                             if (storageError.name === 'QuotaExceededError') {
                                 console.warn('localStorage空间不足，尝试清理旧数据...');
-                                
+
                                 // 清理策略：保留最新的10条记录
                                 const cleanedHistory = existingHistory.slice(-10);
-                                
+
                                 try {
                                     localStorage.setItem('taskHistory', JSON.stringify(cleanedHistory));
                                     console.log('任务历史已保存（清理后）:', historyItem);
@@ -3979,7 +3979,7 @@
                     if (tasks.value.length === 0) {
                         await refreshTasks();
                     }
-                    
+
                     const uniqueImages = [];
                     const seenImages = new Set();
 
@@ -4004,7 +4004,7 @@
 
                     // 按时间戳排序，最新的在前
                     uniqueImages.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    
+
                     const result = uniqueImages.slice(0, 20); // 只显示最近20条
                     imageHistory.value = result;
                     console.log('从任务列表获取图片历史:', result.length, '条');
@@ -4023,7 +4023,7 @@
                     if (tasks.value.length === 0) {
                         await refreshTasks();
                     }
-                    
+
                     const uniqueAudios = [];
                     const seenAudios = new Set();
 
@@ -4047,7 +4047,7 @@
 
                     // 按时间戳排序，最新的在前
                     uniqueAudios.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    
+
                     const result = uniqueAudios.slice(0, 20); // 只显示最近20条
                     audioHistory.value = result;
                     console.log('从任务列表获取音频历史:', result.length, '条');
@@ -4067,7 +4067,7 @@
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    
+
                     const blob = await response.blob();
                     const file = new File([blob], history.filename, { type: blob.type });
 
@@ -4095,7 +4095,7 @@
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    
+
                     const blob = await response.blob();
                     const file = new File([blob], history.filename, { type: blob.type });
 
@@ -4148,7 +4148,7 @@
                 try {
                     // 清理任务历史
                     localStorage.removeItem('taskHistory');
-                    
+
                     // 清理其他可能的缓存数据
                     const keysToRemove = [];
                     for (let i = 0; i < localStorage.length; i++) {
@@ -4157,16 +4157,16 @@
                             keysToRemove.push(key);
                         }
                     }
-                    
+
                     keysToRemove.forEach(key => {
                         localStorage.removeItem(key);
                     });
-                    
+
                     // 重置相关状态
                     imageHistory.value = [];
                     audioHistory.value = [];
                     promptHistory.value = [];
-                    
+
                     showAlert('存储空间已清理', 'success');
                     console.log('localStorage已清理，释放了存储空间');
                 } catch (error) {
@@ -4360,24 +4360,24 @@
             const switchToCreateView = () => {
                 // 生成页面的查询参数
                 const generateQuery = {};
-                
+
                 // 保留任务类型选择
                 if (selectedTaskId.value) {
                     generateQuery.taskType = selectedTaskId.value;
                 }
-                
+
                 // 保留模型选择
                 if (selectedModel.value) {
                     generateQuery.model = selectedModel.value;
                 }
-                
+
                 // 保留创作区域展开状态
                 if (isCreationAreaExpanded.value) {
                     generateQuery.expanded = 'true';
                 }
-                
+
                 router.push({ path: '/generate', query: generateQuery });
-                
+
                 // 如果之前有展开过创作区域，保持展开状态
                 if (isCreationAreaExpanded.value) {
                     // 延迟一点时间确保DOM更新完成
@@ -4393,22 +4393,22 @@
             const switchToProjectsView = (forceRefresh = false) => {
                 // 项目页面的查询参数
                 const projectsQuery = {};
-                
+
                 // 保留搜索查询
                 if (taskSearchQuery.value) {
                     projectsQuery.search = taskSearchQuery.value;
                 }
-                
+
                 // 保留状态筛选
                 if (statusFilter.value) {
                     projectsQuery.status = statusFilter.value;
                 }
-                
+
                 // 保留当前页码
                 if (currentTaskPage.value > 1) {
                     projectsQuery.page = currentTaskPage.value.toString();
                 }
-                
+
                 router.push({ path: '/projects', query: projectsQuery });
                 // 刷新任务列表
                 refreshTasks(forceRefresh);
@@ -4417,22 +4417,22 @@
             const switchToInspirationView = () => {
                 // 灵感页面的查询参数
                 const inspirationQuery = {};
-                
+
                 // 保留搜索查询
                 if (inspirationSearchQuery.value) {
                     inspirationQuery.search = inspirationSearchQuery.value;
                 }
-                
+
                 // 保留分类筛选
                 if (selectedInspirationCategory.value) {
                     inspirationQuery.category = selectedInspirationCategory.value;
                 }
-                
+
                 // 保留当前页码
                 if (inspirationCurrentPage.value > 1) {
                     inspirationQuery.page = inspirationCurrentPage.value.toString();
                 }
-                
+
                 router.push({ path: '/inspirations', query: inspirationQuery });
                 // 加载灵感数据
                 loadInspirationData();
@@ -4440,7 +4440,7 @@
 
             const switchToLoginView = () => {
                 router.push('/login');
-                
+
             };
 
             // 日期格式化函数
@@ -4487,10 +4487,10 @@
                     if (inspirationCurrentPage.value) {
                         params.append('page', inspirationCurrentPage.value.toString());
                     }
-                    if (inspirationPageSize.value) {    
+                    if (inspirationPageSize.value) {
                         params.append('page_size', inspirationPageSize.value.toString());
                     }
-                    
+
                     const apiUrl = `/api/v1/template/tasks${params.toString() ? '?' + params.toString() : ''}`;
                     const response = await publicApiCall(apiUrl);
                     if (response.ok) {
@@ -4589,7 +4589,7 @@
                 // 查找视频容器中的播放按钮
                 const container = video.closest('.relative');
                 if (!container) return;
-                
+
                 // 查找移动端播放按钮
                 const playButton = container.querySelector('button[class*="absolute"][class*="bottom-3"]');
                 if (playButton) {
@@ -4604,13 +4604,13 @@
             const onVideoEnded = (event) => {
                 const video = event.target;
                 console.log('视频播放完毕:', video.src);
-                
+
                 // 重置视频到开始位置
                 video.currentTime = 0;
-                
+
                 // 更新播放按钮图标为播放状态
                 updateVideoIcon(video, false);
-                
+
                 // 如果播放完毕的是当前播放的视频，清除引用
                 if (currentPlayingVideo === video) {
                     currentPlayingVideo = null;
@@ -4621,13 +4621,13 @@
             // 视频播放控制
             const playVideo = (event) => {
                 const video = event.target;
-                
+
                 // 检查视频是否已加载完成
                 if (video.readyState < 2) { // HAVE_CURRENT_DATA
                     console.log('视频还没加载完成，忽略鼠标悬停播放');
                     return;
                 }
-                
+
                 // 如果当前有视频在播放，先暂停它
                 if (currentPlayingVideo && currentPlayingVideo !== video) {
                     currentPlayingVideo.pause();
@@ -4636,7 +4636,7 @@
                     updateVideoIcon(currentPlayingVideo, false);
                     console.log('暂停上一个视频');
                 }
-                
+
                 // 视频已加载完成，可以播放
                 video.currentTime = 0; // 从头开始播放
                 video.play().then(() => {
@@ -4653,19 +4653,19 @@
 
             const pauseVideo = (event) => {
                 const video = event.target;
-                
+
                 // 检查视频是否已加载完成
                 if (video.readyState < 2) { // HAVE_CURRENT_DATA
                     console.log('视频还没加载完成，忽略鼠标离开暂停');
                     return;
                 }
-                
+
                 video.pause();
                 video.currentTime = 0;
-                
+
                 // 更新视频图标
                 updateVideoIcon(video, false);
-                
+
                 // 如果暂停的是当前播放的视频，清除引用
                 if (currentPlayingVideo === video) {
                     currentPlayingVideo = null;
@@ -4678,7 +4678,7 @@
                 const button = event.target.closest('button');
                 const video = button.parentElement.querySelector('video');
                 const icon = button.querySelector('i');
-                
+
                 if (video.paused) {
                     // 如果当前有视频在播放，先暂停它
                     if (currentPlayingVideo && currentPlayingVideo !== video) {
@@ -4688,13 +4688,13 @@
                         updateVideoIcon(currentPlayingVideo, false);
                         console.log('暂停上一个视频（移动端）');
                     }
-                    
+
                     // 如果当前有视频在等待加载，取消它的等待状态
                     if (currentLoadingVideo && currentLoadingVideo !== video) {
                         currentLoadingVideo = null;
                         console.log('取消上一个视频的加载等待（移动端）');
                     }
-                    
+
                     // 检查视频是否已加载完成
                     if (video.readyState >= 2) { // HAVE_CURRENT_DATA
                         // 视频已加载完成，直接播放
@@ -4713,7 +4713,7 @@
                         console.log('视频还没加载完成，等待加载（移动端）');
                         icon.className = 'fas fa-spinner fa-spin text-sm';
                         currentLoadingVideo = video;
-                        
+
                         // 等待视频加载完成
                         video.addEventListener('loadeddata', () => {
                             // 检查这个视频是否仍然是当前等待加载的视频
@@ -4740,13 +4740,13 @@
                     video.pause();
                     video.currentTime = 0;
                     icon.className = 'fas fa-play text-sm';
-                    
+
                     // 如果暂停的是当前播放的视频，清除引用
                     if (currentPlayingVideo === video) {
                         currentPlayingVideo = null;
                         console.log('暂停当前播放视频（移动端）');
                     }
-                    
+
                     // 如果暂停的是当前等待加载的视频，清除引用
                     if (currentLoadingVideo === video) {
                         currentLoadingVideo = null;
@@ -4765,7 +4765,7 @@
                     currentPlayingVideo = null;
                     console.log('暂停所有视频');
                 }
-                
+
                 // 清理等待加载的视频状态
                 if (currentLoadingVideo) {
                     // 重置等待加载的视频图标
@@ -4788,10 +4788,10 @@
                 const video = event.target;
                 // 视频加载完成，准备播放
                 console.log('视频加载完成:', video.src);
-                
+
                 // 更新视频加载状态（使用视频的实际src）
                 setVideoLoaded(video.src, true);
-                
+
                 // 触发Vue的响应式更新
                 videoLoadedStates.value = new Map(videoLoadedStates.value);
             };
@@ -4809,7 +4809,7 @@
             const previewTemplateDetail = (item) => {
                 selectedTemplate.value = item;
                 showTemplateDetailModal.value = true;
-                
+
                 // 更新路由到模板详情页面
                 if (item?.task_id) {
                     router.push(`/template/${item.task_id}`);
@@ -5106,7 +5106,7 @@
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${token}`
                         },
-                        body: JSON.stringify({ 
+                        body: JSON.stringify({
                             task_id: taskId,
                             share_type: shareType
                         })
@@ -5118,7 +5118,7 @@
 
                     const data = await response.json();
                     const shareUrl = `${window.location.origin}${data.share_url}`;
-                    
+
                     await navigator.clipboard.writeText(shareUrl);
                     showAlert(t('shareLinkCopied'), 'success');
                 } catch (err) {
@@ -5132,9 +5132,9 @@
                 const task = modalTask.value;
                 const title = task?.params?.prompt || t('aiGeneratedVideo');
                 const description = t('checkOutThisAIGeneratedVideo');
-                
+
                 let shareUrlWithParams = '';
-                
+
                 switch (platform) {
                     case 'twitter':
                         shareUrlWithParams = `https://twitter.com/intent/tweet?text=${encodeURIComponent(title)}&url=${encodeURIComponent(shareUrl)}`;
@@ -5157,7 +5157,7 @@
                     default:
                         return;
                 }
-                
+
                 window.open(shareUrlWithParams, '_blank', 'width=600,height=400');
             };
 
@@ -5173,7 +5173,7 @@
                         console.log('任务详情已打开，不重复打开');
                         return;
                     }
-                    
+
                     // 查找任务
                     const task = tasks.value.find(t => t.task_id === taskId);
                     if (task) {
@@ -5213,9 +5213,9 @@
                 const template = selectedTemplate.value;
                 const title = template?.params?.prompt || t('aiGeneratedTemplate');
                 const description = t('checkOutThisAITemplate');
-                
+
                 let shareUrlWithParams = '';
-                
+
                 switch (platform) {
                     case 'twitter':
                         shareUrlWithParams = `https://twitter.com/intent/tweet?text=${encodeURIComponent(title)}&url=${encodeURIComponent(shareUrl)}`;
@@ -5238,7 +5238,7 @@
                     default:
                         return;
                 }
-                
+
                 window.open(shareUrlWithParams, '_blank', 'width=600,height=400');
             };
 
@@ -5254,7 +5254,7 @@
                         console.log('模板详情已打开，不重复打开');
                         return;
                     }
-                    
+
                     // 查找模板
                     const template = inspirationItems.value.find(t => t.task_id === templateId);
                     if (template) {
@@ -5305,10 +5305,10 @@
             const loadFeaturedTemplates = async (forceRefresh = false) => {
                 try {
                     featuredTemplatesLoading.value = true;
-                    
+
                     // 构建缓存键
                     const cacheKey = `featured_templates_cache`;
-                    
+
                     if (!forceRefresh) {
                         const cachedData = loadFromCache(cacheKey, TEMPLATES_CACHE_EXPIRY);
                         if (cachedData && cachedData.templates) {
@@ -5323,20 +5323,20 @@
                     const params = new URLSearchParams();
                     params.append('category', '精选');
                     params.append('page_size', '50'); // 获取更多数据用于随机选择
-                    
+
                     const apiUrl = `/api/v1/template/tasks?${params.toString()}`;
                     const response = await publicApiCall(apiUrl);
-                    
+
                     if (response.ok) {
                         const data = await response.json();
                         const templates = data.templates || [];
-                        
+
                         // 缓存数据
                         saveToCache(cacheKey, {
                             templates: templates,
                             timestamp: Date.now()
                         });
-                        
+
                         featuredTemplates.value = templates;
                         console.log('成功加载精选模版数据:', templates.length, '个模版');
                     } else {
@@ -5355,21 +5355,21 @@
             const getRandomFeaturedTemplates = async (count = 10) => {
                 try {
                     featuredTemplatesLoading.value = true;
-                    
+
                     // 如果当前没有数据，先加载
                     if (featuredTemplates.value.length === 0) {
                         await loadFeaturedTemplates();
                     }
-                    
+
                     // 如果数据仍然为空，返回空数组
                     if (featuredTemplates.value.length === 0) {
                         return [];
                     }
-                    
+
                     // 随机选择指定数量的模版
                     const shuffled = [...featuredTemplates.value].sort(() => 0.5 - Math.random());
                     const randomTemplates = shuffled.slice(0, count);
-                    
+
                     return randomTemplates;
                 } catch (error) {
                     console.error('获取随机精选模版失败:', error);
@@ -5389,7 +5389,7 @@
                 initLoading,
                 downloadLoading,
                 isLoading,
-                
+
                 // 录音相关
                 isRecording,
                 recordingDuration,

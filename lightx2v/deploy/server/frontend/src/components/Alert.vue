@@ -17,12 +17,12 @@ const handleScroll = () => {
     if (scrollTimeout) {
         clearTimeout(scrollTimeout)
     }
-    
+
     // 设置新的定时器，防抖处理
     scrollTimeout = setTimeout(() => {
         const scrollY = window.scrollY
         const viewportHeight = window.innerHeight
-        
+
         // 如果用户滚动了超过50px，将Alert显示在视口内
         if (scrollY > 50) {
             // 计算Alert应该显示的位置，确保在视口内可见
