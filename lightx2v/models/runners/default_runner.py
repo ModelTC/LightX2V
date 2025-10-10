@@ -170,7 +170,7 @@ class DefaultRunner(BaseRunner):
             img_ori = Image.open(img_path).convert("RGB")
         if GET_RECORDER_MODE():
             width, height = img_ori.size
-            monitor_cli.lightx2v_input_image_len.observe(width*height)
+            monitor_cli.lightx2v_input_image_len.observe(width * height)
         img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
         self.input_info.original_size = img_ori.size
         return img, img_ori
@@ -256,10 +256,12 @@ class DefaultRunner(BaseRunner):
             self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
-            with ProfilingContext4DebugL1(f"segment end2end {segment_idx + 1}/{self.video_segment_num}", \
-                    recorder_mode=GET_RECORDER_MODE(), \
-                    metrics_func=monitor_cli.lightx2v_run_pre_step_dit_duration, \
-                    metrics_labels=[segment_idx+1, self.video_segment_num]):
+            with ProfilingContext4DebugL1(
+                f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_pre_step_dit_duration,
+                metrics_labels=[segment_idx + 1, self.video_segment_num],
+            ):
                 self.check_stop()
                 # 1. default do nothing
                 self.init_run_segment(segment_idx)
@@ -273,12 +275,7 @@ class DefaultRunner(BaseRunner):
         self.end_run()
         return {"video": gen_video_final}
 
-    @ProfilingContext4DebugL1(
-        "Run VAE Decoder",
-        recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
-        metrics_labels=labels=["DefaultRunner"]
-    )
+    @ProfilingContext4DebugL1("Run VAE Decoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_decode_duration, metrics_labels=["DefaultRunner"])
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
@@ -333,12 +330,7 @@ class DefaultRunner(BaseRunner):
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 
-    @ProfilingContext4DebugL1(
-        "RUN pipeline",
-        recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_worker_request_duration,
-        metrics_labels=["DefaultRunner"]
-    )
+    @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["DefaultRunner"])
     def run_pipeline(self, input_info):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
