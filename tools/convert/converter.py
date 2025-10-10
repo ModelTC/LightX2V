@@ -2,10 +2,12 @@ import argparse
 import gc
 import glob
 import json
+import multiprocessing
 import os
 import re
 import shutil
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import torch
 from loguru import logger
@@ -13,6 +15,9 @@ from qtorch.quant import float_quantize
 from safetensors import safe_open
 from safetensors import torch as st
 from tqdm import tqdm
+
+SCALE_SUFFIX = "_scale"
+COMFYUI_SCALE_SUFFIX = ".scale_weight"
 
 
 def get_key_mapping_rules(direction, model_type):
@@ -398,7 +403,7 @@ def quantize_model(
 
                 # Replace original tensor and store scales
                 weights[key] = w_q
-                weights[key + "_scale"] = scales
+                weights[key + COMFYUI_SCALE_SUFFIX] = scales
 
                 total_quantized += 1
                 total_size += tensor.numel() * tensor.element_size() / (1024**2)  # MB
@@ -413,54 +418,165 @@ def quantize_model(
     return weights
 
 
-def load_loras(lora_path, weight_dict, alpha):
-    logger.info(f"Loading LoRA from: {lora_path}")
+def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None):
+    logger.info(f"Loading LoRA from: {lora_path} with alpha={alpha}")
     with safe_open(lora_path, framework="pt") as f:
         lora_weights = {k: f.get_tensor(k) for k in f.keys()}
 
     lora_pairs = {}
     lora_diffs = {}
-    prefix = "diffusion_model."
+    lora_alphas = {}  # Store LoRA-specific alpha values
 
-    def try_lora_pair(key, suffix_a, suffix_b, target_suffix):
-        if key.endswith(suffix_a):
-            base_name = key[len(prefix) :].replace(suffix_a, target_suffix)
-            pair_key = key.replace(suffix_a, suffix_b)
-            if pair_key in lora_weights:
-                lora_pairs[base_name] = (key, pair_key)
-
-    def try_lora_diff(key, suffix, target_suffix):
-        if key.endswith(suffix):
-            base_name = key[len(prefix) :].replace(suffix, target_suffix)
-            lora_diffs[base_name] = key
-
+    # Extract LoRA alpha values if present
     for key in lora_weights.keys():
-        if not key.startswith(prefix):
+        if key.endswith(".alpha"):
+            base_key = key[:-6]  # Remove .alpha
+            lora_alphas[base_key] = lora_weights[key].item()
+
+    # Handle different prefixes: "diffusion_model." or "transformer_blocks." or no prefix
+    def get_model_key(lora_key, suffix_to_remove, suffix_to_add):
+        """Extract the model weight key from LoRA key"""
+        # Remove the LoRA-specific suffix
+        if lora_key.endswith(suffix_to_remove):
+            base = lora_key[: -len(suffix_to_remove)]
+        else:
+            return None
+
+        # For Qwen models, keep transformer_blocks prefix
+        # Check if this is a Qwen-style LoRA (transformer_blocks.NUMBER.)
+        if base.startswith("transformer_blocks.") and base.split(".")[1].isdigit():
+            # Keep the full path for Qwen models
+            model_key = base + suffix_to_add
+        else:
+            # Remove common prefixes for other models
+            prefixes_to_remove = ["diffusion_model.", "model.", "unet."]
+            for prefix in prefixes_to_remove:
+                if base.startswith(prefix):
+                    base = base[len(prefix) :]
+                    break
+            model_key = base + suffix_to_add
+
+        # Apply key mapping rules if provided (for converted models)
+        if key_mapping_rules:
+            for pattern, replacement in key_mapping_rules:
+                model_key = re.sub(pattern, replacement, model_key)
+
+        return model_key
+
+    # Collect all LoRA pairs and diffs
+    for key in lora_weights.keys():
+        # Skip alpha parameters
+        if key.endswith(".alpha"):
             continue
 
-        try_lora_pair(key, "lora_A.weight", "lora_B.weight", "weight")
-        try_lora_pair(key, "lora_down.weight", "lora_up.weight", "weight")
-        try_lora_diff(key, "diff", "weight")
-        try_lora_diff(key, "diff_b", "bias")
-        try_lora_diff(key, "diff_m", "modulation")
+        # Pattern 1: .lora_down.weight / .lora_up.weight
+        if key.endswith(".lora_down.weight"):
+            base = key[: -len(".lora_down.weight")]
+            up_key = base + ".lora_up.weight"
+            if up_key in lora_weights:
+                model_key = get_model_key(key, ".lora_down.weight", ".weight")
+                if model_key:
+                    lora_pairs[model_key] = (key, up_key)
+
+        # Pattern 2: .lora_A.weight / .lora_B.weight
+        elif key.endswith(".lora_A.weight"):
+            base = key[: -len(".lora_A.weight")]
+            b_key = base + ".lora_B.weight"
+            if b_key in lora_weights:
+                model_key = get_model_key(key, ".lora_A.weight", ".weight")
+                if model_key:
+                    lora_pairs[model_key] = (key, b_key)
+
+        # Pattern 3: diff weights (direct addition)
+        elif key.endswith(".diff"):
+            model_key = get_model_key(key, ".diff", ".weight")
+            if model_key:
+                lora_diffs[model_key] = key
+
+        elif key.endswith(".diff_b"):
+            model_key = get_model_key(key, ".diff_b", ".bias")
+            if model_key:
+                lora_diffs[model_key] = key
+
+        elif key.endswith(".diff_m"):
+            model_key = get_model_key(key, ".diff_m", ".modulation")
+            if model_key:
+                lora_diffs[model_key] = key
 
     applied_count = 0
+    unused_lora_keys = set()
+
+    # Apply LoRA weights by iterating through model weights
     for name, param in weight_dict.items():
+        # Apply LoRA pairs (matmul pattern)
         if name in lora_pairs:
-            name_lora_A, name_lora_B = lora_pairs[name]
-            lora_A = lora_weights[name_lora_A].to(param.device, param.dtype)
-            lora_B = lora_weights[name_lora_B].to(param.device, param.dtype)
-            param += torch.matmul(lora_B, lora_A) * alpha
-            applied_count += 1
+            name_lora_down, name_lora_up = lora_pairs[name]
+            lora_down = lora_weights[name_lora_down].to(param.device, param.dtype)
+            lora_up = lora_weights[name_lora_up].to(param.device, param.dtype)
+
+            # Get LoRA-specific alpha if available, otherwise use global alpha
+            base_key = name_lora_down[: -len(".lora_down.weight")] if name_lora_down.endswith(".lora_down.weight") else name_lora_down[: -len(".lora_A.weight")]
+            lora_alpha = lora_alphas.get(base_key, alpha)
+
+            # Calculate rank from dimensions
+            rank = lora_down.shape[0]  # rank is the output dimension of down projection
+
+            try:
+                # Standard LoRA formula: W' = W + (alpha/rank) * BA
+                # where B = up (rank x out_features), A = down (rank x in_features)
+                # Note: PyTorch linear layers store weight as (out_features, in_features)
+
+                if len(lora_down.shape) == 2 and len(lora_up.shape) == 2:
+                    # For linear layers: down is (rank, in_features), up is (out_features, rank)
+                    lora_delta = torch.mm(lora_up, lora_down) * (lora_alpha / rank)
+                else:
+                    # For other shapes, try element-wise multiplication or skip
+                    logger.warning(f"Unexpected LoRA shape for {name}: down={lora_down.shape}, up={lora_up.shape}")
+                    continue
+
+                param.data += lora_delta
+                applied_count += 1
+                logger.debug(f"Applied LoRA to {name} with alpha={lora_alpha}, rank={rank}")
+            except Exception as e:
+                logger.warning(f"Failed to apply LoRA pair for {name}: {e}")
+                logger.warning(f"  Shapes - param: {param.shape}, down: {lora_down.shape}, up: {lora_up.shape}")
+
+        # Apply diff weights (direct addition)
         elif name in lora_diffs:
             name_diff = lora_diffs[name]
             lora_diff = lora_weights[name_diff].to(param.device, param.dtype)
             try:
-                param += lora_diff * alpha
+                param.data += lora_diff * alpha
                 applied_count += 1
+                logger.debug(f"Applied LoRA diff to {name}")
             except Exception as e:
-                continue
-    logger.info(f"Applied {applied_count} LoRA weight adjustments")
+                logger.warning(f"Failed to apply LoRA diff for {name}: {e}")
+
+    # Check for unused LoRA weights (potential key mismatch issues)
+    used_lora_keys = set()
+    for down_key, up_key in lora_pairs.values():
+        used_lora_keys.add(down_key)
+        used_lora_keys.add(up_key)
+    for diff_key in lora_diffs.values():
+        used_lora_keys.add(diff_key)
+
+    all_lora_keys = set(k for k in lora_weights.keys() if not k.endswith(".alpha"))
+    unused_lora_keys = all_lora_keys - used_lora_keys
+
+    if unused_lora_keys:
+        logger.warning(f"Found {len(unused_lora_keys)} unused LoRA weights - this may indicate key mismatch:")
+        for key in list(unused_lora_keys)[:10]:  # Show first 10
+            logger.warning(f"  Unused: {key}")
+        if len(unused_lora_keys) > 10:
+            logger.warning(f"  ... and {len(unused_lora_keys) - 10} more")
+
+    logger.info(f"Applied {applied_count} LoRA weight adjustments out of {len(lora_pairs) + len(lora_diffs)} possible")
+
+    if applied_count == 0 and (lora_pairs or lora_diffs):
+        logger.error("No LoRA weights were applied! Check for key name mismatches.")
+        logger.info("Model weight keys sample: " + str(list(weight_dict.keys())[:5]))
+        logger.info("LoRA pairs keys sample: " + str(list(lora_pairs.keys())[:5]))
+        logger.info("LoRA diff keys sample: " + str(list(lora_diffs.keys())[:5]))
 
 
 def convert_weights(args):
@@ -473,6 +589,8 @@ def convert_weights(args):
 
     merged_weights = {}
     logger.info(f"Processing source files: {src_files}")
+
+    # Optimize loading for better memory usage
     for file_path in tqdm(src_files, desc="Loading weights"):
         logger.info(f"Loading weights from: {file_path}")
         if file_path.endswith(".pt") or file_path.endswith(".pth"):
@@ -480,14 +598,73 @@ def convert_weights(args):
             if args.model_type == "hunyuan_dit":
                 weights = weights["module"]
         elif file_path.endswith(".safetensors"):
+            # Use lazy loading for safetensors to reduce memory usage
             with safe_open(file_path, framework="pt") as f:
-                weights = {k: f.get_tensor(k) for k in f.keys()}
+                # Only load tensors when needed (lazy loading)
+                weights = {}
+                keys = f.keys()
+
+                # For large files, show progress
+                if len(keys) > 100:
+                    for k in tqdm(keys, desc=f"Loading {os.path.basename(file_path)}", leave=False):
+                        weights[k] = f.get_tensor(k)
+                else:
+                    weights = {k: f.get_tensor(k) for k in keys}
 
         duplicate_keys = set(weights.keys()) & set(merged_weights.keys())
         if duplicate_keys:
             raise ValueError(f"Duplicate keys found: {duplicate_keys} in file {file_path}")
+
+        # Update weights more efficiently
         merged_weights.update(weights)
 
+        # Clear weights dict to free memory
+        del weights
+        if len(src_files) > 1:
+            gc.collect()  # Force garbage collection between files
+
+    if args.direction is not None:
+        rules = get_key_mapping_rules(args.direction, args.model_type)
+        converted_weights = {}
+        logger.info("Converting keys...")
+
+        # Pre-compile regex patterns for better performance
+        compiled_rules = [(re.compile(pattern), replacement) for pattern, replacement in rules]
+
+        def convert_key(key):
+            """Convert a single key using compiled rules"""
+            new_key = key
+            for pattern, replacement in compiled_rules:
+                new_key = pattern.sub(replacement, new_key)
+            return new_key
+
+        # Batch convert keys using list comprehension (faster than loop)
+        keys_list = list(merged_weights.keys())
+
+        # Use parallel processing for large models
+        if len(keys_list) > 1000 and args.parallel:
+            logger.info(f"Using parallel processing for {len(keys_list)} keys")
+            # Use ThreadPoolExecutor for I/O bound regex operations
+            num_workers = min(8, multiprocessing.cpu_count())
+
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                # Submit all conversion tasks
+                future_to_key = {executor.submit(convert_key, key): key for key in keys_list}
+
+                # Process results as they complete with progress bar
+                for future in tqdm(as_completed(future_to_key), total=len(keys_list), desc="Converting keys (parallel)"):
+                    original_key = future_to_key[future]
+                    new_key = future.result()
+                    converted_weights[new_key] = merged_weights[original_key]
+        else:
+            # For smaller models, use simple loop with less overhead
+            for key in tqdm(keys_list, desc="Converting keys"):
+                new_key = convert_key(key)
+                converted_weights[new_key] = merged_weights[key]
+    else:
+        converted_weights = merged_weights
+
+    # Apply LoRA AFTER key conversion to ensure proper key matching
     if args.lora_path is not None:
         # Handle alpha list - if single alpha, replicate for all LoRAs
         if len(args.lora_alpha) == 1 and len(args.lora_path) > 1:
@@ -495,20 +672,24 @@ def convert_weights(args):
         elif len(args.lora_alpha) != len(args.lora_path):
             raise ValueError(f"Number of lora_alpha ({len(args.lora_alpha)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
 
-        for path, alpha in zip(args.lora_path, args.lora_alpha):
-            load_loras(path, merged_weights, alpha)
+        # Determine if we should apply key mapping rules to LoRA keys
+        key_mapping_rules = None
+        if args.lora_key_convert == "convert" and args.direction is not None:
+            # Apply same conversion as model
+            key_mapping_rules = get_key_mapping_rules(args.direction, args.model_type)
+            logger.info("Applying key conversion to LoRA weights")
+        elif args.lora_key_convert == "same":
+            # Don't convert LoRA keys
+            logger.info("Using original LoRA keys without conversion")
+        else:  # auto
+            # Auto-detect: if model was converted, try with conversion first
+            if args.direction is not None:
+                key_mapping_rules = get_key_mapping_rules(args.direction, args.model_type)
+                logger.info("Auto mode: will try with key conversion first")
 
-    if args.direction is not None:
-        rules = get_key_mapping_rules(args.direction, args.model_type)
-        converted_weights = {}
-        logger.info("Converting keys...")
-        for key in tqdm(merged_weights.keys(), desc="Converting keys"):
-            new_key = key
-            for pattern, replacement in rules:
-                new_key = re.sub(pattern, replacement, new_key)
-            converted_weights[new_key] = merged_weights[key]
-    else:
-        converted_weights = merged_weights
+        for path, alpha in zip(args.lora_path, args.lora_alpha):
+            # Pass key mapping rules to handle converted keys properly
+            load_loras(path, converted_weights, alpha, key_mapping_rules)
 
     if args.quantized:
         converted_weights = quantize_model(
@@ -529,8 +710,33 @@ def convert_weights(args):
 
     else:
         index = {"metadata": {"total_size": 0}, "weight_map": {}}
+        if args.single_file:
+            output_filename = f"{args.output_name}.safetensors"
+            output_path = os.path.join(args.output, output_filename)
+            logger.info(f"Saving model to single file: {output_path}")
 
-        if args.save_by_block:
+            # For memory efficiency with large models
+            try:
+                # If model is very large (over threshold), consider warning
+                total_size = sum(tensor.numel() * tensor.element_size() for tensor in converted_weights.values())
+                total_size_gb = total_size / (1024**3)
+
+                if total_size_gb > 10:  # Warn if model is larger than 10GB
+                    logger.warning(f"Model size is {total_size_gb:.2f}GB. This will require significant memory to save as a single file.")
+                    logger.warning("Consider using --save_by_block or default chunked saving for better memory efficiency.")
+
+                # Save the entire model as a single file
+                st.save_file(converted_weights, output_path)
+                logger.info(f"Model saved successfully to: {output_path} ({total_size_gb:.2f}GB)")
+
+            except MemoryError:
+                logger.error("Memory error while saving. The model is too large to save as a single file.")
+                logger.error("Please use --save_by_block or remove --single_file to use chunked saving.")
+                raise
+            except Exception as e:
+                logger.error(f"Error saving model: {e}")
+                raise
+        elif args.save_by_block:
             logger.info("Backward conversion: grouping weights by block")
             block_groups = defaultdict(dict)
             non_block_weights = {}
@@ -679,7 +885,23 @@ def main():
         help="Alpha for LoRA weight scaling",
     )
     parser.add_argument("--copy_no_weight_files", action="store_true")
+    parser.add_argument("--single_file", action="store_true", help="Save as a single safetensors file instead of chunking (warning: requires loading entire model in memory)")
+    parser.add_argument(
+        "--lora_key_convert",
+        choices=["auto", "same", "convert"],
+        default="auto",
+        help="How to handle LoRA key conversion: 'auto' (detect from LoRA), 'same' (use original keys), 'convert' (apply same conversion as model)",
+    )
+    parser.add_argument("--parallel", action="store_true", default=True, help="Use parallel processing for faster conversion (default: True)")
+    parser.add_argument("--no-parallel", dest="parallel", action="store_false", help="Disable parallel processing")
     args = parser.parse_args()
+
+    # Validate conflicting arguments
+    if args.single_file and args.save_by_block:
+        parser.error("--single_file and --save_by_block cannot be used together. Choose one saving strategy.")
+
+    if args.single_file and args.chunk_size > 0 and args.chunk_size != 100:
+        logger.warning("--chunk_size is ignored when using --single_file option.")
 
     if args.quantized:
         args.linear_dtype = eval(args.linear_dtype)
