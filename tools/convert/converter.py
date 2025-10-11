@@ -380,10 +380,13 @@ def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=N
             parts = key.split(".")
 
             if len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
-                if adapter_keys is not None and not any(adapter_key in parts for adapter_key in adapter_keys):
+                if adapter_keys is None:
                     if tensor.dtype != non_linear_dtype:
                         weights[key] = tensor.to(non_linear_dtype)
-                    continue
+                elif not any(adapter_key in parts for adapter_key in adapter_keys):
+                    if tensor.dtype != non_linear_dtype:
+                        weights[key] = tensor.to(non_linear_dtype)
+                continue
 
             try:
                 # Quantize tensor and store results
@@ -406,6 +409,10 @@ def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=N
             gc.collect()
 
         logger.info(f"Quantized {total_quantized} tensors, reduced size by {total_size:.2f} MB")
+
+    if comfyui_mode:
+        weights["scaled_fp8"] = torch.zeros(2, dtype=torch.float8_e4m3fn)
+
     return weights
 
 
