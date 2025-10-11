@@ -36,7 +36,7 @@ class _ProfilingContext:
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
-                self.metrics_func.labels(self.metrics_labels).observe(elapsed)
+                self.metrics_func.labels(*self.metrics_labels).observe(elapsed)
             else:
                 self.metrics_func.observe(elapsed)
         if self.enable_logger:
@@ -53,7 +53,7 @@ class _ProfilingContext:
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
-                self.metrics_func.labels(self.metrics_labels).observe(elapsed)
+                self.metrics_func.labels(*self.metrics_labels).observe(elapsed)
             else:
                 self.metrics_func.observe(elapsed)
         if self.enable_logger:

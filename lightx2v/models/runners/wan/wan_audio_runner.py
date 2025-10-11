@@ -587,7 +587,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.gen_video_final = None
             self.cut_audio_final = None
 
-    @ProfilingContext4DebugL1("Init run segment")
+    @ProfilingContext4DebugL1(
+        "Init run segment",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_init_run_segment_duration,
+        metrics_labels=["WanAudioRunner"],
+    )
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
@@ -618,7 +623,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if segment_idx > 0:
             self.model.scheduler.reset(self.input_info.seed, self.input_info.latent_shape, self.inputs["previmg_encoder_output"])
 
-    @ProfilingContext4DebugL1("End run segment")
+    @ProfilingContext4DebugL1(
+        "End run segment",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_end_run_segment_duration,
+        metrics_labels=["WanAudioRunner"],
+    )
     def end_run_segment(self, segment_idx):
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame

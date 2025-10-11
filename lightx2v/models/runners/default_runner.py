@@ -259,7 +259,7 @@ class DefaultRunner(BaseRunner):
             with ProfilingContext4DebugL1(
                 f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
                 recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_pre_step_dit_duration,
+                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
                 metrics_labels=[segment_idx + 1, self.video_segment_num],
             ):
                 self.check_stop()
