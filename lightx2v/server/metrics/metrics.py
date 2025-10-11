@@ -48,6 +48,7 @@ METRICS_INFO = {
         name="lightx2v_worker_request_duration",
         desc="Duration of the request (s)",
         type_="histogram",
+        labels=["model_cls"],
     ),
     "lightx2v_input_audio_len": MetricsConfig(
         name="lightx2v_input_audio_len",
@@ -86,7 +87,7 @@ METRICS_INFO = {
         type_="histogram",
     ),
     "lightx2v_run_per_step_dit_duration": MetricsConfig(
-        name="lightx2v_run_pre_step_dit_duration",
+        name="lightx2v_run_per_step_dit_duration",
         desc="Duration of run per step Dit (s)",
         type_="histogram",
         labels=["step_no", "total_steps"],
@@ -112,6 +113,18 @@ METRICS_INFO = {
     "lightx2v_run_vae_decode_duration": MetricsConfig(
         name="lightx2v_run_vae_decode_duration",
         desc="Duration of run vae decode (s)",
+        type_="histogram",
+        labels=["model_cls"],
+    ),
+    "lightx2v_run_init_run_segment_duration": MetricsConfig(
+        name="lightx2v_run_init_run_segment_duration",
+        desc="Duration of run init_run_segment (s)",
+        type_="histogram",
+        labels=["model_cls"],
+    ),
+    "lightx2v_run_end_run_segment_duration": MetricsConfig(
+        name="lightx2v_run_end_run_segment_duration",
+        desc="Duration of run end_run_segment (s)",
         type_="histogram",
         labels=["model_cls"],
     ),

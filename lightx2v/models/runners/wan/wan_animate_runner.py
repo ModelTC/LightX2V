@@ -292,6 +292,12 @@ class WanAnimateRunner(WanRunner):
             gc.collect()
         return images
 
+    @ProfilingContext4DebugL1(
+        "Init run segment",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_init_run_segment_duration,
+        metrics_labels=["WanAnimateRunner"],
+    )
     def init_run_segment(self, segment_idx):
         start = segment_idx * self.move_frames
         end = start + self.config["target_video_length"]
