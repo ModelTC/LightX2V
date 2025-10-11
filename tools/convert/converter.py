@@ -356,7 +356,9 @@ def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=N
         Modified state dictionary with quantized weights and scales
     """
     total_quantized = 0
-    total_size = 0
+    original_size = 0
+    quantized_size = 0
+    non_quantized_size = 0
     keys = list(weights.keys())
 
     with tqdm(keys, desc="Quantizing weights") as pbar:
@@ -373,22 +375,35 @@ def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=N
             if not isinstance(tensor, torch.Tensor) or tensor.dim() != 2:
                 if tensor.dtype != non_linear_dtype:
                     weights[key] = tensor.to(non_linear_dtype)
+                    non_quantized_size += weights[key].numel() * weights[key].element_size()
+                else:
+                    non_quantized_size += tensor.numel() * tensor.element_size()
                 continue
 
             # Check if key matches target modules
-
             parts = key.split(".")
 
             if len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
                 if adapter_keys is None:
                     if tensor.dtype != non_linear_dtype:
                         weights[key] = tensor.to(non_linear_dtype)
+                        non_quantized_size += weights[key].numel() * weights[key].element_size()
+                    else:
+                        non_quantized_size += tensor.numel() * tensor.element_size()
                 elif not any(adapter_key in parts for adapter_key in adapter_keys):
                     if tensor.dtype != non_linear_dtype:
                         weights[key] = tensor.to(non_linear_dtype)
+                        non_quantized_size += weights[key].numel() * weights[key].element_size()
+                    else:
+                        non_quantized_size += tensor.numel() * tensor.element_size()
+                else:
+                    non_quantized_size += tensor.numel() * tensor.element_size()
                 continue
 
             try:
+                original_tensor_size = tensor.numel() * tensor.element_size()
+                original_size += original_tensor_size
+
                 # Quantize tensor and store results
                 w_q, scales = quantize_tensor(tensor, w_bit, linear_dtype)
 
@@ -399,8 +414,11 @@ def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=N
                 else:
                     weights[key + "_scale"] = scales
 
+                quantized_tensor_size = w_q.numel() * w_q.element_size()
+                scale_size = scales.numel() * scales.element_size()
+                quantized_size += quantized_tensor_size + scale_size
+
                 total_quantized += 1
-                total_size += tensor.numel() * tensor.element_size() / (1024**2)  # MB
                 del w_q, scales
 
             except Exception as e:
@@ -408,7 +426,18 @@ def quantize_model(weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=N
 
             gc.collect()
 
-        logger.info(f"Quantized {total_quantized} tensors, reduced size by {total_size:.2f} MB")
+    original_size_mb = original_size / (1024**2)
+    quantized_size_mb = quantized_size / (1024**2)
+    non_quantized_size_mb = non_quantized_size / (1024**2)
+    total_final_size_mb = (quantized_size + non_quantized_size) / (1024**2)
+    size_reduction_mb = original_size_mb - quantized_size_mb
+
+    logger.info(f"Quantized {total_quantized} tensors")
+    logger.info(f"Original quantized tensors size: {original_size_mb:.2f} MB")
+    logger.info(f"After quantization size: {quantized_size_mb:.2f} MB (includes scales)")
+    logger.info(f"Non-quantized tensors size: {non_quantized_size_mb:.2f} MB")
+    logger.info(f"Total final model size: {total_final_size_mb:.2f} MB")
+    logger.info(f"Size reduction in quantized tensors: {size_reduction_mb:.2f} MB ({size_reduction_mb / original_size_mb * 100:.1f}%)")
 
     if comfyui_mode:
         weights["scaled_fp8"] = torch.zeros(2, dtype=torch.float8_e4m3fn)
