@@ -8,9 +8,11 @@ from urllib.parse import urlparse
 
 import httpx
 import torch
+from easydict import EasyDict
 from loguru import logger
 
 from ..infer import init_runner
+from ..utils.input_info import set_input_info
 from ..utils.set_config import set_config
 from .audio_utils import is_base64_audio, save_base64_audio
 from .distributed_utils import DistributedManager
@@ -245,8 +247,21 @@ class TorchrunInferenceWorker:
             # Run inference directly - torchrun handles the parallelization
             # Using asyncio.to_thread would be risky with NCCL operations
             # Instead, we rely on FastAPI's async handling and queue management
-            self.runner.set_inputs(task_data)
-            self.runner.run_pipeline()
+
+            task_data["task"] = self.runner.config["task"]
+            task_data["return_result_tensor"] = False
+            task_data["negative_prompt"] = task_data.get("negative_prompt", "")
+
+            # must be convert
+            task_data = EasyDict(task_data)
+            input_info = set_input_info(task_data)
+
+            # update lock config
+            self.runner.set_config(task_data)
+
+            # print("input_info==>", input_info)
+
+            self.runner.run_pipeline(input_info)
 
             # Small yield to allow other async operations if needed
             await asyncio.sleep(0)
@@ -267,7 +282,7 @@ class TorchrunInferenceWorker:
                 return None
 
         except Exception as e:
-            logger.error(f"Rank {self.rank} inference failed: {str(e)}")
+            logger.exception(f"Rank {self.rank} inference failed: {str(e)}")
             if self.world_size > 1:
                 self.dist_manager.barrier()
 
@@ -418,6 +433,37 @@ class VideoGenerationService:
 
                 logger.info(f"Task {message.task_id} audio path: {task_data['audio_path']}")
 
+            if "talk_objects" in message.model_fields_set and message.talk_objects:
+                task_data["talk_objects"] = [{} for _ in range(len(message.talk_objects))]
+
+                for index, talk_object in enumerate(message.talk_objects):
+                    if talk_object.audio.startswith("http"):
+                        audio_path = await self.file_service.download_audio(talk_object.audio)
+                        task_data["talk_objects"][index]["audio"] = str(audio_path)
+                    elif is_base64_audio(talk_object.audio):
+                        audio_path = save_base64_audio(talk_object.audio, str(self.file_service.input_audio_dir))
+                        task_data["talk_objects"][index]["audio"] = str(audio_path)
+                    else:
+                        task_data["talk_objects"][index]["audio"] = talk_object.audio
+
+                    if talk_object.mask.startswith("http"):
+                        mask_path = await self.file_service.download_image(talk_object.mask)
+                        task_data["talk_objects"][index]["mask"] = str(mask_path)
+                    elif is_base64_image(talk_object.mask):
+                        mask_path = save_base64_image(talk_object.mask, str(self.file_service.input_image_dir))
+                        task_data["talk_objects"][index]["mask"] = str(mask_path)
+                    else:
+                        task_data["talk_objects"][index]["mask"] = talk_object.mask
+
+                # FIXME(xxx): 存储成一个config.json , 然后将这个config.json 的路径，赋值给task_data["audio_path"]
+                temp_path = self.file_service.cache_dir / uuid.uuid4().hex[:8]
+                temp_path.mkdir(parents=True, exist_ok=True)
+                task_data["audio_path"] = str(temp_path)
+
+                config_path = temp_path / "config.json"
+                with open(config_path, "w") as f:
+                    json.dump({"talk_objects": task_data["talk_objects"]}, f)
+
             actual_save_path = self.file_service.get_output_path(message.save_result_path)
             task_data["save_result_path"] = str(actual_save_path)
             task_data["video_path"] = message.save_result_path
@@ -441,5 +487,5 @@ class VideoGenerationService:
                 raise RuntimeError(error_msg)
 
         except Exception as e:
-            logger.error(f"Task {message.task_id} processing failed: {str(e)}")
+            logger.exception(f"Task {message.task_id} processing failed: {str(e)}")
             raise

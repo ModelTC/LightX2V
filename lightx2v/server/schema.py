@@ -1,6 +1,13 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from ..utils.generate_task_id import generate_task_id
+
+
+class TalkObject(BaseModel):
+    audio: str = Field(..., description="Audio path")
+    mask: str = Field(..., description="Mask path")
 
 
 class TaskRequest(BaseModel):
@@ -16,6 +23,7 @@ class TaskRequest(BaseModel):
     seed: int = Field(42, description="Random seed")
     audio_path: str = Field("", description="Input audio path (Wan-Audio)")
     video_duration: int = Field(5, description="Video duration (Wan-Audio)")
+    talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")
 
     def __init__(self, **data):
         super().__init__(**data)

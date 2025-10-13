@@ -40,11 +40,14 @@ class ApiServer:
         self._setup_routes()
 
     def _setup_routes(self):
+        @self.app.get("/")
+        def redirect_to_docs():
+            return RedirectResponse(url="/docs")
+
         self._setup_task_routes()
         self._setup_file_routes()
         self._setup_service_routes()
 
-        # Register routers
         self.app.include_router(self.tasks_router)
         self.app.include_router(self.files_router)
         self.app.include_router(self.service_router)
@@ -133,7 +136,7 @@ class ApiServer:
             infer_steps: int = Form(default=5),
             target_video_length: int = Form(default=81),
             seed: int = Form(default=42),
-            audio_file: Optional[UploadFile] = File(default=None),
+            audio_file: UploadFile = File(None),
             video_duration: int = Form(default=5),
         ):
             assert self.file_service is not None, "File service is not initialized"
@@ -305,7 +308,7 @@ class ApiServer:
             if not parsed_url.scheme or not parsed_url.netloc:
                 return False
 
-            timeout = httpx.Timeout(connect=5.0, read=5.0)
+            timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
             async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
                 response = await client.head(image_url, follow_redirects=True)
                 return response.status_code < 400
@@ -375,7 +378,7 @@ class ApiServer:
                     logger.error(f"Task {task_id} generation failed")
 
         except Exception as e:
-            logger.error(f"Task {task_id} processing failed: {str(e)}")
+            logger.exception(f"Task {task_id} processing failed: {str(e)}")
             task_manager.fail_task(task_id, str(e))
         finally:
             if lock_acquired:
