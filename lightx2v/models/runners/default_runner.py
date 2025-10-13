@@ -254,23 +254,29 @@ class DefaultRunner(BaseRunner):
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile(self.input_info)
-        for segment_idx in range(self.video_segment_num):
-            logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
-            with ProfilingContext4DebugL1(
-                f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
-                recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
-                metrics_labels=[segment_idx + 1, self.video_segment_num],
-            ):
-                self.check_stop()
-                # 1. default do nothing
-                self.init_run_segment(segment_idx)
-                # 2. main inference loop
-                latents = self.run_segment(total_steps=total_steps)
-                # 3. vae decoder
-                self.gen_video = self.run_vae_decoder(latents)
-                # 4. default do nothing
-                self.end_run_segment(segment_idx)
+        with ProfilingContext4DebugL1(
+            "Run segment end2end",
+            recorder_mode=GET_RECORDER_MODE(),
+            metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+            metrics_labels=["DefaultRunner"],
+        ):
+            for segment_idx in range(self.video_segment_num):
+                logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
+                with ProfilingContext4DebugL1(
+                    f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
+                    metrics_labels=[segment_idx + 1, self.video_segment_num],
+                ):
+                    self.check_stop()
+                    # 1. default do nothing
+                    self.init_run_segment(segment_idx)
+                    # 2. main inference loop
+                    latents = self.run_segment(total_steps=total_steps)
+                    # 3. vae decoder
+                    self.gen_video = self.run_vae_decoder(latents)
+                    # 4. default do nothing
+                    self.end_run_segment(segment_idx)
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
         return {"video": gen_video_final}
