@@ -79,35 +79,39 @@ HYBRID_60_120MS_BUCKETS = (
     10.0,  # 10s
 )
 
-HYBRID_4_25S_BUCKETS = (
-    1.0,  # 1s
-    2.0,  # 2s
-    3.0,  # 3s
-    4.0,  # 4s
-    5.0,  # 5s
-    6.0,  # 6s
-    7.0,  # 7s
-    8.0,  # 8s
-    9.0,  # 9s
-    10.0,  # 10s
-    11.0,  # 11s
-    12.0,  # 12s
-    13.0,  # 13s
-    15.0,  # 15s
-    16.0,  # 16s
-    17.0,  # 17s
-    18.0,  # 18s
-    19.0,  # 19s
-    20.0,  # 20s
-    21.0,  # 21s
-    22.0,  # 22s
-    23.0,  # 23s
-    25.0,  # 25s
-    30.0,  # 30s
+HYBRID_300MS_1600MS_BUCKETS = (
+    0.010,  # 10ms
+    0.050,  # 50ms
+    0.100,  # 100ms
+    0.150,  # 150ms
+    0.200,  # 200ms
+    0.250,  # 250ms
+    0.300,  # 300ms
+    0.350,  # 350ms
+    0.400,  # 400ms
+    0.450,  # 450ms
+    0.500,  # 500ms
+    0.550,  # 550ms
+    0.600,  # 600ms
+    0.650,  # 650ms
+    0.700,  # 700ms
+    0.750,  # 750ms
+    0.800,  # 800ms
+    0.850,  # 850ms
+    0.900,  # 900ms
+    0.950,  # 950ms
+    1.000,  # 1s
+    1.100,  # 1.1s
+    1.200,  # 1.2s
+    1.300,  # 1.3s
+    1.400,  # 1.4s
+    1.500,  # 1.5s
+    1.600,  # 1.6s
+    2.000,  # 2s
+    3.000,  # 3s
 )
 
-HYBRID_2_11S_BUCKETS = [
-    0.5,  # 500ms
+HYBRID_1_30S_BUCKETS = (
     1.0,  # 1s
     1.5,  # 1.5s
     2.0,  # 2s
@@ -129,9 +133,45 @@ HYBRID_2_11S_BUCKETS = [
     10.0,  # 10s
     11.0,  # 11s
     12.0,  # 12s
+    13.0,  # 13s
     15.0,  # 15s
+    16.0,  # 16s
+    17.0,  # 17s
+    18.0,  # 18s
+    19.0,  # 19s
     20.0,  # 20s
-]
+    21.0,  # 21s
+    22.0,  # 22s
+    23.0,  # 23s
+    25.0,  # 25s
+    30.0,  # 30s
+)
+
+HYBRID_30_900S_BUCKETS = (
+    1.0,  # 1s
+    5.0,  # 5s
+    10.0,  # 10s
+    20.0,  # 20s
+    30.0,  # 30s
+    35.0,  # 35s
+    40.0,  # 40s
+    50.0,  # 50s
+    60.0,  # 1min
+    70.0,  # 1min10s
+    80.0,  # 1min20s
+    90.0,  # 1min30s
+    100.0,  # 1min40s
+    110.0,  # 1min50s
+    120.0,  # 2min
+    130.0,  # 2min10s
+    140.0,  # 2min20s
+    150.0,  # 2min30s
+    180.0,  # 3min
+    240.0,  # 4min
+    300.0,  # 5min
+    600.0,  # 10min
+    900.0,  # 15min
+)
 
 
 METRICS_INFO = {
@@ -198,13 +238,14 @@ METRICS_INFO = {
         desc="Duration of run per step Dit (s)",
         type_="histogram",
         labels=["step_no", "total_steps"],
+        buckets=HYBRID_30_900S_BUCKETS,
     ),
     "lightx2v_run_text_encode_duration": MetricsConfig(
         name="lightx2v_run_text_encode_duration",
         desc="Duration of run text encode (s)",
         type_="histogram",
         labels=["model_cls"],
-        buckets=HYBRID_4_25S_BUCKETS,
+        buckets=HYBRID_1_30S_BUCKETS,
     ),
     "lightx2v_run_img_encode_duration": MetricsConfig(
         name="lightx2v_run_img_encode_duration",
@@ -225,21 +266,21 @@ METRICS_INFO = {
         desc="Duration of run vae decode (s)",
         type_="histogram",
         labels=["model_cls"],
-        buckets=HYBRID_4_25S_BUCKETS,
+        buckets=HYBRID_1_30S_BUCKETS,
     ),
     "lightx2v_run_init_run_segment_duration": MetricsConfig(
         name="lightx2v_run_init_run_segment_duration",
         desc="Duration of run init_run_segment (s)",
         type_="histogram",
         labels=["model_cls"],
-        buckets=HYBRID_2_11S_BUCKETS,
+        buckets=HYBRID_1_30S_BUCKETS,
     ),
     "lightx2v_run_end_run_segment_duration": MetricsConfig(
         name="lightx2v_run_end_run_segment_duration",
         desc="Duration of run end_run_segment (s)",
         type_="histogram",
         labels=["model_cls"],
-        buckets=HYBRID_2_11S_BUCKETS,
+        buckets=HYBRID_300MS_1600MS_BUCKETS,
     ),
     "lightx2v_run_segments_end2end_duration": MetricsConfig(
         name="lightx2v_run_segments_end2end_duration",
