@@ -19,7 +19,7 @@ from torchvision.transforms.functional import resize
 
 from lightx2v.deploy.common.va_reader import VAReader
 from lightx2v.deploy.common.va_recorder import VARecorder
-from lightx2v.deploy.common.va_x64_recorder import VAX64Recorder
+from lightx2v.deploy.common.va_recorder_x264 import X264VARecorder
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
@@ -682,7 +682,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
             if whip_shared_path and output_video_path.startswith("http"):
-                self.va_recorder = VAX64Recorder(
+                self.va_recorder = X264VARecorder(
                     whip_shared_path=whip_shared_path,
                     livestream_url=output_video_path,
                     fps=record_fps,
