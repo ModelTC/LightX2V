@@ -163,6 +163,8 @@ def set_input_info(args):
         )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
+
+    assert not (input_info.save_result_path and input_info.return_result_tensor), "save_result_path and return_result_tensor cannot be set at the same time"
     return input_info
 
 
