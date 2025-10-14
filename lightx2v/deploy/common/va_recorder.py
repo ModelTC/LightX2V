@@ -1,3 +1,4 @@
+import os
 import queue
 import signal
 import socket
@@ -30,7 +31,8 @@ class VARecorder:
         self.sample_rate = sample_rate
         self.audio_port = pseudo_random(32000, 40000)
         self.video_port = self.audio_port + 1
-        logger.info(f"VARecorder audio port: {self.audio_port}, video port: {self.video_port}")
+        self.ffmpeg_log_level = os.getenv("FFMPEG_LOG_LEVEL", "error")
+        logger.info(f"VARecorder audio port: {self.audio_port}, video port: {self.video_port}, ffmpeg_log_level: {self.ffmpeg_log_level}")
 
         self.width = None
         self.height = None
@@ -173,7 +175,7 @@ class VARecorder:
             self.livestream_url,
             "-y",
             "-loglevel",
-            "info",
+            self.ffmpeg_log_level,
         ]
         try:
             self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
@@ -225,7 +227,7 @@ class VARecorder:
             self.livestream_url,
             "-y",
             "-loglevel",
-            "info",
+            self.ffmpeg_log_level,
         ]
         try:
             self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
@@ -295,7 +297,7 @@ class VARecorder:
             self.livestream_url,
             "-y",
             "-loglevel",
-            "info",
+            self.ffmpeg_log_level,
         ]
         try:
             self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
