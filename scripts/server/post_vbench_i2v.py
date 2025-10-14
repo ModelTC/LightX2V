@@ -17,6 +17,7 @@ def create_i2v_messages(img_files, output_path):
         save_result_path = os.path.join(output_path, f"{prompt}.mp4")
 
         message = {
+            "seed": 42,
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "image_path": img_path,

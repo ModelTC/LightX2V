@@ -2,7 +2,7 @@ import os
 
 from loguru import logger
 
-from lightx2v.models.networks.wan.distill_model import Wan22MoeDistillModel, WanDistillModel
+from lightx2v.models.networks.wan.distill_model import WanDistillModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner
@@ -103,10 +103,11 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                     high_lora_wrapper.apply_lora(lora_name, strength)
                     logger.info(f"High noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
-            high_noise_model = Wan22MoeDistillModel(
+            high_noise_model = WanDistillModel(
                 os.path.join(self.config["model_path"], "distill_models", "high_noise_model"),
                 self.config,
                 self.init_device,
+                ckpt_config_key="dit_distill_ckpt_high",
             )
 
         if use_low_lora:
@@ -124,10 +125,11 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                     low_lora_wrapper.apply_lora(lora_name, strength)
                     logger.info(f"Low noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
-            low_noise_model = Wan22MoeDistillModel(
+            low_noise_model = WanDistillModel(
                 os.path.join(self.config["model_path"], "distill_models", "low_noise_model"),
                 self.config,
                 self.init_device,
+                ckpt_config_key="dit_distill_ckpt_low",
             )
 
         return MultiDistillModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary_step_index"])

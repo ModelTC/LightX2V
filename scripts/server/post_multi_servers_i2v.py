@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
     messages = []
     for i, (image_path, prompt) in enumerate(img_prompts.items()):
-        messages.append({"prompt": prompt, "negative_prompt": negative_prompt, "image_path": image_to_base64(image_path), "save_result_path": f"./output_lightx2v_wan_i2v_{i + 1}.mp4"})
+        messages.append({"seed": 42, "prompt": prompt, "negative_prompt": negative_prompt, "image_path": image_to_base64(image_path), "save_result_path": f"./output_lightx2v_wan_i2v_{i + 1}.mp4"})
 
     logger.info(f"urls: {urls}")
 
