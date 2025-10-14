@@ -1,3 +1,4 @@
+import os
 import queue
 import signal
 import socket
@@ -30,7 +31,8 @@ class VARecorder:
         self.sample_rate = sample_rate
         self.audio_port = pseudo_random(32000, 40000)
         self.video_port = self.audio_port + 1
-        logger.info(f"VARecorder audio port: {self.audio_port}, video port: {self.video_port}")
+        self.disable_ffmpeg_log = os.getenv("DISABLE_FFMPEG_LOG", "0") == "1"
+        logger.info(f"VARecorder audio port: {self.audio_port}, video port: {self.video_port}, disable_ffmpeg_log: {self.disable_ffmpeg_log}")
 
         self.width = None
         self.height = None
@@ -132,6 +134,11 @@ class VARecorder:
         finally:
             logger.info("Video push worker thread stopped")
 
+    def popen_process(self, cmd):
+        stdout = subprocess.DEVNULL if self.disable_ffmpeg_log else None
+        stderr = subprocess.DEVNULL if self.disable_ffmpeg_log else None
+        return subprocess.Popen(cmd, stdout=stdout, stderr=stderr)
+
     def start_ffmpeg_process_local(self):
         """Start ffmpeg process that connects to our TCP sockets"""
         ffmpeg_cmd = [
@@ -176,7 +183,7 @@ class VARecorder:
             "info",
         ]
         try:
-            self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
+            self.ffmpeg_process = self.popen_process(ffmpeg_cmd)
             logger.info(f"FFmpeg streaming started with PID: {self.ffmpeg_process.pid}")
             logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
         except Exception as e:
@@ -228,7 +235,7 @@ class VARecorder:
             "info",
         ]
         try:
-            self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
+            self.ffmpeg_process = self.popen_process(ffmpeg_cmd)
             logger.info(f"FFmpeg streaming started with PID: {self.ffmpeg_process.pid}")
             logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
         except Exception as e:
@@ -298,7 +305,7 @@ class VARecorder:
             "info",
         ]
         try:
-            self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
+            self.ffmpeg_process = self.popen_process(ffmpeg_cmd)
             logger.info(f"FFmpeg streaming started with PID: {self.ffmpeg_process.pid}")
             logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
         except Exception as e:
