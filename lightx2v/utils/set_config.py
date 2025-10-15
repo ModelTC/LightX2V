@@ -37,9 +37,11 @@ def set_config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
 
-    with open(config["config_json"], "r") as f:
-        config_json = json.load(f)
-    config.update(config_json)
+    if config.get("config_json", None) is not None:
+        logger.info(f"Loading some config from {config['config_json']}")
+        with open(config["config_json"], "r") as f:
+            config_json = json.load(f)
+        config.update(config_json)
 
     if os.path.exists(os.path.join(config["model_path"], "config.json")):
         with open(os.path.join(config["model_path"], "config.json"), "r") as f:

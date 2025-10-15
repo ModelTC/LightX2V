@@ -279,7 +279,7 @@ class DefaultRunner(BaseRunner):
                 self.end_run_segment(segment_idx)
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
-        return {"video": gen_video_final}
+        return gen_video_final
 
     @ProfilingContext4DebugL1("Run VAE Decoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_decode_duration, metrics_labels=["DefaultRunner"])
     def run_vae_decoder(self, latents):
