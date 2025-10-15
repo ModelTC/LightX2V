@@ -1,9 +1,7 @@
 import ctypes
 import os
 import platform
-import torch
-from lightx2v_kernel import common_ops
-from lightx2v_kernel.gemm import cutlass_scaled_fp4_mm, scaled_fp4_quant
+from lightx2v_kernel import common_ops  # noqa: F401
 from lightx2v_kernel.version import __version__
 
 
