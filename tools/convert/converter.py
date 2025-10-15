@@ -567,7 +567,7 @@ def convert_weights(args):
             current_chunk = {}
             for idx, (k, v) in tqdm(enumerate(converted_weights.items()), desc="Saving chunks"):
                 current_chunk[k] = v
-                if (idx + 1) % args.chunk_size == 0 and args.chunk_size > 0:
+                if args.chunk_size > 0 and (idx + 1) % args.chunk_size == 0:
                     output_filename = f"{args.output_name}_part{chunk_idx}.safetensors"
                     output_path = os.path.join(args.output, output_filename)
                     logger.info(f"Saving chunk to: {output_path}")
