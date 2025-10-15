@@ -22,7 +22,7 @@ RUN git clone https://github.com/sgl-project/sglang.git && cd sglang/sgl-kernel 
     && make build && make clean
 
 RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy imageio \
-    imageio-ffmpeg einops loguru qtorch ftfy av
+    imageio-ffmpeg einops loguru qtorch ftfy av decord
 
 RUN conda install conda-forge::ffmpeg=8.0.0 -y && ln -s /opt/conda/bin/ffmpeg /usr/bin/ffmpeg && conda clean -all -y
 
