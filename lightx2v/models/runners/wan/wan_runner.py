@@ -38,7 +38,7 @@ class WanRunner(DefaultRunner):
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
-        self.vae_name = "Wan2.1_VAE.pth"
+        self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
 
     def load_transformer(self):
@@ -73,7 +73,7 @@ class WanRunner(DefaultRunner):
                 clip_quant_scheme = self.config.get("clip_quant_scheme", None)
                 assert clip_quant_scheme is not None
                 tmp_clip_quant_scheme = clip_quant_scheme.split("-")[0]
-                clip_model_name = f"clip-{tmp_clip_quant_scheme}.pth"
+                clip_model_name = f"models_clip_open-clip-xlm-roberta-large-vit-huge-14-{tmp_clip_quant_scheme}.pth"
                 clip_quantized_ckpt = find_torch_model_path(self.config, "clip_quantized_ckpt", clip_model_name)
                 clip_original_ckpt = None
             else:
@@ -154,6 +154,7 @@ class WanRunner(DefaultRunner):
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
+            "use_lightvae": self.config.get("use_lightvae", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
@@ -174,6 +175,7 @@ class WanRunner(DefaultRunner):
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
+            "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
         }

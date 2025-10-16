@@ -263,16 +263,7 @@ class AttentionBlock(nn.Module):
 
 
 class Encoder3d(nn.Module):
-    def __init__(
-        self,
-        dim=128,
-        z_dim=4,
-        dim_mult=[1, 2, 4, 4],
-        num_res_blocks=2,
-        attn_scales=[],
-        temperal_downsample=[True, True, False],
-        dropout=0.0,
-    ):
+    def __init__(self, dim=128, z_dim=4, dim_mult=[1, 2, 4, 4], num_res_blocks=2, attn_scales=[], temperal_downsample=[True, True, False], dropout=0.0, pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -283,6 +274,7 @@ class Encoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [1] + dim_mult]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0
 
         # init block
@@ -375,16 +367,7 @@ class Encoder3d(nn.Module):
 
 
 class Decoder3d(nn.Module):
-    def __init__(
-        self,
-        dim=128,
-        z_dim=4,
-        dim_mult=[1, 2, 4, 4],
-        num_res_blocks=2,
-        attn_scales=[],
-        temperal_upsample=[False, True, True],
-        dropout=0.0,
-    ):
+    def __init__(self, dim=128, z_dim=4, dim_mult=[1, 2, 4, 4], num_res_blocks=2, attn_scales=[], temperal_upsample=[False, True, True], dropout=0.0, pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -395,6 +378,8 @@ class Decoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
+
         scale = 1.0 / 2 ** (len(dim_mult) - 2)
 
         # init block
@@ -498,16 +483,7 @@ def count_conv3d(model):
 
 
 class WanVAE_(nn.Module):
-    def __init__(
-        self,
-        dim=128,
-        z_dim=4,
-        dim_mult=[1, 2, 4, 4],
-        num_res_blocks=2,
-        attn_scales=[],
-        temperal_downsample=[True, True, False],
-        dropout=0.0,
-    ):
+    def __init__(self, dim=128, z_dim=4, dim_mult=[1, 2, 4, 4], num_res_blocks=2, attn_scales=[], temperal_downsample=[True, True, False], dropout=0.0, pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -534,6 +510,7 @@ class WanVAE_(nn.Module):
             attn_scales,
             self.temperal_downsample,
             dropout,
+            pruning_rate,
         )
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
@@ -545,6 +522,7 @@ class WanVAE_(nn.Module):
             attn_scales,
             self.temperal_upsample,
             dropout,
+            pruning_rate,
         )
 
     def forward(self, x):
@@ -739,23 +717,6 @@ class WanVAE_(nn.Module):
         self.clear_cache()
         return out
 
-    def cached_decode(self, z, scale):
-        # z: [b,c,t,h,w]
-        if isinstance(scale[0], torch.Tensor):
-            z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
-        else:
-            z = z / scale[1] + scale[0]
-        iter_ = z.shape[2]
-        x = self.conv2(z)
-        for i in range(iter_):
-            self._conv_idx = [0]
-            if i == 0:
-                out = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
-            else:
-                out_ = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
-                out = torch.cat([out, out_], 2)
-        return out
-
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
@@ -778,7 +739,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, load_from_rank0=False, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, load_from_rank0=False, pruning_rate=0.0, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
@@ -791,6 +752,7 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
         attn_scales=[],
         temperal_downsample=[False, True, True],
         dropout=0.0,
+        pruning_rate=pruning_rate,
     )
     cfg.update(**kwargs)
 
@@ -820,6 +782,7 @@ class WanVAE:
         cpu_offload=False,
         use_2d_split=True,
         load_from_rank0=False,
+        use_lightvae=False,
     ):
         self.dtype = dtype
         self.device = device
@@ -827,6 +790,10 @@ class WanVAE:
         self.use_tiling = use_tiling
         self.cpu_offload = cpu_offload
         self.use_2d_split = use_2d_split
+        if use_lightvae:
+            pruning_rate = 0.75  # 0.75
+        else:
+            pruning_rate = 0.0
 
         mean = [
             -0.7571,
@@ -906,7 +873,13 @@ class WanVAE:
         }
 
         # init model
-        self.model = _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0).eval().requires_grad_(False).to(device).to(dtype)
+        self.model = (
+            _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0, pruning_rate=pruning_rate)
+            .eval()
+            .requires_grad_(False)
+            .to(device)
+            .to(dtype)
+        )
 
     def _calculate_2d_grid(self, latent_height, latent_width, world_size):
         if (latent_height, latent_width, world_size) in self.grid_table:
