@@ -147,14 +147,14 @@ class WanRunner(DefaultRunner):
             vae_device = torch.device("cuda")
 
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "encoder_vae_pth", self.vae_name),
+            "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
             "device": vae_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
-            "use_lightvae": False,
+            "use_lightvae": self.config.get("use_lightvae", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
@@ -175,9 +175,9 @@ class WanRunner(DefaultRunner):
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
+            "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
-            "use_lightvae": self.config.get("use_lightvae", False),
         }
         if self.config.get("use_tiny_vae", False):
             tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", self.tiny_vae_name)
@@ -188,11 +188,10 @@ class WanRunner(DefaultRunner):
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
-        vae_decoder = self.load_vae_decoder()
-        # if vae_encoder is None or self.config.get("use_tiny_vae", False):
-        #     vae_decoder = self.load_vae_decoder()
-        # else:
-        #     vae_decoder = vae_encoder
+        if vae_encoder is None or self.config.get("use_tiny_vae", False):
+            vae_decoder = self.load_vae_decoder()
+        else:
+            vae_decoder = vae_encoder
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
