@@ -2,7 +2,6 @@ import gc
 import math
 
 import torch
-from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
@@ -63,7 +62,6 @@ class QwenImageRunner(DefaultRunner):
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
-        self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "t2i":
             self.run_input_encoder = self._run_input_encoder_local_t2i
         elif self.config["task"] == "i2i":
@@ -77,15 +75,13 @@ class QwenImageRunner(DefaultRunner):
     def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
-        self.init_scheduler()
-        self.model.scheduler.prepare(self.inputs["image_encoder_output"])
+        self.model.scheduler.prepare(self.input_info)
         latents, generator = self.run(total_steps)
-        self.end_run()
         return latents, generator
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
+        prompt = self.input_info.prompt
         text_encoder_output = self.run_text_encoder(prompt)
         torch.cuda.empty_cache()
         gc.collect()
@@ -96,9 +92,9 @@ class QwenImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
-        _, image = self.read_image_input(self.config["image_path"])
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        text_encoder_output = self.run_text_encoder(prompt, image)
+        _, image = self.read_image_input(self.input_info.image_path)
+        prompt = self.input_info.prompt
+        text_encoder_output = self.run_text_encoder(prompt, image, neg_prompt=self.input_info.negative_prompt)
         image_encoder_output = self.run_vae_encoder(image=text_encoder_output["preprocessed_image"])
         image_encoder_output["image_info"] = text_encoder_output["image_info"]
         torch.cuda.empty_cache()
@@ -109,7 +105,7 @@ class QwenImageRunner(DefaultRunner):
         }
 
     @ProfilingContext4DebugL1("Run Text Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_text_encode_duration, metrics_labels=["QwenImageRunner"])
-    def run_text_encoder(self, text, image=None):
+    def run_text_encoder(self, text, image=None, neg_prompt=None):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         text_encoder_output = {}
@@ -123,11 +119,15 @@ class QwenImageRunner(DefaultRunner):
             text_encoder_output["prompt_embeds_mask"] = prompt_embeds_mask
             text_encoder_output["preprocessed_image"] = preprocessed_image
             text_encoder_output["image_info"] = image_info
+            if self.config["do_true_cfg"] and neg_prompt is not None:
+                neg_prompt_embeds, neg_prompt_embeds_mask, _, _ = self.text_encoders[0].infer([neg_prompt], image)
+                text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+                text_encoder_output["negative_prompt_embeds_mask"] = neg_prompt_embeds_mask
         return text_encoder_output
 
     @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encode_duration, metrics_labels=["QwenImageRunner"])
     def run_vae_encoder(self, image):
-        image_latents = self.vae.encode_vae_image(image)
+        image_latents = self.vae.encode_vae_image(image, self.input_info)
         return {"image_latents": image_latents}
 
     def run(self, total_steps=None):
@@ -151,26 +151,37 @@ class QwenImageRunner(DefaultRunner):
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def set_target_shape(self):
-        if not self.config._auto_resize:
-            width, height = self.config.aspect_ratios[self.config.aspect_ratio]
+        if not self.config["_auto_resize"]:
+            width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
         else:
-            image = Image.open(self.config.image_path).convert("RGB")
-            width, height = image.size
+            width, height = self.input_info.original_size
             calculated_width, calculated_height, _ = calculate_dimensions(1024 * 1024, width / height)
-            height = height or calculated_height
-            width = width or calculated_width
             multiple_of = self.vae.vae_scale_factor * 2
-            width = width // multiple_of * multiple_of
-            height = height // multiple_of * multiple_of
-            self.config.auto_width = width
-            self.config.auto_hight = height
+            width = calculated_width // multiple_of * multiple_of
+            height = calculated_height // multiple_of * multiple_of
+            self.input_info.auto_width = width
+            self.input_info.auto_hight = height
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
         height = 2 * (int(height) // (self.vae.vae_scale_factor * 2))
         width = 2 * (int(width) // (self.vae.vae_scale_factor * 2))
         num_channels_latents = self.model.in_channels // 4
-        self.config.target_shape = (self.config.batchsize, 1, num_channels_latents, height, width)
+        self.input_info.target_shape = (self.config["batchsize"], 1, num_channels_latents, height, width)
+
+    def set_img_shapes(self):
+        if self.config["task"] == "t2i":
+            width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
+            img_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * self.config["batchsize"]
+        elif self.config["task"] == "i2i":
+            image_height, image_width = self.inputs["image_encoder_output"]["image_info"]
+            img_shapes = [
+                [
+                    (1, self.input_info.auto_hight // self.config["vae_scale_factor"] // 2, self.input_info.auto_width // self.config["vae_scale_factor"] // 2),
+                    (1, image_height // self.config["vae_scale_factor"] // 2, image_width // self.config["vae_scale_factor"] // 2),
+                ]
+            ]
+        self.inputs["img_shapes"] = img_shapes
 
     def init_scheduler(self):
         self.scheduler = QwenImageScheduler(self.config)
@@ -195,27 +206,29 @@ class QwenImageRunner(DefaultRunner):
         metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
         metrics_labels=["QwenImageRunner"],
     )
-    def _run_vae_decoder_local(self, latents, generator):
+    def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae()
-        images = self.vae.decode(latents)
+        images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
             torch.cuda.empty_cache()
             gc.collect()
         return images
 
-    def run_pipeline(self, save_image=True):
-        if self.config["use_prompt_enhancer"]:
-            self.config["prompt_enhanced"] = self.post_prompt_enhancer()
+    def run_pipeline(self, input_info):
+        self.input_info = input_info
 
         self.inputs = self.run_input_encoder()
         self.set_target_shape()
-        latents, generator = self.run_dit()
+        self.set_img_shapes()
 
-        images = self.run_vae_decoder(latents, generator)
+        latents, generator = self.run_dit()
+        images = self.run_vae_decoder(latents)
+        self.end_run()
+
         image = images[0]
-        image.save(f"{self.config.save_result_path}")
+        image.save(f"{input_info.save_result_path}")
 
         del latents, generator
         torch.cuda.empty_cache()

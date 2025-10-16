@@ -79,5 +79,6 @@
         56
     ],
     "_comment_attn": "in [torch_sdpa, flash_attn3, sage_attn2]",
-    "attn_type": "flash_attn3"
+    "attn_type": "flash_attn3",
+    "do_true_cfg": false
 }

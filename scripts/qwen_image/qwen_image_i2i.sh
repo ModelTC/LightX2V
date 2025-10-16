@@ -34,6 +34,8 @@ python -m lightx2v.infer \
     --task i2i \
     --model_path $model_path \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i.json \
-    --prompt "Change the rabbit's color to purple, with a flash light background." \
-    --image_path input.jpg \
-    --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i.png
+    --prompt "turn the style of the photo to vintage comic book" \
+    --negative_prompt " " \
+    --image_path pie.png \
+    --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i.png \
+    --seed 0
