@@ -13,8 +13,7 @@
     "offload_granularity": "block",
     "offload_ratio": 0.8,
     "t5_cpu_offload": true,
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F"
-    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
     "use_tiling_vae": true
 }

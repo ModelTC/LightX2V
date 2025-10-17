@@ -19,12 +19,10 @@ class WanTransformerWeights(WeightModule):
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
         self.config = config
-        if config["do_mm_calib"]:
-            self.mm_type = "Calib"
-        else:
-            self.mm_type = config["mm_config"].get("mm_type", "Default") if config["mm_config"] else "Default"
+        self.mm_type = config.get("dit_quant_scheme", "Default")
+        if self.mm_type != "Default":
+            assert config.get("dit_quantized") is True
         self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
-
         self.add_module("blocks", self.blocks)
 
         # non blocks weights

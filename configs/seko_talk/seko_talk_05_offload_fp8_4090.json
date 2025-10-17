@@ -27,7 +27,6 @@
     "adapter_quant_scheme": "fp8",
     "vae_cpu_offload": false,
     "use_tiling_vae": false,
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F"
-    }
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl"
 }

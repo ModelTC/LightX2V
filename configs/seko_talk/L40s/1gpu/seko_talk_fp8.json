@@ -14,9 +14,8 @@
     "use_31_block": false,
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-q8f",
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F"
-    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-q8f",
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
     "cpu_offload": false,

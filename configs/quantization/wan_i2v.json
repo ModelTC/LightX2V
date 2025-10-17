@@ -11,7 +11,6 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "dit_quantized_ckpt": "/path/to/int8/model",
-    "mm_config": {
-        "mm_type": "W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm"
-    }
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm"
 }

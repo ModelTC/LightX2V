@@ -33,8 +33,7 @@ class QwenImageTransformerModel:
             self.in_channels = transformer_config["in_channels"]
         self.attention_kwargs = {}
 
-        self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
-        self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
+        self.dit_quantized = self.config["dit_quantized"]
 
         self._init_infer_class()
         self._init_weights()
@@ -62,7 +61,7 @@ class QwenImageTransformerModel:
         if weight_dict is None:
             is_weight_loader = self._should_load_weights()
             if is_weight_loader:
-                if not self.dit_quantized or self.weight_auto_quant:
+                if not self.dit_quantized:
                     # Load original weights
                     weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
                 else:

@@ -16,14 +16,10 @@ class WeightModule:
 
     def load(self, weight_dict):
         for _, module in self._modules.items():
-            if hasattr(module, "set_config"):
-                module.set_config(self.config["mm_config"])
             if hasattr(module, "load"):
                 module.load(weight_dict)
 
         for _, parameter in self._parameters.items():
-            if hasattr(parameter, "set_config"):
-                parameter.set_config(self.config["mm_config"])
             if hasattr(parameter, "load"):
                 parameter.load(weight_dict)
 
