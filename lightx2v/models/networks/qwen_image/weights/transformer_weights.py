@@ -29,7 +29,6 @@ class QwenImageTransformerAttentionBlock(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
-        self.sparge = config.get("sparge", False)
 
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
@@ -139,7 +138,6 @@ class QwenImageCrossAttention(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
-        self.sparge = config.get("sparge", False)
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.heads = config["attention_out_dim"] // config["attention_dim_head"]
 
