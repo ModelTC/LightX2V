@@ -112,14 +112,11 @@ class VARecorder:
                         break
 
                     # Convert to numpy and scale to [0, 255], convert RGB to BGR for OpenCV/FFmpeg
-                    if not self.realtime:
-                        frames = (data * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
-                        self.video_conn.send(frames.tobytes())
-                    else:
-                        for i in range(data.shape[0]):
-                            t0 = time.time()
-                            frame = (data[i] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
-                            self.video_conn.send(frame.tobytes())
+                    for i in range(data.shape[0]):
+                        t0 = time.time()
+                        frame = (data[i] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+                        self.video_conn.send(frame.tobytes())
+                        if self.realtime:
                             time.sleep(max(0, packet_secs - (time.time() - t0)))
 
                     fail_time = 0
