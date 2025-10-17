@@ -84,9 +84,9 @@ class T5Attention(nn.Module):
         self.head_dim = dim_attn // num_heads
 
         if quantized:
-            if quant_scheme == "int8":
+            if quant_scheme in ["int8", "int8-vllm"]:
                 linear_cls = VllmQuantLinearInt8
-            elif quant_scheme == "fp8":
+            elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
@@ -94,6 +94,8 @@ class T5Attention(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            else:
+                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
@@ -151,9 +153,9 @@ class T5FeedForward(nn.Module):
         self.dim_ffn = dim_ffn
 
         if quantized:
-            if quant_scheme == "int8":
+            if quant_scheme in ["int8", "int8-vllm"]:
                 linear_cls = VllmQuantLinearInt8
-            elif quant_scheme == "fp8":
+            elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
@@ -161,6 +163,8 @@ class T5FeedForward(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            else:
+                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
         # layers
