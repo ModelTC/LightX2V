@@ -59,9 +59,9 @@ class SelfAttention(nn.Module):
 
         # layers
         if quantized:
-            if quant_scheme == "int8":
+            if quant_scheme in ["int8", "int8-vllm"]:
                 linear_cls = VllmQuantLinearInt8
-            elif quant_scheme == "fp8":
+            elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
@@ -69,6 +69,8 @@ class SelfAttention(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            else:
+                NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
@@ -137,9 +139,9 @@ class AttentionBlock(nn.Module):
 
         # layers
         if quantized:
-            if quant_scheme == "int8":
+            if quant_scheme in ["int8", "int8-vllm"]:
                 linear_cls = VllmQuantLinearInt8
-            elif quant_scheme == "fp8":
+            elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
@@ -147,6 +149,8 @@ class AttentionBlock(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            else:
+                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 

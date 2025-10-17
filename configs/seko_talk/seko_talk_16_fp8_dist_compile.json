@@ -20,9 +20,9 @@
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
     "adapter_quantized": true,
-    "adapter_quant_scheme": "fp8",
+    "adapter_quant_scheme": "fp8-sgl",
     "t5_quantized": true,
-    "t5_quant_scheme": "fp8",
+    "t5_quant_scheme": "fp8-sgl",
     "compile": true,
     "compile_shapes": [
         [

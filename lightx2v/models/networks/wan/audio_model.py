@@ -28,9 +28,9 @@ class WanAudioModel(WanModel):
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
             if self.config.get("adapter_quantized", False):
-                if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f"]:
+                if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl"]:
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
-                elif self.config.get("adapter_quant_scheme", None) == "int8":
+                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-sgl"]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
                 else:
                     raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
