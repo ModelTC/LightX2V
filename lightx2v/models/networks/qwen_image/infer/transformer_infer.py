@@ -191,14 +191,14 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         # Process image stream - norm2 + MLP
         img_normed2 = block_weight.img_norm2.apply(hidden_states)
         img_modulated2, img_gate2 = self._modulate(img_normed2, img_mod2)
-        img_mlp_output = F.silu(block_weight.img_mlp.mlp_0.apply(img_modulated2.squeeze(0)))
+        img_mlp_output = F.gelu(block_weight.img_mlp.mlp_0.apply(img_modulated2.squeeze(0)), approximate="tanh")
         img_mlp_output = block_weight.img_mlp.mlp_2.apply(img_mlp_output)
         hidden_states = hidden_states + img_gate2 * img_mlp_output
 
         # Process text stream - norm2 + MLP
         txt_normed2 = block_weight.txt_norm2.apply(encoder_hidden_states)
         txt_modulated2, txt_gate2 = self._modulate(txt_normed2, txt_mod2)
-        txt_mlp_output = F.silu(block_weight.txt_mlp.mlp_0.apply(txt_modulated2.squeeze(0)))
+        txt_mlp_output = F.gelu(block_weight.txt_mlp.mlp_0.apply(txt_modulated2.squeeze(0)), approximate="tanh")
         txt_mlp_output = block_weight.txt_mlp.mlp_2.apply(txt_mlp_output)
         encoder_hidden_states = encoder_hidden_states + txt_gate2 * txt_mlp_output
 

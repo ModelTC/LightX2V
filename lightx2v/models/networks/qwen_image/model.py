@@ -23,18 +23,18 @@ class QwenImageTransformerModel:
 
     def __init__(self, config):
         self.config = config
-        self.model_path = os.path.join(config.model_path, "transformer")
+        self.model_path = os.path.join(config["model_path"], "transformer")
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.device = torch.device("cpu") if self.cpu_offload else torch.device("cuda")
 
-        with open(os.path.join(config.model_path, "transformer", "config.json"), "r") as f:
+        with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
             transformer_config = json.load(f)
             self.in_channels = transformer_config["in_channels"]
         self.attention_kwargs = {}
 
-        self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
-        self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
+        self.dit_quantized = self.config["mm_config"].get("mm_type", "Default") != "Default"
+        self.weight_auto_quant = self.config["mm_config"].get("weight_auto_quant", False)
 
         self._init_infer_class()
         self._init_weights()
@@ -192,14 +192,14 @@ class QwenImageTransformerModel:
 
         t = self.scheduler.timesteps[self.scheduler.step_index]
         latents = self.scheduler.latents
-        if self.config.task == "i2i":
+        if self.config["task"] == "i2i":
             image_latents = inputs["image_encoder_output"]["image_latents"]
             latents_input = torch.cat([latents, image_latents], dim=1)
         else:
             latents_input = latents
 
         timestep = t.expand(latents.shape[0]).to(latents.dtype)
-        img_shapes = self.scheduler.img_shapes
+        img_shapes = inputs["img_shapes"]
 
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
         prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
@@ -227,7 +227,40 @@ class QwenImageTransformerModel:
 
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
 
-        if self.config.task == "i2i":
-            noise_pred = noise_pred[:, : latents.size(1)]
+        if self.config["do_true_cfg"]:
+            neg_prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
+            neg_prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
 
+            neg_hidden_states, neg_encoder_hidden_states, _, neg_pre_infer_out = self.pre_infer.infer(
+                weights=self.pre_weight,
+                hidden_states=latents_input,
+                timestep=timestep / 1000,
+                guidance=self.scheduler.guidance,
+                encoder_hidden_states_mask=neg_prompt_embeds_mask,
+                encoder_hidden_states=neg_prompt_embeds,
+                img_shapes=img_shapes,
+                txt_seq_lens=txt_seq_lens,
+                attention_kwargs=self.attention_kwargs,
+            )
+
+            neg_encoder_hidden_states, neg_hidden_states = self.transformer_infer.infer(
+                block_weights=self.transformer_weights,
+                hidden_states=neg_hidden_states.unsqueeze(0),
+                encoder_hidden_states=neg_encoder_hidden_states.unsqueeze(0),
+                pre_infer_out=neg_pre_infer_out,
+            )
+
+            neg_noise_pred = self.post_infer.infer(self.post_weight, neg_hidden_states, neg_pre_infer_out[0])
+
+        if self.config["task"] == "i2i":
+            noise_pred = noise_pred[:, : latents.size(1)]
+            if self.config["do_true_cfg"]:
+                neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
+                comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
+
+                cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+                noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+                noise_pred = comb_pred * (cond_norm / noise_norm)
+
+        noise_pred = noise_pred[:, : latents.size(1)]
         self.scheduler.noise_pred = noise_pred

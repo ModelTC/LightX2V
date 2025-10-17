@@ -103,6 +103,28 @@ class AnimateInputInfo:
     target_shape: int = field(default_factory=int)
 
 
+@dataclass
+class T2IInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    # shape related
+    target_shape: int = field(default_factory=int)
+
+
+@dataclass
+class I2IInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    # shape related
+    target_shape: int = field(default_factory=int)
+    processed_image_size: int = field(default_factory=list)
+
+
 def set_input_info(args):
     if args.task == "t2v":
         input_info = T2VInputInfo(
@@ -161,10 +183,23 @@ def set_input_info(args):
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
         )
+    elif args.task == "t2i":
+        input_info = T2IInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            save_result_path=args.save_result_path,
+        )
+    elif args.task == "i2i":
+        input_info = I2IInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            save_result_path=args.save_result_path,
+        )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
-
-    assert not (input_info.save_result_path and input_info.return_result_tensor), "save_result_path and return_result_tensor cannot be set at the same time"
     return input_info
 
 

@@ -35,16 +35,15 @@ class AutoencoderKLQwenImageVAE:
         else:
             self.device = torch.device("cuda")
         self.dtype = torch.bfloat16
-        self.latent_channels = config.vae_z_dim
+        self.latent_channels = config["vae_z_dim"]
         self.load()
 
     def load(self):
-        self.model = AutoencoderKLQwenImage.from_pretrained(os.path.join(self.config.model_path, "vae")).to(self.device).to(self.dtype)
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.config.vae_scale_factor * 2)
-        with open(os.path.join(self.config.model_path, "vae", "config.json"), "r") as f:
+        self.model = AutoencoderKLQwenImage.from_pretrained(os.path.join(self.config["model_path"], "vae")).to(self.device).to(self.dtype)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
+        with open(os.path.join(self.config["model_path"], "vae", "config.json"), "r") as f:
             vae_config = json.load(f)
             self.vae_scale_factor = 2 ** len(vae_config["temperal_downsample"]) if "temperal_downsample" in vae_config else 8
-            self.generator = torch.Generator(device="cuda").manual_seed(self.config.seed)
 
     @staticmethod
     def _unpack_latents(latents, height, width, vae_scale_factor):
@@ -63,17 +62,17 @@ class AutoencoderKLQwenImageVAE:
         return latents
 
     @torch.no_grad()
-    def decode(self, latents):
+    def decode(self, latents, input_info):
         if self.cpu_offload:
             self.model.to(torch.device("cuda"))
-        if self.config.task == "t2i":
-            width, height = self.config.aspect_ratios[self.config.aspect_ratio]
-        elif self.config.task == "i2i":
-            width, height = self.config.auto_width, self.config.auto_hight
-        latents = self._unpack_latents(latents, height, width, self.config.vae_scale_factor)
+        if self.config["task"] == "t2i":
+            width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
+        elif self.config["task"] == "i2i":
+            width, height = input_info.auto_width, input_info.auto_hight
+        latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"])
         latents = latents.to(self.dtype)
-        latents_mean = torch.tensor(self.config.vae_latents_mean).view(1, self.config.vae_z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-        latents_std = 1.0 / torch.tensor(self.config.vae_latents_std).view(1, self.config.vae_z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+        latents_mean = torch.tensor(self.config["vae_latents_mean"]).view(1, self.config["vae_z_dim"], 1, 1, 1).to(latents.device, latents.dtype)
+        latents_std = 1.0 / torch.tensor(self.config["vae_latents_std"]).view(1, self.config["vae_z_dim"], 1, 1, 1).to(latents.device, latents.dtype)
         latents = latents / latents_std + latents_mean
         images = self.model.decode(latents, return_dict=False)[0][:, :, 0]
         images = self.image_processor.postprocess(images, output_type="pil")
@@ -97,33 +96,35 @@ class AutoencoderKLQwenImageVAE:
             image_latents = torch.cat(image_latents, dim=0)
         else:
             image_latents = retrieve_latents(self.model.encode(image), generator=generator, sample_mode="argmax")
-        latents_mean = torch.tensor(self.model.config.latents_mean).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
-        latents_std = torch.tensor(self.model.config.latents_std).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
+        latents_mean = torch.tensor(self.model.config["latents_mean"]).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
+        latents_std = torch.tensor(self.model.config["latents_std"]).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
         image_latents = (image_latents - latents_mean) / latents_std
 
         return image_latents
 
     @torch.no_grad()
-    def encode_vae_image(self, image):
+    def encode_vae_image(self, image, input_info):
+        self.generator = torch.Generator().manual_seed(input_info.seed)
         if self.cpu_offload:
             self.model.to(torch.device("cuda"))
-        num_channels_latents = self.config.transformer_in_channels // 4
+        num_channels_latents = self.config["transformer_in_channels"] // 4
         image = image.to(self.model.device).to(self.dtype)
+
         if image.shape[1] != self.latent_channels:
             image_latents = self._encode_vae_image(image=image, generator=self.generator)
         else:
             image_latents = image
-        if self.config.batchsize > image_latents.shape[0] and self.config.batchsize % image_latents.shape[0] == 0:
+        if self.config["batchsize"] > image_latents.shape[0] and self.config["batchsize"] % image_latents.shape[0] == 0:
             # expand init_latents for batchsize
-            additional_image_per_prompt = self.config.batchsize // image_latents.shape[0]
+            additional_image_per_prompt = self.config["batchsize"] // image_latents.shape[0]
             image_latents = torch.cat([image_latents] * additional_image_per_prompt, dim=0)
-        elif self.config.batchsize > image_latents.shape[0] and self.config.batchsize % image_latents.shape[0] != 0:
-            raise ValueError(f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {self.config.batchsize} text prompts.")
+        elif self.config["batchsize"] > image_latents.shape[0] and self.config["batchsize"] % image_latents.shape[0] != 0:
+            raise ValueError(f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {self.config['batchsize']} text prompts.")
         else:
             image_latents = torch.cat([image_latents], dim=0)
 
         image_latent_height, image_latent_width = image_latents.shape[3:]
-        image_latents = self._pack_latents(image_latents, self.config.batchsize, num_channels_latents, image_latent_height, image_latent_width)
+        image_latents = self._pack_latents(image_latents, self.config["batchsize"], num_channels_latents, image_latent_height, image_latent_width)
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
             torch.cuda.empty_cache()

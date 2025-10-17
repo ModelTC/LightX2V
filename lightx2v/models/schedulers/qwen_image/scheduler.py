@@ -1,12 +1,11 @@
 import inspect
 import json
 import os
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
-from diffusers.utils.torch_utils import randn_tensor
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
@@ -80,14 +79,60 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
+def randn_tensor(
+    shape: Union[Tuple, List],
+    generator: Optional[Union[List["torch.Generator"], "torch.Generator"]] = None,
+    device: Optional[Union[str, "torch.device"]] = None,
+    dtype: Optional["torch.dtype"] = None,
+    layout: Optional["torch.layout"] = None,
+):
+    """A helper function to create random tensors on the desired `device` with the desired `dtype`. When
+    passing a list of generators, you can seed each batch size individually. If CPU generators are passed, the tensor
+    is always created on the CPU.
+    """
+    # device on which tensor is created defaults to device
+    if isinstance(device, str):
+        device = torch.device(device)
+    rand_device = device
+    batch_size = shape[0]
+
+    layout = layout or torch.strided
+    device = device or torch.device("cpu")
+
+    if generator is not None:
+        gen_device_type = generator.device.type if not isinstance(generator, list) else generator[0].device.type
+        if gen_device_type != device.type and gen_device_type == "cpu":
+            rand_device = "cpu"
+            if device != "mps":
+                print(
+                    f"The passed generator was created on 'cpu' even though a tensor on {device} was expected."
+                    f" Tensors will be created on 'cpu' and then moved to {device}. Note that one can probably"
+                    f" slightly speed up this function by passing a generator that was created on the {device} device."
+                )
+        elif gen_device_type != device.type and gen_device_type == "cuda":
+            raise ValueError(f"Cannot generate a {device} tensor from a generator of type {gen_device_type}.")
+
+    # make sure generator list of length 1 is treated like a non-list
+    if isinstance(generator, list) and len(generator) == 1:
+        generator = generator[0]
+
+    if isinstance(generator, list):
+        shape = (1,) + shape[1:]
+        latents = [torch.randn(shape, generator=generator[i], device=rand_device, dtype=dtype, layout=layout) for i in range(batch_size)]
+        latents = torch.cat(latents, dim=0).to(device)
+    else:
+        latents = torch.randn(shape, generator=generator, device=rand_device, dtype=dtype, layout=layout).to(device)
+
+    return latents
+
+
 class QwenImageScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config.model_path, "scheduler"))
-        with open(os.path.join(config.model_path, "scheduler", "scheduler_config.json"), "r") as f:
+        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config["model_path"], "scheduler"))
+        with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
-        self.generator = torch.Generator(device="cuda").manual_seed(config.seed)
         self.device = torch.device("cuda")
         self.dtype = torch.bfloat16
         self.guidance_scale = 1.0
@@ -118,27 +163,29 @@ class QwenImageScheduler(BaseScheduler):
     @staticmethod
     def _prepare_latent_image_ids(batch_size, height, width, device, dtype):
         latent_image_ids = torch.zeros(height, width, 3)
+
         latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
         latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
 
         latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
-
         latent_image_ids = latent_image_ids.reshape(latent_image_id_height * latent_image_id_width, latent_image_id_channels)
 
         return latent_image_ids.to(device=device, dtype=dtype)
 
-    def prepare_latents(self):
-        shape = self.config.target_shape
+    def prepare_latents(self, input_info):
+        shape = input_info.target_shape
         width, height = shape[-1], shape[-2]
+
         latents = randn_tensor(shape, generator=self.generator, device=self.device, dtype=self.dtype)
-        latents = self._pack_latents(latents, self.config.batchsize, self.config.num_channels_latents, height, width)
-        latent_image_ids = self._prepare_latent_image_ids(self.config.batchsize, height // 2, width // 2, self.device, self.dtype)
+        latents = self._pack_latents(latents, self.config["batchsize"], self.config["num_channels_latents"], height, width)
+        latent_image_ids = self._prepare_latent_image_ids(self.config["batchsize"], height // 2, width // 2, self.device, self.dtype)
+
         self.latents = latents
         self.latent_image_ids = latent_image_ids
         self.noise_pred = None
 
     def set_timesteps(self):
-        sigmas = np.linspace(1.0, 1 / self.config.infer_steps, self.config.infer_steps)
+        sigmas = np.linspace(1.0, 1 / self.config["infer_steps"], self.config["infer_steps"])
         image_seq_len = self.latents.shape[1]
         mu = calculate_shift(
             image_seq_len,
@@ -147,7 +194,7 @@ class QwenImageScheduler(BaseScheduler):
             self.scheduler_config.get("base_shift", 0.5),
             self.scheduler_config.get("max_shift", 1.15),
         )
-        num_inference_steps = self.config.infer_steps
+        num_inference_steps = self.config["infer_steps"]
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
@@ -165,30 +212,17 @@ class QwenImageScheduler(BaseScheduler):
 
     def prepare_guidance(self):
         # handle guidance
-        if self.config.guidance_embeds:
+        if self.config["guidance_embeds"]:
             guidance = torch.full([1], self.guidance_scale, device=self.device, dtype=torch.float32)
             guidance = guidance.expand(self.latents.shape[0])
         else:
             guidance = None
         self.guidance = guidance
 
-    def set_img_shapes(self, inputs):
-        if self.config.task == "t2i":
-            width, height = self.config.aspect_ratios[self.config.aspect_ratio]
-            self.img_shapes = [(1, height // self.config.vae_scale_factor // 2, width // self.config.vae_scale_factor // 2)] * self.config.batchsize
-        elif self.config.task == "i2i":
-            image_height, image_width = inputs["image_info"]
-            self.img_shapes = [
-                [
-                    (1, self.config.auto_hight // self.config.vae_scale_factor // 2, self.config.auto_width // self.config.vae_scale_factor // 2),
-                    (1, image_height // self.config.vae_scale_factor // 2, image_width // self.config.vae_scale_factor // 2),
-                ]
-            ]
-
-    def prepare(self, inputs):
-        self.prepare_latents()
+    def prepare(self, input_info):
+        self.generator = torch.Generator().manual_seed(input_info.seed)
+        self.prepare_latents(input_info)
         self.prepare_guidance()
-        self.set_img_shapes(inputs)
         self.set_timesteps()
 
     def step_post(self):
