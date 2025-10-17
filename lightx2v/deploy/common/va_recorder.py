@@ -138,6 +138,14 @@ class VARecorder:
         """Start ffmpeg process that connects to our TCP sockets"""
         ffmpeg_cmd = [
             "ffmpeg",
+            "-fflags",
+            "nobuffer",
+            "-analyzeduration",
+            "0",
+            "-probesize",
+            "32",
+            "-flush_packets",
+            "1",
             "-f",
             "s16le",
             "-ar",
