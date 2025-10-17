@@ -293,7 +293,7 @@ def get_attention_mask(mask_name, sample_mse_max_row, context_length, num_frame,
 
 
 @ATTN_WEIGHT_REGISTER("svg_attn")
-class SVGAttnWeight(AttnWeightTemplate):
+class SvgAttnWeight(AttnWeightTemplate):
     head_num = None
     head_dim = None
     sample_mse_max_row = None
@@ -317,7 +317,7 @@ class SVGAttnWeight(AttnWeightTemplate):
         torch._dynamo.config.cache_size_limit = 192 * 3
         torch._dynamo.config.accumulated_cache_size_limit = 192 * 3
         logger.info(
-            f"SVGAttnWeight Prepare: head_num={head_num}, head_dim={head_dim}, sample_mse_max_row={sample_mse_max_row}, num_sampled_rows={num_sampled_rows}, context_length={context_length}, sparsity={sparsity}"
+            f"SvgAttnWeight Prepare: head_num={head_num}, head_dim={head_dim}, sample_mse_max_row={sample_mse_max_row}, num_sampled_rows={num_sampled_rows}, context_length={context_length}, sparsity={sparsity}"
         )
 
     def __init__(self):
@@ -336,7 +336,7 @@ class SVGAttnWeight(AttnWeightTemplate):
         cls.block_mask = prepare_flexattention(
             1, cls.head_num, cls.head_dim, torch.bfloat16, "cuda", cls.context_length, cls.context_length, num_frame, frame_size, diag_width=diag_width, multiplier=multiplier
         )
-        logger.info(f"SVGAttnWeight Update: num_frame={num_frame}, frame_size={frame_size}")
+        logger.info(f"SvgAttnWeight Update: num_frame={num_frame}, frame_size={frame_size}")
 
     def apply(
         self,
@@ -400,9 +400,9 @@ class SVGAttnWeight(AttnWeightTemplate):
 if __name__ == "__main__":
     q, k, v = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda()
 
-    SVGAttnWeight.prepare(head_num=40, head_dim=128, sample_mse_max_row=10000, num_sampled_rows=64, context_length=0, sparsity=0.25)
-    svg_attn = SVGAttnWeight()
-    print("SVGAttnWeight initialized.")
+    SvgAttnWeight.prepare(head_num=40, head_dim=128, sample_mse_max_row=10000, num_sampled_rows=64, context_length=0, sparsity=0.25)
+    svg_attn = SvgAttnWeight()
+    print("SvgAttnWeight initialized.")
 
     out = svg_attn.apply(q, k, v)
     print(f"out: {out.shape}, {out.dtype}, {out.device}")
