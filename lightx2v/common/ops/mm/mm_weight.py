@@ -1,7 +1,6 @@
 from abc import ABCMeta, abstractmethod
 
 import torch
-from loguru import logger
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
@@ -362,7 +361,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return destination
 
 
-@MM_WEIGHT_REGISTER("W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm")
+@MM_WEIGHT_REGISTER("fp8-vllm")
 class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
     """
     Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm
@@ -397,7 +396,7 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         return output_tensor
 
 
-@MM_WEIGHT_REGISTER("W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm")
+@MM_WEIGHT_REGISTER("int8-vllm")
 class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm
@@ -432,7 +431,7 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         return output_tensor
 
 
-@MM_WEIGHT_REGISTER("W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F")
+@MM_WEIGHT_REGISTER("fp8-q8f")
 class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
     """
     Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F
@@ -462,7 +461,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         return output_tensor.squeeze(0)
 
 
-@MM_WEIGHT_REGISTER("W-int8-channel-sym-A-int8-channel-sym-dynamic-Q8F")
+@MM_WEIGHT_REGISTER("int8-q8f")
 class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Q8F
@@ -493,52 +492,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         return output_tensor.squeeze(0)
 
 
-@MM_WEIGHT_REGISTER("W-fp8-block128-sym-A-fp8-channel-group128-sym-dynamic-Deepgemm")
-class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemm(MMWeightQuantTemplate):
-    """
-    Name: W-fp8-block128-sym-A-fp8-channel-group128-sym-dynamic-Deepgemm
-
-    Quant MM:
-        Weight: fp8 perblock 128x128 sym
-        Act: fp8 perchannel-pergroup group=128 dynamic sym
-        Kernel: Deepgemm
-
-    Reference: https://github.com/deepseek-ai/DeepGEMM
-
-    Example:
-        Act(1024, 2048) x Weight(2048, 4096) = Out(1024, 4096)
-
-        Act : torch.Size([1024, 2048]), torch.float8_e4m3fn
-        Act Scale: torch.Size([1024, 16]), torch.float32
-        Weight : torch.Size([4096, 2048]), torch.float8_e4m3fn
-        Weight Scale: torch.Size([32, 16]), torch.float32
-        Out : torch.Size([1024, 4096]), self.infer_dtype
-    """
-
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
-        self.load_func = self.load_fp8_perblock128_sym
-        self.weight_need_transpose = False
-        self.act_quant_func = self.act_quant_fp8_perchannelgroup128_sym_deepgemm
-
-    def apply(self, input_tensor):
-        shape = (input_tensor.shape[0], self.weight.shape[0])
-        dtype = input_tensor.dtype
-        device = input_tensor.device
-        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
-
-        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        deep_gemm.gemm_fp8_fp8_bf16_nt(
-            (input_tensor_quant, input_tensor_scale),
-            (self.weight, self.weight_scale),
-            output_tensor,
-        )
-        if hasattr(self, "bias") and self.bias is not None:
-            output_tensor.add_(self.bias)
-        return output_tensor
-
-
-@MM_WEIGHT_REGISTER("W-fp8-block128-sym-A-fp8-channel-group128-sym-dynamic-Deepgemm-ActSgl")
+@MM_WEIGHT_REGISTER("fp8-b128-deepgemm")
 class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuantTemplate):
     """
     Name: W-fp8-block128-sym-A-fp8-channel-group128-sym-dynamic-Deepgemm-ActSgl
@@ -572,72 +526,7 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
         return output_tensor
 
 
-@MM_WEIGHT_REGISTER("W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm-ActSgl")
-class MMWeightWfp8channelAfp8channeldynamicVllmActSgl(MMWeightQuantTemplate):
-    """
-    Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm-ActSgl
-
-    Quant MM:
-        Weight: fp8 perchannel sym
-        Act: fp8 perchannel dynamic sym
-        Kernel: quant-mm using vllm, act dynamic quant using Sgl-kernel
-    """
-
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
-        self.load_func = self.load_fp8_perchannel_sym
-        self.weight_need_transpose = True
-        self.act_quant_func = self.act_quant_fp8_perchannel_sym_sgl
-
-    def apply(self, input_tensor):
-        shape = (input_tensor.shape[0], self.weight.shape[1])
-        dtype = input_tensor.dtype
-        device = input_tensor.device
-        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
-
-        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        torch.ops._C.cutlass_scaled_mm(
-            output_tensor,
-            input_tensor_quant,
-            self.weight,
-            input_tensor_scale,
-            self.weight_scale,
-            self.bias,
-        )
-        return output_tensor
-
-
-@MM_WEIGHT_REGISTER("W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl-ActVllm")
-class MMWeightWfp8channelAfp8channeldynamicSglActVllm(MMWeightQuantTemplate):
-    """
-    Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl-ActVllm
-
-    Quant MM:
-        Weight: fp8 perchannel sym
-        Act: fp8 perchannel dynamic sym
-        Kernel: quant-mm using Sgl-kernel, act dynamic quant using vllm
-    """
-
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
-        self.load_func = self.load_fp8_perchannel_sym
-        self.weight_need_transpose = True
-        self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
-
-    def apply(self, input_tensor):
-        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = sgl_kernel.fp8_scaled_mm(
-            input_tensor_quant,
-            self.weight,
-            input_tensor_scale,
-            self.weight_scale,
-            self.infer_dtype,
-            bias=self.bias,
-        )
-        return output_tensor
-
-
-@MM_WEIGHT_REGISTER("W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl")
+@MM_WEIGHT_REGISTER("fp8-sgl")
 class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
     """
     Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl
@@ -667,7 +556,7 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
         return output_tensor
 
 
-@MM_WEIGHT_REGISTER("W-int8-channel-sym-A-int8-channel-sym-dynamic-Sgl-ActVllm")
+@MM_WEIGHT_REGISTER("int8-sgl")
 class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Sgl-ActVllm
@@ -702,7 +591,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         return output_tensor
 
 
-@MM_WEIGHT_REGISTER("W-int8-channel-sym-A-int8-channel-sym-dynamic-Torchao")
+@MM_WEIGHT_REGISTER("int8-torchao")
 class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Torchao
@@ -746,7 +635,7 @@ class MMWeightGGUFQ4K(MMWeightGGUFTemplate):
         super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
 
 
-@MM_WEIGHT_REGISTER("W-int4-group128-sym-Marlin")
+@MM_WEIGHT_REGISTER("int4-g128-marlin")
 class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
     """
     Name: "W-int4-group128-sym-Marlin
@@ -779,42 +668,3 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         if hasattr(self, "bias") and self.bias is not None:
             output_tensor.add_(self.bias)
         return output_tensor
-
-
-if __name__ == "__main__":
-    weight_dict = {
-        "xx.weight": torch.randn(8192, 4096).to(torch.float8_e4m3fn),
-        "xx.bias": torch.randn(8192).to(torch.bfloat16),
-        "xx.weight_scale": torch.randn(8192, 1).to(torch.float32),
-    }
-
-    mm_weight = MM_WEIGHT_REGISTER["W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"]("xx.weight", "xx.bias")
-    mm_weight.set_config({"weight_auto_quant": False})
-    mm_weight.load(weight_dict)
-    input_tensor = torch.randn(1024, 4096).to(torch.bfloat16).cuda()
-    output_tensor = mm_weight.apply(input_tensor)
-    logger.info(output_tensor.shape)
-
-    weight_dict = {
-        "xx.weight": torch.randn(8192, 4096),
-        "xx.bias": torch.randn(8192).to(torch.bfloat16),
-    }
-
-    mm_weight = MM_WEIGHT_REGISTER["W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"]("xx.weight", "xx.bias")
-    mm_weight.set_config({"weight_auto_quant": True})
-    mm_weight.load(weight_dict)
-    input_tensor = torch.randn(1024, 4096).to(torch.bfloat16).cuda()
-    output_tensor = mm_weight.apply(input_tensor)
-    logger.info(output_tensor.shape)
-
-    weight_dict = {
-        "xx.weight": torch.randn(8192, 4096),
-        "xx.bias": torch.randn(8192).to(torch.bfloat16),
-    }
-
-    mm_weight = MM_WEIGHT_REGISTER["W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm"]("xx.weight", "xx.bias")
-    mm_weight.set_config({"weight_auto_quant": True})
-    mm_weight.load(weight_dict)
-    input_tensor = torch.randn(1024, 4096).to(torch.bfloat16).cuda()
-    output_tensor = mm_weight.apply(input_tensor)
-    logger.info(output_tensor.shape)

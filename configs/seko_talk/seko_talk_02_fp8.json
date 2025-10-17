@@ -13,9 +13,10 @@
     "enable_cfg": false,
     "cpu_offload": false,
     "use_31_block": false,
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl"
-    },
+    "clip_quantized": true,
+    "clip_quant_scheme": "fp8",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
     "t5_quantized": true,

@@ -29,7 +29,6 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
-from lightx2v.utils.utils import best_output_size
 
 
 @RUNNER_REGISTER("wan2.1")
@@ -48,7 +47,7 @@ class WanRunner(DefaultRunner):
             self.init_device,
         )
         if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
+            assert not self.config.get("dit_quantized", False)
             lora_wrapper = WanLoraWrapper(model)
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]
@@ -445,22 +444,37 @@ class MultiModelStruct:
 class Wan22MoeRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
+        self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
+        if not os.path.isdir(self.high_noise_model_path):
+            self.high_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "high_noise_model")
+        if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
+            self.high_noise_model_path = self.config["high_noise_quantized_ckpt"]
+        elif self.config.get("high_noise_original_ckpt", None):
+            self.high_noise_model_path = self.config["high_noise_original_ckpt"]
+
+        self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
+        if not os.path.isdir(self.low_noise_model_path):
+            self.low_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "low_noise_model")
+        if self.config.get("dit_quantized", False) and self.config.get("low_noise_quantized_ckpt", None):
+            self.low_noise_model_path = self.config["low_noise_quantized_ckpt"]
+        elif not self.config.get("dit_quantized", False) and self.config.get("low_noise_original_ckpt", None):
+            self.low_noise_model_path = self.config["low_noise_original_ckpt"]
 
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
         high_noise_model = WanModel(
-            os.path.join(self.config["model_path"], "high_noise_model"),
+            self.high_noise_model_path,
             self.config,
             self.init_device,
         )
         low_noise_model = WanModel(
-            os.path.join(self.config["model_path"], "low_noise_model"),
+            self.low_noise_model_path,
             self.config,
             self.init_device,
         )
 
         if self.config.get("lora_configs") and self.config["lora_configs"]:
-            assert not self.config.get("dit_quantized", False) or self.config["mm_config"].get("weight_auto_quant", False)
+            assert not self.config.get("dit_quantized", False)
 
             for lora_config in self.config["lora_configs"]:
                 lora_path = lora_config["path"]

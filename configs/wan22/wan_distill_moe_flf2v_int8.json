@@ -25,9 +25,8 @@
         500,
         250
     ],
-    "mm_config": {
-        "mm_type": "W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm"
-    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm",
     "t5_quantized": true,
     "t5_quant_scheme": "int8"
 }

@@ -27,7 +27,7 @@ class WanSFRunner(WanRunner):
             self.init_device,
         )
         if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False) or self.config.mm_config.get("weight_auto_quant", False)
+            assert not self.config.get("dit_quantized", False)
             lora_wrapper = WanLoraWrapper(model)
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]

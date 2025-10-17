@@ -15,5 +15,12 @@
         750,
         500,
         250
-    ]
+    ],
+    "mm_config": {
+        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
+    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
+    "dit_quantized_ckpt": "/data/nvme0/gushiqiao/models/hf_lightx2v_models/models/wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
+
 }

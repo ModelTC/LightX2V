@@ -13,7 +13,6 @@
     "cpu_offload": true,
     "offload_granularity": "block",
     "t5_cpu_offload": true,
-    "mm_config": {
-        "mm_type": "W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm"
-    }
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl"
 }

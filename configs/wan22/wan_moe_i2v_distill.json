@@ -24,7 +24,5 @@
         750,
         500,
         250
-    ],
-    "dit_distill_ckpt_high": "Wan2.2-I2V-A14B/distill_models/high_noise_model/distill_model.safetensors",
-    "dit_distill_ckpt_low": "Wan2.2-I2V-A14B/distill_models/low_noise_model/distill_model.safetensors"
+    ]
 }

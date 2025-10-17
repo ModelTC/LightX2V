@@ -53,9 +53,8 @@
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"
     },
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Sgl"
-    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
     "t5_quantized": true,

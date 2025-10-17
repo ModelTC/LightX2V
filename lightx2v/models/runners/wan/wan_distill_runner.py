@@ -78,6 +78,21 @@ class MultiDistillModelStruct(MultiModelStruct):
 class Wan22MoeDistillRunner(WanDistillRunner):
     def __init__(self, config):
         super().__init__(config)
+        self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
+        if not os.path.isdir(self.high_noise_model_path):
+            self.high_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "high_noise_model")
+        if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
+            self.high_noise_model_path = self.config["high_noise_quantized_ckpt"]
+        elif self.config.get("high_noise_original_ckpt", None):
+            self.high_noise_model_path = self.config["high_noise_original_ckpt"]
+
+        self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
+        if not os.path.isdir(self.low_noise_model_path):
+            self.low_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "low_noise_model")
+        if self.config.get("dit_quantized", False) and self.config.get("low_noise_quantized_ckpt", None):
+            self.low_noise_model_path = self.config["low_noise_quantized_ckpt"]
+        elif not self.config.get("dit_quantized", False) and self.config.get("low_noise_original_ckpt", None):
+            self.low_noise_model_path = self.config["low_noise_original_ckpt"]
 
     def load_transformer(self):
         use_high_lora, use_low_lora = False, False
@@ -90,7 +105,7 @@ class Wan22MoeDistillRunner(WanDistillRunner):
 
         if use_high_lora:
             high_noise_model = WanModel(
-                os.path.join(self.config["model_path"], "high_noise_model"),
+                self.high_noise_model_path,
                 self.config,
                 self.init_device,
             )
@@ -104,15 +119,14 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                     logger.info(f"High noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
             high_noise_model = WanDistillModel(
-                os.path.join(self.config["model_path"], "distill_models", "high_noise_model"),
+                self.high_noise_model_path,
                 self.config,
                 self.init_device,
-                ckpt_config_key="dit_distill_ckpt_high",
             )
 
         if use_low_lora:
             low_noise_model = WanModel(
-                os.path.join(self.config["model_path"], "low_noise_model"),
+                self.low_noise_model_path,
                 self.config,
                 self.init_device,
             )
@@ -126,10 +140,9 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                     logger.info(f"Low noise model loaded LoRA: {lora_name} with strength: {strength}")
         else:
             low_noise_model = WanDistillModel(
-                os.path.join(self.config["model_path"], "distill_models", "low_noise_model"),
+                self.low_noise_model_path,
                 self.config,
                 self.init_device,
-                ckpt_config_key="dit_distill_ckpt_low",
             )
 
         return MultiDistillModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary_step_index"])

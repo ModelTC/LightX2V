@@ -19,8 +19,7 @@
         500,
         250
     ],
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Q8F"
-    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
     "use_tiling_vae": true
 }

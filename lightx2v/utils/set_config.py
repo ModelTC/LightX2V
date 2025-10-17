@@ -21,7 +21,6 @@ def get_default_config():
         "use_ret_steps": False,
         "use_bfloat16": True,
         "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
-        "mm_config": {},
         "use_prompt_enhancer": False,
         "parallel": False,
         "seq_parallel": False,
