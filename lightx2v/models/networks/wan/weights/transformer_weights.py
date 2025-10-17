@@ -1,6 +1,5 @@
 import os
 
-import torch
 from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
@@ -56,7 +55,6 @@ class WanTransformerAttentionBlock(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
-        self.sparge = config.get("sparge", False)
 
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
@@ -108,7 +106,6 @@ class WanSelfAttention(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
-        self.sparge = config.get("sparge", False)
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
@@ -185,16 +182,17 @@ class WanSelfAttention(WeightModule):
                 self.lazy_load_file,
             ),
         )
-        if self.sparge:
-            assert self.config["sparge_ckpt"], "sparge_ckpt must be set when sparge is True"
-            self.add_module(
-                "self_attn_1",
-                ATTN_WEIGHT_REGISTER["Sparge"](f"{block_prefix}.{self.block_index}"),
+        attention_weights_cls = ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]
+        if self.config["self_attn_1_type"] == "svg_attn":
+            attention_weights_cls.prepare(
+                head_num=self.config["num_heads"],
+                head_dim=self.config["dim"] // self.config["num_heads"],
+                sample_mse_max_row=self.config.get("svg_sample_mse_max_row", 10000),
+                num_sampled_rows=self.config.get("svg_num_sampled_rows", 64),
+                context_length=self.config.get("svg_context_length", 0),
+                sparsity=self.config.get("svg_sparsity", 0.25),
             )
-            sparge_ckpt = torch.load(self.config["sparge_ckpt"])
-            self.self_attn_1.load(sparge_ckpt)
-        else:
-            self.add_module("self_attn_1", ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]())
+        self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
             self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")]())
