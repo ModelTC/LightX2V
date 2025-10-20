@@ -228,8 +228,10 @@ class QwenImageTransformerModel:
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
 
         if self.config["do_true_cfg"]:
-            neg_prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-            neg_prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
+            neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
+            neg_prompt_embeds_mask = inputs["text_encoder_output"]["negative_prompt_embeds_mask"]
+
+            negative_txt_seq_lens = neg_prompt_embeds_mask.sum(dim=1).tolist() if neg_prompt_embeds_mask is not None else None
 
             neg_hidden_states, neg_encoder_hidden_states, _, neg_pre_infer_out = self.pre_infer.infer(
                 weights=self.pre_weight,
@@ -239,7 +241,7 @@ class QwenImageTransformerModel:
                 encoder_hidden_states_mask=neg_prompt_embeds_mask,
                 encoder_hidden_states=neg_prompt_embeds,
                 img_shapes=img_shapes,
-                txt_seq_lens=txt_seq_lens,
+                txt_seq_lens=negative_txt_seq_lens,
                 attention_kwargs=self.attention_kwargs,
             )
 
@@ -254,13 +256,14 @@ class QwenImageTransformerModel:
 
         if self.config["task"] == "i2i":
             noise_pred = noise_pred[:, : latents.size(1)]
-            if self.config["do_true_cfg"]:
-                neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
-                comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
 
-                cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
-                noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-                noise_pred = comb_pred * (cond_norm / noise_norm)
+        if self.config["do_true_cfg"]:
+            neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
+            comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
+
+            cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+            noise_pred = comb_pred * (cond_norm / noise_norm)
 
         noise_pred = noise_pred[:, : latents.size(1)]
         self.scheduler.noise_pred = noise_pred

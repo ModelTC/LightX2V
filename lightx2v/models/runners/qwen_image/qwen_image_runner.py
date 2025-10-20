@@ -82,7 +82,7 @@ class QwenImageRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
-        text_encoder_output = self.run_text_encoder(prompt)
+        text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
         torch.cuda.empty_cache()
         gc.collect()
         return {
@@ -113,6 +113,10 @@ class QwenImageRunner(DefaultRunner):
             prompt_embeds, prompt_embeds_mask, _, _ = self.text_encoders[0].infer([text])
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["prompt_embeds_mask"] = prompt_embeds_mask
+            if self.config["do_true_cfg"] and neg_prompt is not None:
+                neg_prompt_embeds, neg_prompt_embeds_mask, _, _ = self.text_encoders[0].infer([neg_prompt])
+                text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+                text_encoder_output["negative_prompt_embeds_mask"] = neg_prompt_embeds_mask
         elif self.config["task"] == "i2i":
             prompt_embeds, prompt_embeds_mask, preprocessed_image, image_info = self.text_encoders[0].infer([text], image)
             text_encoder_output["prompt_embeds"] = prompt_embeds

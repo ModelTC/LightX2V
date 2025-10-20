@@ -60,7 +60,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         self.load()
 
     def load(self):
-        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config["model_path"], "text_encoder")).to(self.device).to(self.dtype)
+        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config["model_path"], "text_encoder"), torch_dtype=torch.bfloat16)
+        if not self.cpu_offload:
+            self.text_encoder = self.text_encoder.to("cuda")
+
         self.tokenizer = Qwen2Tokenizer.from_pretrained(os.path.join(self.config["model_path"], "tokenizer"))
         if self.config["task"] == "i2i":
             self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
@@ -129,6 +132,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             )
 
         hidden_states = encoder_hidden_states.hidden_states[-1]
+
         split_hidden_states = self._extract_masked_hidden(hidden_states, model_inputs.attention_mask)
         split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
         attn_mask_list = [torch.ones(e.size(0), dtype=torch.long, device=e.device) for e in split_hidden_states]

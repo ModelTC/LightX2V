@@ -104,7 +104,11 @@ class AutoencoderKLQwenImageVAE:
 
     @torch.no_grad()
     def encode_vae_image(self, image, input_info):
-        self.generator = torch.Generator().manual_seed(input_info.seed)
+        if self.config["task"] == "i2i":
+            self.generator = torch.Generator().manual_seed(input_info.seed)
+        elif self.config["task"] == "t2i":
+            self.generator = torch.Generator(device="cuda").manual_seed(input_info.seed)
+
         if self.cpu_offload:
             self.model.to(torch.device("cuda"))
         num_channels_latents = self.config["transformer_in_channels"] // 4
