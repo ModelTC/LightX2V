@@ -12,9 +12,11 @@ class QwenImageTransformerWeights(WeightModule):
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
         self.config = config
-        self.mm_type = config.get("dit_quant_scheme", "Default")
-        if self.mm_type != "Default":
-            assert config.get("dit_quantized") is True
+        if config["do_mm_calib"]:
+            self.mm_type = "Calib"
+        else:
+            self.mm_type = config["mm_config"].get("mm_type", "Default") if config["mm_config"] else "Default"
+
         blocks = WeightModuleList(QwenImageTransformerAttentionBlock(i, self.task, self.mm_type, self.config, "transformer_blocks") for i in range(self.blocks_num))
         self.add_module("blocks", blocks)
 
@@ -27,10 +29,11 @@ class QwenImageTransformerAttentionBlock(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
+        self.sparge = config.get("sparge", False)
 
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
-            lazy_load_path = os.path.join(self.config.dit_quantized_ckpt, f"block_{block_index}.safetensors")
+            lazy_load_path = os.path.join(self.config["dit_quantized_ckpt"], f"block_{block_index}.safetensors")
             self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
         else:
             self.lazy_load_file = None
@@ -50,7 +53,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
             LN_WEIGHT_REGISTER["Default"](eps=1e-6),
         )
         self.attn = QwenImageCrossAttention(
-            block_index=block_index, block_prefix="transformer_blocks", task=config.task, mm_type=mm_type, config=config, lazy_load=self.lazy_load, lazy_load_file=self.lazy_load_file
+            block_index=block_index, block_prefix="transformer_blocks", task=config["task"], mm_type=mm_type, config=config, lazy_load=self.lazy_load, lazy_load_file=self.lazy_load_file
         )
         self.add_module("attn", self.attn)
 
@@ -62,7 +65,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
             block_index=block_index,
             block_prefix="transformer_blocks",
             ffn_prefix="img_mlp",
-            task=config.task,
+            task=config["task"],
             mm_type=mm_type,
             config=config,
             lazy_load=self.lazy_load,
@@ -94,7 +97,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
             block_index=block_index,
             block_prefix="transformer_blocks",
             ffn_prefix="txt_mlp",
-            task=config.task,
+            task=config["task"],
             mm_type=mm_type,
             config=config,
             lazy_load=self.lazy_load,
@@ -136,6 +139,7 @@ class QwenImageCrossAttention(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
+        self.sparge = config.get("sparge", False)
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.heads = config["attention_out_dim"] // config["attention_dim_head"]
 

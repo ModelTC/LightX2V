@@ -131,6 +131,8 @@ class RMSWeightFP32(RMSWeight):
         variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
         hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
 
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
         if self.weight is not None:
             hidden_states = hidden_states * self.weight
         hidden_states = hidden_states.to(input_dtype)

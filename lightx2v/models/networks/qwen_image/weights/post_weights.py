@@ -10,9 +10,11 @@ class QwenImagePostWeights(WeightModule):
         super().__init__()
         self.task = config["task"]
         self.config = config
-        self.mm_type = config.get("dit_quant_scheme", "Default")
-        if self.mm_type != "Default":
-            assert config.get("dit_quantized") is True
+        if config["do_mm_calib"]:
+            self.mm_type = "Calib"
+        else:
+            self.mm_type = config["mm_config"].get("mm_type", "Default") if config["mm_config"] else "Default"
+
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
             assert NotImplementedError
