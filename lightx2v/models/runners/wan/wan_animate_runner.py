@@ -154,7 +154,7 @@ class WanAnimateRunner(WanRunner):
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
         metrics_labels=["WanAnimateRunner"],
     )
     def run_vae_encoder(

@@ -470,7 +470,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_run_vae_encode_duration,
+        metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
         metrics_labels=["WanAudioRunner"],
     )
     def run_vae_encoder(self, img):
@@ -533,7 +533,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.vae_encoder = self.load_vae_encoder()
 
         _, nframe, height, width = self.model.scheduler.latents.shape
-        with ProfilingContext4DebugL1("vae_encoder in init run segment"):
+        with ProfilingContext4DebugL1(
+            "vae_encoder in init run segment",
+            recorder_mode=GET_RECORDER_MODE(),
+            metrics_func=monitor_cli.lightx2v_run_vae_encoder_pre_latent_duration,
+            metrics_labels=["WanAudioRunner"],
+        ):
             if self.config["model_cls"] == "wan2.2_audio":
                 if prev_video is not None:
                     prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))

@@ -254,12 +254,19 @@ METRICS_INFO = {
         labels=["model_cls"],
         buckets=HYBRID_10_50MS_BUCKETS,
     ),
-    "lightx2v_run_vae_encode_duration": MetricsConfig(
-        name="lightx2v_run_vae_encode_duration",
-        desc="Duration of run vae encode (s)",
+    "lightx2v_run_vae_encoder_image_duration": MetricsConfig(
+        name="lightx2v_run_vae_encoder_image_duration",
+        desc="Duration of run vae encode for image (s)",
         type_="histogram",
         labels=["model_cls"],
         buckets=HYBRID_60_120MS_BUCKETS,
+    ),
+    "lightx2v_run_vae_encoder_pre_latent_duration": MetricsConfig(
+        name="lightx2v_run_vae_encoder_pre_latent_duration",
+        desc="Duration of run vae encode for pre latents (s)",
+        type_="histogram",
+        labels=["model_cls"],
+        buckets=HYBRID_1_30S_BUCKETS,
     ),
     "lightx2v_run_vae_decode_duration": MetricsConfig(
         name="lightx2v_run_vae_decode_duration",

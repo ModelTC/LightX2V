@@ -125,7 +125,7 @@ class QwenImageRunner(DefaultRunner):
             text_encoder_output["image_info"] = image_info
         return text_encoder_output
 
-    @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encode_duration, metrics_labels=["QwenImageRunner"])
+    @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration, metrics_labels=["QwenImageRunner"])
     def run_vae_encoder(self, image):
         image_latents = self.vae.encode_vae_image(image)
         return {"image_latents": image_latents}
