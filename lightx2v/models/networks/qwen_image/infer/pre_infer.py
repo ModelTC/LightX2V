@@ -163,7 +163,7 @@ class QwenImagePreInfer:
         self.config = config
         self.attention_kwargs = {}
         self.cpu_offload = config.get("cpu_offload", False)
-        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(config.axes_dims_rope), scale_rope=True)
+        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(config["axes_dims_rope"]), scale_rope=True)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -174,6 +174,7 @@ class QwenImagePreInfer:
 
         timestep = timestep.to(hidden_states.dtype)
         encoder_hidden_states = encoder_hidden_states.squeeze(0)
+
         encoder_hidden_states = weights.txt_norm.apply(encoder_hidden_states)
         encoder_hidden_states = weights.txt_in.apply(encoder_hidden_states)
         timesteps_proj = get_timestep_embedding(timestep).to(torch.bfloat16)
