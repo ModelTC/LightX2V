@@ -364,6 +364,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             monitor_cli.lightx2v_input_audio_len.observe(audio_len)
 
         expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
+        if expected_frames < int(video_duration * target_fps):
+            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={video_duration}")
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
