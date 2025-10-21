@@ -16,6 +16,5 @@
         750,
         500,
         250
-    ],
-    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/hf_lightx2v_models/models/wan2.1_t2v_14b_lightx2v_4step.safetensors"
+    ]
 }
