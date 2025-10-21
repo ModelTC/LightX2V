@@ -24,7 +24,7 @@
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-q8f",
     "t5_quantized": true,
-    "t5_quant_scheme": "fp8",
+    "t5_quant_scheme": "fp8-q8f",
     "clip_quantized": true,
-    "clip_quant_scheme": "fp8"
+    "clip_quant_scheme": "fp8-q8f"
 }

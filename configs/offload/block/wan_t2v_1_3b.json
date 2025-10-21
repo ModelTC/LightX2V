@@ -12,8 +12,7 @@
     "t5_cpu_offload": true,
     "t5_offload_granularity": "block",
     "t5_quantized": true,
-    "t5_quantized_ckpt": "/path/to/models_t5_umt5-xxl-enc-fp8.pth",
-    "t5_quant_scheme": "fp8",
-    "unload_modules": true,
-    "use_tiling_vae": true
+    "t5_quant_scheme": "fp8-sgl",
+    "unload_modules": false,
+    "use_tiling_vae": false
 }

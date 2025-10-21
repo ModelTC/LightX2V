@@ -1,381 +1,558 @@
-# 模型结构介绍
+# 模型格式与加载指南
 
 ## 📖 概述
 
-本文档全面介绍 LightX2V 项目的模型目录结构，旨在帮助用户高效组织模型文件，实现便捷的使用体验。通过科学的目录组织方式，用户可以享受"一键启动"的便利，无需手动配置复杂的路径参数。同时，系统也支持灵活的手动路径配置，满足不同用户群体的多样化需求。
+LightX2V 是一个灵活的视频生成推理框架，支持多种模型来源和格式，为用户提供丰富的选择：
 
-## 🗂️ 模型目录结构
+- ✅ **Wan 官方模型**：直接兼容 Wan2.1 和 Wan2.2 官方发布的完整模型
+- ✅ **单文件模型**：支持 LightX2V 发布的单文件格式模型（包含量化版本）
+- ✅ **LoRA 模型**：支持加载 LightX2V 发布的蒸馏 LoRA
 
-### LightX2V 官方模型列表
+本文档将详细介绍各种模型格式的使用方法、配置参数和最佳实践。
 
-查看所有可用模型：[LightX2V 官方模型仓库](https://huggingface.co/lightx2v)
+---
 
-### 标准目录结构
+## 🗂️ 格式一：Wan 官方模型
 
-以 `Wan2.1-I2V-14B-480P-LightX2V` 为例，标准文件结构如下：
+### 模型仓库
+- [Wan2.1 Collection](https://huggingface.co/collections/Wan-AI/wan21-68ac4ba85372ae5a8e282a1b)
+- [Wan2.2 Collection](https://huggingface.co/collections/Wan-AI/wan22-68ac4ae80a8b477e79636fc8)
 
-```
-Wan2.1-I2V-14B-480P-LightX2V/
-├── fp8/                                          # FP8 量化版本 (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT 模型 FP8 量化版本
-│   ├── models_t5_umt5-xxl-enc-fp8.pth            # T5 编码器 FP8 量化版本
-│   ├── clip-fp8.pth                              # CLIP 编码器 FP8 量化版本
-│   ├── Wan2.1_VAE.pth                            # VAE 变分自编码器
-│   ├── taew2_1.pth                               # 轻量级 VAE (可选)
-│   └── config.json                               # 模型配置文件
-├── int8/                                         # INT8 量化版本 (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT 模型 INT8 量化版本
-│   ├── models_t5_umt5-xxl-enc-int8.pth           # T5 编码器 INT8 量化版本
-│   ├── clip-int8.pth                             # CLIP 编码器 INT8 量化版本
-│   ├── Wan2.1_VAE.pth                            # VAE 变分自编码器
-│   ├── taew2_1.pth                               # 轻量级 VAE (可选)
-│   └── config.json                               # 模型配置文件
-├── original/                                     # 原始精度版本 (DIT/T5/CLIP)
-│   ├── xx.safetensors                            # DIT 模型原始精度版本
-│   ├── models_t5_umt5-xxl-enc-bf16.pth           # T5 编码器原始精度版本
-│   ├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP 编码器原始精度版本
-│   ├── Wan2.1_VAE.pth                            # VAE 变分自编码器
-│   ├── taew2_1.pth                               # 轻量级 VAE (可选)
-│   └── config.json                               # 模型配置文件
-```
+### 模型特点
+- **官方保证**：Wan-AI 官方发布的完整模型，质量最高
+- **完整组件**：包含所有必需的组件（DIT、T5、CLIP、VAE）
+- **原始精度**：使用 BF16/FP32 精度，无量化损失
+- **兼容性强**：与 Wan 官方工具链完全兼容
 
-以 `Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V` 为例，标准文件结构如下：
+### Wan2.1 官方模型
 
+#### 目录结构
+
+以 [Wan2.1-I2V-14B-720P](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P) 为例：
 
 ```
-Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/
-├── distill_fp8/                                  # FP8 量化版本 (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT 模型 FP8 量化版本
-│   ├── models_t5_umt5-xxl-enc-fp8.pth            # T5 编码器 FP8 量化版本
-│   ├── clip-fp8.pth                              # CLIP 编码器 FP8 量化版本
-│   ├── Wan2.1_VAE.pth                            # VAE 变分自编码器
-│   ├── taew2_1.pth                               # 轻量级 VAE (可选)
-│   └── config.json                               # 模型配置文件
-├── distill_int8/                                 # INT8 量化版本 (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT 模型 INT8 量化版本
-│   ├── models_t5_umt5-xxl-enc-int8.pth           # T5 编码器 INT8 量化版本
-│   ├── clip-int8.pth                             # CLIP 编码器 INT8 量化版本
-│   ├── Wan2.1_VAE.pth                            # VAE 变分自编码器
-│   ├── taew2_1.pth                               # 轻量级 VAE (可选)
-│   └── config.json                               # 模型配置文件
-├── distill_models/                               # 原始精度版本 (DIT/T5/CLIP)
-│   ├── distill_model.safetensors                 # DIT 模型原始精度版本
-│   ├── models_t5_umt5-xxl-enc-bf16.pth           # T5 编码器原始精度版本
-│   ├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP 编码器原始精度版本
-│   ├── Wan2.1_VAE.pth                            # VAE 变分自编码器
-│   ├── taew2_1.pth                               # 轻量级 VAE (可选)
-│   └── config.json                               # 模型配置文件
-├── loras/
-│   ├── Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors  # 蒸馏模型lora
+Wan2.1-I2V-14B-720P/
+├── diffusion_pytorch_model-00001-of-00007.safetensors   # DIT 模型分片 1
+├── diffusion_pytorch_model-00002-of-00007.safetensors   # DIT 模型分片 2
+├── diffusion_pytorch_model-00003-of-00007.safetensors   # DIT 模型分片 3
+├── diffusion_pytorch_model-00004-of-00007.safetensors   # DIT 模型分片 4
+├── diffusion_pytorch_model-00005-of-00007.safetensors   # DIT 模型分片 5
+├── diffusion_pytorch_model-00006-of-00007.safetensors   # DIT 模型分片 6
+├── diffusion_pytorch_model-00007-of-00007.safetensors   # DIT 模型分片 7
+├── diffusion_pytorch_model.safetensors.index.json       # 分片索引文件
+├── models_t5_umt5-xxl-enc-bf16.pth                      # T5 文本编码器
+├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP 编码器
+├── Wan2.1_VAE.pth                                       # VAE 编解码器
+├── config.json                                          # 模型配置
+├── xlm-roberta-large/                                   # CLIP tokenizer
+├── google/                                              # T5 tokenizer
+├── assets/
+└── examples/
 ```
 
-### 💾 存储建议
-
-**强烈建议将模型文件存储在 SSD 固态硬盘上**，此举可显著提升模型加载速度和推理性能。
-
-**推荐存储路径**：
-```bash
-/mnt/ssd/models/          # 独立 SSD 挂载点
-/data/ssd/models/         # 数据 SSD 目录
-/opt/models/              # 系统优化目录
-```
-
-### 量化版本说明
-
-每个模型均包含多个量化版本，适配不同硬件配置需求：
-- **FP8 版本**：适用于支持 FP8 的 GPU（如 H100、A100、RTX 40系列），提供最佳性能表现
-- **INT8 版本**：适用于大多数 GPU，在性能和兼容性间取得平衡，内存占用减少约50%
-- **原始精度版本**：适用于对精度要求极高的应用场景，提供最高质量输出
-
-## 🚀 使用方法
-
-### 环境准备
-
-#### 安装 Hugging Face CLI
-
-在开始下载模型之前，请确保已正确安装 Hugging Face CLI：
+#### 使用方法
 
 ```bash
-# 安装 huggingface_hub
-pip install huggingface_hub
+# 下载模型
+huggingface-cli download Wan-AI/Wan2.1-I2V-14B-720P \
+    --local-dir ./models/Wan2.1-I2V-14B-720P
 
-# 或者安装 huggingface-cli
-pip install huggingface-cli
+# 配置启动脚本
+model_path=./models/Wan2.1-I2V-14B-720P
+lightx2v_path=/path/to/LightX2V
 
-# 登录 Hugging Face（可选，但强烈推荐）
-huggingface-cli login
+# 运行推理
+cd LightX2V/scripts
+bash wan/run_wan_i2v.sh
 ```
 
-### 方式一：完整模型下载（推荐）
+### Wan2.2 官方模型
 
-**优势**：下载完整模型后，系统将自动识别所有组件路径，无需手动配置，使用体验更加便捷
+#### 目录结构
 
-#### 1. 下载完整模型
+以 [Wan2.2-I2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B) 为例：
+
+```
+Wan2.2-I2V-A14B/
+├── high_noise_model/                                    # 高噪声模型目录
+│   ├── diffusion_pytorch_model-00001-of-00009.safetensors
+│   ├── diffusion_pytorch_model-00002-of-00009.safetensors
+│   ├── ...
+│   ├── diffusion_pytorch_model-00009-of-00009.safetensors
+│   └── diffusion_pytorch_model.safetensors.index.json
+├── low_noise_model/                                     # 低噪声模型目录
+│   ├── diffusion_pytorch_model-00001-of-00009.safetensors
+│   ├── diffusion_pytorch_model-00002-of-00009.safetensors
+│   ├── ...
+│   ├── diffusion_pytorch_model-00009-of-00009.safetensors
+│   └── diffusion_pytorch_model.safetensors.index.json
+├── models_t5_umt5-xxl-enc-bf16.pth                      # T5 文本编码器
+├── Wan2.1_VAE.pth                                       # VAE 编解码器
+├── configuration.json                                   # 模型配置
+├── google/                                              # T5 tokenizer
+├── assets/                                              # 示例资源（可选）
+└── examples/                                            # 示例文件（可选）
+```
+
+#### 使用方法
 
 ```bash
-# 使用 Hugging Face CLI 下载完整模型
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V
+# 下载模型
+huggingface-cli download Wan-AI/Wan2.2-I2V-A14B \
+    --local-dir ./models/Wan2.2-I2V-A14B
+
+# 配置启动脚本
+model_path=./models/Wan2.2-I2V-A14B
+lightx2v_path=/path/to/LightX2V
+
+# 运行推理
+cd LightX2V/scripts
+bash wan22/run_wan22_moe_i2v.sh
 ```
 
-#### 2. 启动推理
+### 可用模型列表
 
-##### Bash 脚本启动
+#### Wan2.1 官方模型列表
 
-###### 场景一：使用全精度模型
+| 模型名称 | 下载链接 |
+|---------|----------|
+| Wan2.1-I2V-14B-720P | [链接](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P) |
+| Wan2.1-I2V-14B-480P | [链接](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P) |
+| Wan2.1-T2V-14B | [链接](https://huggingface.co/Wan-AI/Wan2.1-T2V-14B) |
+| Wan2.1-T2V-1.3B | [链接](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B) |
+| Wan2.1-FLF2V-14B-720P | [链接](https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P) |
+| Wan2.1-VACE-14B | [链接](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) |
+| Wan2.1-VACE-1.3B | [链接](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B) |
 
-修改[运行脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_distill_4step_cfg.sh)中的配置：
-- `model_path`：设置为下载的模型路径 `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V`
-- `lightx2v_path`：设置为 `LightX2V` 项目根目录路径
+#### Wan2.2 官方模型列表
 
-###### 场景二：使用量化模型
+| 模型名称 | 下载链接 |
+|---------|----------|
+| Wan2.2-I2V-A14B | [链接](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B) |
+| Wan2.2-T2V-A14B | [链接](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B) |
+| Wan2.2-TI2V-5B | [链接](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B) |
+| Wan2.2-Animate-14B | [链接](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) |
 
-当使用完整模型时，如需启用量化功能，请在[配置文件](https://github.com/ModelTC/LightX2V/tree/main/configs/distill/wan_i2v_distill_4step_cfg.json)中添加以下配置：
+### 使用提示
+
+> 💡 **量化模型使用**：如需使用量化模型，可参考[模型转换脚本](https://github.com/ModelTC/LightX2V/blob/main/tools/convert/readme_zh.md)进行转换，或直接使用下方格式二中的预转换量化模型
+>
+> 💡 **显存优化**：对于 RTX 4090 24GB 或更小显存的设备，建议结合量化技术和 CPU 卸载功能：
+> - 量化配置：参考[量化技术文档](../method_tutorials/quantization.md)
+> - CPU 卸载：参考[参数卸载文档](../method_tutorials/offload.md)
+> - Wan2.1 配置：参考 [offload 配置文件](https://github.com/ModelTC/LightX2V/tree/main/configs/offload)
+> - Wan2.2 配置：参考 [wan22 配置文件](https://github.com/ModelTC/LightX2V/tree/main/configs/wan22) 中以 `4090` 结尾的配置
+
+---
+
+## 🗂️ 格式二：LightX2V 单文件模型（推荐）
+
+### 模型仓库
+- [Wan2.1-LightX2V](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- [Wan2.2-LightX2V](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
+
+### 模型特点
+- **单文件管理**：单个 safetensors 文件，易于管理和部署
+- **多精度支持**：提供原始精度、FP8、INT8 等多种精度版本
+- **蒸馏加速**：支持 4-step 快速推理
+- **工具兼容**：兼容 ComfyUI 等其他工具
+
+**示例**：
+- `wan2.1_i2v_720p_lightx2v_4step.safetensors` - 720P 图生视频原始精度
+- `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors` - 720P 图生视频 FP8 量化
+- `wan2.1_i2v_480p_int8_lightx2v_4step.safetensors` - 480P 图生视频 INT8 量化
+- ...
+
+### Wan2.1 单文件模型
+
+#### 场景 A：下载单个模型文件
+
+**步骤 1：选择并下载模型**
+
+```bash
+# 创建模型目录
+mkdir -p ./models/wan2.1_i2v_720p
+
+# 下载 720P 图生视频 FP8 量化模型
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p \
+    --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
+```
+
+**步骤 2：配置启动脚本**
+
+```bash
+# 在启动脚本中设置（指向包含模型文件的目录）
+model_path=./models/wan2.1_i2v_720p
+lightx2v_path=/path/to/LightX2V
+
+# 运行脚本
+cd LightX2V/scripts
+bash wan/run_wan_i2v_distill_4step_cfg.sh
+```
+
+> 💡 **提示**：当目录下只有一个模型文件时，LightX2V 会自动加载该文件。
+
+#### 场景 B：下载多个模型文件
+
+当您下载了多个不同精度的模型到同一目录时，需要在配置文件中明确指定使用哪个模型。
+
+**步骤 1：下载多个模型**
+
+```bash
+# 创建模型目录
+mkdir -p ./models/wan2.1_i2v_720p_multi
+
+# 下载原始精度模型
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p_multi \
+    --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
+
+# 下载 FP8 量化模型
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p_multi \
+    --include "wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
+
+# 下载 INT8 量化模型
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p_multi \
+    --include "wan2.1_i2v_720p_int8_lightx2v_4step.safetensors"
+```
+
+**目录结构**：
+
+```
+wan2.1_i2v_720p_multi/
+├── wan2.1_i2v_720p_lightx2v_4step.safetensors                    # 原始精度
+├── wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors   # FP8 量化
+└── wan2.1_i2v_720p_int8_lightx2v_4step.safetensors              # INT8 量化
+└── t5/clip/vae/config.json/xlm-roberta-large/google等其他组件       # 需要手动组织
+```
+
+**步骤 2：在配置文件中指定模型**
+
+编辑配置文件（如 `configs/distill/wan_i2v_distill_4step_cfg.json`）：
 
 ```json
 {
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
-    },                              // DIT 模型量化方案
-    "t5_quantized": true,           // 启用 T5 量化
-    "t5_quant_scheme": "fp8",       // T5 量化模式
-    "clip_quantized": true,         // 启用 CLIP 量化
-    "clip_quant_scheme": "fp8"      // CLIP 量化模式
+    // 使用原始精度模型
+    "dit_original_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_lightx2v_4step.safetensors",
+
+    // 或使用 FP8 量化模型
+    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "fp8-vllm",
+
+    // 或使用 INT8 量化模型
+    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_int8_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "int8-vllm",
+
+    // 其他配置...
 }
 ```
+### 使用提示
 
-> **重要提示**：各模型的量化配置可以灵活组合。量化路径无需手动指定，系统将自动定位各模型的量化版本。
+> 💡 **配置参数说明**：
+> - **dit_original_ckpt**：用于指定原始精度模型（BF16/FP32/FP16）的路径
+> - **dit_quantized_ckpt**：用于指定量化模型（FP8/INT8）的路径，需配合 `dit_quantized` 和 `dit_quant_scheme` 参数使用
 
-有关量化技术的详细说明，请参考[量化文档](../method_tutorials/quantization.md)。
-
-使用提供的 bash 脚本快速启动：
+**步骤 3：启动推理**
 
 ```bash
 cd LightX2V/scripts
-bash wan/run_wan_t2v_distill_4step_cfg.sh
+bash wan/run_wan_i2v_distill_4step_cfg.sh
 ```
 
-##### Gradio 界面启动
+### Wan2.2 单文件模型
 
-通过 Gradio 界面进行推理时，只需在启动时指定模型根目录路径，轻量级 VAE 等可通过前端界面按钮灵活选择：
+#### 目录结构要求
+
+使用 Wan2.2 单文件模型时，需要手动创建特定的目录结构：
+
+```
+wan2.2_models/
+├── high_noise_model/                                    # 高噪声模型目录（必须）
+│   └── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors  # 高噪声模型文件
+└── low_noise_model/                                     # 低噪声模型目录（必须）
+│   └── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors  # 低噪声模型文件
+└── t5/vae/config.json/xlm-roberta-large/google等其他组件       # 需要手动组织
+```
+
+#### 场景 A：每个目录下只有一个模型文件
 
 ```bash
-# 图像到视频推理 (I2V)
-python gradio_demo_zh.py \
-    --model_path ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --model_size 14b \
-    --task i2v \
-    --model_cls wan2.1_distill
-```
+# 创建必需的子目录
+mkdir -p ./models/wan2.2_models/high_noise_model
+mkdir -p ./models/wan2.2_models/low_noise_model
 
-### 方式二：选择性下载
+# 下载高噪声模型到对应目录
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models/high_noise_model \
+    --include "wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 
-**优势**：仅下载所需的版本（量化或非量化），有效节省存储空间和下载时间
+# 下载低噪声模型到对应目录
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models/low_noise_model \
+    --include "wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 
-#### 1. 选择性下载
+# 配置启动脚本（指向父目录）
+model_path=./models/wan2.2_models
+lightx2v_path=/path/to/LightX2V
 
-```bash
-# 使用 Hugging Face CLI 选择性下载非量化版本
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --include "distill_models/*"
-```
-
-```bash
-# 使用 Hugging Face CLI 选择性下载 FP8 量化版本
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --include "distill_fp8/*"
-```
-
-```bash
-# 使用 Hugging Face CLI 选择性下载 INT8 量化版本
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --include "distill_int8/*"
-```
-
-> **重要提示**：当启动推理脚本或Gradio时，`model_path` 参数仍需要指定为不包含 `--include` 的完整路径。例如：`model_path=./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V`，而不是 `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/distill_int8`。
-
-#### 2. 启动推理
-
-**以只下载了FP8版本的模型为例：**
-
-##### Bash 脚本启动
-
-###### 场景一：使用 FP8 DIT + FP8 T5 + FP8 CLIP
-
-将[运行脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_distill_4step_cfg.sh)中的 `model_path` 指定为您下载好的模型路径 `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/`，`lightx2v_path` 指定为您的 `LightX2V` 项目路径。
-
-仅需修改配置文件中的量化模型配置如下：
-```json
-{
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
-    },                              // DIT 的量化方案
-    "t5_quantized": true,           // 是否使用 T5 量化版本
-    "t5_quant_scheme": "fp8",       // T5 的量化模式
-    "clip_quantized": true,         // 是否使用 CLIP 量化版本
-    "clip_quant_scheme": "fp8",     // CLIP 的量化模式
-}
-```
-
-> **重要提示**：此时各模型只能指定为量化版本。量化路径无需手动指定，系统将自动定位各模型的量化版本。
-
-###### 场景二：使用 FP8 DIT + 原始精度 T5 + 原始精度 CLIP
-
-将[运行脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_distill_4step_cfg.sh)中的 `model_path` 指定为您下载好的模型路径 `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V`，`lightx2v_path` 指定为您的 `LightX2V` 项目路径。
-
-由于仅下载了量化权重，需要手动下载 T5 和 CLIP 的原始精度版本，并在配置文件的 `t5_original_ckpt` 和 `clip_original_ckpt` 中配置如下：
-```json
-{
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
-    },                              // DIT 的量化方案
-    "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
-    "clip_original_ckpt": "/path/to/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
-}
-```
-
-使用提供的 bash 脚本快速启动：
-
-```bash
+# 运行脚本
 cd LightX2V/scripts
-bash wan/run_wan_t2v_distill_4step_cfg.sh
+bash wan22/run_wan22_moe_i2v_distill.sh
 ```
 
-##### Gradio 界面启动
+> 💡 **提示**：当每个子目录下只有一个模型文件时，LightX2V 会自动加载。
 
-通过 Gradio 界面进行推理时，启动时指定模型根目录路径：
+#### 场景 B：每个目录下有多个模型文件
+
+当您在 `high_noise_model/` 和 `low_noise_model/` 目录下分别放置了多个不同精度的模型时，需要在配置文件中明确指定。
 
 ```bash
-# 图像到视频推理 (I2V)
-python gradio_demo_zh.py \
-    --model_path ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/ \
-    --model_size 14b \
-    --task i2v \
-    --model_cls wan2.1_distill
+# 创建目录
+mkdir -p ./models/wan2.2_models_multi/high_noise_model
+mkdir -p ./models/wan2.2_models_multi/low_noise_model
+
+# 下载高噪声模型的多个版本
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models_multi/high_noise_model \
+    --include "wan2.2_i2v_A14b_high_noise_*.safetensors"
+
+# 下载低噪声模型的多个版本
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models_multi/low_noise_model \
+    --include "wan2.2_i2v_A14b_low_noise_*.safetensors"
 ```
 
-> **重要提示**：由于模型根目录下仅包含各模型的量化版本，前端使用时，对于 DIT/T5/CLIP 模型的量化精度只能选择 fp8。如需使用非量化版本的T5/CLIP，请手动下载非量化权重并放置到gradio_demo的model_path目录（`./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/`）下，此时T5/CLIP的量化精度可以选择bf16/fp16。
+**目录结构**：
 
-### 方式三：手动配置
+```
+wan2.2_models_multi/
+├── high_noise_model/
+│   ├── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors        # 原始精度
+│   ├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors    # FP8 量化
+│   └── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors   # INT8 量化
+└── low_noise_model/
+    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # 原始精度
+    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 量化
+    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 量化
+```
 
-用户可根据实际需求灵活配置各个组件的量化选项和路径，实现量化与非量化组件的混合使用。请确保所需的模型权重已正确下载并放置在指定路径。
-
-#### DIT 模型配置
+**配置文件设置**：
 
 ```json
 {
-    "dit_quantized_ckpt": "/path/to/dit_quantized_ckpt",    // DIT 量化权重路径
-    "dit_original_ckpt": "/path/to/dit_original_ckpt",      // DIT 原始精度权重路径
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"  // DIT 矩阵乘算子类型，非量化时指定为 "Default"
+    // 使用原始精度模型
+    "high_noise_original_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
+    "low_noise_original_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
+
+    // 或使用 FP8 量化模型
+    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors",
+    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "fp8-vllm"
+
+    // 或使用 INT8 量化模型
+    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
+    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "int8-vllm"
+}
+```
+
+### 使用提示
+
+> 💡 **配置参数说明**：
+> - **high_noise_original_ckpt** / **low_noise_original_ckpt**：用于指定原始精度模型（BF16/FP32/FP16）的路径
+> - **high_noise_quantized_ckpt** / **low_noise_quantized_ckpt**：用于指定量化模型（FP8/INT8）的路径，需配合 `dit_quantized` 和 `dit_quant_scheme` 参数使用
+
+
+### 可用模型列表
+
+#### Wan2.1 单文件模型列表
+
+**图生视频模型（I2V）**
+
+| 文件名 | 精度 | 说明 |
+|--------|------|------|
+| `wan2.1_i2v_480p_lightx2v_4step.safetensors` | BF16 | 4步模型原始精度 |
+| `wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 4步模型FP8 量化 |
+| `wan2.1_i2v_480p_int8_lightx2v_4step.safetensors` | INT8 | 4步模型INT8 量化 |
+| `wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_4step_comfyui.safetensors` | FP8 | 4步模型ComfyUI 格式 |
+| `wan2.1_i2v_720p_lightx2v_4step.safetensors` | BF16 | 4步模型原始精度 |
+| `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 4步模型FP8 量化 |
+| `wan2.1_i2v_720p_int8_lightx2v_4step.safetensors` | INT8 | 4步模型INT8 量化 |
+| `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step_comfyui.safetensors` | FP8 | 4步模型ComfyUI 格式 |
+
+**文生视频模型（T2V）**
+
+| 文件名 | 精度 | 说明 |
+|--------|------|------|
+| `wan2.1_t2v_14b_lightx2v_4step.safetensors` | BF16 | 4步模型原始精度 |
+| `wan2.1_t2v_14b_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 4步模型FP8 量化 |
+| `wan2.1_t2v_14b_int8_lightx2v_4step.safetensors` | INT8 | 4步模型INT8 量化 |
+| `wan2.1_t2v_14b_scaled_fp8_e4m3_lightx2v_4step_comfyui.safetensors` | FP8 | 4步模型ComfyUI 格式 |
+
+#### Wan2.2 单文件模型列表
+
+**图生视频模型（I2V）- A14B 系列**
+
+| 文件名 | 精度 | 说明 |
+|--------|------|------|
+| `wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors` | BF16 | 高噪声模型-4步原始精度 |
+| `wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 高噪声模型-4步FP8量化 |
+| `wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors` | INT8 | 高噪声模型-4步INT8量化 |
+| `wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors` | BF16 | 低噪声模型-4步原始精度 |
+| `wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 低噪声模型-4步FP8量化 |
+| `wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors` | INT8 | 低噪声模型-4步INT8量化 |
+
+> 💡 **使用提示**：
+> - Wan2.2 模型采用双噪声架构，需要同时下载高噪声（high_noise）和低噪声（low_noise）模型
+> - 详细的目录组织方式请参考上方"Wan2.2 单文件模型"部分
+
+---
+
+## 🗂️ 格式三：LightX2V LoRA 模型
+
+LoRA（Low-Rank Adaptation）模型提供了一种轻量级的模型微调方案，可以在不修改基础模型的情况下实现特定效果的定制化。
+
+### 模型仓库
+
+- **Wan2.1 LoRA 模型**：[lightx2v/Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
+- **Wan2.2 LoRA 模型**：[lightx2v/Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
+
+### 使用方式
+
+#### 方式一：离线合并
+
+将 LoRA 权重离线合并到基础模型中，生成新的完整模型文件。
+
+**操作步骤**：
+
+参考 [模型转换文档](https://github.com/ModelTC/lightx2v/tree/main/tools/convert/readme_zh.md) 进行离线合并。
+
+**优点**：
+- ✅ 推理时无需额外加载 LoRA
+- ✅ 性能更优
+
+**缺点**：
+- ❌ 需要额外存储空间
+- ❌ 切换不同 LoRA 需要重新合并
+
+#### 方式二：在线加载
+
+在推理时动态加载 LoRA 权重，无需修改基础模型。
+
+**LoRA 应用原理**：
+
+```python
+# LoRA 权重应用公式
+# W' = W + (alpha/rank) * B @ A
+# 其中：B = up_proj (out_features, rank)
+#      A = down_proj (rank, in_features)
+
+if weights_dict["alpha"] is not None:
+    lora_alpha = weights_dict["alpha"] / lora_down.shape[0]
+elif alpha is not None:
+    lora_alpha = alpha / lora_down.shape[0]
+else:
+    lora_alpha = 1.0
+```
+
+**配置方法**：
+
+**Wan2.1 LoRA 配置**：
+
+```json
+{
+  "lora_configs": [
+    {
+      "path": "wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
+      "strength": 1.0,
+      "alpha": null
     }
+  ]
 }
 ```
 
-#### T5 模型配置
+**Wan2.2 LoRA 配置**：
+
+由于 Wan2.2 采用双模型架构（高噪声/低噪声），需要分别为两个模型配置 LoRA：
 
 ```json
 {
-    "t5_quantized_ckpt": "/path/to/t5_quantized_ckpt",      // T5 量化权重路径
-    "t5_original_ckpt": "/path/to/t5_original_ckpt",        // T5 原始精度权重路径
-    "t5_quantized": true,                                   // 是否启用 T5 量化
-    "t5_quant_scheme": "fp8"                                // T5 量化模式，仅在 t5_quantized 为 true 时生效
+  "lora_configs": [
+    {
+      "name": "low_noise_model",
+      "path": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step.safetensors",
+      "strength": 1.0,
+      "alpha": null
+    },
+    {
+      "name": "high_noise_model",
+      "path": "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step.safetensors",
+      "strength": 1.0,
+      "alpha": null
+    }
+  ]
 }
 ```
 
-#### CLIP 模型配置
+**参数说明**：
 
-```json
-{
-    "clip_quantized_ckpt": "/path/to/clip_quantized_ckpt",  // CLIP 量化权重路径
-    "clip_original_ckpt": "/path/to/clip_original_ckpt",    // CLIP 原始精度权重路径
-    "clip_quantized": true,                                 // 是否启用 CLIP 量化
-    "clip_quant_scheme": "fp8"                              // CLIP 量化模式，仅在 clip_quantized 为 true 时生效
-}
-```
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `path` | LoRA 模型文件路径 | 必填 |
+| `strength` | LoRA 强度系数，范围 [0.0, 1.0] | 1.0 |
+| `alpha` | LoRA 缩放因子，`null` 时使用模型内置值，如果没有内置值默认1 | null |
+| `name` | （仅 Wan2.2）指定应用到哪个模型 | 必填 |
 
-#### VAE 模型配置
+**优点**：
+- ✅ 灵活切换不同 LoRA
+- ✅ 节省存储空间
+- ✅ 可动态调整 LoRA 强度
 
-```json
-{
-    "vae_pth": "/path/to/Wan2.1_VAE.pth",                   // 原始 VAE 模型路径
-    "use_tiny_vae": true,                                   // 是否使用轻量级 VAE
-    "tiny_vae_path": "/path/to/taew2_1.pth"                 // 轻量级 VAE 模型路径
-}
-```
+**缺点**：
+- ❌ 推理时需额外加载时间
+- ❌ 略微增加显存占用
 
-> **配置说明**：
-> - 量化权重和原始精度权重可以灵活混合使用，系统将根据配置自动选择对应的模型
-> - 量化模式的选择取决于您的硬件支持情况，建议在 H100/A100 等高端 GPU 上使用 FP8
-> - 轻量级 VAE 可以显著提升推理速度，但可能略微影响生成质量
+---
 
-## 💡 最佳实践
+## 📚 相关资源
 
-### 推荐配置
+### 官方仓库
+- [LightX2V GitHub](https://github.com/ModelTC/LightX2V)
+- [LightX2V 单文件模型仓库](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- [Wan-AI 官方模型仓库](https://huggingface.co/Wan-AI)
 
-**完整模型用户**：
-- 下载完整模型，享受自动路径查找的便利
-- 仅需配置量化方案和组件开关
-- 推荐使用 bash 脚本快速启动
+### 模型下载链接
 
-**存储空间受限用户**：
-- 选择性下载所需的量化版本
-- 灵活混合使用量化和原始精度组件
-- 使用 bash 脚本简化启动流程
+**Wan2.1 系列**
+- [Wan2.1 Collection](https://huggingface.co/collections/Wan-AI/wan21-68ac4ba85372ae5a8e282a1b)
 
-**高级用户**：
-- 完全手动配置路径，实现最大灵活性
-- 支持模型文件分散存储
-- 可自定义 bash 脚本参数
+**Wan2.2 系列**
+- [Wan2.2 Collection](https://huggingface.co/collections/Wan-AI/wan22-68ac4ae80a8b477e79636fc8)
 
-### 性能优化建议
+**LightX2V 单文件模型**
+- [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
 
-- **使用 SSD 存储**：显著提升模型加载速度和推理性能
-- **选择合适的量化方案**：
-  - FP8：适用于 H100/A100 等高端 GPU，精度高
-  - INT8：适用于通用 GPU，内存占用小
-- **启用轻量级 VAE**：`use_tiny_vae: true` 可提升推理速度
-- **合理配置 CPU 卸载**：`t5_cpu_offload: true` 可节省 GPU 内存
-
-### 下载优化建议
-
-- **使用 Hugging Face CLI**：比 git clone 更稳定，支持断点续传
-- **选择性下载**：仅下载所需的量化版本，节省时间和存储空间
-- **网络优化**：使用稳定的网络连接，必要时使用代理
-- **断点续传**：使用 `--resume-download` 参数支持中断后继续下载
-
-## 🚨 常见问题
-
-### Q: 模型文件过大，下载速度缓慢怎么办？
-A: 建议使用选择性下载方式，仅下载所需的量化版本，或使用国内镜像源
-
-### Q: 启动时提示模型路径不存在？
-A: 请检查模型是否已正确下载，验证路径配置是否正确，确认自动查找机制是否正常工作
-
-### Q: 如何切换不同的量化方案？
-A: 修改配置文件中的 `mm_type`, `t5_quant_scheme`,`clip_quant_scheme`等参数，请参考[量化文档](../method_tutorials/quantization.md)
-
-### Q: 如何混合使用量化和原始精度组件？
-A: 通过 `t5_quantized` 和 `clip_quantized` 参数控制，并手动指定原始精度路径
-
-### Q: 配置文件中的路径如何设置？
-A: 推荐使用自动路径查找，如需手动配置请参考"手动配置"部分
-
-### Q: 如何验证自动路径查找是否正常工作？
-A: 查看启动日志，代码将输出实际使用的模型路径
-
-### Q: bash 脚本启动失败怎么办？
-A: 检查脚本中的路径配置是否正确，确保 `lightx2v_path` 和 `model_path` 变量已正确设置
-
-## 📚 相关链接
-
-- [LightX2V 官方模型仓库](https://huggingface.co/lightx2v)
-- [Gradio 部署指南](./deploy_gradio.md)
+### 文档链接
+- [量化技术文档](../method_tutorials/quantization.md)
+- [参数卸载文档](../method_tutorials/offload.md)
 - [配置文件示例](https://github.com/ModelTC/LightX2V/tree/main/configs)
 
 ---
 
-通过科学的模型文件组织和灵活的配置选项，LightX2V 支持多种使用场景。完整模型下载提供最大的便利性，选择性下载节省存储空间，手动配置提供最大的灵活性。自动路径查找机制确保用户无需记忆复杂的路径配置，同时保持系统的可扩展性。
+通过本文档，您应该能够：
+
+✅ 理解 LightX2V 支持的所有模型格式
+✅ 根据需求选择合适的模型和精度
+✅ 正确下载和组织模型文件
+✅ 配置启动参数并成功运行推理
+✅ 解决常见的模型加载问题
+
+如有其他问题，欢迎在 [GitHub Issues](https://github.com/ModelTC/LightX2V/issues) 中提问。
