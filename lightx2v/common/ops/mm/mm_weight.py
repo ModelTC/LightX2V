@@ -7,6 +7,12 @@ from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 try:
+    from lightx2v_kernel.gemm import cutlass_scaled_nvfp4_mm, scaled_nvfp4_quant
+except ImportError:
+    scaled_nvfp4_quant = None
+    cutlass_scaled_nvfp4_mm = None
+
+try:
     from vllm import _custom_ops as ops
 except ImportError:
     ops = None
@@ -267,6 +273,55 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.bias = None
             self.pin_bias = None
 
+    def load_nvfp4(self, weight_dict):
+        if self.config.get("weight_auto_quant", False):
+            device = weight_dict[self.weight_name].device
+            self.weight = weight_dict[self.weight_name].cuda().to(torch.bfloat16)
+            weight_global_scale = (2688.0 / torch.max(torch.abs(self.weight))).to(torch.float32)
+            self.weight, self.weight_scale, self.weight_global_scale = scaled_nvfp4_quant(self.weight, weight_global_scale)
+            self.weight = self.weight.to(device)
+            self.weight_scale = self.weight_scale.to(device)
+            self.weight_global_scale = self.weight_global_scale.to(device)
+        else:
+            device = weight_dict[self.weight_name].device
+            if device.type == "cuda":
+                self.weight = weight_dict[self.weight_name]
+                self.weight_scale = weight_dict[self.weight_scale_name]
+                self.weight_global_scale = weight_dict[f"{self.weight_name}_weight_global_scale"]
+            elif device.type == "cpu":
+                weight_shape = weight_dict[self.weight_name].shape
+                weight_dtype = weight_dict[self.weight_name].dtype
+                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+                self.pin_weight.copy_(weight_dict[self.weight_name])
+
+                weight_scale_shape = weight_dict[self.weight_scale_name].shape
+                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
+                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+
+                weight_global_scale_shape = weight_dict[f"{self.weight_name}_weight_global_scale"].shape
+                weight_global_scale_dtype = weight_dict[f"{self.weight_name}_weight_global_scale"].dtype
+                self.pin_weight_global_scale = torch.empty(weight_global_scale_shape, pin_memory=True, dtype=weight_global_scale_dtype)
+                self.pin_weight_global_scale.copy_(weight_dict[f"{self.weight_name}_weight_global_scale"])
+                del weight_dict[self.weight_name]
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+
+        if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
+            if device.type == "cuda":
+                self.bias = weight_dict[self.bias_name]
+            elif device.type == "cpu":
+                bias_shape = weight_dict[self.bias_name].shape
+                bias_dtype = weight_dict[self.bias_name].dtype
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
+
     def load_fp8_perblock128_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name]
@@ -324,6 +379,12 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     def act_quant_int8_perchannel_sym_vllm(self, x):
         input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
         return input_tensor_quant, input_tensor_scale
+
+    def act_quant_nvfp4(self, x):
+        x_absmax = torch.tensor(5.0, dtype=torch.float32, device=x.device)  # need to be calibrated
+        input_global_scale = (2688.0 / x_absmax).to(torch.float32)
+        input_tensor_quant, input_tensor_scale = scaled_nvfp4_quant(x, input_global_scale)
+        return input_tensor_quant, input_tensor_scale, input_global_scale
 
     def act_quant_fp8_perchannelgroup128_sym_deepgemm(self, x):
         assert x.dim() == 2 and x.size(1) % 128 == 0
@@ -428,6 +489,34 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight_scale,
             self.bias,
         )
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("nvfp4")
+class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
+    """
+    Name: Wnvfp48-channel-sym-A-nvfp48-channel-sym-dynamic
+
+    Quant MM:
+        Weight: nvfp4 perchannel sym
+        Act: nvfp4 perchannel dynamic sym
+        Kernel: vllm
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_nvfp4
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_nvfp4
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale, input_global_scale = self.act_quant_func(input_tensor)
+        self.alpha = 1.0 / (input_global_scale * self.weight_global_scale)
+
+        self.weight = self.weight.contiguous()
+        input_tensor_quant = input_tensor_quant.contiguous()
+
+        output_tensor = cutlass_scaled_nvfp4_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
         return output_tensor
 
 

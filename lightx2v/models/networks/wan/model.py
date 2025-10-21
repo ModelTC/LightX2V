@@ -64,7 +64,18 @@ class WanModel(CompiledMethodsMixin):
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
-            assert self.config.get("dit_quant_scheme", "Default") in ["Default-Force-FP32", "fp8-vllm", "int8-vllm", "fp8-q8f", "int8-q8f", "fp8-b128-deepgemm", "fp8-sgl", "int8-sgl", "int8-torchao"]
+            assert self.config.get("dit_quant_scheme", "Default") in [
+                "Default-Force-FP32",
+                "fp8-vllm",
+                "int8-vllm",
+                "fp8-q8f",
+                "int8-q8f",
+                "fp8-b128-deepgemm",
+                "fp8-sgl",
+                "int8-sgl",
+                "int8-torchao",
+                "nvfp4",
+            ]
         self.device = device
         self._init_infer_class()
         self._init_weights()
