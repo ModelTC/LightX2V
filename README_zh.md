@@ -27,6 +27,7 @@
 ### 官方开源模型
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
+- ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 
 ### 量化模型和蒸馏模型/Lora (**🚀 推荐：4步推理**)
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)

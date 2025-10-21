@@ -28,6 +28,7 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 ### Official Open-Source Models
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
+- ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 
 ### Quantized and Distilled Models/LoRAs (**🚀 Recommended: 4-step inference**)
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
