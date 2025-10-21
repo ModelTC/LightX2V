@@ -14,7 +14,7 @@
   "denoising_step_list": [1000, 750, 500, 250],
   "lora_configs": [
     {
-      "path": "Wan2.1-T2V-14B/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+      "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",
       "strength": 1.0
     }
   ]

@@ -15,7 +15,5 @@
         750,
         500,
         250
-    ],
-    "dit_quantized": true,
-    "dit_quant_scheme": "fp8-sgl"
+    ]
 }

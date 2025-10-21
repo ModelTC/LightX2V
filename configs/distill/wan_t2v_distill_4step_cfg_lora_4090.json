@@ -1,0 +1,36 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": 6,
+    "sample_shift": 5,
+    "enable_cfg": false,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "clip_cpu_offload": false,
+    "denoising_step_list": [
+        1000,
+        750,
+        500,
+        250
+    ],
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-q8f",
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8-q8f",
+    "clip_quantized": true,
+    "clip_quant_scheme": "fp8-q8f",
+    "lora_configs": [
+      {
+        "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",
+        "strength": 1.0
+      }
+      ]
+}
