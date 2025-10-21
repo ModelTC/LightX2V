@@ -41,7 +41,7 @@
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 
-💡 参考[模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/model_structure.html)快速上手 LightX2V
+💡 参考[模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/model_structure.html)快速上手 LightX2V
 
 ## 🚀 前端展示
 

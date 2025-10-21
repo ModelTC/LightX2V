@@ -38,6 +38,7 @@ HuggingFace: https://huggingface.co/lightx2v
    :caption: 快速入门
 
    快速入门 <getting_started/quickstart.md>
+   模型结构 <getting_started/model_structure.md>
    基准测试 <getting_started/benchmark.md>
 
 .. toctree::
@@ -58,7 +59,6 @@ HuggingFace: https://huggingface.co/lightx2v
    :maxdepth: 1
    :caption: 部署指南
 
-   模型结构 <deploy_guides/model_structure.md>
    低延迟场景部署 <deploy_guides/for_low_latency.md>
    低资源场景部署 <deploy_guides/for_low_resource.md>
    Lora模型部署 <deploy_guides/lora_deploy.md>
