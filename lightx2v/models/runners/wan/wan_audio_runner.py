@@ -647,6 +647,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 target_fps=target_fps,
             )
 
+        if "video_super_resolution" in self.config and self.vsr_model is not None:
+            logger.info(f"Applying video super resolution with scale {self.config['video_super_resolution']['scale']}")
+            video_seg = self.vsr_model.super_resolve_frames(
+                video_seg,
+                seed=self.config["video_super_resolution"]["seed"],
+                scale=self.config["video_super_resolution"]["scale"],
+            )
+
         if self.va_recorder:
             self.va_recorder.pub_livestream(video_seg, audio_seg)
         elif self.input_info.return_result_tensor:

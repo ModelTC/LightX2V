@@ -72,6 +72,15 @@ class DefaultRunner(BaseRunner):
         else:
             raise ValueError(f"Unsupported VFI model: {self.config['video_frame_interpolation']['algo']}")
 
+    def load_vsr_model(self):
+        if "video_super_resolution" in self.config:
+            from lightx2v.models.runners.vsr.vsr_wrapper import VSRWrapper
+
+            logger.info("Loading VSR model...")
+            return VSRWrapper(self.config["video_super_resolution"]["model_path"])
+        else:
+            return None
+
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
@@ -79,6 +88,7 @@ class DefaultRunner(BaseRunner):
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
+        self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
 
     def check_sub_servers(self, task_type):
         urls = self.config.get("sub_servers", {}).get(task_type, [])
