@@ -268,7 +268,7 @@ Edit configuration file (e.g., `configs/distill/wan_i2v_distill_4step_cfg.json`)
 > - **dit_original_ckpt**: Used to specify the path to original precision models (BF16/FP32/FP16)
 > - **dit_quantized_ckpt**: Used to specify the path to quantized models (FP8/INT8), must be used with `dit_quantized` and `dit_quant_scheme` parameters
 
-**Step 3: Start Inference**
+**Step 4: Start Inference**
 
 ```bash
 cd LightX2V/scripts
