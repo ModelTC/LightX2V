@@ -466,11 +466,13 @@ class Wan22MoeRunner(WanRunner):
             self.high_noise_model_path,
             self.config,
             self.init_device,
+            model_type="wan2.2_moe_high_noise",
         )
         low_noise_model = WanModel(
             self.low_noise_model_path,
             self.config,
             self.init_device,
+            model_type="wan2.2_moe_low_noise",
         )
 
         if self.config.get("lora_configs") and self.config["lora_configs"]:

@@ -127,6 +127,14 @@ class LockableDict(dict):
         self.update(other)
         return self
 
+    # ========== Attribute-style access (EasyDict-like behavior) ==========
+    def __getattr__(self, key: str):
+        """Allow attribute-style access: d.key instead of d['key']"""
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(f"'LockableDict' object has no attribute '{key}'")
+
     # ========== Internal utilities ==========
     def _ensure_unlocked(self) -> None:
         if self._locked:
