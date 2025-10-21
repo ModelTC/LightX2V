@@ -571,17 +571,18 @@ def convert_weights(args):
     # Apply LoRA AFTER key conversion to ensure proper key matching
     if args.lora_path is not None:
         # Handle alpha list - if single alpha, replicate for all LoRAs
-        if len(args.lora_alpha) == 1 and len(args.lora_path) > 1:
-            args.lora_alpha = args.lora_alpha * len(args.lora_path)
-        elif len(args.lora_alpha) != len(args.lora_path):
-            raise ValueError(f"Number of lora_alpha ({len(args.lora_alpha)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
+        if args.lora_alpha is not None:
+            if len(args.lora_alpha) == 1 and len(args.lora_path) > 1:
+                args.lora_alpha = args.lora_alpha * len(args.lora_path)
+            elif len(args.lora_alpha) != len(args.lora_path):
+                raise ValueError(f"Number of lora_alpha ({len(args.lora_alpha)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
 
         # Normalize strength list
-        if args.strength is not None:
-            if len(args.strength) == 1 and len(args.lora_path) > 1:
-                args.strength = args.strength * len(args.lora_path)
-            elif len(args.strength) != len(args.lora_path):
-                raise ValueError(f"Number of strength ({len(args.strength)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
+        if args.lora_strength is not None:
+            if len(args.lora_strength) == 1 and len(args.lora_path) > 1:
+                args.lora_strength = args.lora_strength * len(args.lora_path)
+            elif len(args.lora_strength) != len(args.lora_path):
+                raise ValueError(f"Number of strength ({len(args.lora_strength)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
 
         # Determine if we should apply key mapping rules to LoRA keys
         key_mapping_rules = None
@@ -598,9 +599,10 @@ def convert_weights(args):
                 key_mapping_rules = get_key_mapping_rules(args.direction, args.model_type)
                 logger.info("Auto mode: will try with key conversion first")
 
-        for idx, (path, alpha) in enumerate(zip(args.lora_path, args.lora_alpha)):
+        for idx, path in enumerate(args.lora_path):
             # Pass key mapping rules to handle converted keys properly
-            strength = args.strength[idx] if args.strength is not None else 1.0
+            strength = args.lora_strength[idx] if args.lora_strength is not None else 1.0
+            alpha = args.lora_alpha[idx] if args.lora_alpha is not None else None
             load_loras(path, converted_weights, alpha, key_mapping_rules, strength=strength)
 
     if args.quantized:
@@ -802,11 +804,11 @@ def main():
         "--lora_alpha",
         type=float,
         nargs="*",
-        default=[1.0],
-        help="Alpha for LoRA weight scaling",
+        default=None,
+        help="Alpha for LoRA weight scaling, Default non scaling. ",
     )
     parser.add_argument(
-        "--strength",
+        "--lora_strength",
         type=float,
         nargs="*",
         help="Additional strength factor(s) for LoRA deltas; default 1.0",
