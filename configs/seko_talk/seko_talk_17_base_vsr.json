@@ -20,6 +20,6 @@
     "video_super_resolution": {
         "scale": 2.0,
         "seed": 0,
-        "model_path": "/home/wangshankun/code/FlashVSR/examples/WanVSR/FlashVSR"
+        "model_path": "/base_code/FlashVSR/examples/WanVSR/FlashVSR"
     }
 }

@@ -1,9 +1,9 @@
 #!/bin/bash
 
-lightx2v_path="/home/wangshankun/code/LightX2V"
-model_path="/data/nvme0/gushiqiao/models/Lightx2v_models/SekoTalk-Distill"
+lightx2v_path=""
+model_path=""
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -12,8 +12,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 export SENSITIVE_LAYER_DTYPE=None
 
-#python -m lightx2v.infer \
-python -m debugpy  --listen 0.0.0.0:15678 -m lightx2v.infer \
+python -m lightx2v.infer \
 --model_cls seko_talk \
 --task s2v \
 --model_path $model_path \
