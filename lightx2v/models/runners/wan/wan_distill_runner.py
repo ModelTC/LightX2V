@@ -108,6 +108,7 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 self.high_noise_model_path,
                 self.config,
                 self.init_device,
+                model_type="wan2.2_moe_high_noise",
             )
             high_lora_wrapper = WanLoraWrapper(high_noise_model)
             for lora_config in self.config["lora_configs"]:
@@ -122,6 +123,7 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 self.high_noise_model_path,
                 self.config,
                 self.init_device,
+                model_type="wan2.2_moe_high_noise",
             )
 
         if use_low_lora:
@@ -129,6 +131,7 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 self.low_noise_model_path,
                 self.config,
                 self.init_device,
+                model_type="wan2.2_moe_low_noise",
             )
             low_lora_wrapper = WanLoraWrapper(low_noise_model)
             for lora_config in self.config["lora_configs"]:
@@ -143,6 +146,7 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 self.low_noise_model_path,
                 self.config,
                 self.init_device,
+                model_type="wan2.2_moe_low_noise",
             )
 
         return MultiDistillModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary_step_index"])
