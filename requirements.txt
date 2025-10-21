@@ -6,6 +6,7 @@ torchvision
 diffusers
 transformers
 tokenizers
+tqdm
 accelerate
 safetensors
 opencv-python
