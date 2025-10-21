@@ -26,8 +26,6 @@
 
 ### 官方开源模型
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
-- ✅ [SkyReels-V2-DF](https://huggingface.co/Skywork/SkyReels-V2-DF-14B-540P)
-- ✅ [CogVideoX1.5-5B-T2V](https://huggingface.co/THUDM/CogVideoX1.5-5B)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 
 ### 量化模型和蒸馏模型/Lora (**🚀 推荐：4步推理**)

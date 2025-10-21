@@ -27,8 +27,6 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 
 ### Official Open-Source Models
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
-- ✅ [SkyReels-V2-DF](https://huggingface.co/Skywork/SkyReels-V2-DF-14B-540P)
-- ✅ [CogVideoX1.5-5B-T2V](https://huggingface.co/THUDM/CogVideoX1.5-5B)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 
 ### Quantized and Distilled Models/LoRAs (**🚀 Recommended: 4-step inference**)
