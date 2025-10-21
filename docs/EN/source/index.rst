@@ -37,6 +37,7 @@ Documentation
    :caption: Quick Start
 
    Quick Start <getting_started/quickstart.md>
+   Model Structure <getting_started/model_structure.md>
    Benchmark <getting_started/benchmark.md>
 
 .. toctree::
@@ -57,7 +58,6 @@ Documentation
    :maxdepth: 1
    :caption: Deployment Guides
 
-   Model Structure <deploy_guides/model_structure.md>
    Low Latency Deployment <deploy_guides/for_low_latency.md>
    Low Resource Deployment <deploy_guides/for_low_resource.md>
    Lora Deployment <deploy_guides/lora_deploy.md>

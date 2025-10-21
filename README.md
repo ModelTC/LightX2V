@@ -42,7 +42,7 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 
-💡 Refer to the [Model Structure Documentation](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/model_structure.html) to quickly get started with LightX2V
+💡 Refer to the [Model Structure Documentation](https://lightx2v-en.readthedocs.io/en/latest/getting_started/model_structure.html) to quickly get started with LightX2V
 
 ## 🚀 Frontend Interfaces
 
