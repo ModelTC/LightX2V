@@ -179,7 +179,16 @@ huggingface-cli download lightx2v/Wan2.1-Distill-Models \
     --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
 ```
 
-**步骤 2：配置启动脚本**
+**步骤 2：手动组织其他模块**
+
+目录结构如下
+```
+wan2.1_i2v_720p/
+├── wan2.1_i2v_720p_lightx2v_4step.safetensors                    # 原始精度
+└── t5/clip/vae/config.json/xlm-roberta-large/google等其他组件       # 需要手动组织
+```
+
+**步骤 3：配置启动脚本**
 
 ```bash
 # 在启动脚本中设置（指向包含模型文件的目录）
@@ -219,7 +228,9 @@ huggingface-cli download lightx2v/Wan2.1-Distill-Models \
     --include "wan2.1_i2v_720p_int8_lightx2v_4step.safetensors"
 ```
 
-**目录结构**：
+**步骤 2：手动组织其他模块**
+
+目录结构如下：
 
 ```
 wan2.1_i2v_720p_multi/
@@ -229,7 +240,7 @@ wan2.1_i2v_720p_multi/
 └── t5/clip/vae/config.json/xlm-roberta-large/google等其他组件       # 需要手动组织
 ```
 
-**步骤 2：在配置文件中指定模型**
+**步骤 3：在配置文件中指定模型**
 
 编辑配置文件（如 `configs/distill/wan_i2v_distill_4step_cfg.json`）：
 
@@ -257,7 +268,7 @@ wan2.1_i2v_720p_multi/
 > - **dit_original_ckpt**：用于指定原始精度模型（BF16/FP32/FP16）的路径
 > - **dit_quantized_ckpt**：用于指定量化模型（FP8/INT8）的路径，需配合 `dit_quantized` 和 `dit_quant_scheme` 参数使用
 
-**步骤 3：启动推理**
+**步骤 4：启动推理**
 
 ```bash
 cd LightX2V/scripts
@@ -336,9 +347,10 @@ wan2.2_models_multi/
 │   ├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors    # FP8 量化
 │   └── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors   # INT8 量化
 └── low_noise_model/
-    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # 原始精度
-    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 量化
-    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 量化
+│    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # 原始精度
+│    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 量化
+│    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 量化
+└── t5/vae/config.json/xlm-roberta-large/google等其他组件       # 需要手动组织
 ```
 
 **配置文件设置**：
@@ -450,16 +462,17 @@ LoRA（Low-Rank Adaptation）模型提供了一种轻量级的模型微调方案
 
 ```python
 # LoRA 权重应用公式
-# W' = W + (alpha/rank) * B @ A
+# lora_scale = (alpha / rank)
+# W' = W + lora_scale * B @ A
 # 其中：B = up_proj (out_features, rank)
 #      A = down_proj (rank, in_features)
 
 if weights_dict["alpha"] is not None:
-    lora_alpha = weights_dict["alpha"] / lora_down.shape[0]
+    lora_scale = weights_dict["alpha"] / lora_down.shape[0]
 elif alpha is not None:
-    lora_alpha = alpha / lora_down.shape[0]
+    lora_scale = alpha / lora_down.shape[0]
 else:
-    lora_alpha = 1.0
+    lora_scale = 1.0
 ```
 
 **配置方法**：
@@ -507,7 +520,10 @@ else:
 |------|------|--------|
 | `path` | LoRA 模型文件路径 | 必填 |
 | `strength` | LoRA 强度系数，范围 [0.0, 1.0] | 1.0 |
-| `alpha` | LoRA 缩放因子，`null` 时使用模型内置值，如果没有内置值默认1 | null |
+| `alpha` | LoRA 缩放因子，`null` 时使用模型内置值|
+
+如果没有内置值默认1 | null |
+
 | `name` | （仅 Wan2.2）指定应用到哪个模型 | 必填 |
 
 **优点**：

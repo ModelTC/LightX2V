@@ -179,7 +179,16 @@ huggingface-cli download lightx2v/Wan2.1-Distill-Models \
     --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
 ```
 
-**Step 2: Configure Launch Script**
+**Step 2: Manually Organize Other Components**
+
+Directory structure as follows:
+```
+wan2.1_i2v_720p/
+├── wan2.1_i2v_720p_lightx2v_4step.safetensors                    # Original precision
+└── t5/clip/vae/config.json/xlm-roberta-large/google and other components       # Need manual organization
+```
+
+**Step 3: Configure Launch Script**
 
 ```bash
 # Set in launch script (point to directory containing model file)
@@ -219,17 +228,19 @@ huggingface-cli download lightx2v/Wan2.1-Distill-Models \
     --include "wan2.1_i2v_720p_int8_lightx2v_4step.safetensors"
 ```
 
-**Directory Structure**:
+**Step 2: Manually Organize Other Components**
+
+Directory structure as follows:
 
 ```
 wan2.1_i2v_720p_multi/
 ├── wan2.1_i2v_720p_lightx2v_4step.safetensors                    # Original precision
 ├── wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors   # FP8 quantization
 └── wan2.1_i2v_720p_int8_lightx2v_4step.safetensors              # INT8 quantization
-└── t5/clip/vae/config.json/xlm-roberta-large/google and other components  # Manually organized
+└── t5/clip/vae/config.json/xlm-roberta-large/google and other components       # Need manual organization
 ```
 
-**Step 2: Specify Model in Configuration File**
+**Step 3: Specify Model in Configuration File**
 
 Edit configuration file (e.g., `configs/distill/wan_i2v_distill_4step_cfg.json`):
 
@@ -264,6 +275,8 @@ cd LightX2V/scripts
 bash wan/run_wan_i2v_distill_4step_cfg.sh
 ```
 
+> 💡 **Tip**: Other components (T5, CLIP, VAE, tokenizer, etc.) need to be manually organized into the model directory
+
 ### Wan2.2 Single-File Models
 
 #### Directory Structure Requirements
@@ -273,10 +286,10 @@ When using Wan2.2 single-file models, you need to manually create a specific dir
 ```
 wan2.2_models/
 ├── high_noise_model/                                    # High-noise model directory (required)
-│   └── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors  # High-noise model file
-└── low_noise_model/                                     # Low-noise model directory (required)
-│   └── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors  # Low-noise model file
-└── t5/vae/config.json/xlm-roberta-large/google and other components  # Manually organized
+│   └── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors
+├── low_noise_model/                                     # Low-noise model directory (required)
+│   └── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors
+└── t5/clip/vae/config.json/...                          # Other components (manually organized)
 ```
 
 #### Scenario A: Only One Model File Per Directory
@@ -336,9 +349,10 @@ wan2.2_models_multi/
 │   ├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors    # FP8 quantization
 │   └── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors   # INT8 quantization
 └── low_noise_model/
-    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # Original precision
-    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 quantization
-    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 quantization
+│    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # Original precision
+│    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 quantization
+│    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 quantization
+└── t5/vae/config.json/xlm-roberta-large/google and other components       # Need manual organization
 ```
 
 **Configuration File Settings**:
@@ -450,16 +464,17 @@ Dynamically load LoRA weights during inference without modifying the base model.
 
 ```python
 # LoRA weight application formula
-# W' = W + (alpha/rank) * B @ A
+# lora_scale = (alpha / rank)
+# W' = W + lora_scale * B @ A
 # Where: B = up_proj (out_features, rank)
 #        A = down_proj (rank, in_features)
 
 if weights_dict["alpha"] is not None:
-    lora_alpha = weights_dict["alpha"] / lora_down.shape[0]
+    lora_scale = weights_dict["alpha"] / lora_down.shape[0]
 elif alpha is not None:
-    lora_alpha = alpha / lora_down.shape[0]
+    lora_scale = alpha / lora_down.shape[0]
 else:
-    lora_alpha = 1.0
+    lora_scale = 1.0
 ```
 
 **Configuration Method**:
@@ -507,7 +522,7 @@ Since Wan2.2 uses a dual-model architecture (high-noise/low-noise), LoRA needs t
 |------|------|--------|
 | `path` | LoRA model file path | Required |
 | `strength` | LoRA strength coefficient, range [0.0, 1.0] | 1.0 |
-| `alpha` | LoRA scaling factor, uses model's built-in value when `null`, defaults to 1 if no built-in value | null |
+| `alpha` | LoRA scaling factor, uses model's built-in value when `null` | null |
 | `name` | (Wan2.2 only) Specifies which model to apply to | Required |
 
 **Advantages**:
