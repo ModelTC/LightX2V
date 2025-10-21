@@ -336,8 +336,8 @@ class LoRALoader:
         self,
         weight_dict: Dict[str, torch.Tensor],
         lora_weights: Dict[str, torch.Tensor],
-        alpha: float = 1.0,
-        scale: float = 1.0,
+        alpha: float = None,
+        strength: float = 1.0,
     ) -> int:
         """
         Apply LoRA weights to model weights.
@@ -346,7 +346,7 @@ class LoRALoader:
             weight_dict: The model weights dictionary (will be modified in place)
             lora_weights: The LoRA weights dictionary
             alpha: Global alpha scaling factor
-            scale: Additional scale factor for LoRA deltas
+            strength: Additional strength factor for LoRA deltas
 
         Returns:
             Number of LoRA weights successfully applied
@@ -379,21 +379,23 @@ class LoRALoader:
                 lora_down = lora_weights[down_key].to(param.device, param.dtype)
 
                 # Get LoRA-specific alpha if available, otherwise use global alpha
-                lora_alpha = pair_info["alpha"] if pair_info["alpha"] is not None else alpha
-
-                # Calculate rank from dimensions
-                rank = lora_down.shape[0]
-
                 # Apply LoRA: W' = W + (alpha/rank) * B @ A
                 # where B = up (out_features, rank), A = down (rank, in_features)
+                if pair_info["alpha"]:
+                    lora_scale = pair_info["alpha"] / lora_down.shape[0]
+                elif alpha is not None:
+                    lora_scale = alpha / lora_down.shape[0]
+                else:
+                    lora_scale = 1
+
                 if len(lora_down.shape) == 2 and len(lora_up.shape) == 2:
-                    lora_delta = torch.mm(lora_up, lora_down) * (lora_alpha / rank)
-                    if scale is not None:
-                        lora_delta = lora_delta * float(scale)
+                    lora_delta = torch.mm(lora_up, lora_down) * lora_scale
+                    if strength is not None:
+                        lora_delta = lora_delta * float(strength)
 
                     param.data += lora_delta
                     applied_count += 1
-                    logger.debug(f"Applied LoRA to {model_key} with alpha={lora_alpha}, rank={rank}")
+                    logger.debug(f"Applied LoRA to {model_key} with lora_scale={lora_scale}")
                 else:
                     logger.warning(f"Unexpected LoRA shape for {model_key}: down={lora_down.shape}, up={lora_up.shape}")
 
@@ -415,7 +417,10 @@ class LoRALoader:
 
             try:
                 lora_diff = lora_weights[diff_key].to(param.device, param.dtype)
-                param.data += lora_diff * alpha * (float(scale) if scale is not None else 1.0)
+                if alpha is not None:
+                    param.data += lora_diff * alpha * (float(strength) if strength is not None else 1.0)
+                else:
+                    param.data += lora_diff * (float(strength) if strength is not None else 1.0)
                 applied_count += 1
                 logger.debug(f"Applied LoRA diff to {model_key} (type: {diff_info['type']})")
             except Exception as e:

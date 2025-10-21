@@ -454,7 +454,7 @@ def quantize_model(
     return weights
 
 
-def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, scale=1.0):
+def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, strength=1.0):
     """
     Load and apply LoRA weights to model weights using the LoRALoader class.
 
@@ -463,9 +463,9 @@ def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, scale=1.0)
         weight_dict: Model weights dictionary (will be modified in place)
         alpha: Global alpha scaling factor
         key_mapping_rules: Optional list of (pattern, replacement) regex rules for key mapping
-        scale: Additional scale factor for LoRA deltas
+        strength: Additional strength factor for LoRA deltas
     """
-    logger.info(f"Loading LoRA from: {lora_path} with alpha={alpha}")
+    logger.info(f"Loading LoRA from: {lora_path} with alpha={alpha}, strength={strength}")
 
     # Load LoRA weights from safetensors file
     with safe_open(lora_path, framework="pt") as f:
@@ -479,7 +479,7 @@ def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, scale=1.0)
         weight_dict=weight_dict,
         lora_weights=lora_weights,
         alpha=alpha,
-        scale=scale,
+        strength=strength,
     )
 
 
@@ -576,12 +576,12 @@ def convert_weights(args):
         elif len(args.lora_alpha) != len(args.lora_path):
             raise ValueError(f"Number of lora_alpha ({len(args.lora_alpha)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
 
-        # Normalize lora_scale list
-        if args.lora_scale is not None:
-            if len(args.lora_scale) == 1 and len(args.lora_path) > 1:
-                args.lora_scale = args.lora_scale * len(args.lora_path)
-            elif len(args.lora_scale) != len(args.lora_path):
-                raise ValueError(f"Number of lora_scale ({len(args.lora_scale)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
+        # Normalize strength list
+        if args.strength is not None:
+            if len(args.strength) == 1 and len(args.lora_path) > 1:
+                args.strength = args.strength * len(args.lora_path)
+            elif len(args.strength) != len(args.lora_path):
+                raise ValueError(f"Number of strength ({len(args.strength)}) must match number of lora_path ({len(args.lora_path)}) or be 1")
 
         # Determine if we should apply key mapping rules to LoRA keys
         key_mapping_rules = None
@@ -600,8 +600,8 @@ def convert_weights(args):
 
         for idx, (path, alpha) in enumerate(zip(args.lora_path, args.lora_alpha)):
             # Pass key mapping rules to handle converted keys properly
-            scale = args.lora_scale[idx] if args.lora_scale is not None else 1.0
-            load_loras(path, converted_weights, alpha, key_mapping_rules, scale=scale)
+            strength = args.strength[idx] if args.strength is not None else 1.0
+            load_loras(path, converted_weights, alpha, key_mapping_rules, strength=strength)
 
     if args.quantized:
         if args.full_quantized and args.comfyui_mode:
@@ -806,10 +806,10 @@ def main():
         help="Alpha for LoRA weight scaling",
     )
     parser.add_argument(
-        "--lora_scale",
+        "--strength",
         type=float,
         nargs="*",
-        help="Additional scale factor(s) for LoRA deltas; default 1.0",
+        help="Additional strength factor(s) for LoRA deltas; default 1.0",
     )
     parser.add_argument("--copy_no_weight_files", action="store_true")
     parser.add_argument("--single_file", action="store_true", help="Save as a single safetensors file instead of chunking (warning: requires loading entire model in memory)")
