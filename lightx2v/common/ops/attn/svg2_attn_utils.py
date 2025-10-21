@@ -1,4 +1,3 @@
-import flashinfer
 import torch
 import torch.nn.functional as F
 import triton
@@ -1291,76 +1290,6 @@ def dynamic_block_sparse_fwd_triton(q, k, v, dynamic_map, qc_size, kc_size):
     )
 
     return out
-
-
-def dynamic_block_sparse_fwd_flashinfer(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    block_mask_map: torch.Tensor,
-    block_row_sz: torch.Tensor,
-    block_col_sz: torch.Tensor,
-    is_cpu: bool = True,
-):
-    """
-    Launcher for the Flashinfer dynamic block sparse attention kernel.
-
-    Args:
-        q (torch.Tensor): Query tensor, shape [B, H, S, D].
-        k (torch.Tensor): Key tensor, shape [B, H, S, D].
-        v (torch.Tensor): Value tensor, shape [B, H, S, D].
-        block_mask_map (torch.Tensor): Boolean mask, shape [B, H, qc_num, kc_num]. Currently must on CPU.
-        block_row_sz (torch.Tensor): Query block sizes, shape [B, H, qc_num]. Currently must on CPU.
-        block_col_sz (torch.Tensor): Key block sizes, shape [B, H, kc_num]. Currently must on CPU.
-        is_cpu (bool): Whether to run on CPU. Flashinfer default is to run on CPU. We switch to GPU for faster planning. Default is True.
-    """
-    # Input shape check
-    B, H, S, D = q.shape
-    qc_num = block_row_sz.shape[-1]
-    kc_num = block_col_sz.shape[-1]
-    assert block_mask_map.shape == (B, H, qc_num, kc_num)
-
-    assert all(t.device == torch.device("cpu") for t in [block_mask_map, block_row_sz, block_col_sz]) if is_cpu else True
-
-    # Check if block_col_sz and block_row_sz are the same for each head
-    assert torch.all(block_col_sz.sum(dim=2) == block_col_sz.sum(dim=2)[0, 0])
-    assert torch.all(block_row_sz.sum(dim=2) == block_row_sz.sum(dim=2)[0, 0])
-
-    # Prepare flashinfer wrapper
-    float_workspace_buffer = torch.empty(128 * 1024 * 1024, device=q.device)
-    vector_sparse_indices_buffer = torch.empty(1024 * 1024 * 1024, device=q.device)
-    wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(float_workspace_buffer, backend="auto")
-    wrapper.reset_workspace_buffer(
-        float_workspace_buffer=wrapper._float_workspace_buffer,
-        int_workspace_buffer=wrapper._int_workspace_buffer,
-        vector_sparse_indices_buffer=vector_sparse_indices_buffer,  # Only reset this buffer size
-        vector_sparse_indptr_buffer=wrapper._vector_sparse_indptr_buffer,
-    )
-
-    # Reshape inputs to (B * H, ...)
-    q = q.reshape(B * H, S, D)
-    k = k.reshape(B * H, S, D)
-    v = v.reshape(B * H, S, D)
-    block_mask_map = block_mask_map.reshape(B * H, qc_num, kc_num)
-    block_row_sz = block_row_sz.reshape(B * H, qc_num)
-    block_col_sz = block_col_sz.reshape(B * H, kc_num)
-
-    wrapper.plan(
-        block_mask_map=block_mask_map,
-        block_row_sz=block_row_sz,
-        block_col_sz=block_col_sz,
-        num_qo_heads=B * H,
-        num_kv_heads=B * H,
-        head_dim=D,
-        q_data_type=q.dtype,
-        kv_data_type=k.dtype,
-    )
-
-    # print_memory_usage("After plan")
-
-    o = wrapper.run(q, k, v)  # [num_qo_heads, qo_len, head_dim]
-    o = o.reshape(B, H, S, D)
-    return o
 
 
 # ---------------- Batch wrapper for cuVS KMeans -----------------
