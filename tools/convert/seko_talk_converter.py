@@ -1,25 +1,42 @@
 """
 Model Merge and Multi-Precision Conversion Script
 
-This script orchestrates the full conversion pipeline:
-1. Merge R2V + distillation model via LoRA → merged.safetensors (FP32)
-2. Convert merged.safetensors to BF16 and FP8 (using converter.py)
-3. Convert audio_adapter to BF16 and FP8 (using quant_adapter.py)
+This script supports three conversion modes:
+1. 'both' (default): Convert both merged model and audio adapter
+2. 'merged': Only convert merged model (R2V + distill via LoRA)
+3. 'audio': Only convert audio adapter
 
-Usage:
-    python tools/convert/merge_models.py \
+Pipeline:
+- Merged model: R2V + distill via LoRA → merged.safetensors (FP32) → BF16/FP8
+- Audio adapter: audio_adapter.pt → BF16 → FP8
+
+Usage Examples:
+    # Convert both (default)
+    python tools/convert/seko_talk_converter.py \
         --r2v_model /path/to/model.pt \
         --distill_model /path/to/model_ema.pt \
         --audio_adapter /path/to/audio_adapter.pt \
-        --output_dir /data/output \
-        --lora_alpha 8.0
+        --output_dir /data/output
 
-Output files:
-    - merged.safetensors                  (FP32, R2V + distill merged via LoRA)
-    - merged_bf16.safetensors             (BF16, from merged.safetensors)
-    - merged_fp8.safetensors              (FP8, from merged.safetensors via converter.py)
+    # Only convert merged model
+    python tools/convert/seko_talk_converter.py \
+        --mode merged \
+        --r2v_model /path/to/model.pt \
+        --distill_model /path/to/model_ema.pt \
+        --output_dir /data/output
+
+    # Only convert audio adapter
+    python tools/convert/seko_talk_converter.py \
+        --mode audio \
+        --audio_adapter /path/to/audio_adapter.pt \
+        --output_dir /data/output
+
+Output files (depending on mode):
+    - merged.safetensors                  (FP32, R2V + distill merged)
+    - merged_bf16.safetensors             (BF16)
+    - merged_fp8.safetensors              (FP8)
     - audio_adapter_model.safetensors     (BF16)
-    - audio_adapter_model_fp8.safetensors (FP8, via quant_adapter.py)
+    - audio_adapter_model_fp8.safetensors (FP8)
 """
 
 import argparse
@@ -211,10 +228,13 @@ def step5_convert_audio_adapter_to_fp8(output_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description="Merge R2V+distill via LoRA and convert to multiple formats")
 
-    # Inputs
-    parser.add_argument("--r2v_model", type=str, required=True, help="Path to R2V model (.pt)")
-    parser.add_argument("--distill_model", type=str, required=True, help="Path to distillation model (.pt)")
-    parser.add_argument("--audio_adapter", type=str, required=True, help="Path to audio adapter (.pt)")
+    # Mode selection
+    parser.add_argument("--mode", type=str, choices=["both", "merged", "audio"], default="both", help="Conversion mode: 'both' (default), 'merged' (only model), or 'audio' (only audio adapter)")
+
+    # Inputs (conditionally required based on mode)
+    parser.add_argument("--r2v_model", type=str, help="Path to R2V model (.pt) [required for 'both' and 'merged' modes]")
+    parser.add_argument("--distill_model", type=str, help="Path to distillation model (.pt) [required for 'both' and 'merged' modes]")
+    parser.add_argument("--audio_adapter", type=str, help="Path to audio adapter (.pt) [required for 'both' and 'audio' modes]")
 
     # Outputs
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
@@ -230,49 +250,77 @@ def main():
 
     args = parser.parse_args()
 
+    # Validate required arguments based on mode
+    if args.mode in ["both", "merged"]:
+        if not args.r2v_model or not args.distill_model:
+            parser.error("--r2v_model and --distill_model are required for 'both' and 'merged' modes")
+
+    if args.mode in ["both", "audio"]:
+        if not args.audio_adapter:
+            parser.error("--audio_adapter is required for 'both' and 'audio' modes")
+
     # Setup paths
-    r2v_path = Path(args.r2v_model)
-    distill_path = Path(args.distill_model)
-    audio_path = Path(args.audio_adapter)
     output_dir = Path(args.output_dir)
     temp_dir = Path(args.temp_dir) if args.temp_dir else output_dir / "temp"
 
-    # Validate
-    for path, name in [(r2v_path, "R2V"), (distill_path, "Distill"), (audio_path, "Audio")]:
-        if not path.exists():
-            raise FileNotFoundError(f"{name} not found: {path}")
+    r2v_path = Path(args.r2v_model) if args.r2v_model else None
+    distill_path = Path(args.distill_model) if args.distill_model else None
+    audio_path = Path(args.audio_adapter) if args.audio_adapter else None
+
+    # Validate file existence
+    if r2v_path and not r2v_path.exists():
+        raise FileNotFoundError(f"R2V model not found: {r2v_path}")
+    if distill_path and not distill_path.exists():
+        raise FileNotFoundError(f"Distill model not found: {distill_path}")
+    if audio_path and not audio_path.exists():
+        raise FileNotFoundError(f"Audio adapter not found: {audio_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 80)
-    logger.info("MODEL MERGE AND CONVERSION PIPELINE")
+    logger.info("MODEL CONVERSION PIPELINE")
     logger.info("=" * 80)
-    logger.info(f"R2V model:      {r2v_path}")
-    logger.info(f"Distill model:  {distill_path}")
-    logger.info(f"Audio adapter:  {audio_path}")
+    logger.info(f"Mode:           {args.mode}")
+    if r2v_path:
+        logger.info(f"R2V model:      {r2v_path}")
+    if distill_path:
+        logger.info(f"Distill model:  {distill_path}")
+    if audio_path:
+        logger.info(f"Audio adapter:  {audio_path}")
     logger.info(f"Output dir:     {output_dir}")
-    logger.info(f"LoRA alpha:     {args.lora_alpha}")
+    if args.mode in ["both", "merged"]:
+        logger.info(f"LoRA alpha:     {args.lora_alpha}")
     logger.info(f"Device:         {args.device}")
     logger.info("=" * 80)
 
-    # Execute pipeline
+    # Execute pipeline based on mode
     try:
-        # Step 1: Merge R2V (FP32) + Distill (FP32) via LoRA → merged.safetensors (FP32)
-        merged_path = step1_merge_via_lora(r2v_path, distill_path, output_dir, args.lora_alpha, temp_dir)
+        merged_path = None
 
-        # Step 2: Convert merged (FP32) → BF16
-        step2_convert_merged_to_bf16(merged_path, output_dir)
+        # Process merged model (modes: 'both', 'merged')
+        if args.mode in ["both", "merged"]:
+            logger.info("\n>>> Processing MERGED MODEL")
 
-        # Step 3: Convert merged (FP32) → FP8 (via converter.py)
-        if not args.skip_merged_fp8:
-            step3_convert_merged_to_fp8(merged_path, output_dir, args.device)
+            # Step 1: Merge R2V + Distill via LoRA
+            merged_path = step1_merge_via_lora(r2v_path, distill_path, output_dir, args.lora_alpha, temp_dir)
 
-        # Step 4: Convert audio adapter → BF16
-        step4_convert_audio_adapter_to_bf16(audio_path, output_dir)
+            # Step 2: Convert merged to BF16
+            step2_convert_merged_to_bf16(merged_path, output_dir)
 
-        # Step 5: Convert audio adapter → FP8 (via quant_adapter.py)
-        if not args.skip_audio_fp8:
-            step5_convert_audio_adapter_to_fp8(output_dir)
+            # Step 3: Convert merged to FP8
+            if not args.skip_merged_fp8:
+                step3_convert_merged_to_fp8(merged_path, output_dir, args.device)
+
+        # Process audio adapter (modes: 'both', 'audio')
+        if args.mode in ["both", "audio"]:
+            logger.info("\n>>> Processing AUDIO ADAPTER")
+
+            # Step 4: Convert audio adapter to BF16
+            step4_convert_audio_adapter_to_bf16(audio_path, output_dir)
+
+            # Step 5: Convert audio adapter to FP8
+            if not args.skip_audio_fp8:
+                step5_convert_audio_adapter_to_fp8(output_dir)
 
     except Exception as e:
         logger.error(f"\n{'=' * 80}")
@@ -285,22 +333,39 @@ def main():
     logger.info("\n" + "=" * 80)
     logger.info("✓ PIPELINE COMPLETED SUCCESSFULLY!")
     logger.info("=" * 80)
-    logger.info(f"\nOutput directory: {output_dir}\n")
+    logger.info(f"\nMode: {args.mode}")
+    logger.info(f"Output directory: {output_dir}\n")
     logger.info("Generated files:")
-    logger.info("  ✓ merged.safetensors                  (FP32, R2V+distill merged)")
-    logger.info("  ✓ merged_bf16.safetensors             (BF16, from merged FP32)")
-    if not args.skip_merged_fp8:
-        logger.info("  ✓ merged_fp8.safetensors              (FP8, from merged FP32)")
-    logger.info("  ✓ audio_adapter_model.safetensors     (BF16)")
-    if not args.skip_audio_fp8:
-        logger.info("  ✓ audio_adapter_model_fp8.safetensors (FP8)")
-    logger.info(f"\nTemp files: {temp_dir}")
+
+    # Show files based on mode
+    if args.mode in ["both", "merged"]:
+        logger.info("  ✓ merged.safetensors                  (FP32, R2V+distill merged)")
+        logger.info("  ✓ merged_bf16.safetensors             (BF16)")
+        if not args.skip_merged_fp8:
+            logger.info("  ✓ merged_fp8.safetensors              (FP8)")
+
+    if args.mode in ["both", "audio"]:
+        logger.info("  ✓ audio_adapter_model.safetensors     (BF16)")
+        if not args.skip_audio_fp8:
+            logger.info("  ✓ audio_adapter_model_fp8.safetensors (FP8)")
+
+    if args.mode in ["both", "merged"]:
+        logger.info(f"\nTemp files: {temp_dir}")
+
+    # Show conversion flow
     logger.info("\nConversion flow:")
-    logger.info("  1. R2V (FP32) + Distill (FP32) --LoRA--> merged.safetensors (FP32)")
-    logger.info("  2. merged.safetensors (FP32) --> merged_bf16.safetensors")
-    logger.info("  3. merged.safetensors (FP32) --> merged_fp8.safetensors")
-    logger.info("  4. audio_adapter --> audio_adapter_model.safetensors (BF16)")
-    logger.info("  5. audio_adapter_model.safetensors --> audio_adapter_model_fp8.safetensors")
+    if args.mode in ["both", "merged"]:
+        logger.info("  Merged model:")
+        logger.info("    1. R2V (FP32) + Distill (FP32) --LoRA--> merged.safetensors (FP32)")
+        logger.info("    2. merged.safetensors (FP32) --> merged_bf16.safetensors")
+        if not args.skip_merged_fp8:
+            logger.info("    3. merged.safetensors (FP32) --> merged_fp8.safetensors")
+
+    if args.mode in ["both", "audio"]:
+        logger.info("  Audio adapter:")
+        logger.info("    1. audio_adapter.pt --> audio_adapter_model.safetensors (BF16)")
+        if not args.skip_audio_fp8:
+            logger.info("    2. audio_adapter_model.safetensors --> audio_adapter_model_fp8.safetensors")
 
 
 if __name__ == "__main__":
