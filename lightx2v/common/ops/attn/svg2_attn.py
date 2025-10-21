@@ -1,6 +1,11 @@
 from typing import Optional
 
-import flashinfer
+# Please reinstall flashinfer by referring to https://github.com/svg-project/Sparse-VideoGen
+try:
+    import flashinfer
+except ImportError:
+    flashinfer = None
+
 import torch
 import triton
 import triton.language as tl

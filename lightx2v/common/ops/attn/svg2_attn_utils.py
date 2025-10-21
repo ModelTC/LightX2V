@@ -2,7 +2,12 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-from cuvs.cluster.kmeans import KMeansParams, fit
+
+try:
+    from cuvs.cluster.kmeans import KMeansParams, fit
+except ImportError:
+    KMeansParams = None
+    fit = None
 
 # --- New functions ---
 
