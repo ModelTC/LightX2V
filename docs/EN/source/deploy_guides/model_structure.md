@@ -1,380 +1,558 @@
-# Model Structure Guide
+# Model Format and Loading Guide
 
 ## 📖 Overview
 
-This document provides a comprehensive introduction to the model directory structure of the LightX2V project, designed to help users efficiently organize model files and achieve a convenient user experience. Through scientific directory organization, users can enjoy the convenience of "one-click startup" without manually configuring complex path parameters. Meanwhile, the system also supports flexible manual path configuration to meet the diverse needs of different user groups.
+LightX2V is a flexible video generation inference framework that supports multiple model sources and formats, providing users with rich options:
 
-## 🗂️ Model Directory Structure
+- ✅ **Wan Official Models**: Directly compatible with officially released complete models from Wan2.1 and Wan2.2
+- ✅ **Single-File Models**: Supports single-file format models released by LightX2V (including quantized versions)
+- ✅ **LoRA Models**: Supports loading distilled LoRAs released by LightX2V
 
-### LightX2V Official Model List
+This document provides detailed instructions on how to use various model formats, configuration parameters, and best practices.
 
-View all available models: [LightX2V Official Model Repository](https://huggingface.co/lightx2v)
+---
 
-### Standard Directory Structure
+## 🗂️ Format 1: Wan Official Models
 
-Using `Wan2.1-I2V-14B-480P-LightX2V` as an example, the standard file structure is as follows:
+### Model Repositories
+- [Wan2.1 Collection](https://huggingface.co/collections/Wan-AI/wan21-68ac4ba85372ae5a8e282a1b)
+- [Wan2.2 Collection](https://huggingface.co/collections/Wan-AI/wan22-68ac4ae80a8b477e79636fc8)
 
-```
-Wan2.1-I2V-14B-480P-LightX2V/
-├── fp8/                                          # FP8 quantized version (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT model FP8 quantized version
-│   ├── models_t5_umt5-xxl-enc-fp8.pth            # T5 encoder FP8 quantized version
-│   ├── clip-fp8.pth                              # CLIP encoder FP8 quantized version
-│   ├── Wan2.1_VAE.pth                            # VAE variational autoencoder
-│   ├── taew2_1.pth                               # Lightweight VAE (optional)
-│   └── config.json                               # Model configuration file
-├── int8/                                         # INT8 quantized version (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT model INT8 quantized version
-│   ├── models_t5_umt5-xxl-enc-int8.pth           # T5 encoder INT8 quantized version
-│   ├── clip-int8.pth                             # CLIP encoder INT8 quantized version
-│   ├── Wan2.1_VAE.pth                            # VAE variational autoencoder
-│   ├── taew2_1.pth                               # Lightweight VAE (optional)
-│   └── config.json                               # Model configuration file
-├── original/                                     # Original precision version (DIT/T5/CLIP)
-│   ├── xx.safetensors                            # DIT model original precision version
-│   ├── models_t5_umt5-xxl-enc-bf16.pth           # T5 encoder original precision version
-│   ├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP encoder original precision version
-│   ├── Wan2.1_VAE.pth                            # VAE variational autoencoder
-│   ├── taew2_1.pth                               # Lightweight VAE (optional)
-│   └── config.json                               # Model configuration file
-```
+### Model Features
+- **Official Guarantee**: Complete models officially released by Wan-AI with highest quality
+- **Complete Components**: Includes all necessary components (DIT, T5, CLIP, VAE)
+- **Original Precision**: Uses BF16/FP32 precision with no quantization loss
+- **Strong Compatibility**: Fully compatible with Wan official toolchain
 
-Using `Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V` as an example, the standard file structure is as follows:
+### Wan2.1 Official Models
+
+#### Directory Structure
+
+Using [Wan2.1-I2V-14B-720P](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P) as an example:
 
 ```
-Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/
-├── distill_fp8/                                  # FP8 quantized version (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT model FP8 quantized version
-│   ├── models_t5_umt5-xxl-enc-fp8.pth            # T5 encoder FP8 quantized version
-│   ├── clip-fp8.pth                              # CLIP encoder FP8 quantized version
-│   ├── Wan2.1_VAE.pth                            # VAE variational autoencoder
-│   ├── taew2_1.pth                               # Lightweight VAE (optional)
-│   └── config.json                               # Model configuration file
-├── distill_int8/                                 # INT8 quantized version (DIT/T5/CLIP)
-│   ├── block_xx.safetensors                      # DIT model INT8 quantized version
-│   ├── models_t5_umt5-xxl-enc-int8.pth           # T5 encoder INT8 quantized version
-│   ├── clip-int8.pth                             # CLIP encoder INT8 quantized version
-│   ├── Wan2.1_VAE.pth                            # VAE variational autoencoder
-│   ├── taew2_1.pth                               # Lightweight VAE (optional)
-│   └── config.json                               # Model configuration file
-├── distill_models/                               # Original precision version (DIT/T5/CLIP)
-│   ├── distill_model.safetensors                 # DIT model original precision version
-│   ├── models_t5_umt5-xxl-enc-bf16.pth           # T5 encoder original precision version
-│   ├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP encoder original precision version
-│   ├── Wan2.1_VAE.pth                            # VAE variational autoencoder
-│   ├── taew2_1.pth                               # Lightweight VAE (optional)
-│   └── config.json                               # Model configuration file
-├── loras/
-│   ├── Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors  # Distillation model lora
+Wan2.1-I2V-14B-720P/
+├── diffusion_pytorch_model-00001-of-00007.safetensors   # DIT model shard 1
+├── diffusion_pytorch_model-00002-of-00007.safetensors   # DIT model shard 2
+├── diffusion_pytorch_model-00003-of-00007.safetensors   # DIT model shard 3
+├── diffusion_pytorch_model-00004-of-00007.safetensors   # DIT model shard 4
+├── diffusion_pytorch_model-00005-of-00007.safetensors   # DIT model shard 5
+├── diffusion_pytorch_model-00006-of-00007.safetensors   # DIT model shard 6
+├── diffusion_pytorch_model-00007-of-00007.safetensors   # DIT model shard 7
+├── diffusion_pytorch_model.safetensors.index.json       # Shard index file
+├── models_t5_umt5-xxl-enc-bf16.pth                      # T5 text encoder
+├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP encoder
+├── Wan2.1_VAE.pth                                       # VAE encoder/decoder
+├── config.json                                          # Model configuration
+├── xlm-roberta-large/                                   # CLIP tokenizer
+├── google/                                              # T5 tokenizer
+├── assets/
+└── examples/
 ```
 
-### 💾 Storage Recommendations
-
-**It is strongly recommended to store model files on SSD solid-state drives**, as this can significantly improve model loading speed and inference performance.
-
-**Recommended storage paths**:
-```bash
-/mnt/ssd/models/          # Independent SSD mount point
-/data/ssd/models/         # Data SSD directory
-/opt/models/              # System optimization directory
-```
-
-### Quantization Version Description
-
-Each model includes multiple quantized versions to adapt to different hardware configuration requirements:
-- **FP8 Version**: Suitable for GPUs that support FP8 (such as H100, A100, RTX 40 series), providing optimal performance
-- **INT8 Version**: Suitable for most GPUs, balancing performance and compatibility, reducing memory usage by approximately 50%
-- **Original Precision Version**: Suitable for applications with extremely high precision requirements, providing highest quality output
-
-## 🚀 Usage Methods
-
-### Environment Setup
-
-#### Installing Hugging Face CLI
-
-Before starting to download models, please ensure that Hugging Face CLI is properly installed:
+#### Usage
 
 ```bash
-# Install huggingface_hub
-pip install huggingface_hub
+# Download model
+huggingface-cli download Wan-AI/Wan2.1-I2V-14B-720P \
+    --local-dir ./models/Wan2.1-I2V-14B-720P
 
-# Or install huggingface-cli
-pip install huggingface-cli
+# Configure launch script
+model_path=./models/Wan2.1-I2V-14B-720P
+lightx2v_path=/path/to/LightX2V
 
-# Login to Hugging Face (optional, but strongly recommended)
-huggingface-cli login
+# Run inference
+cd LightX2V/scripts
+bash wan/run_wan_i2v.sh
 ```
 
-### Method 1: Complete Model Download (Recommended)
+### Wan2.2 Official Models
 
-**Advantage**: After downloading the complete model, the system will automatically identify all component paths without manual configuration, providing a more convenient user experience
+#### Directory Structure
 
-#### 1. Download Complete Model
+Using [Wan2.2-I2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B) as an example:
+
+```
+Wan2.2-I2V-A14B/
+├── high_noise_model/                                    # High-noise model directory
+│   ├── diffusion_pytorch_model-00001-of-00009.safetensors
+│   ├── diffusion_pytorch_model-00002-of-00009.safetensors
+│   ├── ...
+│   ├── diffusion_pytorch_model-00009-of-00009.safetensors
+│   └── diffusion_pytorch_model.safetensors.index.json
+├── low_noise_model/                                     # Low-noise model directory
+│   ├── diffusion_pytorch_model-00001-of-00009.safetensors
+│   ├── diffusion_pytorch_model-00002-of-00009.safetensors
+│   ├── ...
+│   ├── diffusion_pytorch_model-00009-of-00009.safetensors
+│   └── diffusion_pytorch_model.safetensors.index.json
+├── models_t5_umt5-xxl-enc-bf16.pth                      # T5 text encoder
+├── Wan2.1_VAE.pth                                       # VAE encoder/decoder
+├── configuration.json                                   # Model configuration
+├── google/                                              # T5 tokenizer
+├── assets/                                              # Example assets (optional)
+└── examples/                                            # Example files (optional)
+```
+
+#### Usage
 
 ```bash
-# Use Hugging Face CLI to download complete model
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V
+# Download model
+huggingface-cli download Wan-AI/Wan2.2-I2V-A14B \
+    --local-dir ./models/Wan2.2-I2V-A14B
+
+# Configure launch script
+model_path=./models/Wan2.2-I2V-A14B
+lightx2v_path=/path/to/LightX2V
+
+# Run inference
+cd LightX2V/scripts
+bash wan22/run_wan22_moe_i2v.sh
 ```
 
-#### 2. Start Inference
+### Available Model List
 
-##### Bash Script Startup
+#### Wan2.1 Official Model List
 
-###### Scenario 1: Using Full Precision Model
+| Model Name | Download Link |
+|---------|----------|
+| Wan2.1-I2V-14B-720P | [Link](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P) |
+| Wan2.1-I2V-14B-480P | [Link](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P) |
+| Wan2.1-T2V-14B | [Link](https://huggingface.co/Wan-AI/Wan2.1-T2V-14B) |
+| Wan2.1-T2V-1.3B | [Link](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B) |
+| Wan2.1-FLF2V-14B-720P | [Link](https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P) |
+| Wan2.1-VACE-14B | [Link](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) |
+| Wan2.1-VACE-1.3B | [Link](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B) |
 
-Modify the configuration in the [run script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_distill_4step_cfg.sh):
-- `model_path`: Set to the downloaded model path `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V`
-- `lightx2v_path`: Set to the LightX2V project root directory path
+#### Wan2.2 Official Model List
 
-###### Scenario 2: Using Quantized Model
+| Model Name | Download Link |
+|---------|----------|
+| Wan2.2-I2V-A14B | [Link](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B) |
+| Wan2.2-T2V-A14B | [Link](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B) |
+| Wan2.2-TI2V-5B | [Link](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B) |
+| Wan2.2-Animate-14B | [Link](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) |
 
-When using the complete model, if you need to enable quantization, please add the following configuration to the [configuration file](https://github.com/ModelTC/LightX2V/tree/main/configs/distill/wan_i2v_distill_4step_cfg.json):
+### Usage Tips
+
+> 💡 **Quantized Model Usage**: To use quantized models, refer to the [Model Conversion Script](https://github.com/ModelTC/LightX2V/blob/main/tools/convert/readme_zh.md) for conversion, or directly use pre-converted quantized models in Format 2 below
+>
+> 💡 **Memory Optimization**: For devices with RTX 4090 24GB or smaller memory, it's recommended to combine quantization techniques with CPU offload features:
+> - Quantization Configuration: Refer to [Quantization Documentation](../method_tutorials/quantization.md)
+> - CPU Offload: Refer to [Parameter Offload Documentation](../method_tutorials/offload.md)
+> - Wan2.1 Configuration: Refer to [offload config files](https://github.com/ModelTC/LightX2V/tree/main/configs/offload)
+> - Wan2.2 Configuration: Refer to [wan22 config files](https://github.com/ModelTC/LightX2V/tree/main/configs/wan22) with `4090` suffix
+
+---
+
+## 🗂️ Format 2: LightX2V Single-File Models (Recommended)
+
+### Model Repositories
+- [Wan2.1-LightX2V](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- [Wan2.2-LightX2V](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
+
+### Model Features
+- **Single-File Management**: Single safetensors file, easy to manage and deploy
+- **Multi-Precision Support**: Provides original precision, FP8, INT8, and other precision versions
+- **Distillation Acceleration**: Supports 4-step fast inference
+- **Tool Compatibility**: Compatible with ComfyUI and other tools
+
+**Examples**:
+- `wan2.1_i2v_720p_lightx2v_4step.safetensors` - 720P I2V original precision
+- `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors` - 720P I2V FP8 quantization
+- `wan2.1_i2v_480p_int8_lightx2v_4step.safetensors` - 480P I2V INT8 quantization
+- ...
+
+### Wan2.1 Single-File Models
+
+#### Scenario A: Download Single Model File
+
+**Step 1: Select and Download Model**
+
+```bash
+# Create model directory
+mkdir -p ./models/wan2.1_i2v_720p
+
+# Download 720P I2V FP8 quantized model
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p \
+    --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
+```
+
+**Step 2: Configure Launch Script**
+
+```bash
+# Set in launch script (point to directory containing model file)
+model_path=./models/wan2.1_i2v_720p
+lightx2v_path=/path/to/LightX2V
+
+# Run script
+cd LightX2V/scripts
+bash wan/run_wan_i2v_distill_4step_cfg.sh
+```
+
+> 💡 **Tip**: When there's only one model file in the directory, LightX2V will automatically load it.
+
+#### Scenario B: Download Multiple Model Files
+
+When you download multiple models with different precisions to the same directory, you need to explicitly specify which model to use in the configuration file.
+
+**Step 1: Download Multiple Models**
+
+```bash
+# Create model directory
+mkdir -p ./models/wan2.1_i2v_720p_multi
+
+# Download original precision model
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p_multi \
+    --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
+
+# Download FP8 quantized model
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p_multi \
+    --include "wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
+
+# Download INT8 quantized model
+huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+    --local-dir ./models/wan2.1_i2v_720p_multi \
+    --include "wan2.1_i2v_720p_int8_lightx2v_4step.safetensors"
+```
+
+**Directory Structure**:
+
+```
+wan2.1_i2v_720p_multi/
+├── wan2.1_i2v_720p_lightx2v_4step.safetensors                    # Original precision
+├── wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors   # FP8 quantization
+└── wan2.1_i2v_720p_int8_lightx2v_4step.safetensors              # INT8 quantization
+└── t5/clip/vae/config.json/xlm-roberta-large/google and other components  # Manually organized
+```
+
+**Step 2: Specify Model in Configuration File**
+
+Edit configuration file (e.g., `configs/distill/wan_i2v_distill_4step_cfg.json`):
 
 ```json
 {
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
-    },                              // DIT model quantization scheme
-    "t5_quantized": true,           // Enable T5 quantization
-    "t5_quant_scheme": "fp8",       // T5 quantization mode
-    "clip_quantized": true,         // Enable CLIP quantization
-    "clip_quant_scheme": "fp8"      // CLIP quantization mode
+    // Use original precision model
+    "dit_original_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_lightx2v_4step.safetensors",
+
+    // Or use FP8 quantized model
+    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "fp8-vllm",
+
+    // Or use INT8 quantized model
+    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_int8_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "int8-vllm",
+
+    // Other configurations...
 }
 ```
+### Usage Tips
 
-> **Important Note**: Quantization configurations for each model can be flexibly combined. Quantization paths do not need to be manually specified, as the system will automatically locate the quantized versions of each model.
+> 💡 **Configuration Parameter Description**:
+> - **dit_original_ckpt**: Used to specify the path to original precision models (BF16/FP32/FP16)
+> - **dit_quantized_ckpt**: Used to specify the path to quantized models (FP8/INT8), must be used with `dit_quantized` and `dit_quant_scheme` parameters
 
-For detailed explanation of quantization technology, please refer to the [Quantization Documentation](../method_tutorials/quantization.md).
-
-Use the provided bash script for quick startup:
+**Step 3: Start Inference**
 
 ```bash
 cd LightX2V/scripts
-bash wan/run_wan_t2v_distill_4step_cfg.sh
+bash wan/run_wan_i2v_distill_4step_cfg.sh
 ```
 
-##### Gradio Interface Startup
+### Wan2.2 Single-File Models
 
-When performing inference through the Gradio interface, simply specify the model root directory path at startup, and lightweight VAE can be flexibly selected through frontend interface buttons:
+#### Directory Structure Requirements
+
+When using Wan2.2 single-file models, you need to manually create a specific directory structure:
+
+```
+wan2.2_models/
+├── high_noise_model/                                    # High-noise model directory (required)
+│   └── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors  # High-noise model file
+└── low_noise_model/                                     # Low-noise model directory (required)
+│   └── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors  # Low-noise model file
+└── t5/vae/config.json/xlm-roberta-large/google and other components  # Manually organized
+```
+
+#### Scenario A: Only One Model File Per Directory
 
 ```bash
-# Image-to-video inference (I2V)
-python gradio_demo.py \
-    --model_path ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --model_size 14b \
-    --task i2v \
-    --model_cls wan2.1_distill
-```
+# Create required subdirectories
+mkdir -p ./models/wan2.2_models/high_noise_model
+mkdir -p ./models/wan2.2_models/low_noise_model
 
-### Method 2: Selective Download
+# Download high-noise model to corresponding directory
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models/high_noise_model \
+    --include "wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 
-**Advantage**: Only download the required versions (quantized or non-quantized), effectively saving storage space and download time
+# Download low-noise model to corresponding directory
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models/low_noise_model \
+    --include "wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 
-#### 1. Selective Download
+# Configure launch script (point to parent directory)
+model_path=./models/wan2.2_models
+lightx2v_path=/path/to/LightX2V
 
-```bash
-# Use Hugging Face CLI to selectively download non-quantized version
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --include "distill_models/*"
-```
-
-```bash
-# Use Hugging Face CLI to selectively download FP8 quantized version
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --include "distill_fp8/*"
-```
-
-```bash
-# Use Hugging Face CLI to selectively download INT8 quantized version
-huggingface-cli download lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --local-dir ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V \
-    --include "distill_int8/*"
-```
-
-> **Important Note**: When starting inference scripts or Gradio, the `model_path` parameter still needs to be specified as the complete path without the `--include` parameter. For example: `model_path=./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V`, not `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/distill_int8`.
-
-#### 2. Start Inference
-
-**Taking the model with only FP8 version downloaded as an example:**
-
-##### Bash Script Startup
-
-###### Scenario 1: Using FP8 DIT + FP8 T5 + FP8 CLIP
-
-Set the `model_path` in the [run script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_distill_4step_cfg.sh) to your downloaded model path `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/`, and set `lightx2v_path` to your LightX2V project path.
-
-Only need to modify the quantized model configuration in the configuration file as follows:
-```json
-{
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
-    },                              // DIT quantization scheme
-    "t5_quantized": true,           // Whether to use T5 quantized version
-    "t5_quant_scheme": "fp8",       // T5 quantization mode
-    "clip_quantized": true,         // Whether to use CLIP quantized version
-    "clip_quant_scheme": "fp8",     // CLIP quantization mode
-}
-```
-
-> **Important Note**: At this time, each model can only be specified as a quantized version. Quantization paths do not need to be manually specified, as the system will automatically locate the quantized versions of each model.
-
-###### Scenario 2: Using FP8 DIT + Original Precision T5 + Original Precision CLIP
-
-Set the `model_path` in the [run script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_distill_4step_cfg.sh) to your downloaded model path `./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V`, and set `lightx2v_path` to your LightX2V project path.
-
-Since only quantized weights were downloaded, you need to manually download the original precision versions of T5 and CLIP, and configure them in the configuration file's `t5_original_ckpt` and `clip_original_ckpt` as follows:
-```json
-{
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"
-    },                              // DIT quantization scheme
-    "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
-    "clip_original_ckpt": "/path/to/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
-}
-```
-
-Use the provided bash script for quick startup:
-
-```bash
+# Run script
 cd LightX2V/scripts
-bash wan/run_wan_t2v_distill_4step_cfg.sh
+bash wan22/run_wan22_moe_i2v_distill.sh
 ```
 
-##### Gradio Interface Startup
+> 💡 **Tip**: When there's only one model file in each subdirectory, LightX2V will automatically load it.
 
-When performing inference through the Gradio interface, specify the model root directory path at startup:
+#### Scenario B: Multiple Model Files Per Directory
+
+When you place multiple models with different precisions in both `high_noise_model/` and `low_noise_model/` directories, you need to explicitly specify them in the configuration file.
 
 ```bash
-# Image-to-video inference (I2V)
-python gradio_demo.py \
-    --model_path ./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/ \
-    --model_size 14b \
-    --task i2v \
-    --model_cls wan2.1_distill
+# Create directories
+mkdir -p ./models/wan2.2_models_multi/high_noise_model
+mkdir -p ./models/wan2.2_models_multi/low_noise_model
+
+# Download multiple versions of high-noise model
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models_multi/high_noise_model \
+    --include "wan2.2_i2v_A14b_high_noise_*.safetensors"
+
+# Download multiple versions of low-noise model
+huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --local-dir ./models/wan2.2_models_multi/low_noise_model \
+    --include "wan2.2_i2v_A14b_low_noise_*.safetensors"
 ```
 
-> **Important Note**: Since the model root directory only contains quantized versions of each model, when using the frontend, the quantization precision for DIT/T5/CLIP models can only be selected as fp8. If you need to use non-quantized versions of T5/CLIP, please manually download non-quantized weights and place them in the gradio_demo model_path directory (`./Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-LightX2V/`). In this case, the T5/CLIP quantization precision can be set to bf16/fp16.
+**Directory Structure**:
 
-### Method 3: Manual Configuration
+```
+wan2.2_models_multi/
+├── high_noise_model/
+│   ├── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors        # Original precision
+│   ├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors    # FP8 quantization
+│   └── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors   # INT8 quantization
+└── low_noise_model/
+    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # Original precision
+    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 quantization
+    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 quantization
+```
 
-Users can flexibly configure quantization options and paths for each component according to actual needs, achieving mixed use of quantized and non-quantized components. Please ensure that the required model weights have been correctly downloaded and placed in the specified paths.
-
-#### DIT Model Configuration
+**Configuration File Settings**:
 
 ```json
 {
-    "dit_quantized_ckpt": "/path/to/dit_quantized_ckpt",    // DIT quantized weights path
-    "dit_original_ckpt": "/path/to/dit_original_ckpt",      // DIT original precision weights path
-    "mm_config": {
-        "mm_type": "W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Vllm"  // DIT matrix multiplication operator type, specify as "Default" when not quantized
+    // Use original precision model
+    "high_noise_original_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
+    "low_noise_original_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
+
+    // Or use FP8 quantized model
+    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors",
+    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "fp8-vllm"
+
+    // Or use INT8 quantized model
+    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
+    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
+    // "dit_quantized": true,
+    // "dit_quant_scheme": "int8-vllm"
+}
+```
+
+### Usage Tips
+
+> 💡 **Configuration Parameter Description**:
+> - **high_noise_original_ckpt** / **low_noise_original_ckpt**: Used to specify the path to original precision models (BF16/FP32/FP16)
+> - **high_noise_quantized_ckpt** / **low_noise_quantized_ckpt**: Used to specify the path to quantized models (FP8/INT8), must be used with `dit_quantized` and `dit_quant_scheme` parameters
+
+
+### Available Model List
+
+#### Wan2.1 Single-File Model List
+
+**Image-to-Video Models (I2V)**
+
+| Filename | Precision | Description |
+|--------|------|------|
+| `wan2.1_i2v_480p_lightx2v_4step.safetensors` | BF16 | 4-step model original precision |
+| `wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 4-step model FP8 quantization |
+| `wan2.1_i2v_480p_int8_lightx2v_4step.safetensors` | INT8 | 4-step model INT8 quantization |
+| `wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_4step_comfyui.safetensors` | FP8 | 4-step model ComfyUI format |
+| `wan2.1_i2v_720p_lightx2v_4step.safetensors` | BF16 | 4-step model original precision |
+| `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 4-step model FP8 quantization |
+| `wan2.1_i2v_720p_int8_lightx2v_4step.safetensors` | INT8 | 4-step model INT8 quantization |
+| `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step_comfyui.safetensors` | FP8 | 4-step model ComfyUI format |
+
+**Text-to-Video Models (T2V)**
+
+| Filename | Precision | Description |
+|--------|------|------|
+| `wan2.1_t2v_14b_lightx2v_4step.safetensors` | BF16 | 4-step model original precision |
+| `wan2.1_t2v_14b_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | 4-step model FP8 quantization |
+| `wan2.1_t2v_14b_int8_lightx2v_4step.safetensors` | INT8 | 4-step model INT8 quantization |
+| `wan2.1_t2v_14b_scaled_fp8_e4m3_lightx2v_4step_comfyui.safetensors` | FP8 | 4-step model ComfyUI format |
+
+#### Wan2.2 Single-File Model List
+
+**Image-to-Video Models (I2V) - A14B Series**
+
+| Filename | Precision | Description |
+|--------|------|------|
+| `wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors` | BF16 | High-noise model - 4-step original precision |
+| `wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | High-noise model - 4-step FP8 quantization |
+| `wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors` | INT8 | High-noise model - 4-step INT8 quantization |
+| `wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors` | BF16 | Low-noise model - 4-step original precision |
+| `wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors` | FP8 | Low-noise model - 4-step FP8 quantization |
+| `wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors` | INT8 | Low-noise model - 4-step INT8 quantization |
+
+> 💡 **Usage Tips**:
+> - Wan2.2 models use a dual-noise architecture, requiring both high-noise and low-noise models to be downloaded
+> - Refer to the "Wan2.2 Single-File Models" section above for detailed directory organization
+
+---
+
+## 🗂️ Format 3: LightX2V LoRA Models
+
+LoRA (Low-Rank Adaptation) models provide a lightweight model fine-tuning solution that enables customization for specific effects without modifying the base model.
+
+### Model Repositories
+
+- **Wan2.1 LoRA Models**: [lightx2v/Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
+- **Wan2.2 LoRA Models**: [lightx2v/Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
+
+### Usage Methods
+
+#### Method 1: Offline Merging
+
+Merge LoRA weights offline into the base model to generate a new complete model file.
+
+**Steps**:
+
+Refer to the [Model Conversion Documentation](https://github.com/ModelTC/lightx2v/tree/main/tools/convert/readme_zh.md) for offline merging.
+
+**Advantages**:
+- ✅ No need to load LoRA during inference
+- ✅ Better performance
+
+**Disadvantages**:
+- ❌ Requires additional storage space
+- ❌ Switching different LoRAs requires re-merging
+
+#### Method 2: Online Loading
+
+Dynamically load LoRA weights during inference without modifying the base model.
+
+**LoRA Application Principle**:
+
+```python
+# LoRA weight application formula
+# W' = W + (alpha/rank) * B @ A
+# Where: B = up_proj (out_features, rank)
+#        A = down_proj (rank, in_features)
+
+if weights_dict["alpha"] is not None:
+    lora_alpha = weights_dict["alpha"] / lora_down.shape[0]
+elif alpha is not None:
+    lora_alpha = alpha / lora_down.shape[0]
+else:
+    lora_alpha = 1.0
+```
+
+**Configuration Method**:
+
+**Wan2.1 LoRA Configuration**:
+
+```json
+{
+  "lora_configs": [
+    {
+      "path": "wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
+      "strength": 1.0,
+      "alpha": null
     }
+  ]
 }
 ```
 
-#### T5 Model Configuration
+**Wan2.2 LoRA Configuration**:
+
+Since Wan2.2 uses a dual-model architecture (high-noise/low-noise), LoRA needs to be configured separately for both models:
 
 ```json
 {
-    "t5_quantized_ckpt": "/path/to/t5_quantized_ckpt",      // T5 quantized weights path
-    "t5_original_ckpt": "/path/to/t5_original_ckpt",        // T5 original precision weights path
-    "t5_quantized": true,                                   // Whether to enable T5 quantization
-    "t5_quant_scheme": "fp8"                                // T5 quantization mode, only effective when t5_quantized is true
+  "lora_configs": [
+    {
+      "name": "low_noise_model",
+      "path": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step.safetensors",
+      "strength": 1.0,
+      "alpha": null
+    },
+    {
+      "name": "high_noise_model",
+      "path": "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step.safetensors",
+      "strength": 1.0,
+      "alpha": null
+    }
+  ]
 }
 ```
 
-#### CLIP Model Configuration
+**Parameter Description**:
 
-```json
-{
-    "clip_quantized_ckpt": "/path/to/clip_quantized_ckpt",  // CLIP quantized weights path
-    "clip_original_ckpt": "/path/to/clip_original_ckpt",    // CLIP original precision weights path
-    "clip_quantized": true,                                 // Whether to enable CLIP quantization
-    "clip_quant_scheme": "fp8"                              // CLIP quantization mode, only effective when clip_quantized is true
-}
-```
+| Parameter | Description | Default |
+|------|------|--------|
+| `path` | LoRA model file path | Required |
+| `strength` | LoRA strength coefficient, range [0.0, 1.0] | 1.0 |
+| `alpha` | LoRA scaling factor, uses model's built-in value when `null`, defaults to 1 if no built-in value | null |
+| `name` | (Wan2.2 only) Specifies which model to apply to | Required |
 
-#### VAE Model Configuration
+**Advantages**:
+- ✅ Flexible switching between different LoRAs
+- ✅ Saves storage space
+- ✅ Can dynamically adjust LoRA strength
 
-```json
-{
-    "vae_pth": "/path/to/Wan2.1_VAE.pth",                   // Original VAE model path
-    "use_tiny_vae": true,                                   // Whether to use lightweight VAE
-    "tiny_vae_path": "/path/to/taew2_1.pth"                 // Lightweight VAE model path
-}
-```
+**Disadvantages**:
+- ❌ Additional loading time during inference
+- ❌ Slightly increases memory usage
 
-> **Configuration Notes**:
-> - Quantized weights and original precision weights can be flexibly mixed and used, and the system will automatically select the corresponding model based on the configuration
-> - The choice of quantization mode depends on your hardware support, it is recommended to use FP8 on high-end GPUs like H100/A100
-> - Lightweight VAE can significantly improve inference speed but may slightly affect generation quality
+---
 
-## 💡 Best Practices
+## 📚 Related Resources
 
-### Recommended Configurations
+### Official Repositories
+- [LightX2V GitHub](https://github.com/ModelTC/LightX2V)
+- [LightX2V Single-File Model Repository](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- [Wan-AI Official Model Repository](https://huggingface.co/Wan-AI)
 
-**Complete Model Users**:
-- Download complete models to enjoy the convenience of automatic path discovery
-- Only need to configure quantization schemes and component switches
-- Recommended to use bash scripts for quick startup
+### Model Download Links
 
-**Storage Space Limited Users**:
-- Selectively download required quantized versions
-- Flexibly mix and use quantized and original precision components
-- Use bash scripts to simplify startup process
+**Wan2.1 Series**
+- [Wan2.1 Collection](https://huggingface.co/collections/Wan-AI/wan21-68ac4ba85372ae5a8e282a1b)
 
-**Advanced Users**:
-- Completely manual path configuration for maximum flexibility
-- Support scattered storage of model files
-- Can customize bash script parameters
+**Wan2.2 Series**
+- [Wan2.2 Collection](https://huggingface.co/collections/Wan-AI/wan22-68ac4ae80a8b477e79636fc8)
 
-### Performance Optimization Recommendations
+**LightX2V Single-File Models**
+- [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
 
-- **Use SSD Storage**: Significantly improve model loading speed and inference performance
-- **Choose Appropriate Quantization Schemes**:
-  - FP8: Suitable for high-end GPUs like H100/A100, high precision
-  - INT8: Suitable for general GPUs, small memory footprint
-- **Enable Lightweight VAE**: `use_tiny_vae: true` can improve inference speed
-- **Reasonable CPU Offload Configuration**: `t5_cpu_offload: true` can save GPU memory
-
-### Download Optimization Recommendations
-
-- **Use Hugging Face CLI**: More stable than git clone, supports resume download
-- **Selective Download**: Only download required quantized versions, saving time and storage space
-- **Network Optimization**: Use stable network connections, use proxy when necessary
-- **Resume Download**: Use `--resume-download` parameter to support continuing download after interruption
-
-## 🚨 Frequently Asked Questions
-
-### Q: Model files are too large and download speed is slow, what should I do?
-A: It is recommended to use selective download method, only download required quantized versions, or use domestic mirror sources
-
-### Q: Model path does not exist when starting up?
-A: Please check if the model has been correctly downloaded, verify if the path configuration is correct, and confirm if the automatic discovery mechanism is working properly
-
-### Q: How to switch between different quantization schemes?
-A: Modify parameters such as `mm_type`, `t5_quant_scheme`, `clip_quant_scheme` in the configuration file, please refer to the [Quantization Documentation](../method_tutorials/quantization.md)
-
-### Q: How to mix and use quantized and original precision components?
-A: Control through `t5_quantized` and `clip_quantized` parameters, and manually specify original precision paths
-
-### Q: How to set paths in configuration files?
-A: It is recommended to use automatic path discovery, for manual configuration please refer to the "Manual Configuration" section
-
-### Q: How to verify if automatic path discovery is working properly?
-A: Check the startup logs, the code will output the actual model paths being used
-
-### Q: What should I do if bash script startup fails?
-A: Check if the path configuration in the script is correct, ensure that `lightx2v_path` and `model_path` variables are correctly set
-
-## 📚 Related Links
-
-- [LightX2V Official Model Repository](https://huggingface.co/lightx2v)
-- [Gradio Deployment Guide](./deploy_gradio.md)
+### Documentation Links
+- [Quantization Documentation](../method_tutorials/quantization.md)
+- [Parameter Offload Documentation](../method_tutorials/offload.md)
 - [Configuration File Examples](https://github.com/ModelTC/LightX2V/tree/main/configs)
 
 ---
 
-Through scientific model file organization and flexible configuration options, LightX2V supports multiple usage scenarios. Complete model download provides maximum convenience, selective download saves storage space, and manual configuration provides maximum flexibility. The automatic path discovery mechanism ensures that users do not need to remember complex path configurations while maintaining system scalability.
+Through this document, you should be able to:
+
+✅ Understand all model formats supported by LightX2V
+✅ Select appropriate models and precisions based on your needs
+✅ Correctly download and organize model files
+✅ Configure launch parameters and successfully run inference
+✅ Resolve common model loading issues
+
+If you have other questions, feel free to ask in [GitHub Issues](https://github.com/ModelTC/LightX2V/issues).

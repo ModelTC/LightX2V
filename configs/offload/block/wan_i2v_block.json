@@ -9,10 +9,15 @@
     "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": true,
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-q8f",
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8-q8f",
+    "clip_quantized": true,
+    "clip_quant_scheme": "fp8-q8f",
     "cpu_offload": true,
-    "t5_cpu_offload": true,
     "offload_granularity": "block",
-    "mm_config": {
-        "mm_type": "W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm"
-    }
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "clip_cpu_offload": false
 }

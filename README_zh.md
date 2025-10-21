@@ -25,26 +25,24 @@
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
-- ✅ [HunyuanVideo](https://huggingface.co/tencent/HunyuanVideo)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [SkyReels-V2-DF](https://huggingface.co/Skywork/SkyReels-V2-DF-14B-540P)
 - ✅ [CogVideoX1.5-5B-T2V](https://huggingface.co/THUDM/CogVideoX1.5-5B)
+- ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 
-### 量化模型
-- ✅ [Wan2.1-T2V-1.3B-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-1.3B-Lightx2v)
-- ✅ [Wan2.1-T2V-14B-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-Lightx2v)
-- ✅ [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v)
-- ✅ [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
-
-### 蒸馏模型 (**🚀 推荐：4步推理**)
-- ✅ [Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v)
-- ✅ [Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v)
-- ✅ [Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v)
+### 量化模型和蒸馏模型/Lora (**🚀 推荐：4步推理**)
+- ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
+- ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
+- ✅ [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
 
 🔔 可以关注我们的[HuggingFace主页](https://huggingface.co/lightx2v)，及时获取我们团队的模型。
 
 ### 自回归模型
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
+- ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
+
+💡 参考[模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/model_structure.html)快速上手 LightX2V
 
 ## 🚀 前端展示
 
@@ -79,6 +77,7 @@
 - **🔄 并行推理加速**: 多GPU并行处理，显著提升性能表现
 - **📱 灵活部署选择**: 支持Gradio、服务化部署、ComfyUI等多种部署方式
 - **🎛️ 动态分辨率推理**: 自适应分辨率调整，优化生成质量
+- **🎞️ 视频帧插值**: 基于RIFE的帧插值技术，实现流畅的帧率提升
 
 
 ## 🏆 性能基准测试
