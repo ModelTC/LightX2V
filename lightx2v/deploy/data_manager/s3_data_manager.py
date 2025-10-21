@@ -28,6 +28,7 @@ class S3DataManager(BaseDataManager):
         self.write_timeout = self.config.get("write_timeout", 10)
         self.addressing_style = self.config.get("addressing_style", None)
         self.region = self.config.get("region", None)
+        self.cdn_url = self.config.get("cdn_url", "")
         self.session = None
         self.s3_client = None
         self.presign_client = None
@@ -138,6 +139,9 @@ class S3DataManager(BaseDataManager):
     @class_try_catch_async
     async def presign_url(self, filename, abs_path=None):
         filename = self.fmt_path(self.base_path, filename, abs_path)
+        if self.cdn_url:
+            return f"{self.cdn_url}/{filename}"
+
         if self.presign_client:
             expires = self.config.get("presign_expires", 24 * 60 * 60)
             out = await asyncio.to_thread(self.presign_client.pre_signed_url, tos.HttpMethodType.Http_Method_Get, self.bucket_name, filename, expires)
