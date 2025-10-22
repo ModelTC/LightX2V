@@ -121,6 +121,13 @@ class VSRWrapper:
         self.sparse_ratio = 2.0  # Recommended: 1.5 or 2.0. 1.5 → faster; 2.0 → more stable.
         with ProfilingContext4DebugL2("Load VSR model"):
             self.pipe = init_pipeline(model_path)
+        self._warm_up()
+
+    def _warm_up(self):
+        dummy = torch.zeros((25, 384, 640, 3), dtype=torch.float32, device=self.device)
+        _ = self.super_resolve_frames(dummy, seed=0, scale=2.0)
+        torch.cuda.synchronize()
+        del dummy
 
     @ProfilingContext4DebugL2("VSR video")
     def super_resolve_frames(
