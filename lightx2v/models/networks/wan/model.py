@@ -44,22 +44,18 @@ class WanModel(CompiledMethodsMixin):
     pre_weight_class = WanPreWeights
     transformer_weight_class = WanTransformerWeights
 
-    def __init__(self, model_path, config, device):
+    def __init__(self, model_path, config, device, model_type="wan2.1"):
         super().__init__()
         self.model_path = model_path
         self.config = config
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
+        self.model_type = model_type
 
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
-            self.init_empty_model = True
-        else:
-            self.init_empty_model = False
 
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.get("dit_quantized", False)
@@ -108,6 +104,20 @@ class WanModel(CompiledMethodsMixin):
                     return True
             else:
                 return True
+        return False
+
+    def _should_init_empty_model(self):
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
+            if self.model_type in ["wan2.1"]:
+                return True
+            if self.model_type in ["wan2.2_moe_high_noise"]:
+                for lora_config in self.config["lora_configs"]:
+                    if lora_config["name"] == "high_noise_model":
+                        return True
+            if self.model_type in ["wan2.2_moe_low_noise"]:
+                for lora_config in self.config["lora_configs"]:
+                    if lora_config["name"] == "low_noise_model":
+                        return True
         return False
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
@@ -254,7 +264,7 @@ class WanModel(CompiledMethodsMixin):
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config)
-        if not self.init_empty_model:
+        if not self._should_init_empty_model():
             self._apply_weights()
 
     def _apply_weights(self, weight_dict=None):
