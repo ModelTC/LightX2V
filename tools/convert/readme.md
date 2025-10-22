@@ -48,7 +48,7 @@ A powerful model weight conversion tool that supports format conversion, quantiz
   - `torch.bfloat16`: BF16
   - `torch.float16`: FP16
   - `torch.float32`: FP32 (default)
-- `--device`: Device for quantization, `cpu` (default) or `cuda`
+- `--device`: Device for quantization, `cpu` or `cuda` (default)
 - `--comfyui_mode`: ComfyUI compatible mode
 - `--full_quantized`: Full quantization mode (effective in ComfyUI mode)
 
@@ -391,7 +391,8 @@ python converter.py \
     --source /path/to/model.pth \
     --output /path/to/output \
     --output_ext .safetensors \
-    --output_name model
+    --output_name model \
+    --single_file
 ```
 
 #### 4.2 Multiple .safetensors → Single File
