@@ -48,7 +48,7 @@
   - `torch.bfloat16`: BF16
   - `torch.float16`: FP16
   - `torch.float32`: FP32（默认）
-- `--device`: 量化使用的设备，可选 `cpu`（默认）或 `cuda`
+- `--device`: 量化使用的设备，可选 `cpu` 或 `cuda`（默认）
 - `--comfyui_mode`: ComfyUI 兼容模式
 - `--full_quantized`: 全量化模式（ComfyUI 模式下有效）
 
@@ -391,7 +391,8 @@ python converter.py \
     --source /path/to/model.pth \
     --output /path/to/output \
     --output_ext .safetensors \
-    --output_name model
+    --output_name model \
+    --single_file
 ```
 
 #### 4.2 多个 .safetensors → 单文件

@@ -107,7 +107,7 @@ class WanModel(CompiledMethodsMixin):
         return False
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and self.config.lora_configs:
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
             if self.model_type in ["wan2.1"]:
                 return True
             if self.model_type in ["wan2.2_moe_high_noise"]:
