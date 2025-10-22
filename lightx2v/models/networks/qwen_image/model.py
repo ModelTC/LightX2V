@@ -194,7 +194,7 @@ class QwenImageTransformerModel:
         t = self.scheduler.timesteps[self.scheduler.step_index]
         latents = self.scheduler.latents
         if self.config["task"] == "i2i":
-            image_latents = inputs["image_encoder_output"]["image_latents"]
+            image_latents = torch.cat([item["image_latents"] for item in inputs["image_encoder_output"]], dim=1)
             latents_input = torch.cat([latents, image_latents], dim=1)
         else:
             latents_input = latents

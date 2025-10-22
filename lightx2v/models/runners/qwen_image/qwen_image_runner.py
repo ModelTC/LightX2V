@@ -2,6 +2,8 @@ import gc
 import math
 
 import torch
+import torchvision.transforms.functional as TF
+from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
@@ -90,41 +92,61 @@ class QwenImageRunner(DefaultRunner):
             "image_encoder_output": None,
         }
 
+    def read_image_input(self, img_path):
+        if isinstance(img_path, Image.Image):
+            img_ori = img_path
+        else:
+            img_ori = Image.open(img_path).convert("RGB")
+        if GET_RECORDER_MODE():
+            width, height = img_ori.size
+            monitor_cli.lightx2v_input_image_len.observe(width * height)
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        self.input_info.original_size.append(img_ori.size)
+        return img, img_ori
+
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
-        _, image = self.read_image_input(self.input_info.image_path)
+        image_paths_list = self.input_info.image_path.split(",")
+        images_list = []
+        for image_path in image_paths_list:
+            _, image = self.read_image_input(image_path)
+            images_list.append(image)
+
         prompt = self.input_info.prompt
-        text_encoder_output = self.run_text_encoder(prompt, image, neg_prompt=self.input_info.negative_prompt)
-        image_encoder_output = self.run_vae_encoder(image=text_encoder_output["preprocessed_image"])
-        image_encoder_output["image_info"] = text_encoder_output["image_info"]
+        text_encoder_output = self.run_text_encoder(prompt, images_list, neg_prompt=self.input_info.negative_prompt)
+
+        image_encoder_output_list = []
+        for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
+            image_encoder_output = self.run_vae_encoder(image=vae_image)
+            image_encoder_output_list.append(image_encoder_output)
+
         torch.cuda.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
-            "image_encoder_output": image_encoder_output,
+            "image_encoder_output": image_encoder_output_list,
         }
 
     @ProfilingContext4DebugL1("Run Text Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_text_encode_duration, metrics_labels=["QwenImageRunner"])
-    def run_text_encoder(self, text, image=None, neg_prompt=None):
+    def run_text_encoder(self, text, image_list=None, neg_prompt=None):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         text_encoder_output = {}
         if self.config["task"] == "t2i":
-            prompt_embeds, prompt_embeds_mask, _, _ = self.text_encoders[0].infer([text])
+            prompt_embeds, prompt_embeds_mask, _ = self.text_encoders[0].infer([text])
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["prompt_embeds_mask"] = prompt_embeds_mask
             if self.config["do_true_cfg"] and neg_prompt is not None:
-                neg_prompt_embeds, neg_prompt_embeds_mask, _, _ = self.text_encoders[0].infer([neg_prompt])
+                neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
                 text_encoder_output["negative_prompt_embeds_mask"] = neg_prompt_embeds_mask
         elif self.config["task"] == "i2i":
-            prompt_embeds, prompt_embeds_mask, preprocessed_image, image_info = self.text_encoders[0].infer([text], image)
+            prompt_embeds, prompt_embeds_mask, image_info = self.text_encoders[0].infer([text], image_list)
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["prompt_embeds_mask"] = prompt_embeds_mask
-            text_encoder_output["preprocessed_image"] = preprocessed_image
             text_encoder_output["image_info"] = image_info
             if self.config["do_true_cfg"] and neg_prompt is not None:
-                neg_prompt_embeds, neg_prompt_embeds_mask, _, _ = self.text_encoders[0].infer([neg_prompt], image)
+                neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
                 text_encoder_output["negative_prompt_embeds_mask"] = neg_prompt_embeds_mask
         return text_encoder_output
@@ -158,7 +180,7 @@ class QwenImageRunner(DefaultRunner):
         if not self.config["_auto_resize"]:
             width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
         else:
-            width, height = self.input_info.original_size
+            width, height = self.input_info.original_size[-1]
             calculated_width, calculated_height, _ = calculate_dimensions(1024 * 1024, width / height)
             multiple_of = self.vae.vae_scale_factor * 2
             width = calculated_width // multiple_of * multiple_of
@@ -178,13 +200,10 @@ class QwenImageRunner(DefaultRunner):
             width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
             img_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * self.config["batchsize"]
         elif self.config["task"] == "i2i":
-            image_height, image_width = self.inputs["image_encoder_output"]["image_info"]
-            img_shapes = [
-                [
-                    (1, self.input_info.auto_hight // self.config["vae_scale_factor"] // 2, self.input_info.auto_width // self.config["vae_scale_factor"] // 2),
-                    (1, image_height // self.config["vae_scale_factor"] // 2, image_width // self.config["vae_scale_factor"] // 2),
-                ]
-            ]
+            img_shapes = [[(1, self.input_info.auto_hight // self.config["vae_scale_factor"] // 2, self.input_info.auto_width // self.config["vae_scale_factor"] // 2)]]
+            for image_height, image_width in self.inputs["text_encoder_output"]["image_info"]["vae_image_info_list"]:
+                img_shapes[0].append((1, image_height // self.config["vae_scale_factor"] // 2, image_width // self.config["vae_scale_factor"] // 2))
+
         self.inputs["img_shapes"] = img_shapes
 
     def init_scheduler(self):

@@ -36,6 +36,6 @@ python -m lightx2v.infer \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i.json \
     --prompt "turn the style of the photo to vintage comic book" \
     --negative_prompt " " \
-    --image_path /data/nvme2/wushuo/qwen-image/pie.png \
+    --image_path pie.png \
     --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i.png \
     --seed 0
