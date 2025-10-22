@@ -715,10 +715,11 @@ def convert_weights(args):
                 index["metadata"]["total_size"] += os.path.getsize(output_path)
 
         # Save index file
-        index_path = os.path.join(args.output, "diffusion_pytorch_model.safetensors.index.json")
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(index, f, indent=2)
-        logger.info(f"Index file written to: {index_path}")
+        if not args.single_file:
+            index_path = os.path.join(args.output, "diffusion_pytorch_model.safetensors.index.json")
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(index, f, indent=2)
+            logger.info(f"Index file written to: {index_path}")
 
     if os.path.isdir(args.source) and args.copy_no_weight_files:
         copy_non_weight_files(args.source, args.output)
@@ -783,7 +784,7 @@ def main():
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
+        default="cuda",
         help="Device to use for quantization (cpu/cuda)",
     )
     parser.add_argument(
