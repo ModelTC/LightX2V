@@ -123,6 +123,7 @@ class I2IInputInfo:
     # shape related
     target_shape: int = field(default_factory=int)
     processed_image_size: int = field(default_factory=list)
+    original_size: list = field(default_factory=list)
 
 
 def set_input_info(args):

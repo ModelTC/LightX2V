@@ -2,7 +2,7 @@
     "batchsize": 1,
     "num_channels_latents": 16,
     "vae_scale_factor": 8,
-    "infer_steps": 50,
+    "infer_steps": 40,
     "guidance_embeds": false,
     "num_images_per_prompt": 1,
     "vae_latents_mean": [
@@ -59,9 +59,7 @@
     "attn_type": "flash_attn3",
     "do_true_cfg": true,
     "true_cfg_scale": 4.0,
-    "cpu_offload": true,
-    "offload_granularity": "block",
     "mm_config": {},
-    "CONDITION_IMAGE_SIZE": 1048576,
-    "USE_IMAGE_ID_IN_PROMPT": false
+    "CONDITION_IMAGE_SIZE": 147456,
+    "USE_IMAGE_ID_IN_PROMPT": true
 }

@@ -111,6 +111,7 @@ class AutoencoderKLQwenImageVAE:
 
         if self.cpu_offload:
             self.model.to(torch.device("cuda"))
+
         num_channels_latents = self.config["transformer_in_channels"] // 4
         image = image.to(self.model.device).to(self.dtype)
 
@@ -129,6 +130,7 @@ class AutoencoderKLQwenImageVAE:
 
         image_latent_height, image_latent_width = image_latents.shape[3:]
         image_latents = self._pack_latents(image_latents, self.config["batchsize"], num_channels_latents, image_latent_height, image_latent_width)
+
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
             torch.cuda.empty_cache()
