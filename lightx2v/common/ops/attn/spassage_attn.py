@@ -1,8 +1,10 @@
 import os
-
-import matplotlib.pyplot as plt
-import spas_sage_attn
 import torch
+
+try:
+    import spas_sage_attn
+except ImportError:
+    spas_sage_attn = None
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
@@ -29,6 +31,8 @@ class SageAttnWeight(AttnWeightTemplate):
 
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
     # 1. 构造输入
     q = torch.randn(32760, 12, 128, dtype=torch.bfloat16).cuda()
     k = torch.randn(32760, 12, 128, dtype=torch.bfloat16).cuda()
