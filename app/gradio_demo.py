@@ -273,7 +273,7 @@ def run_inference(
     t5_quant_scheme,
     clip_quant_scheme,
     fps,
-    use_tiny_vae,
+    use_tae,
     use_tiling_vae,
     lazy_load,
     precision_mode,
@@ -491,8 +491,8 @@ def run_inference(
         "clip_quant_scheme": clip_quant_scheme,
         "vae_path": find_torch_model_path(model_path, "Wan2.1_VAE.pth"),
         "use_tiling_vae": use_tiling_vae,
-        "use_tiny_vae": use_tiny_vae,
-        "tiny_vae_path": (find_torch_model_path(model_path, "taew2_1.pth") if use_tiny_vae else None),
+        "use_tae": use_tae,
+        "tae_pth": (find_torch_model_path(model_path, "taew2_1.pth") if use_tae else None),
         "lazy_load": lazy_load,
         "do_mm_calib": False,
         "parallel_attn_type": None,
@@ -590,7 +590,7 @@ def auto_configure(enable_auto_config, resolution):
         "t5_quant_scheme_val": "bf16",
         "clip_quant_scheme_val": "fp16",
         "precision_mode_val": "fp32",
-        "use_tiny_vae_val": False,
+        "use_tae_val": False,
         "use_tiling_vae_val": False,
         "enable_teacache_val": False,
         "teacache_thresh_val": 0.26,
@@ -692,7 +692,7 @@ def auto_configure(enable_auto_config, resolution):
                     "rotary_chunk_val": True,
                     "rotary_chunk_size_val": 100,
                     "clean_cuda_cache_val": True,
-                    "use_tiny_vae_val": True,
+                    "use_tae_val": True,
                 },
             ),
             (
@@ -713,7 +713,7 @@ def auto_configure(enable_auto_config, resolution):
                     "dit_quant_scheme_val": quant_type,
                     "lazy_load_val": True,
                     "unload_modules_val": True,
-                    "use_tiny_vae_val": True,
+                    "use_tae_val": True,
                 },
             ),
         ]
@@ -754,7 +754,7 @@ def auto_configure(enable_auto_config, resolution):
                         "unload_modules_val": True,
                         "rotary_chunk_val": True,
                         "rotary_chunk_size_val": 10000,
-                        "use_tiny_vae_val": True,
+                        "use_tae_val": True,
                     }
                     if res == "540p"
                     else {
@@ -770,7 +770,7 @@ def auto_configure(enable_auto_config, resolution):
                         "dit_quant_scheme_val": quant_type,
                         "lazy_load_val": True,
                         "unload_modules_val": True,
-                        "use_tiny_vae_val": True,
+                        "use_tae_val": True,
                     }
                 ),
             ),
@@ -813,7 +813,7 @@ def auto_configure(enable_auto_config, resolution):
                 {
                     "t5_quant_scheme_val": quant_type,
                     "unload_modules_val": True,
-                    "use_tiny_vae_val": True,
+                    "use_tae_val": True,
                 },
             ),
         ]
@@ -1161,7 +1161,7 @@ def main():
 
                     gr.Markdown("### Variational Autoencoder (VAE)")
                     with gr.Row():
-                        use_tiny_vae = gr.Checkbox(
+                        use_tae = gr.Checkbox(
                             label="Use Tiny VAE",
                             value=False,
                             info="Use a lightweight VAE model to accelerate the decoding process",
@@ -1213,7 +1213,7 @@ def main():
                         t5_quant_scheme,
                         clip_quant_scheme,
                         precision_mode,
-                        use_tiny_vae,
+                        use_tae,
                         use_tiling_vae,
                         enable_teacache,
                         teacache_thresh,
@@ -1248,7 +1248,7 @@ def main():
                     t5_quant_scheme,
                     clip_quant_scheme,
                     fps,
-                    use_tiny_vae,
+                    use_tae,
                     use_tiling_vae,
                     lazy_load,
                     precision_mode,
@@ -1289,7 +1289,7 @@ def main():
                     t5_quant_scheme,
                     clip_quant_scheme,
                     fps,
-                    use_tiny_vae,
+                    use_tae,
                     use_tiling_vae,
                     lazy_load,
                     precision_mode,
