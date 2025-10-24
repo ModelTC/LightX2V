@@ -11,11 +11,11 @@ class DotDict(dict):
 
 
 class WanVAE_tiny(nn.Module):
-    def __init__(self, vae_pth="taew2_1.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
+    def __init__(self, vae_path="taew2_1.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
         super().__init__()
         self.dtype = dtype
         self.device = torch.device("cuda")
-        self.taehv = TAEHV(vae_pth).to(self.dtype)
+        self.taehv = TAEHV(vae_path).to(self.dtype)
         self.temperal_downsample = [True, True, False]
         self.need_scaled = need_scaled
 
@@ -83,11 +83,11 @@ class WanVAE_tiny(nn.Module):
 
 
 class Wan2_2_VAE_tiny(nn.Module):
-    def __init__(self, vae_pth="taew2_2.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
+    def __init__(self, vae_path="taew2_2.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
         super().__init__()
         self.dtype = dtype
         self.device = torch.device("cuda")
-        self.taehv = TAEHV(vae_pth, model_type="wan22").to(self.dtype)
+        self.taehv = TAEHV(vae_path, model_type="wan22").to(self.dtype)
         self.need_scaled = need_scaled
         if self.need_scaled:
             self.latents_mean = [

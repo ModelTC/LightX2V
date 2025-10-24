@@ -795,7 +795,7 @@ class WanVAE:
     def __init__(
         self,
         z_dim=16,
-        vae_pth="cache/vae_step_411000.pth",
+        vae_path="cache/vae_step_411000.pth",
         dtype=torch.float,
         device="cuda",
         parallel=False,
@@ -895,7 +895,7 @@ class WanVAE:
 
         # init model
         self.model = (
-            _video_vae(pretrained_path=vae_pth, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0, pruning_rate=pruning_rate)
+            _video_vae(pretrained_path=vae_path, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0, pruning_rate=pruning_rate)
             .eval()
             .requires_grad_(False)
             .to(device)

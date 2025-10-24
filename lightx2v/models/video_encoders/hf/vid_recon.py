@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     dtype = dtype_map[args.dtype]
 
-    model_args = {"vae_pth": args.checkpoint, "dtype": dtype, "device": dev}
+    model_args = {"vae_path": args.checkpoint, "dtype": dtype, "device": dev}
     if args.model_type in "vaew2_1":
         model_args.update({"use_lightvae": args.use_lightvae})
 

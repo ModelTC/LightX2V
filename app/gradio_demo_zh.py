@@ -496,7 +496,7 @@ def run_inference(
         "vae_path": find_torch_model_path(model_path, "Wan2.1_VAE.pth"),
         "use_tiling_vae": use_tiling_vae,
         "use_tae": use_tae,
-        "tae_pth": (find_torch_model_path(model_path, "taew2_1.pth") if use_tae else None),
+        "tae_path": (find_torch_model_path(model_path, "taew2_1.pth") if use_tae else None),
         "lazy_load": lazy_load,
         "do_mm_calib": False,
         "parallel_attn_type": None,
