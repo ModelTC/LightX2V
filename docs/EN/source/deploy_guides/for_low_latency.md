@@ -28,8 +28,8 @@ In some cases, the VAE component can be time-consuming. You can use a lightweigh
 
 ```python
 {
-    "use_tiny_vae": true,
-    "tiny_vae_path": "/path to taew2_1.pth"
+    "use_tae": true,
+    "tae_pth": "/path to taew2_1.pth"
 }
 ```
 The taew2_1.pth weights can be downloaded from [here](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)

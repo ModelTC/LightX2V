@@ -28,8 +28,8 @@
 
 ```python
 {
-    "use_tiny_vae": true,
-    "tiny_vae_path": "/path to taew2_1.pth"
+    "use_tae": true,
+    "tae_pth": "/path to taew2_1.pth"
 }
 ```
 taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)下载

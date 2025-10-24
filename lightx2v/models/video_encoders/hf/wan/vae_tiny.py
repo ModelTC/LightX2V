@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
 
+from lightx2v.models.video_encoders.hf.tae import TAEHV
 from lightx2v.utils.memory_profiler import peak_memory_decorator
-
-from ..tae import TAEHV
 
 
 class DotDict(dict):
@@ -73,6 +72,14 @@ class WanVAE_tiny(nn.Module):
 
         # low-memory, set parallel=True for faster + higher memory
         return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False).transpose(1, 2).mul_(2).sub_(1)
+
+    @torch.no_grad()
+    def encode_video(self, vid):
+        return self.taehv.encode_video(vid)
+
+    @torch.no_grad()
+    def decode_video(self, vid_enc):
+        return self.taehv.decode_video(vid_enc)
 
 
 class Wan2_2_VAE_tiny(nn.Module):
@@ -199,3 +206,11 @@ class Wan2_2_VAE_tiny(nn.Module):
 
         # low-memory, set parallel=True for faster + higher memory
         return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False).transpose(1, 2).mul_(2).sub_(1)
+
+    @torch.no_grad()
+    def encode_video(self, vid):
+        return self.taehv.encode_video(vid)
+
+    @torch.no_grad()
+    def decode_video(self, vid_enc):
+        return self.taehv.decode_video(vid_enc)

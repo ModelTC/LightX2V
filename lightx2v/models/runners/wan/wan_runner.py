@@ -178,16 +178,16 @@ class WanRunner(DefaultRunner):
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
         }
-        if self.config.get("use_tiny_vae", False):
-            tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_pth=tiny_vae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
+        if self.config.get("use_tae", False):
+            tae_pth = find_torch_model_path(self.config, "tae_pth", self.tiny_vae_name)
+            vae_decoder = self.tiny_vae_cls(vae_pth=tae_pth, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
-        if vae_encoder is None or self.config.get("use_tiny_vae", False):
+        if vae_encoder is None or self.config.get("use_tae", False):
             vae_decoder = self.load_vae_decoder()
         else:
             vae_decoder = vae_encoder

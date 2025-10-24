@@ -659,7 +659,7 @@ class WanVAE_(nn.Module):
 
         return dec
 
-    def encode(self, x, scale):
+    def encode(self, x, scale, return_mu=False):
         self.clear_cache()
         ## cache
         t = x.shape[2]
@@ -686,7 +686,10 @@ class WanVAE_(nn.Module):
             mu = (mu - scale[0]) * scale[1]
 
         self.clear_cache()
-        return mu
+        if return_mu:
+            return mu, log_var
+        else:
+            return mu
 
     def decode(self, z, scale):
         self.clear_cache()
@@ -722,12 +725,12 @@ class WanVAE_(nn.Module):
         eps = torch.randn_like(std)
         return eps * std + mu
 
-    def sample(self, imgs, deterministic=False):
-        mu, log_var = self.encode(imgs)
+    def sample(self, imgs, deterministic=False, scale=[0, 1]):
+        mu, log_var = self.encode(imgs, scale, return_mu=True)
         if deterministic:
             return mu
         std = torch.exp(0.5 * log_var.clamp(-30.0, 20.0))
-        return mu + std * torch.randn_like(std)
+        return mu + std * torch.randn_like(std), mu, log_var
 
     def clear_cache(self):
         self._conv_num = count_conv3d(self.decoder)
@@ -737,6 +740,24 @@ class WanVAE_(nn.Module):
         self._enc_conv_num = count_conv3d(self.encoder)
         self._enc_conv_idx = [0]
         self._enc_feat_map = [None] * self._enc_conv_num
+
+    def encode_video(self, x, scale=[0, 1]):
+        assert x.ndim == 5  # NTCHW
+        assert x.shape[2] % 3 == 0
+        x = x.transpose(1, 2)
+        y = x.mul(2).sub_(1)
+        y, mu, log_var = self.sample(y, scale=scale)
+        return y.transpose(1, 2).to(x), mu, log_var
+
+    def decode_video(self, x, scale=[0, 1]):
+        assert x.ndim == 5  # NTCHW
+        assert x.shape[2] % self.z_dim == 0
+        x = x.transpose(1, 2)
+        # B, C, T, H, W
+        y = x
+        y = self.decode(y, scale).clamp_(-1, 1)
+        y = y.mul_(0.5).add_(0.5).clamp_(0, 1)  # NCTHW
+        return y.transpose(1, 2).to(x)
 
 
 def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, load_from_rank0=False, pruning_rate=0.0, **kwargs):
@@ -1281,34 +1302,8 @@ class WanVAE:
 
         return images
 
+    def encode_video(self, vid):
+        return self.model.encode_video(vid)
 
-if __name__ == "__main__":
-    dist.init_process_group(backend="nccl")
-    torch.cuda.set_device(dist.get_rank())
-
-    # # Test both 1D and 2D splitting
-    # print(f"Rank {dist.get_rank()}: Testing 1D splitting")
-    # model_1d = WanVAE(vae_pth="/data/nvme0/models/Wan-AI/Wan2.1-I2V-14B-480P/Wan2.1_VAE.pth", dtype=torch.bfloat16, parallel=True, use_2d_split=False)
-    # model_1d.to_cuda()
-
-    input_tensor = torch.randn(1, 3, 17, 480, 480).to(torch.bfloat16).to("cuda")
-    # encoded_tensor_1d = model_1d.encode(input_tensor)
-    # print(f"rank {dist.get_rank()} 1D encoded_tensor shape: {encoded_tensor_1d.shape}")
-    # decoded_tensor_1d = model_1d.decode(encoded_tensor_1d)
-    # print(f"rank {dist.get_rank()} 1D decoded_tensor shape: {decoded_tensor_1d.shape}")
-
-    print(f"Rank {dist.get_rank()}: Testing 2D splitting")
-    model_2d = WanVAE(vae_pth="/data/nvme0/models/Wan-AI/Wan2.1-I2V-14B-480P/Wan2.1_VAE.pth", dtype=torch.bfloat16, parallel=True, use_2d_split=True)
-    model_2d.to_cuda()
-
-    encoded_tensor_2d = model_2d.encode(input_tensor)
-    print(f"rank {dist.get_rank()} 2D encoded_tensor shape: {encoded_tensor_2d.shape}")
-    decoded_tensor_2d = model_2d.decode(encoded_tensor_2d)
-    print(f"rank {dist.get_rank()} 2D decoded_tensor shape: {decoded_tensor_2d.shape}")
-
-    # # Verify that both methods produce the same results
-    # if dist.get_rank() == 0:
-    #     print(f"Encoded tensors match: {torch.allclose(encoded_tensor_1d, encoded_tensor_2d, atol=1e-5)}")
-    #     print(f"Decoded tensors match: {torch.allclose(decoded_tensor_1d, decoded_tensor_2d, atol=1e-5)}")
-
-    dist.destroy_process_group()
+    def decode_video(self, vid_enc):
+        return self.model.decode_video(vid_enc)
