@@ -161,7 +161,7 @@ use_tiling_vae = True          # Enable VAE chunked inference
 ```python
 # VAE optimization configuration
 use_tae = True            # Use lightweight VAE
-tae_pth = "/path to taew2_1.pth"
+tae_path = "/path to taew2_1.pth"
 ```
 You can download taew2_1.pth [here](https://github.com/madebyollin/taehv/blob/main/taew2_1.pth)
 

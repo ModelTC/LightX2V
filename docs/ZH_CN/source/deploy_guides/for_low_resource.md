@@ -161,7 +161,7 @@ use_tiling_vae = True          # 启用VAE分块推理
 ```python
 # VAE优化配置
 use_tae = True
-tae_pth = "/path to taew2_1.pth"
+tae_path = "/path to taew2_1.pth"
 ```
 taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)下载
 

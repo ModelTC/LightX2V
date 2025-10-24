@@ -866,7 +866,7 @@ class Wan2_2_VAE:
         self,
         z_dim=48,
         c_dim=160,
-        vae_pth=None,
+        vae_path=None,
         dim_mult=[1, 2, 4, 4],
         temperal_downsample=[False, True, True],
         dtype=torch.float,
@@ -994,7 +994,7 @@ class Wan2_2_VAE:
         # init model
         self.model = (
             _video_vae(
-                pretrained_path=vae_pth, z_dim=z_dim, dim=c_dim, dim_mult=dim_mult, temperal_downsample=temperal_downsample, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0
+                pretrained_path=vae_path, z_dim=z_dim, dim=c_dim, dim_mult=dim_mult, temperal_downsample=temperal_downsample, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0
             )
             .eval()
             .requires_grad_(False)

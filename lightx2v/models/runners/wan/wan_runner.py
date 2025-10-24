@@ -146,7 +146,7 @@ class WanRunner(DefaultRunner):
             vae_device = torch.device("cuda")
 
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
+            "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -169,7 +169,7 @@ class WanRunner(DefaultRunner):
             vae_device = torch.device("cuda")
 
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", self.vae_name),
+            "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -179,8 +179,8 @@ class WanRunner(DefaultRunner):
             "load_from_rank0": self.config.get("load_from_rank0", False),
         }
         if self.config.get("use_tae", False):
-            tae_pth = find_torch_model_path(self.config, "tae_pth", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_pth=tae_pth, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
+            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
