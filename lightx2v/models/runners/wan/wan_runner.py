@@ -532,10 +532,10 @@ class Wan22DenseRunner(WanRunner):
         # to tensor
         img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda().unsqueeze(1)
         vae_encoder_out = self.get_vae_encoder_output(img)
-        self.config.lat_w, self.config.lat_h = ow // self.config.vae_stride[2], oh // self.config.vae_stride[1]
-
-        return vae_encoder_out
+        latent_w, latent_h = ow // self.config["vae_stride"][2], oh // self.config["vae_stride"][1]
+        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+        return vae_encoder_out, latent_shape
 
     def get_vae_encoder_output(self, img):
-        z = self.vae_encoder.encode(img.to(GET_DTYPE()))
+        z = self.vae_encoder.encode(img.unsqueeze(0).to(GET_DTYPE()))
         return z
