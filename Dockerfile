@@ -40,6 +40,10 @@ RUN git clone https://github.com/KONAKONA666/q8_kernels.git
 
 RUN cd q8_kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
 
+RUN git clone https://github.com/ModelTC/FlashVSR.git
+
+RUN cd FlashVSR && pip install -e . && pip install -r requirements.txt
+
 # cloud deploy
 RUN pip install --no-cache-dir aio-pika asyncpg>=0.27.0 aioboto3>=12.0.0 PyJWT alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0 tos
 
