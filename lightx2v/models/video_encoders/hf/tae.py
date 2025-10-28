@@ -228,7 +228,6 @@ class TAEHV(nn.Module):
             conv(n_f[3], self.image_channels * self.patch_size**2),
         )
         if checkpoint_path is not None:
-            # 获取文件后缀（小写处理，避免大小写问题）
             ext = os.path.splitext(checkpoint_path)[1].lower()
 
             if ext == ".pth":
