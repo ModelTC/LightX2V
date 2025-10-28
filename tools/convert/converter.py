@@ -390,7 +390,7 @@ def quantize_model(
             # Check if key matches target modules
             parts = key.split(".")
 
-            if comfyui_mode and key in comfyui_keys:
+            if comfyui_mode and (comfyui_keys is not None and key in comfyui_keys):
                 pass
             elif len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
                 if adapter_keys is None:

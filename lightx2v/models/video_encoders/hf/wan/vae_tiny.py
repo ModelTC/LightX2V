@@ -214,3 +214,7 @@ class Wan2_2_VAE_tiny(nn.Module):
     @torch.no_grad()
     def decode_video(self, vid_enc):
         return self.taehv.decode_video(vid_enc)
+
+    images = vae.decode_video(latents.permute(0, 2, 1, 3, 4), cond=flashvsr_LQ_images.to(vae.dtype) if flashvsr_LQ_images is not None else None)[0].permute(1, 0, 2, 3)
+    images = torch.clamp(images, 0.0, 1.0)
+    images = images.permute(1, 2, 3, 0).cpu().float()
