@@ -4,11 +4,13 @@ Tiny AutoEncoder for Hunyuan Video
 (DNN for encoding / decoding videos to Hunyuan Video's latent space)
 """
 
+import os
 from collections import namedtuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors.torch import load_file
 from tqdm.auto import tqdm
 
 DecoderResult = namedtuple("DecoderResult", ("frame", "memory"))
@@ -226,7 +228,16 @@ class TAEHV(nn.Module):
             conv(n_f[3], self.image_channels * self.patch_size**2),
         )
         if checkpoint_path is not None:
-            self.load_state_dict(self.patch_tgrow_layers(torch.load(checkpoint_path, map_location="cpu", weights_only=True)))
+            ext = os.path.splitext(checkpoint_path)[1].lower()
+
+            if ext == ".pth":
+                state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            elif ext == ".safetensors":
+                state_dict = load_file(checkpoint_path, device="cpu")
+            else:
+                raise ValueError(f"Unsupported checkpoint format: {ext}. Supported formats: .pth, .safetensors")
+
+            self.load_state_dict(self.patch_tgrow_layers(state_dict))
 
     def patch_tgrow_layers(self, sd):
         """Patch TGrow layers to use a smaller kernel if needed.
