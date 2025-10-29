@@ -288,7 +288,7 @@ class VisionTransformer(nn.Module):
         b = x.size(0)
 
         # embeddings
-        x = self.patch_embedding(x).flatten(2).permute(0, 2, 1)
+        x = self.patch_embedding(x.type(self.patch_embedding.weight.type())).flatten(2).permute(0, 2, 1)
         if self.pool_type in ("token", "token_fc"):
             x = torch.cat([self.cls_embedding.expand(b, -1, -1), x], dim=1)
         if interpolation:

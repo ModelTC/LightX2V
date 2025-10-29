@@ -145,9 +145,9 @@ class BaseRunner(ABC):
 
         if world_size > 1:
             if rank == signal_rank:
-                t = torch.tensor([stopped], dtype=torch.int32).to(device="cuda")
+                t = torch.tensor([stopped], dtype=torch.int32).to(device=self.config.get("run_device", "cuda"))
             else:
-                t = torch.zeros(1, dtype=torch.int32, device="cuda")
+                t = torch.zeros(1, dtype=torch.int32, device=self.config.get("run_device", "cuda"))
             dist.broadcast(t, src=signal_rank)
             stopped = t.item()
 

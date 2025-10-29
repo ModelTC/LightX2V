@@ -535,7 +535,7 @@ class T5EncoderModel:
         self,
         text_len,
         dtype=torch.bfloat16,
-        device=torch.cuda.current_device(),
+        device=torch.device("cuda"),
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -590,7 +590,7 @@ class T5EncoderModel:
         self.model = self.model.to("cpu")
 
     def to_cuda(self):
-        self.model = self.model.to("cuda")
+        self.model = self.model.to(self.device)
 
     def optimize_memory(self):
         """优化内存使用"""
@@ -601,8 +601,8 @@ class T5EncoderModel:
             self.to_cuda()
 
         ids, mask = self.tokenizer(texts, return_mask=True, add_special_tokens=True)
-        ids = ids.cuda()
-        mask = mask.cuda()
+        ids = ids.to(self.device)
+        mask = mask.to(self.device)
         seq_lens = mask.gt(0).sum(dim=1).long()
 
         with torch.no_grad():

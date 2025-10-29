@@ -10,7 +10,7 @@ from lightx2v.utils.utils import masks_like
 class WanScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.device = torch.device("cuda")
+        self.device = torch.device(self.config.get("run_device", "cuda"))
         self.infer_steps = self.config["infer_steps"]
         self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
