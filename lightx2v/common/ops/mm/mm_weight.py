@@ -3,8 +3,26 @@ from abc import ABCMeta, abstractmethod
 import torch
 
 from lightx2v.utils.envs import *
+from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+
+try:
+    from lightx2v_kernel.gemm import (
+        cutlass_scaled_mxfp4_mm,
+        cutlass_scaled_mxfp6_mxfp8_mm,
+        cutlass_scaled_mxfp8_mm,
+        cutlass_scaled_nvfp4_mm,
+        scaled_mxfp4_quant,
+        scaled_mxfp6_quant,
+        scaled_mxfp8_quant,
+        scaled_nvfp4_quant,
+    )
+except ImportError:
+    scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm = None, None
+    scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm = None, None
+    scaled_mxfp6_quant, cutlass_scaled_mxfp6_mxfp8_mm = None, None
+    scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm = None, None
 
 try:
     from vllm import _custom_ops as ops
@@ -267,6 +285,179 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.bias = None
             self.pin_bias = None
 
+    def load_mxfp4(self, weight_dict):
+        if self.config.get("weight_auto_quant", False):
+            device = weight_dict[self.weight_name].device
+            self.weight = weight_dict[self.weight_name].cuda().to(torch.bfloat16)
+            self.weight, self.weight_scale = scaled_mxfp4_quant(self.weight)
+            self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
+        else:
+            device = weight_dict[self.weight_name].device
+            if device.type == "cuda":
+                self.weight = weight_dict[self.weight_name]
+                self.weight_scale = weight_dict[self.weight_scale_name]
+            elif device.type == "cpu":
+                weight_shape = weight_dict[self.weight_name].shape
+                weight_dtype = weight_dict[self.weight_name].dtype
+                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+                self.pin_weight.copy_(weight_dict[self.weight_name])
+
+                weight_scale_shape = weight_dict[self.weight_scale_name].shape
+                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
+                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                del weight_dict[self.weight_name]
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+
+        if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
+            if device.type == "cuda":
+                self.bias = weight_dict[self.bias_name]
+            elif device.type == "cpu":
+                bias_shape = weight_dict[self.bias_name].shape
+                bias_dtype = weight_dict[self.bias_name].dtype
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
+
+    def load_mxfp6(self, weight_dict):
+        if self.config.get("weight_auto_quant", False):
+            device = weight_dict[self.weight_name].device
+            self.weight = weight_dict[self.weight_name].cuda().to(torch.bfloat16)
+            self.weight, self.weight_scale = scaled_mxfp6_quant(self.weight)
+            self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
+        else:
+            device = weight_dict[self.weight_name].device
+            if device.type == "cuda":
+                self.weight = weight_dict[self.weight_name]
+                self.weight_scale = weight_dict[self.weight_scale_name]
+            elif device.type == "cpu":
+                weight_shape = weight_dict[self.weight_name].shape
+                weight_dtype = weight_dict[self.weight_name].dtype
+                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+                self.pin_weight.copy_(weight_dict[self.weight_name])
+
+                weight_scale_shape = weight_dict[self.weight_scale_name].shape
+                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
+                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                del weight_dict[self.weight_name]
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+
+        if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
+            if device.type == "cuda":
+                self.bias = weight_dict[self.bias_name]
+            elif device.type == "cpu":
+                bias_shape = weight_dict[self.bias_name].shape
+                bias_dtype = weight_dict[self.bias_name].dtype
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
+
+    def load_mxfp8(self, weight_dict):
+        if self.config.get("weight_auto_quant", False):
+            device = weight_dict[self.weight_name].device
+            self.weight = weight_dict[self.weight_name].cuda().to(torch.bfloat16)
+            self.weight, self.weight_scale = scaled_mxfp8_quant(self.weight)
+            self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
+        else:
+            device = weight_dict[self.weight_name].device
+            if device.type == "cuda":
+                self.weight = weight_dict[self.weight_name]
+                self.weight_scale = weight_dict[self.weight_scale_name]
+            elif device.type == "cpu":
+                weight_shape = weight_dict[self.weight_name].shape
+                weight_dtype = weight_dict[self.weight_name].dtype
+                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+                self.pin_weight.copy_(weight_dict[self.weight_name])
+
+                weight_scale_shape = weight_dict[self.weight_scale_name].shape
+                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
+                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                del weight_dict[self.weight_name]
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+
+        if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
+            if device.type == "cuda":
+                self.bias = weight_dict[self.bias_name]
+            elif device.type == "cpu":
+                bias_shape = weight_dict[self.bias_name].shape
+                bias_dtype = weight_dict[self.bias_name].dtype
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
+
+    def load_nvfp4(self, weight_dict):
+        device = weight_dict[self.weight_name].device
+
+        input_absmax = weight_dict[self.weight_name.replace(".weight", ".input_absmax")]
+        input_global_scale = (2688.0 / input_absmax).to(torch.float32)
+        weight_global_scale = weight_dict[f"{self.weight_name}_global_scale"]
+        alpha = 1.0 / (input_global_scale * weight_global_scale)
+
+        if device.type == "cuda":
+            self.weight = weight_dict[self.weight_name]
+            self.weight_scale = weight_dict[self.weight_scale_name]
+            self.input_global_scale = input_global_scale
+            self.alpha = alpha
+        elif device.type == "cpu":
+            weight_shape = weight_dict[self.weight_name].shape
+            weight_dtype = weight_dict[self.weight_name].dtype
+            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+            self.pin_weight.copy_(weight_dict[self.weight_name])
+
+            weight_scale_shape = weight_dict[self.weight_scale_name].shape
+            weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
+            self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+            self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+
+            input_global_scale_shape = input_global_scale.shape
+            input_global_scale_dtype = input_global_scale.dtype
+            self.pin_input_global_scale = torch.empty(input_global_scale_shape, pin_memory=True, dtype=input_global_scale_dtype)
+            self.pin_input_global_scale.copy_(input_global_scale)
+
+            alpha_shape = alpha.shape
+            alpha_dtype = alpha.dtype
+            self.pin_alpha = torch.empty(alpha_shape, pin_memory=True, dtype=alpha_dtype)
+            self.pin_alpha.copy_(alpha)
+
+            del weight_dict[self.weight_name]
+        else:
+            raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+
+        if self.bias_name is not None:
+            device = weight_dict[self.bias_name].device
+            if device.type == "cuda":
+                self.bias = weight_dict[self.bias_name]
+            elif device.type == "cpu":
+                bias_shape = weight_dict[self.bias_name].shape
+                bias_dtype = weight_dict[self.bias_name].dtype
+                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
+
     def load_fp8_perblock128_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name]
@@ -323,6 +514,18 @@ class MMWeightQuantTemplate(MMWeightTemplate):
 
     def act_quant_int8_perchannel_sym_vllm(self, x):
         input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
+        return input_tensor_quant, input_tensor_scale
+
+    def act_quant_nvfp4(self, x):
+        input_tensor_quant, input_tensor_scale = scaled_nvfp4_quant(x, self.input_global_scale)
+        return input_tensor_quant, input_tensor_scale
+
+    def act_quant_mxfp4(self, x):
+        input_tensor_quant, input_tensor_scale = scaled_mxfp4_quant(x)
+        return input_tensor_quant, input_tensor_scale
+
+    def act_quant_mxfp8(self, x):
+        input_tensor_quant, input_tensor_scale = scaled_mxfp8_quant(x)
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannelgroup128_sym_deepgemm(self, x):
@@ -429,6 +632,170 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self.bias,
         )
         return output_tensor
+
+
+@MM_WEIGHT_REGISTER("mxfp4")
+class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
+    """
+    Name: W-mxfp4-A-mxfp4-dynamic
+
+    Quant MM:
+        Weight: mxfp4
+        Act: mxfp4
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_mxfp4
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_mxfp4
+        self.set_alpha()
+
+    def set_alpha(self):
+        self.alpha = torch.tensor(1.0, dtype=torch.float32)
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        self.alpha = self.alpha.to(self.weight.device)
+        output_tensor = cutlass_scaled_mxfp4_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("mxfp6-mxfp8")
+class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
+    """
+    Name: W-mxfp6-A-nvfp8-dynamic
+
+    Quant MM:
+        Weight: mxfp6
+        Act: mxfp8
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_mxfp6
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_mxfp8
+        self.set_alpha()
+
+    def set_alpha(self):
+        self.alpha = torch.tensor(1.0, dtype=torch.float32)
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        self.alpha = self.alpha.to(self.weight.device)
+        output_tensor = cutlass_scaled_mxfp6_mxfp8_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("mxfp8")
+class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
+    """
+    Name: W-mxfp8-A-nvfp8-dynamic
+
+    Quant MM:
+        Weight: mxfp8
+        Act: mxfp8
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_mxfp8
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_mxfp8
+        self.set_alpha()
+
+    def set_alpha(self):
+        self.alpha = torch.tensor(1.0, dtype=torch.float32)
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        self.alpha = self.alpha.to(self.weight.device)
+        output_tensor = cutlass_scaled_mxfp8_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("nvfp4")
+class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
+    """
+    Name: W-nvfp4-A-nvfp4-dynamic
+
+    Quant MM:
+        Weight: nvfp4
+        Act: nvfp4
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_nvfp4
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_nvfp4
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        output_tensor = cutlass_scaled_nvfp4_mm(input_tensor_quant, self.weight, input_tensor_scale, self.weight_scale, alpha=self.alpha, bias=self.bias)
+        return output_tensor
+
+    def to_cuda(self, non_blocking=False):
+        self.weight = self.pin_weight.cuda(non_blocking=non_blocking)
+        if hasattr(self, "pin_weight_scale"):
+            self.weight_scale = self.pin_weight_scale.cuda(non_blocking=non_blocking)
+            self.input_global_scale = self.pin_input_global_scale.cuda(non_blocking=non_blocking)
+            self.alpha = self.pin_alpha.cuda(non_blocking=non_blocking)
+        if hasattr(self, "pin_bias") and self.pin_bias is not None:
+            self.bias = self.pin_bias.cuda(non_blocking=non_blocking)
+
+    def to_cpu(self, non_blocking=False):
+        if hasattr(self, "pin_weight"):
+            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            if hasattr(self, "weight_scale_name"):
+                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
+                self.input_global_scale = self.pin_input_global_scale.copy_(self.input_global_scale, non_blocking=non_blocking).cpu()
+                self.alpha = self.pin_alpha.copy_(self.alpha, non_blocking=non_blocking).cpu()
+            if self.bias is not None:
+                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+        else:
+            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
+            if hasattr(self, "weight_scale"):
+                self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
+                self.input_global_scale = self.input_global_scale.to("cpu", non_blocking=non_blocking)
+                self.alpha = self.alpha.to("cpu", non_blocking=non_blocking)
+            if hasattr(self, "bias") and self.bias is not None:
+                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
+
+
+@MM_WEIGHT_REGISTER("Calib")
+class MMCalibNvfp4(MMWeight):
+    """
+    Name: calib
+
+    Calib:
+        absmax: torch.max(torch.abs(input_tensor))
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.running_absmax = None
+        self.count = 0
+        self.decay = 0.9
+
+    def apply(self, input_tensor):
+        shape = (input_tensor.shape[0], self.weight.shape[1])
+        dtype, device = input_tensor.dtype, input_tensor.device
+
+        current_absmax = torch.max(torch.abs(input_tensor)).to("cpu")
+        if self.count % 2 == 0:
+            if self.running_absmax is None:
+                self.running_absmax = current_absmax
+            else:
+                self.running_absmax = self.decay * self.running_absmax + (1 - self.decay) * current_absmax
+            CALIB["absmax"][self.weight_name] = self.running_absmax
+        self.count = self.count + 1
+
+        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        if self.bias is None:
+            return torch.mm(input_tensor, self.weight, out=output_tensor)
+        return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
 
 
 @MM_WEIGHT_REGISTER("fp8-q8f")
