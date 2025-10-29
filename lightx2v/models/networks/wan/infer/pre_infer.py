@@ -22,7 +22,7 @@ class WanPreInfer:
                 rope_params(1024, 2 * (d // 6)),
             ],
             dim=1,
-        ).to(torch.device(self.run_device))
+        ).to(self.device)
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
         self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)

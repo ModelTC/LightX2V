@@ -745,7 +745,6 @@ class T5EncoderModel:
         text_len,
         dtype=torch.bfloat16,
         device=torch.device("cuda"),
-        run_device=torch.device("cuda"),
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -758,7 +757,7 @@ class T5EncoderModel:
         self.text_len = text_len
         self.dtype = dtype
         self.device = device
-        self.run_device = run_device
+        self.run_device = device
         if t5_quantized_ckpt is not None and t5_quantized:
             self.checkpoint_path = t5_quantized_ckpt
         else:
@@ -807,8 +806,8 @@ class T5EncoderModel:
 
     def infer(self, texts):
         ids, mask = self.tokenizer(texts, return_mask=True, add_special_tokens=True)
-        ids = ids.to(self.run_device)
-        mask = mask.to(self.run_device)
+        ids = ids.to(self.device)
+        mask = mask.to(self.device)
         seq_lens = mask.gt(0).sum(dim=1).long()
 
         with torch.no_grad():
