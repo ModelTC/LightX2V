@@ -62,7 +62,7 @@ class DefaultRunner(BaseRunner):
         if self.config["cpu_offload"]:
             self.init_device = torch.device("cpu")
         else:
-            self.init_device = torch.device("cuda")
+            self.init_device = torch.device(self.config.get("run_device", "cuda"))
 
     def load_vfi_model(self):
         if self.config["video_frame_interpolation"].get("algo", None) == "rife":

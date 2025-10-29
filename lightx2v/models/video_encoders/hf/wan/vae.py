@@ -1018,7 +1018,7 @@ class WanVAE:
         full_encoded = [torch.empty_like(encoded_chunk) for _ in range(world_size)]
         dist.all_gather(full_encoded, encoded_chunk)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         encoded = torch.cat(full_encoded, dim=split_dim)
 
@@ -1100,7 +1100,7 @@ class WanVAE:
 
         dist.all_gather(full_encoded, encoded_chunk)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         # Reconstruct the full encoded tensor
         encoded_rows = []
@@ -1197,7 +1197,7 @@ class WanVAE:
         full_images = [torch.empty_like(images) for _ in range(world_size)]
         dist.all_gather(full_images, images)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         images = torch.cat(full_images, dim=split_dim + 1)
 
@@ -1271,7 +1271,7 @@ class WanVAE:
 
         dist.all_gather(full_images, images_chunk)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         # Reconstruct the full image tensor
         image_rows = []
@@ -1324,3 +1324,9 @@ class WanVAE:
 
     def decode_video(self, vid_enc):
         return self.model.decode_video(vid_enc)
+
+    def device_synchronize(self,):
+        if "cuda" in str(self.device):
+            torch.cuda.synchronize()
+        elif "mlu" in str(self.device):
+            torch.mlu.synchronize()

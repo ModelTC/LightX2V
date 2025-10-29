@@ -121,7 +121,7 @@ class MMWeight(MMWeightTemplate):
                 self.bias_cuda_buffer = weight_dict[self.bias_name].cuda()
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name].t()
                 if self.bias_name is not None:
                     self.bias = weight_dict[self.bias_name]

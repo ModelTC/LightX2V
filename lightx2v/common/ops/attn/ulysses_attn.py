@@ -53,7 +53,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         img_q = all2all_seq2head(img_q, group=seq_p_group)
         img_k = all2all_seq2head(img_k, group=seq_p_group)
         img_v = all2all_seq2head(img_v, group=seq_p_group)
-        torch.cuda.synchronize()  # 确保CUDA操作完成
+        self.device_synchronize()  # 确保CUDA操作完成
 
         # 处理文本的查询、键和值，选择当前进程的头
         txt_q = txt_q[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
@@ -66,7 +66,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         v = torch.cat((img_v, txt_v), dim=0)
 
         # 初始化累积序列长度张量
-        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device="cuda")
+        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device=self.config.get("run_device", "cuda"))
         s = txt_qkv_len + img_q.shape[0]  # 计算文本和图像的总长度
         s1 = s  # 当前样本的结束位置
         cu_seqlens_qkv[1] = s1  # 设置累积序列长度
@@ -100,8 +100,16 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
         img_attn = all2all_head2seq(img_attn, group=seq_p_group)  # 将头的格式转换回序列格式
         img_attn = img_attn.reshape(shard_seqlen, -1)  # 重塑为 [shard_seqlen, -1] 形状
-        torch.cuda.synchronize()  # 确保CUDA操作完成
+        self.device_synchronize()  # 确保CUDA操作完成
         return img_attn
+
+    def device_synchronize(self,):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            self.config["run_device"] = "cuda"
+        elif hasattr(torch, "mlu") and torch.mlu.is_available():
+            torch.mlu.synchronize()
+            self.config["run_device"] = "mlu"
 
 
 @ATTN_WEIGHT_REGISTER("ulysses-4090")
@@ -276,3 +284,4 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         torch.cuda.synchronize()  # 确保CUDA操作完成
         return img_attn
+
