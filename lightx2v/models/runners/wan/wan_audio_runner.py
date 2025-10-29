@@ -450,7 +450,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             ref_img = img_path
         else:
             ref_img = load_image(img_path)
-        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
 
         ref_img, h, w = resize_image(
             ref_img,
@@ -538,7 +538,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
-        device = torch.device("cuda")
+        device = self.init_device
         dtype = GET_DTYPE()
 
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
@@ -835,7 +835,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def load_audio_encoder(self):
         audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))
         audio_encoder_offload = self.config.get("audio_encoder_cpu_offload", self.config.get("cpu_offload", False))
-        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload)
+        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload, device=self.config.get("run_device", "cuda"))
         return model
 
     def load_audio_adapter(self):
@@ -843,7 +843,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if audio_adapter_offload:
             device = torch.device("cpu")
         else:
-            device = torch.device("cuda")
+            device = torch.device(self.init_device)
         audio_adapter = AudioAdapter(
             attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
@@ -856,6 +856,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quantized=self.config.get("adapter_quantized", False),
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
+            device=self.config.get("run_device", "cuda")
         )
 
         audio_adapter.to(device)

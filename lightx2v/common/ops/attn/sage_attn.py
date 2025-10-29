@@ -5,7 +5,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 
-if torch.cuda.get_device_capability(0) in [(8, 9), (12, 0)]:
+if torch.cuda.is_available() and torch.cuda.get_device_capability(0) in [(8, 9), (12, 0)]:
     try:
         from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
     except ImportError:

@@ -113,7 +113,7 @@ class MMWeight(MMWeightTemplate):
 
     def load(self, weight_dict):
         device = weight_dict[self.weight_name].device
-        if device.type == "cuda":
+        if device.type == "cuda" or device.type == "mlu":
             self.weight = weight_dict[self.weight_name].t()
             if self.bias_name is not None:
                 self.bias = weight_dict[self.bias_name]
