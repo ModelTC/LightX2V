@@ -22,9 +22,9 @@ class WanAudioModel(WanModel):
 
     def __init__(self, model_path, config, device):
         self.config = config
-        self.run_device = self.config.get("run_device", "cuda")
         self._load_adapter_ckpt()
         super().__init__(model_path, config, device)
+        self._load_adapter_ckpt()
 
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
@@ -51,7 +51,7 @@ class WanAudioModel(WanModel):
         if not adapter_offload:
             if not dist.is_initialized() or not load_from_rank0:
                 for key in self.adapter_weights_dict:
-                    self.adapter_weights_dict[key] = self.adapter_weights_dict[key].to(torch.device(self.run_device))
+                    self.adapter_weights_dict[key] = self.adapter_weights_dict[key].to(torch.device(self.device))
 
     def _init_infer_class(self):
         super()._init_infer_class()

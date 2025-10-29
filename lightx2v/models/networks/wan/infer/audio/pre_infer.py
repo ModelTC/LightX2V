@@ -21,7 +21,7 @@ class WanAudioPreInfer(WanPreInfer):
                 rope_params(1024, 2 * (d // 6)),
             ],
             dim=1,
-        ).to(torch.device(self.run_device))
+        ).to(self.device)
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
         self.rope_t_dim = d // 2 - 2 * (d // 6)

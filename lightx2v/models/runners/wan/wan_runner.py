@@ -65,7 +65,7 @@ class WanRunner(DefaultRunner):
             if clip_offload:
                 clip_device = torch.device("cpu")
             else:
-                clip_device = torch.device(self.run_device)
+                clip_device = torch.device(self.init_device)
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -142,7 +142,7 @@ class WanRunner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.run_device)
+            vae_device = torch.device(self.init_device)
 
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
