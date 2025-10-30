@@ -60,7 +60,21 @@ class WanModel(CompiledMethodsMixin):
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
-            assert self.config.get("dit_quant_scheme", "Default") in ["Default-Force-FP32", "fp8-vllm", "int8-vllm", "fp8-q8f", "int8-q8f", "fp8-b128-deepgemm", "fp8-sgl", "int8-sgl", "int8-torchao"]
+            assert self.config.get("dit_quant_scheme", "Default") in [
+                "Default-Force-FP32",
+                "fp8-vllm",
+                "int8-vllm",
+                "fp8-q8f",
+                "int8-q8f",
+                "fp8-b128-deepgemm",
+                "fp8-sgl",
+                "int8-sgl",
+                "int8-torchao",
+                "nvfp4",
+                "mxfp4",
+                "mxfp6-mxfp8",
+                "mxfp8",
+            ]
         self.device = device
         self._init_infer_class()
         self._init_weights()
@@ -169,6 +183,7 @@ class WanModel(CompiledMethodsMixin):
             safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
             safetensors_files = [safetensors_path]
+            safetensors_path = os.path.dirname(safetensors_path)
 
         weight_dict = {}
         for safetensor_path in safetensors_files:
@@ -191,6 +206,13 @@ class WanModel(CompiledMethodsMixin):
                             weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
                     else:
                         weight_dict[k] = f.get_tensor(k).to(self.device)
+
+        if self.config.get("dit_quant_scheme", "Default") == "nvfp4":
+            calib_path = os.path.join(safetensors_path, "calib.pt")
+            logger.info(f"[CALIB] Loaded calibration data from: {calib_path}")
+            calib_data = torch.load(calib_path, map_location="cpu")
+            for k, v in calib_data["absmax"].items():
+                weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
 
         return weight_dict
 

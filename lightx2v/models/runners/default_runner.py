@@ -11,6 +11,7 @@ from requests.exceptions import RequestException
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
+from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
@@ -176,6 +177,10 @@ class DefaultRunner(BaseRunner):
                 self.model.transformer_weights.clear()
             self.model.pre_weight.clear()
             del self.model
+        if self.config.get("do_mm_calib", False):
+            calib_path = os.path.join(os.getcwd(), "calib.pt")
+            torch.save(CALIB, calib_path)
+            logger.info(f"[CALIB] Saved calibration data successfully to: {calib_path}")
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -258,6 +263,7 @@ class DefaultRunner(BaseRunner):
     def init_run(self):
         self.gen_video_final = None
         self.get_video_segment_num()
+
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
 
