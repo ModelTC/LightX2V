@@ -9,6 +9,7 @@ from safetensors.torch import save_file
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from lightx2v.utils.quant_utils import FloatQuantizer
+from tools.convert.quant import *
 
 
 def main():
@@ -47,11 +48,16 @@ def main():
         if key.startswith("ca") and ".to" in key and "weight" in key:
             print(f"Converting {key} to FP8, dtype: {state_dict[key].dtype}")
 
-            weight = state_dict[key].to(torch.float32).cuda()
+            ## fp8
             w_quantizer = FloatQuantizer("e4m3", True, "per_channel")
             weight, weight_scale, _ = w_quantizer.real_quant_tensor(weight)
             weight = weight.to(torch.float8_e4m3fn)
             weight_scale = weight_scale.to(torch.float32)
+
+            ## QuantWeightMxFP4, QuantWeightMxFP6, QuantWeightMxFP8 for mxfp4,mxfp6,mxfp8
+            # weight = state_dict[key].to(torch.bfloat16).cuda()
+            # quantizer = QuantWeightMxFP4(weight)
+            # weight, weight_scale, _ = quantizer.weight_quant_func(weight)
 
             new_state_dict[key] = weight.cpu()
             new_state_dict[key + "_scale"] = weight_scale.cpu()

@@ -32,6 +32,12 @@ class WanAudioModel(WanModel):
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
                 elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-sgl"]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
+                elif self.config.get("adapter_quant_scheme", None) in ["mxfp4"]:
+                    adapter_model_name = "audio_adapter_model_mxfp4.safetensors"
+                elif self.config.get("adapter_quant_scheme", None) in ["mxfp6", "mxfp6-mxfp8"]:
+                    adapter_model_name = "audio_adapter_model_mxfp6.safetensors"
+                elif self.config.get("adapter_quant_scheme", None) in ["mxfp8"]:
+                    adapter_model_name = "audio_adapter_model_mxfp8.safetensors"
                 else:
                     raise ValueError(f"Unsupported quant_scheme: {self.config.get('adapter_quant_scheme', None)}")
             else:
