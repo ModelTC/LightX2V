@@ -16,14 +16,15 @@ try:
     from lora_loader import LoRALoader
 except ImportError:
     pass
+import sys
+from pathlib import Path
+
 from safetensors import safe_open
 from safetensors import torch as st
 from tqdm import tqdm
 
-try:
-    from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
-except ImportError:
-    pass
+sys.path.append(str(Path(__file__).parent.parent.parent))
+from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
 from tools.convert.quant import *
 
 
