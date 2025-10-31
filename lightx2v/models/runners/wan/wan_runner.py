@@ -128,7 +128,6 @@ class WanRunner(DefaultRunner):
             tokenizer_path=tokenizer_path,
             shard_fn=None,
             cpu_offload=t5_offload,
-            offload_granularity=self.config.get("t5_offload_granularity", "model"),  # support ['model', 'block']
             t5_quantized=t5_quantized,
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,

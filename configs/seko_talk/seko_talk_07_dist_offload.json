@@ -22,7 +22,6 @@
     "clip_cpu_offload": false,
     "vae_cpu_offload": false,
     "offload_ratio": 1,
-    "t5_offload_granularity": "block",
     "use_tiling_vae": true,
     "audio_encoder_cpu_offload": true,
     "audio_adapter_cpu_offload": false
