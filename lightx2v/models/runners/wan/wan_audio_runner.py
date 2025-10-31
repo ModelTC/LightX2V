@@ -4,6 +4,7 @@ import json
 import os
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -454,6 +455,17 @@ class WanAudioRunner(WanRunner):  # type:ignore
         mask_latent = (mask_latent > 0).to(torch.int8)
         return mask_latent
 
+    def load_tensor_file(self, path):
+        if not path or not os.path.exists(path):
+            return None, None
+        try:
+            prev_section_info = torch.load(path)
+            return prev_section_info["prev_video"], prev_section_info["prev_latent"]
+
+        except Exception as e:
+            print(f"[read_prev_video] Failed to read {path}: {e}")
+            return None, None
+
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
             ref_img = img_path
@@ -525,6 +537,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
         if self.config.get("f2v_process", False):
             self.ref_img = img
+        prev_video, prev_latent = self.load_tensor_file(self.input_info.prev_section_info_path)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
@@ -545,6 +558,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             "audio_segments": audio_segments,
             "expected_frames": expected_frames,
             "person_mask_latens": person_mask_latens,
+            "prev_video": prev_video,
+            "prev_latent": prev_latent,
         }
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
@@ -622,7 +637,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if self.config.get("f2v_process", False):
             self.prev_video = self.ref_img.unsqueeze(2)
         else:
-            self.prev_video = None
+            self.prev_video = self.inputs.get("prev_video", None)
+            self.prev_latent = self.inputs.get("prev_latent", None)
+            
         if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
@@ -660,10 +677,18 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_features = torch.stack(features_list, dim=0)
 
         self.inputs["audio_encoder_output"] = audio_features
-        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=self.prev_frame_length)
+
+        if self.prev_latent is not None:
+            self.inputs["previmg_encoder_output"] = {
+                "prev_latents": self.prev_latent,
+                "prev_mask": None,
+                "prev_len": 0,
+            }
+        else:
+            self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=self.prev_frame_length)
 
         # Reset scheduler for non-first segments
-        if segment_idx > 0:
+        if self.prev_video is not None or self.prev_latent is not None:
             self.model.scheduler.reset(self.input_info.seed, self.input_info.latent_shape, self.inputs["previmg_encoder_output"])
 
     @ProfilingContext4DebugL1(
@@ -705,7 +730,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
 
         # Update prev_video for next iteration
-        self.prev_video = self.gen_video
+        self.prev_video = self.gen_video[:, :, :useful_length].cpu()
+        self.prev_latent = None
 
         del video_seg, audio_seg
         torch.cuda.empty_cache()
@@ -809,11 +835,31 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self):
+        section_info = self._build_section_info()
+        if section_info is not None:
+            section_info_path = self._resolve_section_info_path()
+            section_info_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(section_info, section_info_path)
+            logger.info(f"[wan_audio] Saved section info to: {section_info_path}")
+
         if self.input_info.return_result_tensor:
             audio_waveform = self.cut_audio_final.unsqueeze(0).unsqueeze(0)
             comfyui_audio = {"waveform": audio_waveform, "sample_rate": self._audio_processor.audio_sr}
-            return {"video": self.gen_video_final, "audio": comfyui_audio}
-        return {"video": None, "audio": None}
+            return {"video": self.gen_video_final, "audio": comfyui_audio, "for_next_section": section_info}
+
+        return {"video": None, "audio": None, "for_next_section": section_info}
+
+    def _build_section_info(self) -> Optional[Dict[str, torch.Tensor]]:
+        if self.prev_video is None:
+            return None
+        prev_video = self.prev_video
+        last_frames = prev_video[:, :, -self.prev_frame_length :].detach().cpu().clone()
+        return {"prev_video": last_frames, "prev_latent": self.prev_latent}
+
+    def _resolve_section_info_path(self) -> Path:
+        if self.input_info.save_result_path:
+            return Path(self.input_info.save_result_path).parent / "section_info.pt"
+        return Path.cwd() / "section_info.pt"
 
     def load_transformer(self):
         """Load transformer with LoRA support"""
