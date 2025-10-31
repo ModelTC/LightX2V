@@ -137,19 +137,30 @@ class BaseRunner(ABC):
         if dist.is_initialized():
             rank = dist.get_rank()
             world_size = dist.get_world_size()
-        signal_rank = world_size - 1
+        signal_rank = world_size - 1 # same as worker hub target_rank
+        pause_rank = 1 % world_size # same as va_reader target_rank
 
-        stopped = 0
+        stopped, paused = 0, 0
         if rank == signal_rank and hasattr(self, "stop_signal") and self.stop_signal:
             stopped = 1
+        if rank == pause_rank and hasattr(self, "pause_signal") and self.pause_signal:
+            paused = 1
 
         if world_size > 1:
             if rank == signal_rank:
-                t = torch.tensor([stopped], dtype=torch.int32).to(device="cuda")
+                t1 = torch.tensor([stopped], dtype=torch.int32).to(device="cuda")
             else:
-                t = torch.zeros(1, dtype=torch.int32, device="cuda")
-            dist.broadcast(t, src=signal_rank)
-            stopped = t.item()
+                t1 = torch.zeros(1, dtype=torch.int32, device="cuda")
+            if rank == pause_rank:
+                t2 = torch.tensor([paused], dtype=torch.int32).to(device="cuda")
+            else:
+                t2 = torch.zeros(1, dtype=torch.int32, device="cuda")
+            dist.broadcast(t1, src=signal_rank)
+            dist.broadcast(t2, src=pause_rank)
+            stopped = t1.item()
+            paused = t2.item()
 
         if stopped == 1:
             raise Exception(f"find rank: {rank} stop_signal, stop running, it's an expected behavior")
+        if paused == 1:
+            raise Exception(f"find rank: {rank} pause_signal, pause running, it's an expected behavior")

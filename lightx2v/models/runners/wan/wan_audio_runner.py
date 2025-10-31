@@ -18,6 +18,7 @@ from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
 from lightx2v.deploy.common.va_reader import VAReader
+from lightx2v.deploy.common.va_reader_omni import OmniVAReader
 from lightx2v.deploy.common.va_recorder import VARecorder
 from lightx2v.deploy.common.va_recorder_x264 import X264VARecorder
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
@@ -663,7 +664,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             )
 
         if self.va_recorder:
-            self.va_recorder.pub_livestream(video_seg, audio_seg)
+            self.va_recorder.buffer_stream(video_seg, audio_seg, self.gen_video[:, :, :useful_length])
         elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
@@ -688,26 +689,27 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if isinstance(output_video_path, dict):
             output_video_path = output_video_path["data"]
         logger.info(f"init va_recorder with output_video_path: {output_video_path}")
-        rank, world_size = self.get_rank_and_world_size()
-        if output_video_path and rank == world_size - 1:
-            record_fps = self.config.get("target_fps", 16)
-            audio_sr = self.config.get("audio_sr", 16000)
-            if "video_frame_interpolation" in self.config and self.vfi_model is not None:
-                record_fps = self.config["video_frame_interpolation"]["target_fps"]
-
+        rank, _ = self.get_rank_and_world_size()
+        self.record_fps = self.config.get("target_fps", 16)
+        audio_sr = self.config.get("audio_sr", 16000)
+        if "video_frame_interpolation" in self.config and self.vfi_model is not None:
+            self.record_fps = self.config["video_frame_interpolation"]["target_fps"]
+        if output_video_path and rank == self.target_recorder_rank:
             whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
             if whip_shared_path and output_video_path.startswith("http"):
                 self.va_recorder = X264VARecorder(
                     whip_shared_path=whip_shared_path,
                     livestream_url=output_video_path,
-                    fps=record_fps,
+                    fps=self.record_fps,
                     sample_rate=audio_sr,
                 )
             else:
                 self.va_recorder = VARecorder(
                     livestream_url=output_video_path,
-                    fps=record_fps,
+                    fps=self.record_fps,
                     sample_rate=audio_sr,
+                    slice_frame=self.slice_frame,
+                    prev_frame=self.prev_frame_length,
                 )
 
     def init_va_reader(self):
@@ -720,7 +722,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
             max_num_frames = self.config.get("target_video_length", 81)
             audio_sr = self.config.get("audio_sr", 16000)
             prev_frames = self.config.get("prev_frame_length", 5)
-            self.va_reader = VAReader(
+            onmi_work_dir = os.getenv("OMNI_WORK_DIR", None)
+            ReaderClass = OmniVAReader if onmi_work_dir else VAReader
+            self.va_reader = ReaderClass(
                 rank=rank,
                 world_size=world_size,
                 stream_url=audio_path["data"],
@@ -728,39 +732,72 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 segment_duration=max_num_frames / target_fps,
                 prev_duration=prev_frames / target_fps,
                 target_rank=1,
+                model_runner=self,
             )
 
     def run_main(self, total_steps=None):
         try:
+            rank, world_size = self.get_rank_and_world_size()
+            tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
+            self.target_recorder_rank = -1 % world_size
+            self.slice_frame = self.config.get("slice_frame", 1)
+
             self.init_va_recorder()
             self.init_va_reader()
             logger.info(f"init va_recorder: {self.va_recorder} and va_reader: {self.va_reader}")
 
             if self.va_reader is None:
                 return super().run_main(total_steps)
-
             self.va_reader.start()
-            rank, world_size = self.get_rank_and_world_size()
-            if rank == world_size - 1:
+            if rank == self.target_recorder_rank:
                 assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
-                self.va_recorder.start(self.input_info.target_shape[1], self.input_info.target_shape[0])
+                self.va_recorder.start(tgt_w, tgt_h)
             if world_size > 1:
                 dist.barrier()
 
             self.init_run()
             if self.config.get("compile", False):
                 self.model.select_graph_for_compile(self.input_info)
-            self.video_segment_num = "unlimited"
+            # if only one segment, each step will check stop
+            self.video_segment_num = 1
 
-            fetch_timeout = self.va_reader.segment_duration + 1
             segment_idx = 0
             fail_count = 0
             max_fail_count = 10
 
+            est_max_infer_secs = 0.6
+            slice_interval = self.slice_frame / self.record_fps
+            est_infer_end_idx = round(est_max_infer_secs / slice_interval)
+            min_stay_queue_num = est_infer_end_idx * 2 + 1
+            gen_tensor = torch.zeros((1, 3, self.prev_frame_length, tgt_h, tgt_w), dtype=torch.float, device="cuda")
+            stream_len_tensor = torch.tensor([0], dtype=torch.int32, device="cuda")
+
             while True:
                 with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
-                    self.check_stop()
-                    audio_array = self.va_reader.get_audio_segment(timeout=fetch_timeout)
+                    immediate_switch = self.va_reader.get_immediate_switch()
+                    if immediate_switch == 1:
+                        # truncate the stream buffer to keep the max infer time length
+                        # and broadcast the prev video tensor to all ranks
+                        if rank == self.target_recorder_rank:
+                            logger.warning(f"runner recv immediate switch, truncate stream buffer")
+                            gen = self.va_recorder.truncate_stream_buffer(est_infer_end_idx)
+                            gen_tensor.copy_(gen)
+                        dist.broadcast(gen_tensor, src=self.target_recorder_rank)
+                        self.prev_video = gen_tensor
+
+                    else:
+                        # get the length of stream buffer, broadcast to all ranks
+                        if rank == self.target_recorder_rank:
+                            stream_buffer_length = self.va_recorder.get_buffer_stream_size()
+                            stream_len_tensor.copy_(stream_buffer_length)
+                        dist.broadcast(stream_len_tensor, src=self.target_recorder_rank)
+                        buffer_length = stream_len_tensor.item()
+                        # stream buffer is enough, skip infer
+                        if buffer_length >= min_stay_queue_num:
+                            time.sleep(0.01)
+                            continue
+
+                    audio_array = self.va_reader.get_audio_segment()
                     if audio_array is None:
                         fail_count += 1
                         logger.warning(f"Failed to get audio chunk {fail_count} times")
@@ -769,12 +806,22 @@ class WanAudioRunner(WanRunner):  # type:ignore
                         continue
 
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
-                    fail_count = 0
-                    self.init_run_segment(segment_idx, audio_array)
-                    latents = self.run_segment(total_steps=None)
-                    self.gen_video = self.run_vae_decoder(latents)
-                    self.end_run_segment(segment_idx)
-                    segment_idx += 1
+                    try:
+                        self.pause_signal = False
+                        self.init_run_segment(segment_idx, audio_array)
+                        self.check_stop()
+                        latents = self.run_segment(total_steps=None)
+                        self.check_stop()
+                        self.gen_video = self.run_vae_decoder(latents)
+                        self.check_stop()
+                        self.end_run_segment(segment_idx)
+                        segment_idx += 1
+                        fail_count = 0
+                    except Exception as e:
+                        if "pause_signal, pause running" in str(e):
+                            logger.warning(f"model infer audio pause: {e}, should continue")
+                        else:
+                            raise
 
         finally:
             if hasattr(self.model, "inputs"):

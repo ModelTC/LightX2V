@@ -24,6 +24,8 @@ class VARecorder:
         livestream_url: str,
         fps: float = 16.0,
         sample_rate: int = 16000,
+        slice_frame: int = 1,
+        prev_frame: int = 1,
     ):
         self.livestream_url = livestream_url
         self.fps = fps
@@ -52,6 +54,16 @@ class VARecorder:
         # queue for send data to ffmpeg process
         self.audio_queue = queue.Queue()
         self.video_queue = queue.Queue()
+
+        # buffer for stream data
+        self.audio_samples_per_frame = round(self.sample_rate / self.fps)
+        self.stream_buffer = []
+        self.stream_buffer_lock = threading.Lock()
+        self.stop_schedule = False
+        self.schedule_thread = None
+        self.slice_frame = slice_frame
+        self.prev_frame = prev_frame
+        assert self.slice_frame >= self.prev_frame, "Slice frame must be greater than previous frame"
 
     def init_sockets(self):
         # TCP socket for send and recv video and audio data
@@ -128,7 +140,7 @@ class VARecorder:
                         except (BrokenPipeError, OSError, ConnectionResetError) as e:
                             logger.info(f"Video connection closed, stopping worker: {type(e).__name__}")
                             return
-                        if self.realtime:
+                        if self.realtime and i < data.shape[0] - 1:
                             time.sleep(max(0, packet_secs - (time.time() - t0)))
 
                     fail_time = 0
@@ -348,8 +360,10 @@ class VARecorder:
             self.realtime = False
         self.audio_thread = threading.Thread(target=self.audio_worker)
         self.video_thread = threading.Thread(target=self.video_worker)
+        self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
         self.audio_thread.start()
         self.video_thread.start()
+        self.schedule_thread.start()
 
     # Publish ComfyUI Image tensor and audio tensor to livestream
     def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor):
@@ -369,6 +383,72 @@ class VARecorder:
 
         self.stoppable_t = time.time() + M / self.sample_rate + 3
 
+    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor):
+        N, height, width, C = images.shape
+        M = audios.reshape(-1).shape[0]
+        assert N % self.slice_frame == 0, "Video frames must be divisible by slice_frame"
+        assert C == 3, "Input must be [N, H, W, C] with C=3"
+
+        audio_frames = round(M * self.fps / self.sample_rate)
+        if audio_frames != N:
+            logger.warning(f"Video and audio frames mismatch, {N} vs {audio_frames}")
+        self.set_video_size(width, height)
+
+        # logger.info(f"Buffer stream images {images.shape} {audios.shape} {gen_video.shape}")
+        rets = []
+        for i in range(0, N, self.slice_frame):
+            end_frame = i + self.slice_frame
+            img = images[i : end_frame]
+            aud = audios[i * self.audio_samples_per_frame : end_frame * self.audio_samples_per_frame]
+            gen = gen_video[:, :, (end_frame - self.prev_frame) : end_frame]
+            rets.append((img, aud, gen))
+
+        with self.stream_buffer_lock:
+            origin_size = len(self.stream_buffer)
+            self.stream_buffer.extend(rets)
+            logger.info(f"Buffered {origin_size} + {len(rets)} = {len(self.stream_buffer)} stream segments")
+
+    def get_buffer_stream_size(self):
+        return len(self.stream_buffer)
+
+    def truncate_stream_buffer(self, size: int):
+        with self.stream_buffer_lock:
+            self.stream_buffer = self.stream_buffer[:size]
+            logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
+            return self.stream_buffer[-1][2] # return the last video tensor
+
+    def schedule_stream_buffer(self):
+        schedule_interval = self.slice_frame / self.fps
+        logger.info(f"Schedule stream buffer with interval: {schedule_interval} seconds")
+        t = None
+        while True:
+            try:
+                if self.stop_schedule:
+                    break
+                img, aud, gen = None, None, None
+                with self.stream_buffer_lock:
+                    if len(self.stream_buffer) > 0:
+                        img, aud, gen = self.stream_buffer.pop(0)
+
+                if t is not None:
+                    wait_secs = schedule_interval - (time.time() - t)
+                    if wait_secs > 0:
+                        time.sleep(wait_secs)
+                t = time.time()
+
+                if img is not None and aud is not None:
+                    self.audio_queue.put(aud)
+                    self.video_queue.put(img)
+                    # logger.info(f"Scheduled {img.shape[0]} frames and {aud.shape[0]} audio samples to publish")
+                    del gen
+                    self.stoppable_t = time.time() + aud.shape[0] / self.sample_rate + 3
+                else:
+                    logger.warning(f"No stream buffer to schedule")
+            except Exception:
+                logger.error(f"Schedule stream buffer error: {traceback.format_exc()}")
+                break
+        logger.info("Schedule stream buffer thread stopped")
+
     def stop(self, wait=True):
         if wait and self.stoppable_t:
             t = self.stoppable_t - time.time()
@@ -376,6 +456,11 @@ class VARecorder:
                 logger.warning(f"Waiting for {t} seconds to stop ...")
                 time.sleep(t)
             self.stoppable_t = None
+
+        self.stop_schedule = True
+        self.schedule_thread.join(timeout=5)
+        if self.schedule_thread and self.schedule_thread.is_alive():
+            logger.error(f"Schedule thread did not stop after 5s")
 
         # Send stop signals to queues
         if self.audio_queue:

@@ -131,7 +131,7 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    @peak_memory_decorator
+    # @# peak_memory_decorator
     def run_segment(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
@@ -145,7 +145,7 @@ class DefaultRunner(BaseRunner):
             ):
                 if self.video_segment_num == 1:
                     self.check_stop()
-                logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+                # logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
                 with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.step_pre(step_index=step_index)
