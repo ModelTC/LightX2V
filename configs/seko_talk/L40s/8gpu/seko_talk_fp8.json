@@ -20,7 +20,6 @@
     "adapter_quant_scheme": "fp8",
     "cpu_offload": false,
     "t5_cpu_offload": true,
-    "t5_offload_granularity": "block",
     "clip_cpu_offload": true,
     "vae_cpu_offload": true,
     "audio_encoder_cpu_offload": true,

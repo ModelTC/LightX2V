@@ -112,6 +112,8 @@ class MMWeight(MMWeightTemplate):
             self.weight = weight_dict[self.weight_name].t()
             if self.bias_name is not None:
                 self.bias = weight_dict[self.bias_name]
+            else:
+                self.bias = None
         elif device.type == "cpu":
             weight_shape = weight_dict[self.weight_name].t().shape
             weight_dtype = weight_dict[self.weight_name].dtype
@@ -124,6 +126,7 @@ class MMWeight(MMWeightTemplate):
                 self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
                 self.pin_bias.copy_(weight_dict[self.bias_name])
             else:
+                self.bias = None
                 self.pin_bias = None
             del weight_dict[self.weight_name]
         else:

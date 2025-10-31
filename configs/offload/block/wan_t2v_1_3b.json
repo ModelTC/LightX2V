@@ -10,7 +10,6 @@
     "sample_shift": 5,
     "enable_cfg": true,
     "t5_cpu_offload": true,
-    "t5_offload_granularity": "block",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-sgl",
     "unload_modules": false,
