@@ -1,5 +1,6 @@
 import torch
 from loguru import logger
+
 try:
     from magi_attention.functional import flex_flash_attn_func as magi_ffa_func
 except ImportError:
@@ -13,7 +14,7 @@ from .template import AttnWeightTemplate
 def generate_nbhd_mask(a, block_num, num_frame, device="cpu"):
     """
     a : block num per frame
-    block_num : block num per col/row 
+    block_num : block num per col/row
     num_frame : total frame num
     """
     i_indices = torch.arange(block_num, device=device).unsqueeze(1)  # [block_num, 1]
@@ -30,10 +31,10 @@ def generate_nbhd_mask(a, block_num, num_frame, device="cpu"):
     mask_cross = torch.zeros((block_num, block_num), dtype=torch.bool, device=device)
     for n in range(1, num_frame):
         if n == 1:
-            width = 1/2 * a
+            width = 1 / 2 * a
         elif n >= 2:
-            width = 1/8 * a
-        
+            width = 1 / 8 * a
+
         mask_1 = (i_indices - j_indices + (n * a + width) >= 0) & (i_indices - j_indices + (n * a - width) < 0)
         mask_2 = (i_indices - j_indices - (n * a - width) > 0) & (i_indices - j_indices - (n * a + width) <= 0)
 
@@ -43,21 +44,22 @@ def generate_nbhd_mask(a, block_num, num_frame, device="cpu"):
     mask = mask_sink | mask_self | mask_cross
     return mask
 
+
 def generate_qk_ranges(mask, block_size, seqlen):
     indices = torch.nonzero(mask, as_tuple=False)  # shape: [N, 2]
-    
+
     i_indices = indices[:, 0]  # [N]
     j_indices = indices[:, 1]  # [N]
-    
+
     q_start = i_indices * block_size  # [N]
     q_end = torch.clamp((i_indices + 1) * block_size, max=seqlen)  # [N]
-    
+
     k_start = j_indices * block_size  # [N]
     k_end = torch.clamp((j_indices + 1) * block_size, max=seqlen)  # [N]
-    
+
     q_ranges = torch.stack([q_start, q_end], dim=1)  # [N, 2]
     k_ranges = torch.stack([k_start, k_end], dim=1)  # [N, 2]
-    
+
     return q_ranges, k_ranges
 
 
@@ -72,7 +74,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
 
     def __init__(self):
         self.config = {}
-    
+
     @classmethod
     def prepare_mask(cls, seqlen, num_frame):
         if seqlen == cls.seqlen and num_frame == cls.num_frame:
