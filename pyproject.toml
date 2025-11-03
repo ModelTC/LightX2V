@@ -36,9 +36,9 @@ keywords = ["video generation", "AI", "deep learning", "diffusion models", "text
 dependencies = [
     "numpy",
     "scipy",
-    "torch",
-    "torchvision",
-    "torchaudio",
+    "torch<=2.8.0",
+    "torchvision<=0.23.0",
+    "torchaudio<=2.8.0",
     "diffusers",
     "transformers",
     "tokenizers",
