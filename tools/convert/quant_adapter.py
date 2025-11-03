@@ -49,6 +49,7 @@ def main():
             print(f"Converting {key} to FP8, dtype: {state_dict[key].dtype}")
 
             ## fp8
+            weight = state_dict[key].to(torch.float32).cuda()
             w_quantizer = FloatQuantizer("e4m3", True, "per_channel")
             weight, weight_scale, _ = w_quantizer.real_quant_tensor(weight)
             weight = weight.to(torch.float8_e4m3fn)
