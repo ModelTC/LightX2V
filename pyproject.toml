@@ -1,3 +1,105 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightx2v"
+version = "0.1.0"
+authors = [
+    {name = "LightX2V Contributors"},
+]
+description = "LightX2V: 轻量级视频生成推理框架"
+readme = "README.md"
+license = {text = "Apache 2.0"}
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Video",
+]
+keywords = ["video generation", "AI", "deep learning", "diffusion models", "text-to-video", "image-to-video"]
+
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy",
+    "torch>=1.12.0",
+    "torchvision>=0.13.0",
+    "torchaudio",
+    "diffusers>=0.20.0",
+    "transformers>=4.25.0",
+    "tokenizers>=0.13.0",
+    "tqdm",
+    "accelerate",
+    "safetensors",
+    "opencv-python",
+    "imageio",
+    "imageio-ffmpeg",
+    "einops",
+    "loguru",
+    "qtorch",
+    "ftfy",
+    "gradio",
+    "aiohttp",
+    "pydantic",
+    "prometheus-client",
+    "gguf",
+]
+
+[project.optional-dependencies]
+full = [
+    "vllm",
+    "sgl-kernel",
+    "fastapi",
+    "uvicorn",
+    "PyJWT",
+    "requests",
+    "aio-pika",
+    "asyncpg>=0.27.0",
+    "aioboto3>=12.0.0",
+    "alibabacloud_dypnsapi20170525==1.2.2",
+    "redis==6.4.0",
+    "tos",
+    "decord",
+    "av",
+]
+
+[project.urls]
+Homepage = "https://github.com/ModelTC/LightX2V"
+Documentation = "https://lightx2v-en.readthedocs.io/en/latest/"
+Repository = "https://github.com/ModelTC/LightX2V"
+"Bug Tracker" = "https://github.com/ModelTC/LightX2V/issues"
+
+[project.scripts]
+lightx2v-infer = "lightx2v.cli:infer_main"
+lightx2v-server = "lightx2v.server.main:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["lightx2v*"]
+
+[tool.setuptools.package-data]
+lightx2v = [
+    "configs/*.json",
+    "assets/**/*",
+]
+
 [tool.ruff]
 exclude = [
     ".git",
@@ -16,7 +118,6 @@ exclude = [
 target-version = "py311"
 line-length = 200
 indent-width = 4
-
 
 [tool.ruff.lint]
 extend-select = ["I", "F401"]
