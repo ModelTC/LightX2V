@@ -15,13 +15,12 @@ authors = [
 ]
 description = "LightX2V: 轻量级视频生成推理框架"
 readme = "README.md"
-license = {text = "Apache 2.0"}
+license = "Apache-2.0"
 requires-python = ">=3.8"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -35,14 +34,14 @@ classifiers = [
 keywords = ["video generation", "AI", "deep learning", "diffusion models", "text-to-video", "image-to-video"]
 
 dependencies = [
-    "numpy>=1.20.0",
+    "numpy",
     "scipy",
-    "torch>=1.12.0",
-    "torchvision>=0.13.0",
+    "torch",
+    "torchvision",
     "torchaudio",
-    "diffusers>=0.20.0",
-    "transformers>=4.25.0",
-    "tokenizers>=0.13.0",
+    "diffusers",
+    "transformers",
+    "tokenizers",
     "tqdm",
     "accelerate",
     "safetensors",
@@ -51,6 +50,7 @@ dependencies = [
     "imageio-ffmpeg",
     "einops",
     "loguru",
+    "sgl-kernel",
     "qtorch",
     "ftfy",
     "gradio",
@@ -63,7 +63,6 @@ dependencies = [
 [project.optional-dependencies]
 full = [
     "vllm",
-    "sgl-kernel",
     "fastapi",
     "uvicorn",
     "PyJWT",
@@ -84,9 +83,6 @@ Documentation = "https://lightx2v-en.readthedocs.io/en/latest/"
 Repository = "https://github.com/ModelTC/LightX2V"
 "Bug Tracker" = "https://github.com/ModelTC/LightX2V/issues"
 
-[project.scripts]
-lightx2v-infer = "lightx2v.cli:infer_main"
-lightx2v-server = "lightx2v.server.main:main"
 
 [tool.setuptools]
 include-package-data = true
