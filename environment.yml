@@ -1,0 +1,111 @@
+name: lightx2v
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python版本
+  - python=3.11
+
+  # PyTorch生态系统 (CUDA 12.1)
+  - pytorch=2.2.0
+  - torchvision=0.17.0
+  - pytorch-cuda=12.1
+  - torchaudio
+
+  # 基础科学计算
+  - numpy
+  - scipy
+
+  # 系统依赖
+  - ffmpeg=8.0.0
+  - libiconv
+  - libgcc
+  - libstdcxx-ng
+  - libcusolver
+  - libcublas
+  - libcurand
+  - libcusparse
+  - libnvjpeg
+  - libcufft
+
+  # 构建工具
+  - cmake
+  - ninja
+  - pkg-config
+  - make
+  - gcc_linux-64=11.*
+  - gxx_linux-64=11.*
+
+  # 可选的系统库
+  - libopencv
+  - imagemagick
+
+  # Python包管理
+  - pip
+  - setuptools
+  - wheel
+
+  # Jupyter支持 (可选)
+  - jupyter
+  - ipython
+
+  - pip:
+    # 核心AI框架
+    - diffusers>=0.20.0
+    - transformers>=4.25.0
+    - tokenizers>=0.13.0
+    - accelerate
+
+    # 图像和视频处理
+    - opencv-python
+    - imageio
+    - imageio-ffmpeg
+    - decord
+    - av
+
+    # 深度学习工具
+    - safetensors
+    - einops
+    - tqdm
+    - loguru
+    - qtorch
+    - ftfy
+
+    # Web界面和服务
+    - gradio
+    - fastapi
+    - uvicorn
+    - aiohttp
+    - pydantic
+    - requests
+
+    # 数据库和消息队列
+    - aio-pika
+    - asyncpg>=0.27.0
+    - redis==6.4.0
+
+    # 云服务
+    - aioboto3>=12.0.0
+    - tos
+
+    # 认证和安全
+    - PyJWT
+    - alibabacloud_dypnsapi20170525==1.2.2
+
+    # 性能优化 (可选，需要CUDA环境)
+    - vllm
+    - sgl-kernel
+
+    # 高性能attention (需要编译)
+    # 注意：这些需要额外安装，见下面的安装说明
+    # - flash-attn  # 需要从源码编译
+    # - sageattention  # 需要从源码编译
+    # - q8-kernels  # 需要从源码编译
+
+    # 开发工具
+    - ruff
+    - pre-commit
+    - packaging
