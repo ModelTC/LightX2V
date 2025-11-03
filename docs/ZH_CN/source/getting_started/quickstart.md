@@ -77,11 +77,14 @@ conda create -n lightx2v python=3.11 -y
 conda activate lightx2v
 ```
 
-#### 步骤 3: 安装依赖
+#### 步骤 3: 安装依赖及代码
 
 ```bash
-# 安装基础依赖
-pip install -r requirements.txt
+# 基础安装（核心推理功能）
+pip install -v -e .
+
+# 完整安装（含推理功能和服务端）
+pip install -v -e .[full]
 ```
 
 > 💡 **提示**: 混元模型需要在 4.45.2 版本的 transformers 下运行，如果您不需要运行混元模型，可以跳过 transformers 版本限制。
@@ -102,7 +105,20 @@ cd flash-attention/hopper && python setup.py install
 **选项 C: SageAttention 2（推荐）**
 ```bash
 git clone https://github.com/thu-ml/SageAttention.git
-cd SageAttention && python setup.py install
+cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .
+```
+
+**选项 D: Q8 Kernels**
+```bash
+git clone https://github.com/KONAKONA666/q8_kernels.git
+cd q8_kernels && git submodule init && git submodule update
+python setup.py install
+```
+
+#### 步骤 5: 验证安装
+```python
+import lightx2v
+print(f"LightX2V 版本: {lightx2v.__version__}")
 ```
 
 ## 🪟 Windows 系统环境搭建
