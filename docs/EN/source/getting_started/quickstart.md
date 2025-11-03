@@ -81,7 +81,10 @@ conda activate lightx2v
 
 ```bash
 # Install basic dependencies
-pip install -r requirements.txt
+pip install -v -e .
+
+# Full dependencies
+pip install -v -e .[full]
 ```
 
 > 💡 **Note**: The Hunyuan model needs to run under transformers version 4.45.2. If you don't need to run the Hunyuan model, you can skip the transformers version restriction.
@@ -102,7 +105,21 @@ cd flash-attention/hopper && python setup.py install
 **Option C: SageAttention 2 (Recommended)**
 ```bash
 git clone https://github.com/thu-ml/SageAttention.git
-cd SageAttention && python setup.py install
+cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .
+```
+
+**Option D: Q8 Kernels**
+```bash
+git clone https://github.com/KONAKONA666/q8_kernels.git
+cd q8_kernels && git submodule init && git submodule update
+python setup.py install
+```
+
+#### Step 5: Verify Installation
+
+```python
+import lightx2v
+print(f"LightX2V Version: {lightx2v.__version__}")
 ```
 
 ## 🪟 Windows Environment Setup
