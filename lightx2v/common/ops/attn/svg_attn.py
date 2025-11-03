@@ -299,8 +299,8 @@ class SvgAttnWeight(AttnWeightTemplate):
     sample_mse_max_row = None
     num_sampled_rows = None
     context_length = None
-    num_frame = None
-    frame_size = None
+    attnmap_frame_num = None
+    seqlen = None
     sparsity = None
     mask_name_list = ["spatial", "temporal"]
     attention_masks = None
@@ -325,18 +325,18 @@ class SvgAttnWeight(AttnWeightTemplate):
         self.sparse_attention = torch.compile(flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
 
     @classmethod
-    def prepare_mask(cls, num_frame, frame_size):
+    def prepare_mask(cls, seqlen):
         # Use class attributes so updates affect all instances of this class
-        if num_frame == cls.num_frame and frame_size == cls.frame_size:
+        if seqlen == cls.seqlen:
             return
-        cls.num_frame = num_frame
-        cls.frame_size = frame_size
-        cls.attention_masks = [get_attention_mask(mask_name, cls.sample_mse_max_row, cls.context_length, num_frame, frame_size) for mask_name in cls.mask_name_list]
-        multiplier = diag_width = sparsity_to_width(cls.sparsity, cls.context_length, num_frame, frame_size)
+        frame_size = seqlen // cls.attnmap_frame_num
+        cls.attention_masks = [get_attention_mask(mask_name, cls.sample_mse_max_row, cls.context_length, cls.attnmap_frame_num, frame_size) for mask_name in cls.mask_name_list]
+        multiplier = diag_width = sparsity_to_width(cls.sparsity, cls.context_length, cls.attnmap_frame_num, frame_size)
         cls.block_mask = prepare_flexattention(
-            1, cls.head_num, cls.head_dim, torch.bfloat16, "cuda", cls.context_length, cls.context_length, num_frame, frame_size, diag_width=diag_width, multiplier=multiplier
+            1, cls.head_num, cls.head_dim, torch.bfloat16, "cuda", cls.context_length, cls.context_length, cls.attnmap_frame_num, frame_size, diag_width=diag_width, multiplier=multiplier
         )
-        logger.info(f"SvgAttnWeight Update: num_frame={num_frame}, frame_size={frame_size}")
+        cls.seqlen = seqlen
+        logger.info(f"SvgAttnWeight Update: seqlen={seqlen}")
 
     def apply(
         self,
@@ -354,18 +354,19 @@ class SvgAttnWeight(AttnWeightTemplate):
         v = v.unsqueeze(0).transpose(1, 2)
         bs, num_heads, seq_len, dim = q.size()
 
-        num_frame = 21
-        self.prepare_mask(num_frame=num_frame, frame_size=seq_len // num_frame)
+        self.prepare_mask(seq_len)
         sampled_mses = self.sample_mse(q, k, v)
         best_mask_idx = torch.argmin(sampled_mses, dim=0)
 
         output_hidden_states = torch.zeros_like(q)
         query_out, key_out, value_out = torch.zeros_like(q), torch.zeros_like(k), torch.zeros_like(v)
 
-        query_out, key_out, value_out = self.fast_sparse_head_placement(q, k, v, query_out, key_out, value_out, best_mask_idx, self.context_length, self.num_frame, self.frame_size)
+        query_out, key_out, value_out = self.fast_sparse_head_placement(
+            q, k, v, query_out, key_out, value_out, best_mask_idx, self.context_length, self.attnmap_frame_num, seq_len // self.attnmap_frame_num
+        )
 
         hidden_states = self.sparse_attention(query_out, key_out, value_out)
-        wan_hidden_states_placement(hidden_states, output_hidden_states, best_mask_idx, self.context_length, self.num_frame, self.frame_size)
+        wan_hidden_states_placement(hidden_states, output_hidden_states, best_mask_idx, self.context_length, self.attnmap_frame_num, seq_len // self.attnmap_frame_num)
 
         return output_hidden_states.reshape(bs, num_heads, seq_len, dim).transpose(1, 2).reshape(bs * seq_len, -1)
 

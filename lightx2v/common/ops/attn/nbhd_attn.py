@@ -11,11 +11,11 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .template import AttnWeightTemplate
 
 
-def generate_nbhd_mask(a, block_num, num_frame, device="cpu"):
+def generate_nbhd_mask(a, block_num, attnmap_frame_num, device="cpu"):
     """
     a : block num per frame
     block_num : block num per col/row
-    num_frame : total frame num
+    attnmap_frame_num : total frame num
     """
     i_indices = torch.arange(block_num, device=device).unsqueeze(1)  # [block_num, 1]
     j_indices = torch.arange(block_num, device=device).unsqueeze(0)  # [1, block_num]
@@ -29,7 +29,7 @@ def generate_nbhd_mask(a, block_num, num_frame, device="cpu"):
 
     # 3. cross-frame attention
     mask_cross = torch.zeros((block_num, block_num), dtype=torch.bool, device=device)
-    for n in range(1, num_frame):
+    for n in range(1, attnmap_frame_num):
         if n == 1:
             width = 1 / 2 * a
         elif n >= 2:
@@ -67,7 +67,7 @@ def generate_qk_ranges(mask, block_size, seqlen):
 class NbhdAttnWeight(AttnWeightTemplate):
     block_size = 128
     seqlen = None
-    num_frame = None
+    attnmap_frame_num = None
     q_ranges = None
     k_ranges = None
     attn_type_map = None
@@ -76,22 +76,21 @@ class NbhdAttnWeight(AttnWeightTemplate):
         self.config = {}
 
     @classmethod
-    def prepare_mask(cls, seqlen, num_frame):
-        if seqlen == cls.seqlen and num_frame == cls.num_frame:
+    def prepare_mask(cls, seqlen):
+        if seqlen == cls.seqlen:
             return
         block_num = (seqlen + cls.block_size - 1) // cls.block_size
-        block_num_per_frame = (seqlen // num_frame + cls.block_size - 1) // cls.block_size
-        mask = generate_nbhd_mask(block_num_per_frame, block_num, num_frame, device="cpu")
+        block_num_per_frame = (seqlen // cls.attnmap_frame_num + cls.block_size - 1) // cls.block_size
+        mask = generate_nbhd_mask(block_num_per_frame, block_num, cls.attnmap_frame_num, device="cpu")
         q_ranges, k_ranges = generate_qk_ranges(mask, cls.block_size, seqlen)
         attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cuda")
         q_ranges = q_ranges.to(torch.int32).to("cuda")
         k_ranges = k_ranges.to(torch.int32).to("cuda")
         cls.seqlen = seqlen
-        cls.num_frame = num_frame
         cls.q_ranges = q_ranges
         cls.k_ranges = k_ranges
         cls.attn_type_map = attn_type_map
-        logger.info(f"NbhdAttnWeight Update: seqlen={seqlen}, num_frame={num_frame}")
+        logger.info(f"NbhdAttnWeight Update: seqlen={seqlen}")
         sparsity = 1 - mask.sum().item() / mask.numel()
         logger.info(f"Attention sparsity: {sparsity}")
 
@@ -111,8 +110,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
         k: [seqlen, head_num, head_dim]
         v: [seqlen, head_num, head_dim]
         """
-        num_frame = 21
-        self.prepare_mask(seqlen=q.shape[0], num_frame=num_frame)
+        self.prepare_mask(seqlen=q.shape[0])
         out = magi_ffa_func(
             q,
             k,
