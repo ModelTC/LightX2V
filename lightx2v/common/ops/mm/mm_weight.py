@@ -597,7 +597,7 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self.bias,
+            self.bias if self.bias is not None else None,
         )
         return output_tensor
 
@@ -632,7 +632,7 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self.bias,
+            self.bias if self.bias is not None else None,
         )
         return output_tensor
 
@@ -823,7 +823,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         output_tensor = Q8F.linear.fp8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias.float(),
+            self.bias.float() if self.bias is not None else None,
             input_tensor_scale,
             self.weight_scale,
             out_dtype=self.infer_dtype,
@@ -853,7 +853,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         output_tensor = Q8F.linear.q8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias.float(),
+            self.bias.float() if self.bias is not None else None,
             input_tensor_scale,
             self.weight_scale,
             fuse_gelu=False,
@@ -956,7 +956,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self.bias,
+            self.bias if self.bias is not None else None,
         )
         return output_tensor
 
