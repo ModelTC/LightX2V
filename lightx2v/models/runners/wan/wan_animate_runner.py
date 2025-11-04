@@ -17,6 +17,7 @@ except ImportError:
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
+from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -391,6 +392,17 @@ class WanAnimateRunner(WanRunner):
             self.config,
             self.init_device,
         )
+
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            assert not self.config.get("dit_quantized", False)
+            lora_wrapper = WanLoraWrapper(model)
+            for lora_config in self.config.lora_configs:
+                lora_path = lora_config["path"]
+                strength = lora_config.get("strength", 1.0)
+                lora_name = lora_wrapper.load_lora(lora_path)
+                lora_wrapper.apply_lora(lora_name, strength)
+                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+
         motion_encoder, face_encoder = self.load_encoders()
         model.set_animate_encoders(motion_encoder, face_encoder)
         return model
