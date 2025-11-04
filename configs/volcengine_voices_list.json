@@ -15,6 +15,162 @@
       "emotions": []
     },
     {
+      "name": "可爱女生",
+      "voice_type": "ICL_zh_female_keainvsheng_tob",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "大壹",
+      "voice_type": "zh_male_dayi_saturn_bigtts",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "魅力女友",
+      "voice_type": "ICL_zh_female_tiaopigongzhu_tob",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "黑猫侦探社咪仔",
+      "voice_type": "zh_female_mizai_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "爽朗少年",
+      "voice_type": "ICL_zh_male_shuanglangshaonian_tob",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "鸡汤女",
+      "voice_type": "zh_female_jitangnv_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "天才同桌",
+      "voice_type": "ICL_zh_male_tiancaitongzhuo_tob",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "魅力女友",
+      "voice_type": "zh_female_meilinvyou_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "流畅女声",
+      "voice_type": "zh_female_santongyongns_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "儒雅逸辰",
+      "voice_type": "zh_male_ruyayichen_saturn_bigtts",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "知性灿灿",
+      "voice_type": "saturn_zh_female_cancan_tob",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "温柔女神",
+      "voice_type": "ICL_zh_female_wenrounvshen_239eff5e8ffa_tob",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
       "name": "沪普男",
       "voice_type": "zh_male_hupunan_mars_bigtts",
       "gender": "male",
@@ -28,10 +184,10 @@
       "emotions": []
     },
     {
-      "name": "可爱女生",
-      "voice_type": "ICL_zh_female_keainvsheng_tob",
+      "name": "纯真少女",
+      "voice_type": "ICL_zh_female_chunzhenshaonv_e588402fb8ad_tob",
       "gender": "female",
-      "version": "2.0",
+      "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
       "scene": "角色扮演",
@@ -116,11 +272,11 @@
       "emotions": []
     },
     {
-      "name": "大壹",
-      "voice_type": "zh_male_dayi_saturn_bigtts",
+      "name": "悠悠君子",
+      "voice_type": "zh_male_M100_conversation_wvae_bigtts",
       "gender": "male",
-      "version": "2.0",
-      "resource_id": "seed-tts-2.0",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
@@ -129,8 +285,8 @@
       "emotions": []
     },
     {
-      "name": "温柔女神",
-      "voice_type": "ICL_zh_female_wenrounvshen_239eff5e8ffa_tob",
+      "name": "Vivi",
+      "voice_type": "zh_female_vv_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -155,10 +311,10 @@
       "emotions": []
     },
     {
-      "name": "魅力女友",
-      "voice_type": "ICL_zh_female_tiaopigongzhu_tob",
-      "gender": "female",
-      "version": "2.0",
+      "name": "奶气小生",
+      "voice_type": "ICL_zh_male_xiaonaigou_edf58cf28b8b_tob",
+      "gender": "male",
+      "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
       "scene": "角色扮演",
@@ -225,11 +381,11 @@
       "emotions": []
     },
     {
-      "name": "黑猫侦探社咪仔",
-      "voice_type": "zh_female_mizai_saturn_bigtts",
+      "name": "文静毛毛",
+      "voice_type": "zh_female_maomao_conversation_wvae_bigtts",
       "gender": "female",
-      "version": "2.0",
-      "resource_id": "seed-tts-2.0",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
@@ -238,8 +394,8 @@
       "emotions": []
     },
     {
-      "name": "Vivi",
-      "voice_type": "zh_female_vv_mars_bigtts",
+      "name": "亲切女声",
+      "voice_type": "zh_female_qinqienvsheng_moon_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -264,10 +420,10 @@
       "emotions": []
     },
     {
-      "name": "爽朗少年",
-      "voice_type": "ICL_zh_male_shuanglangshaonian_tob",
-      "gender": "male",
-      "version": "2.0",
+      "name": "精灵向导",
+      "voice_type": "ICL_zh_female_jinglingxiangdao_1beb294a9e3e_tob",
+      "gender": "female",
+      "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
       "scene": "角色扮演",
@@ -339,11 +495,11 @@
       "emotions": []
     },
     {
-      "name": "鸡汤女",
-      "voice_type": "zh_female_jitangnv_saturn_bigtts",
+      "name": "倾心少女",
+      "voice_type": "ICL_zh_female_qiuling_v1_tob",
       "gender": "female",
-      "version": "2.0",
-      "resource_id": "seed-tts-2.0",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
@@ -352,9 +508,9 @@
       "emotions": []
     },
     {
-      "name": "亲切女声",
-      "voice_type": "zh_female_qinqienvsheng_moon_bigtts",
-      "gender": "female",
+      "name": "机灵小伙",
+      "voice_type": "ICL_zh_male_shenmi_v1_tob",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -378,10 +534,10 @@
       "emotions": []
     },
     {
-      "name": "天才同桌",
-      "voice_type": "ICL_zh_male_tiancaitongzhuo_tob",
+      "name": "闷油瓶小哥",
+      "voice_type": "ICL_zh_male_menyoupingxiaoge_ffed9fc2fee7_tob",
       "gender": "male",
-      "version": "2.0",
+      "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
       "scene": "角色扮演",
@@ -448,11 +604,11 @@
       "emotions": []
     },
     {
-      "name": "魅力女友",
-      "voice_type": "zh_female_meilinvyou_saturn_bigtts",
-      "gender": "female",
-      "version": "2.0",
-      "resource_id": "seed-tts-2.0",
+      "name": "醇厚低音",
+      "voice_type": "ICL_zh_male_buyan_v1_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
@@ -461,9 +617,9 @@
       "emotions": []
     },
     {
-      "name": "机灵小伙",
-      "voice_type": "ICL_zh_male_shenmi_v1_tob",
-      "gender": "male",
+      "name": "元气甜妹",
+      "voice_type": "ICL_zh_female_wuxi_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -487,9 +643,9 @@
       "emotions": []
     },
     {
-      "name": "纯真少女",
-      "voice_type": "ICL_zh_female_chunzhenshaonv_e588402fb8ad_tob",
-      "gender": "female",
+      "name": "黯刃秦主",
+      "voice_type": "ICL_zh_male_anrenqinzhu_cd62e63dcdab_tob",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -556,11 +712,11 @@
       "emotions": []
     },
     {
-      "name": "流畅女声",
-      "voice_type": "zh_female_santongyongns_saturn_bigtts",
-      "gender": "female",
-      "version": "2.0",
-      "resource_id": "seed-tts-2.0",
+      "name": "咆哮小哥",
+      "voice_type": "ICL_zh_male_BV144_paoxiaoge_v1_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
@@ -569,8 +725,8 @@
       "emotions": []
     },
     {
-      "name": "元气甜妹",
-      "voice_type": "ICL_zh_female_wuxi_tob",
+      "name": "知心姐姐",
+      "voice_type": "ICL_zh_female_wenyinvsheng_v1_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -595,8 +751,8 @@
       "emotions": []
     },
     {
-      "name": "奶气小生",
-      "voice_type": "ICL_zh_male_xiaonaigou_edf58cf28b8b_tob",
+      "name": "霸道总裁",
+      "voice_type": "ICL_zh_male_badaozongcai_v1_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -666,11 +822,11 @@
       "emotions": []
     },
     {
-      "name": "儒雅逸辰",
-      "voice_type": "zh_male_ruyayichen_saturn_bigtts",
-      "gender": "male",
-      "version": "2.0",
-      "resource_id": "seed-tts-2.0",
+      "name": "和蔼奶奶",
+      "voice_type": "ICL_zh_female_heainainai_tob",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
@@ -679,9 +835,9 @@
       "emotions": []
     },
     {
-      "name": "知心姐姐",
-      "voice_type": "ICL_zh_female_wenyinvsheng_v1_tob",
-      "gender": "female",
+      "name": "阳光阿辰",
+      "voice_type": "zh_male_qingyiyuxuan_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -705,8 +861,8 @@
       "emotions": []
     },
     {
-      "name": "精灵向导",
-      "voice_type": "ICL_zh_female_jinglingxiangdao_1beb294a9e3e_tob",
+      "name": "妩媚可人",
+      "voice_type": "ICL_zh_female_ganli_v1_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -776,9 +932,9 @@
       "emotions": []
     },
     {
-      "name": "悠悠君子",
-      "voice_type": "zh_male_M100_conversation_wvae_bigtts",
-      "gender": "male",
+      "name": "邻居阿姨",
+      "voice_type": "ICL_zh_female_linjuayi_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -789,8 +945,8 @@
       "emotions": []
     },
     {
-      "name": "阳光阿辰",
-      "voice_type": "zh_male_qingyiyuxuan_mars_bigtts",
+      "name": "快乐小东",
+      "voice_type": "zh_male_xudong_conversation_wvae_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -815,9 +971,9 @@
       "emotions": []
     },
     {
-      "name": "闷油瓶小哥",
-      "voice_type": "ICL_zh_male_menyoupingxiaoge_ffed9fc2fee7_tob",
-      "gender": "male",
+      "name": "邪魅御姐",
+      "voice_type": "ICL_zh_female_xiangliangya_v1_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -888,8 +1044,8 @@
       "emotions": []
     },
     {
-      "name": "文静毛毛",
-      "voice_type": "zh_female_maomao_conversation_wvae_bigtts",
+      "name": "温柔小雅",
+      "voice_type": "zh_female_wenrouxiaoya_moon_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -901,8 +1057,8 @@
       "emotions": []
     },
     {
-      "name": "快乐小东",
-      "voice_type": "zh_male_xudong_conversation_wvae_bigtts",
+      "name": "冷酷哥哥",
+      "voice_type": "ICL_zh_male_lengkugege_v1_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -927,8 +1083,8 @@
       "emotions": []
     },
     {
-      "name": "黯刃秦主",
-      "voice_type": "ICL_zh_male_anrenqinzhu_cd62e63dcdab_tob",
+      "name": "嚣张小哥",
+      "voice_type": "ICL_zh_male_ms_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1000,9 +1156,9 @@
       "emotions": []
     },
     {
-      "name": "倾心少女",
-      "voice_type": "ICL_zh_female_qiuling_v1_tob",
-      "gender": "female",
+      "name": "天才童声",
+      "voice_type": "zh_male_tiancaitongsheng_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -1013,9 +1169,9 @@
       "emotions": []
     },
     {
-      "name": "冷酷哥哥",
-      "voice_type": "ICL_zh_male_lengkugege_v1_tob",
-      "gender": "male",
+      "name": "纯澈女生",
+      "voice_type": "ICL_zh_female_feicui_v1_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -1039,8 +1195,8 @@
       "emotions": []
     },
     {
-      "name": "霸道总裁",
-      "voice_type": "ICL_zh_male_badaozongcai_v1_tob",
+      "name": "油腻大叔",
+      "voice_type": "ICL_zh_male_you_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1111,8 +1267,8 @@
       "emotions": []
     },
     {
-      "name": "醇厚低音",
-      "voice_type": "ICL_zh_male_buyan_v1_tob",
+      "name": "猴哥",
+      "voice_type": "zh_male_sunwukong_mars_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1124,8 +1280,8 @@
       "emotions": []
     },
     {
-      "name": "纯澈女生",
-      "voice_type": "ICL_zh_female_feicui_v1_tob",
+      "name": "初恋女友",
+      "voice_type": "ICL_zh_female_yuxin_v1_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1150,9 +1306,9 @@
       "emotions": []
     },
     {
-      "name": "妩媚可人",
-      "voice_type": "ICL_zh_female_ganli_v1_tob",
-      "gender": "female",
+      "name": "孤傲公子",
+      "voice_type": "ICL_zh_male_guaogongzi_v1_tob",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -1222,8 +1378,8 @@
       "emotions": []
     },
     {
-      "name": "咆哮小哥",
-      "voice_type": "ICL_zh_male_BV144_paoxiaoge_v1_tob",
+      "name": "熊二",
+      "voice_type": "zh_male_xionger_mars_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1235,8 +1391,8 @@
       "emotions": []
     },
     {
-      "name": "初恋女友",
-      "voice_type": "ICL_zh_female_yuxin_v1_tob",
+      "name": "贴心闺蜜",
+      "voice_type": "ICL_zh_female_xnx_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1261,9 +1417,9 @@
       "emotions": []
     },
     {
-      "name": "邪魅御姐",
-      "voice_type": "ICL_zh_female_xiangliangya_v1_tob",
-      "gender": "female",
+      "name": "胡子叔叔",
+      "voice_type": "ICL_zh_male_huzi_v1_tob",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -1323,8 +1479,8 @@
       "emotions": []
     },
     {
-      "name": "和蔼奶奶",
-      "voice_type": "ICL_zh_female_heainainai_tob",
+      "name": "佩奇猪",
+      "voice_type": "zh_female_peiqi_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1336,8 +1492,8 @@
       "emotions": []
     },
     {
-      "name": "贴心闺蜜",
-      "voice_type": "ICL_zh_female_xnx_tob",
+      "name": "温柔白月光",
+      "voice_type": "ICL_zh_female_yry_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1362,9 +1518,9 @@
       "emotions": []
     },
     {
-      "name": "嚣张小哥",
-      "voice_type": "ICL_zh_male_ms_tob",
-      "gender": "male",
+      "name": "性感魅惑",
+      "voice_type": "ICL_zh_female_luoqing_v1_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -1422,8 +1578,8 @@
       "emotions": []
     },
     {
-      "name": "邻居阿姨",
-      "voice_type": "ICL_zh_female_linjuayi_tob",
+      "name": "武则天",
+      "voice_type": "zh_female_wuzetian_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1435,9 +1591,9 @@
       "emotions": []
     },
     {
-      "name": "温柔白月光",
-      "voice_type": "ICL_zh_female_yry_tob",
-      "gender": "female",
+      "name": "开朗学长",
+      "voice_type": "en_male_jason_conversation_wvae_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -1461,8 +1617,8 @@
       "emotions": []
     },
     {
-      "name": "油腻大叔",
-      "voice_type": "ICL_zh_male_you_tob",
+      "name": "病弱公子",
+      "voice_type": "ICL_zh_male_bingruogongzi_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1517,8 +1673,8 @@
       "emotions": []
     },
     {
-      "name": "温柔小雅",
-      "voice_type": "zh_female_wenrouxiaoya_moon_bigtts",
+      "name": "顾姐",
+      "voice_type": "zh_female_gujie_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1530,9 +1686,9 @@
       "emotions": []
     },
     {
-      "name": "开朗学长",
-      "voice_type": "en_male_jason_conversation_wvae_bigtts",
-      "gender": "male",
+      "name": "魅力苏菲",
+      "voice_type": "zh_female_sophie_conversation_wvae_bigtts",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -1556,9 +1712,9 @@
       "emotions": []
     },
     {
-      "name": "孤傲公子",
-      "voice_type": "ICL_zh_male_guaogongzi_v1_tob",
-      "gender": "male",
+      "name": "邪魅女王",
+      "voice_type": "ICL_zh_female_bingjiao3_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -1617,9 +1773,9 @@
       "emotions": []
     },
     {
-      "name": "天才童声",
-      "voice_type": "zh_male_tiancaitongsheng_mars_bigtts",
-      "gender": "male",
+      "name": "樱桃丸子",
+      "voice_type": "zh_female_yingtaowanzi_mars_bigtts",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -1630,8 +1786,8 @@
       "emotions": []
     },
     {
-      "name": "魅力苏菲",
-      "voice_type": "zh_female_sophie_conversation_wvae_bigtts",
+      "name": "贴心妹妹",
+      "voice_type": "ICL_zh_female_yilin_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1656,8 +1812,8 @@
       "emotions": []
     },
     {
-      "name": "胡子叔叔",
-      "voice_type": "ICL_zh_male_huzi_v1_tob",
+      "name": "傲慢青年",
+      "voice_type": "ICL_zh_male_aomanqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1717,8 +1873,8 @@
       "emotions": []
     },
     {
-      "name": "猴哥",
-      "voice_type": "zh_male_sunwukong_mars_bigtts",
+      "name": "广告解说",
+      "voice_type": "zh_male_chunhui_mars_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1730,8 +1886,8 @@
       "emotions": []
     },
     {
-      "name": "贴心妹妹",
-      "voice_type": "ICL_zh_female_yilin_tob",
+      "name": "甜美桃子",
+      "voice_type": "zh_female_tianmeitaozi_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1756,9 +1912,9 @@
       "emotions": []
     },
     {
-      "name": "性感魅惑",
-      "voice_type": "ICL_zh_female_luoqing_v1_tob",
-      "gender": "female",
+      "name": "醋精男生",
+      "voice_type": "ICL_zh_male_cujingnansheng_tob",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -1818,9 +1974,9 @@
       "emotions": []
     },
     {
-      "name": "熊二",
-      "voice_type": "zh_male_xionger_mars_bigtts",
-      "gender": "male",
+      "name": "少儿故事",
+      "voice_type": "zh_female_shaoergushi_mars_bigtts",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -1831,8 +1987,8 @@
       "emotions": []
     },
     {
-      "name": "甜美桃子",
-      "voice_type": "zh_female_tianmeitaozi_mars_bigtts",
+      "name": "清新女声",
+      "voice_type": "zh_female_qingxinnvsheng_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1857,8 +2013,8 @@
       "emotions": []
     },
     {
-      "name": "病弱公子",
-      "voice_type": "ICL_zh_male_bingruogongzi_tob",
+      "name": "撒娇男友",
+      "voice_type": "ICL_zh_male_sajiaonanyou_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1919,9 +2075,9 @@
       "emotions": []
     },
     {
-      "name": "佩奇猪",
-      "voice_type": "zh_female_peiqi_mars_bigtts",
-      "gender": "female",
+      "name": "四郎",
+      "voice_type": "zh_male_silang_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -1932,8 +2088,8 @@
       "emotions": []
     },
     {
-      "name": "清新女声",
-      "voice_type": "zh_female_qingxinnvsheng_mars_bigtts",
+      "name": "知性女声",
+      "voice_type": "zh_female_zhixingnvsheng_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1958,9 +2114,9 @@
       "emotions": []
     },
     {
-      "name": "邪魅女王",
-      "voice_type": "ICL_zh_female_bingjiao3_tob",
-      "gender": "female",
+      "name": "温柔男友",
+      "voice_type": "ICL_zh_male_wenrounanyou_tob",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "roleplay",
@@ -2021,8 +2177,8 @@
       "emotions": []
     },
     {
-      "name": "武则天",
-      "voice_type": "zh_female_wuzetian_mars_bigtts",
+      "name": "俏皮女声",
+      "voice_type": "zh_female_qiaopinvsheng_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2034,9 +2190,9 @@
       "emotions": []
     },
     {
-      "name": "知性女声",
-      "voice_type": "zh_female_zhixingnvsheng_mars_bigtts",
-      "gender": "female",
+      "name": "清爽男大",
+      "voice_type": "zh_male_qingshuangnanda_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -2060,8 +2216,8 @@
       "emotions": []
     },
     {
-      "name": "傲慢青年",
-      "voice_type": "ICL_zh_male_aomanqingnian_tob",
+      "name": "温顺少年",
+      "voice_type": "ICL_zh_male_wenshunshaonian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2123,9 +2279,9 @@
       "emotions": []
     },
     {
-      "name": "顾姐",
-      "voice_type": "zh_female_gujie_mars_bigtts",
-      "gender": "female",
+      "name": "懒音绵宝",
+      "voice_type": "zh_male_lanxiaoyang_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -2136,9 +2292,9 @@
       "emotions": []
     },
     {
-      "name": "清爽男大",
-      "voice_type": "zh_male_qingshuangnanda_mars_bigtts",
-      "gender": "male",
+      "name": "邻家女孩",
+      "voice_type": "zh_female_linjianvhai_moon_bigtts",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -2162,8 +2318,8 @@
       "emotions": []
     },
     {
-      "name": "醋精男生",
-      "voice_type": "ICL_zh_male_cujingnansheng_tob",
+      "name": "粘人男友",
+      "voice_type": "ICL_zh_male_naigounanyou_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2224,9 +2380,9 @@
       "emotions": []
     },
     {
-      "name": "樱桃丸子",
-      "voice_type": "zh_female_yingtaowanzi_mars_bigtts",
-      "gender": "female",
+      "name": "亮嗓萌仔",
+      "voice_type": "zh_male_dongmanhaimian_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
@@ -2237,9 +2393,9 @@
       "emotions": []
     },
     {
-      "name": "邻家女孩",
-      "voice_type": "zh_female_linjianvhai_moon_bigtts",
-      "gender": "female",
+      "name": "渊博小叔",
+      "voice_type": "zh_male_yuanboxiaoshu_moon_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -2264,8 +2420,8 @@
       "emotions": []
     },
     {
-      "name": "撒娇男友",
-      "voice_type": "ICL_zh_male_sajiaonanyou_tob",
+      "name": "撒娇男生",
+      "voice_type": "ICL_zh_male_sajiaonansheng_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2303,21 +2459,22 @@
       "emotions": []
     },
     {
-      "name": "广告解说",
-      "voice_type": "zh_male_chunhui_mars_bigtts",
+      "name": "磁性解说男声/Morgan",
+      "voice_type": "zh_male_jieshuonansheng_mars_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
-        "chinese"
+        "chinese",
+        "en_us"
       ],
       "emotions": []
     },
     {
-      "name": "渊博小叔",
-      "voice_type": "zh_male_yuanboxiaoshu_moon_bigtts",
+      "name": "阳光青年",
+      "voice_type": "zh_male_yangguangqingnian_moon_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2342,8 +2499,8 @@
       "emotions": []
     },
     {
-      "name": "温柔男友",
-      "voice_type": "ICL_zh_male_wenrounanyou_tob",
+      "name": "活泼男友",
+      "voice_type": "ICL_zh_male_huoponanyou_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2381,22 +2538,23 @@
       "emotions": []
     },
     {
-      "name": "少儿故事",
-      "voice_type": "zh_female_shaoergushi_mars_bigtts",
+      "name": "鸡汤妹妹/Hope",
+      "voice_type": "zh_female_jitangmeimei_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
-        "chinese"
+        "chinese",
+        "en_us"
       ],
       "emotions": []
     },
     {
-      "name": "阳光青年",
-      "voice_type": "zh_male_yangguangqingnian_moon_bigtts",
-      "gender": "male",
+      "name": "甜美小源",
+      "voice_type": "zh_female_tianmeixiaoyuan_moon_bigtts",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -2407,8 +2565,8 @@
       "emotions": []
     },
     {
-      "name": "温顺少年",
-      "voice_type": "ICL_zh_male_wenshunshaonian_tob",
+      "name": "甜系男友",
+      "voice_type": "ICL_zh_male_tianxinanyou_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2446,21 +2604,22 @@
       "emotions": []
     },
     {
-      "name": "四郎",
-      "voice_type": "zh_male_silang_mars_bigtts",
-      "gender": "male",
+      "name": "贴心女声/Candy",
+      "voice_type": "zh_female_tiexinnvsheng_mars_bigtts",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
-        "chinese"
+        "chinese",
+        "en_us"
       ],
       "emotions": []
     },
     {
-      "name": "甜美小源",
-      "voice_type": "zh_female_tianmeixiaoyuan_moon_bigtts",
+      "name": "清澈梓梓",
+      "voice_type": "zh_female_qingchezizi_moon_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2472,8 +2631,8 @@
       "emotions": []
     },
     {
-      "name": "粘人男友",
-      "voice_type": "ICL_zh_male_naigounanyou_tob",
+      "name": "活力青年",
+      "voice_type": "ICL_zh_male_huoliqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2498,22 +2657,23 @@
       "emotions": []
     },
     {
-      "name": "俏皮女声",
-      "voice_type": "zh_female_qiaopinvsheng_mars_bigtts",
+      "name": "萌丫头/Cutey",
+      "voice_type": "zh_female_mengyatou_mars_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "video_dubbing",
       "scene": "视频配音",
       "language": [
-        "chinese"
+        "chinese",
+        "en_us"
       ],
       "emotions": []
     },
     {
-      "name": "清澈梓梓",
-      "voice_type": "zh_female_qingchezizi_moon_bigtts",
-      "gender": "female",
+      "name": "解说小明",
+      "voice_type": "zh_male_jieshuoxiaoming_moon_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -2524,8 +2684,8 @@
       "emotions": []
     },
     {
-      "name": "撒娇男生",
-      "voice_type": "ICL_zh_male_sajiaonansheng_tob",
+      "name": "开朗青年",
+      "voice_type": "ICL_zh_male_kailangqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2550,232 +2710,8 @@
       "emotions": []
     },
     {
-      "name": "懒音绵宝",
-      "voice_type": "zh_male_lanxiaoyang_mars_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "video_dubbing",
-      "scene": "视频配音",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "解说小明",
-      "voice_type": "zh_male_jieshuoxiaoming_moon_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "活泼男友",
-      "voice_type": "ICL_zh_male_huoponanyou_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Adam",
-      "voice_type": "en_male_adam_mars_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_us"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "亮嗓萌仔",
-      "voice_type": "zh_male_dongmanhaimian_mars_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "video_dubbing",
-      "scene": "视频配音",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
       "name": "开朗姐姐",
       "voice_type": "zh_female_kailangjiejie_moon_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "甜系男友",
-      "voice_type": "ICL_zh_male_tianxinanyou_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Amanda",
-      "voice_type": "en_female_amanda_mars_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_us"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "磁性解说男声/Morgan",
-      "voice_type": "zh_male_jieshuonansheng_mars_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "video_dubbing",
-      "scene": "视频配音",
-      "language": [
-        "chinese",
-        "en_us"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "邻家男孩",
-      "voice_type": "zh_male_linjiananhai_moon_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "活力青年",
-      "voice_type": "ICL_zh_male_huoliqingnian_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Jackson",
-      "voice_type": "en_male_jackson_mars_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_us"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "鸡汤妹妹/Hope",
-      "voice_type": "zh_female_jitangmeimei_mars_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "video_dubbing",
-      "scene": "视频配音",
-      "language": [
-        "chinese",
-        "en_us"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "甜美悦悦",
-      "voice_type": "zh_female_tianmeiyueyue_moon_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "开朗青年",
-      "voice_type": "ICL_zh_male_kailangqingnian_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Delicate Girl",
-      "voice_type": "en_female_daisy_moon_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_gb"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "贴心女声/Candy",
-      "voice_type": "zh_female_tiexinnvsheng_mars_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "video_dubbing",
-      "scene": "视频配音",
-      "language": [
-        "chinese",
-        "en_us"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "心灵鸡汤",
-      "voice_type": "zh_female_xinlingjitang_moon_bigtts",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2800,36 +2736,22 @@
       "emotions": []
     },
     {
-      "name": "Dave",
-      "voice_type": "en_male_dave_moon_bigtts",
+      "name": "Adam",
+      "voice_type": "en_male_adam_mars_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "multi_language",
       "scene": "多语种",
       "language": [
-        "en_gb"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "萌丫头/Cutey",
-      "voice_type": "zh_female_mengyatou_mars_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "video_dubbing",
-      "scene": "视频配音",
-      "language": [
-        "chinese",
         "en_us"
       ],
       "emotions": []
     },
     {
-      "name": "知性温婉",
-      "voice_type": "ICL_zh_female_zhixingwenwan_tob",
-      "gender": "female",
+      "name": "邻家男孩",
+      "voice_type": "zh_male_linjiananhai_moon_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
@@ -2853,8 +2775,125 @@
       "emotions": []
     },
     {
-      "name": "Hades",
-      "voice_type": "en_male_hades_moon_bigtts",
+      "name": "Amanda",
+      "voice_type": "en_female_amanda_mars_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_us"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "甜美悦悦",
+      "voice_type": "zh_female_tianmeiyueyue_moon_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "懵懂青年",
+      "voice_type": "ICL_zh_male_mengdongqingnian_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Jackson",
+      "voice_type": "en_male_jackson_mars_bigtts",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_us"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "心灵鸡汤",
+      "voice_type": "zh_female_xinlingjitang_moon_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "冷脸兄长",
+      "voice_type": "ICL_zh_male_lenglianxiongzhang_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Delicate Girl",
+      "voice_type": "en_female_daisy_moon_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_gb"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "知性温婉",
+      "voice_type": "ICL_zh_female_zhixingwenwan_tob",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "病娇少年",
+      "voice_type": "ICL_zh_male_bingjiaoshaonian_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Dave",
+      "voice_type": "en_male_dave_moon_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -2879,123 +2918,6 @@
       "emotions": []
     },
     {
-      "name": "懵懂青年",
-      "voice_type": "ICL_zh_male_mengdongqingnian_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Onez",
-      "voice_type": "en_female_onez_moon_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_gb"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "开朗轻快",
-      "voice_type": "ICL_zh_male_kailangqingkuai_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "冷脸兄长",
-      "voice_type": "ICL_zh_male_lenglianxiongzhang_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Emily",
-      "voice_type": "en_female_emily_mars_bigtts",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_gb"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "活泼爽朗",
-      "voice_type": "ICL_zh_male_huoposhuanglang_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "病娇少年",
-      "voice_type": "ICL_zh_male_bingjiaoshaonian_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "Daniel",
-      "voice_type": "zh_male_xudong_conversation_wvae_bigtts",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "multi_language",
-      "scene": "多语种",
-      "language": [
-        "en_gb"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "率真小伙",
-      "voice_type": "ICL_zh_male_shuaizhenxiaohuo_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
       "name": "病娇男友",
       "voice_type": "ICL_zh_male_bingjiaonanyou_tob",
       "gender": "male",
@@ -3009,8 +2931,8 @@
       "emotions": []
     },
     {
-      "name": "Alastor",
-      "voice_type": "ICL_en_male_cc_alastor_tob",
+      "name": "Hades",
+      "voice_type": "en_male_hades_moon_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3022,8 +2944,8 @@
       "emotions": []
     },
     {
-      "name": "温柔小哥",
-      "voice_type": "zh_male_wenrouxiaoge_mars_bigtts",
+      "name": "开朗轻快",
+      "voice_type": "ICL_zh_male_kailangqingkuai_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3048,8 +2970,125 @@
       "emotions": []
     },
     {
-      "name": "Smith",
-      "voice_type": "en_male_smith_mars_bigtts",
+      "name": "Onez",
+      "voice_type": "en_female_onez_moon_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_gb"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "活泼爽朗",
+      "voice_type": "ICL_zh_male_huoposhuanglang_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "意气少年",
+      "voice_type": "ICL_zh_male_yiqishaonian_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Emily",
+      "voice_type": "en_female_emily_mars_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_gb"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "率真小伙",
+      "voice_type": "ICL_zh_male_shuaizhenxiaohuo_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "干净少年",
+      "voice_type": "ICL_zh_male_ganjingshaonian_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Daniel",
+      "voice_type": "zh_male_xudong_conversation_wvae_bigtts",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_gb"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "温柔小哥",
+      "voice_type": "zh_male_wenrouxiaoge_mars_bigtts",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "冷漠男友",
+      "voice_type": "ICL_zh_male_lengmonanyou_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Alastor",
+      "voice_type": "ICL_en_male_cc_alastor_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3075,8 +3114,8 @@
       "emotions": []
     },
     {
-      "name": "意气少年",
-      "voice_type": "ICL_zh_male_yiqishaonian_tob",
+      "name": "精英青年",
+      "voice_type": "ICL_zh_male_jingyingqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3088,9 +3127,9 @@
       "emotions": []
     },
     {
-      "name": "Anna",
-      "voice_type": "en_female_anna_mars_bigtts",
-      "gender": "female",
+      "name": "Smith",
+      "voice_type": "en_male_smith_mars_bigtts",
+      "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "multi_language",
@@ -3115,8 +3154,48 @@
       "emotions": []
     },
     {
-      "name": "干净少年",
-      "voice_type": "ICL_zh_male_ganjingshaonian_tob",
+      "name": "热血少年",
+      "voice_type": "ICL_zh_male_rexueshaonian_tob",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "Anna",
+      "voice_type": "en_female_anna_mars_bigtts",
+      "gender": "female",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "multi_language",
+      "scene": "多语种",
+      "language": [
+        "en_gb"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "温暖阿虎/Alvin",
+      "voice_type": "zh_male_wennuanahu_moon_bigtts",
+      "gender": "male",
+      "version": "1.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese",
+        "en_us"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "清爽少年",
+      "voice_type": "ICL_zh_male_qingshuangshaonian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3141,8 +3220,8 @@
       "emotions": []
     },
     {
-      "name": "温暖阿虎/Alvin",
-      "voice_type": "zh_male_wennuanahu_moon_bigtts",
+      "name": "少年梓辛/Brayan",
+      "voice_type": "zh_male_shaonianzixin_moon_bigtts",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3155,8 +3234,8 @@
       "emotions": []
     },
     {
-      "name": "冷漠男友",
-      "voice_type": "ICL_zh_male_lengmonanyou_tob",
+      "name": "中二青年",
+      "voice_type": "ICL_zh_male_zhongerqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3181,22 +3260,21 @@
       "emotions": []
     },
     {
-      "name": "少年梓辛/Brayan",
-      "voice_type": "zh_male_shaonianzixin_moon_bigtts",
-      "gender": "male",
+      "name": "温柔文雅",
+      "voice_type": "ICL_zh_female_wenrouwenya_tob",
+      "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
       "voice_category": "general",
       "scene": "通用场景",
       "language": [
-        "chinese",
-        "en_us"
+        "chinese"
       ],
       "emotions": []
     },
     {
-      "name": "精英青年",
-      "voice_type": "ICL_zh_male_jingyingqingnian_tob",
+      "name": "凌云青年",
+      "voice_type": "ICL_zh_male_lingyunqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3221,21 +3299,8 @@
       "emotions": []
     },
     {
-      "name": "温柔文雅",
-      "voice_type": "ICL_zh_female_wenrouwenya_tob",
-      "gender": "female",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "general",
-      "scene": "通用场景",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "热血少年",
-      "voice_type": "ICL_zh_male_rexueshaonian_tob",
+      "name": "自负青年",
+      "voice_type": "ICL_zh_male_zifuqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3260,8 +3325,8 @@
       "emotions": []
     },
     {
-      "name": "清爽少年",
-      "voice_type": "ICL_zh_male_qingshuangshaonian_tob",
+      "name": "不羁青年",
+      "voice_type": "ICL_zh_male_bujiqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3286,8 +3351,8 @@
       "emotions": []
     },
     {
-      "name": "中二青年",
-      "voice_type": "ICL_zh_male_zhongerqingnian_tob",
+      "name": "儒雅君子",
+      "voice_type": "ICL_zh_male_ruyajunzi_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3312,8 +3377,8 @@
       "emotions": []
     },
     {
-      "name": "凌云青年",
-      "voice_type": "ICL_zh_male_lingyunqingnian_tob",
+      "name": "低音沉郁",
+      "voice_type": "ICL_zh_male_diyinchenyu_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3338,8 +3403,8 @@
       "emotions": []
     },
     {
-      "name": "自负青年",
-      "voice_type": "ICL_zh_male_zifuqingnian_tob",
+      "name": "冷脸学霸",
+      "voice_type": "ICL_zh_male_lenglianxueba_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3364,8 +3429,8 @@
       "emotions": []
     },
     {
-      "name": "不羁青年",
-      "voice_type": "ICL_zh_male_bujiqingnian_tob",
+      "name": "儒雅总裁",
+      "voice_type": "ICL_zh_male_ruyazongcai_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3390,8 +3455,8 @@
       "emotions": []
     },
     {
-      "name": "儒雅君子",
-      "voice_type": "ICL_zh_male_ruyajunzi_tob",
+      "name": "深沉总裁",
+      "voice_type": "ICL_zh_male_shenchenzongcai_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3416,8 +3481,8 @@
       "emotions": []
     },
     {
-      "name": "低音沉郁",
-      "voice_type": "ICL_zh_male_diyinchenyu_tob",
+      "name": "小侯爷",
+      "voice_type": "ICL_zh_male_xiaohouye_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3442,8 +3507,8 @@
       "emotions": []
     },
     {
-      "name": "冷脸学霸",
-      "voice_type": "ICL_zh_male_lenglianxueba_tob",
+      "name": "孤高公子",
+      "voice_type": "ICL_zh_male_gugaogongzi_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3468,8 +3533,8 @@
       "emotions": []
     },
     {
-      "name": "儒雅总裁",
-      "voice_type": "ICL_zh_male_ruyazongcai_tob",
+      "name": "仗剑君子",
+      "voice_type": "ICL_zh_male_zhangjianjunzi_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3495,8 +3560,8 @@
       "emotions": []
     },
     {
-      "name": "深沉总裁",
-      "voice_type": "ICL_zh_male_shenchenzongcai_tob",
+      "name": "温润学者",
+      "voice_type": "ICL_zh_male_wenrunxuezhe_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3522,8 +3587,8 @@
       "emotions": []
     },
     {
-      "name": "小侯爷",
-      "voice_type": "ICL_zh_male_xiaohouye_tob",
+      "name": "亲切青年",
+      "voice_type": "ICL_zh_male_qinqieqingnian_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -3545,58 +3610,6 @@
       "language": [
         "ja",
         "es"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "孤高公子",
-      "voice_type": "ICL_zh_male_gugaogongzi_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "仗剑君子",
-      "voice_type": "ICL_zh_male_zhangjianjunzi_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "温润学者",
-      "voice_type": "ICL_zh_male_wenrunxuezhe_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
-      ],
-      "emotions": []
-    },
-    {
-      "name": "亲切青年",
-      "voice_type": "ICL_zh_male_qinqieqingnian_tob",
-      "gender": "male",
-      "version": "1.0",
-      "resource_id": "seed-tts-1.0",
-      "voice_category": "roleplay",
-      "scene": "角色扮演",
-      "language": [
-        "chinese"
       ],
       "emotions": []
     },
