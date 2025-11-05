@@ -81,7 +81,7 @@ const router = createRouter({
 // 路由守卫 - 整合和优化后的逻辑
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('accessToken')
-
+  console.log('token', token)
   // 检查 URL 中是否有 code 参数（OAuth 回调）
   // 可以从路由查询参数或实际 URL 中获取
   const hasOAuthCode = to.query?.code !== undefined ||

@@ -33,7 +33,7 @@ onMounted(() => {
 
 <template>
             <!-- Apple 风格顶部栏 - Tailwind 深浅色 -->
-            <div class="sticky top-0 z-[100] bg-white/80 dark:bg-[#1e1e1e]/80 backdrop-blur-[20px] backdrop-saturate-[180%] border-b border-black/8 dark:border-white/8 shadow-[0_1px_3px_0_rgba(0,0,0,0.05)] dark:shadow-[0_1px_3px_0_rgba(0,0,0,0.3)] transition-all duration-300">
+            <div class="sticky top-0 z-[100] bg-white/80 dark:bg-[#1e1e1e]/80 backdrop-blur-[20px] backdrop-saturate-[180%] border-b border-black/8 dark:border-white/8 shadow-[0_1px_3px_0_rgba(0,0,0,0.05)] dark:shadow-[0_1px_3px_0_rgba(0,0,0,0.3)] transition-all duration-300 flex-shrink-0">
                 <div class="flex justify-between items-center max-w-full mx-auto px-6 py-3">
                     <!-- 左侧 Logo -->
                     <div class="flex items-center">

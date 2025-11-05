@@ -241,7 +241,7 @@ onUnmounted(() => {
             <button
                 v-if="sortedTasks.length > 1"
                 @click="goToPreviousTask"
-                class="absolute top-1/2 -translate-y-1/2 left-[-60px] md:left-[-60px] sm:left-[-30px] w-[44px] h-[44px] rounded-full border-0 cursor-pointer flex items-center justify-center text-base transition-all duration-200 ease-out z-10 bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95 disabled:opacity-20 disabled:cursor-not-allowed"
+                class="absolute top-1/2 -translate-y-1/2 left-[-10px] sm:left-[-20px] md:left-[-40px] lg:left-[-60px] w-[44px] h-[44px] rounded-full border-0 cursor-pointer flex items-center justify-center text-base transition-all duration-200 ease-out z-10 bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95 disabled:opacity-20 disabled:cursor-not-allowed"
                 :disabled="sortedTasks.length <= 1">
                 <i class="fas fa-chevron-left"></i>
             </button>
@@ -250,13 +250,13 @@ onUnmounted(() => {
             <button
                 v-if="sortedTasks.length > 1"
                 @click="goToNextTask"
-                class="absolute top-1/2 -translate-y-1/2 right-[-60px] md:right-[-60px] sm:right-[-30px] w-[44px] h-[44px] rounded-full border-0 cursor-pointer flex items-center justify-center text-base transition-all duration-200 ease-out z-10 bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95 disabled:opacity-20 disabled:cursor-not-allowed"
+                class="absolute top-1/2 -translate-y-1/2 right-[-10px] sm:right-[-20px] md:right-[-40px] lg:right-[-60px] w-[44px] h-[44px] rounded-full border-0 cursor-pointer flex items-center justify-center text-base transition-all duration-200 ease-out z-10 bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95 disabled:opacity-20 disabled:cursor-not-allowed"
                 :disabled="sortedTasks.length <= 1">
                 <i class="fas fa-chevron-right"></i>
             </button>
 
             <!-- 视频容器 - Apple 圆角和阴影 -->
-            <div class="w-full max-w-[500px] md:max-w-[400px] sm:max-w-[300px] aspect-[9/16] bg-black dark:bg-[#000000] rounded-[16px] overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.5)] relative cursor-pointer transition-all duration-200 hover:shadow-[0_12px_32px_rgba(0,0,0,0.2)] dark:hover:shadow-[0_12px_32px_rgba(0,0,0,0.6)]"
+            <div class="w-full max-w-[280px] sm:max-w-[300px] md:max-w-[400px] lg:max-w-[400px] aspect-[9/16] bg-black dark:bg-[#000000] rounded-[16px] overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.5)] relative cursor-pointer transition-all duration-200 hover:shadow-[0_12px_32px_rgba(0,0,0,0.2)] dark:hover:shadow-[0_12px_32px_rgba(0,0,0,0.6)]"
                 @click="openTaskDetailModal(currentTask)"
                 :title="t('viewTaskDetails')">
                 <!-- 已完成：显示视频播放器 -->
@@ -374,7 +374,7 @@ onUnmounted(() => {
                 <button
                     v-if="isCompleted && currentTask?.outputs?.output_video"
                     @click="handleDownloadFile(currentTask.task_id, 'output_video', currentTask.outputs.output_video)"
-                    class="w-[44px] h-[44px] md:w-[44px] md:h-[44px] sm:w-[40px] sm:h-[40px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95"
+                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95"
                     :title="t('download')">
                     <i class="fas fa-download"></i>
                 </button>
@@ -383,7 +383,7 @@ onUnmounted(() => {
                 <button
                     v-if="isCompleted && currentTask?.outputs?.output_video"
                     @click="handleShareTask"
-                    class="w-[44px] h-[44px] md:w-[44px] md:h-[44px] sm:w-[40px] sm:h-[40px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:scale-105 active:scale-95"
+                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:scale-105 active:scale-95"
                     :title="t('share')">
                     <i class="fas fa-share-alt"></i>
                 </button>
@@ -392,7 +392,7 @@ onUnmounted(() => {
                 <button
                     v-if="isRunning"
                     @click="handleCancel"
-                    class="w-[44px] h-[44px] md:w-[44px] md:h-[44px] sm:w-[40px] sm:h-[40px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-red-500 dark:text-red-400 hover:scale-105 active:scale-95"
+                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-red-500 dark:text-red-400 hover:scale-105 active:scale-95"
                     :title="t('cancel')">
                     <i class="fas fa-times"></i>
                 </button>
@@ -401,7 +401,7 @@ onUnmounted(() => {
                 <button
                     v-if="isFailed || isCancelled"
                     @click="handleRetry"
-                    class="w-[44px] h-[44px] md:w-[44px] md:h-[44px] sm:w-[40px] sm:h-[40px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:scale-105 active:scale-95"
+                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:scale-105 active:scale-95"
                     :title="t('retry')">
                     <i class="fas fa-redo"></i>
                 </button>

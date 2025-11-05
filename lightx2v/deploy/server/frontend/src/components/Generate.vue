@@ -278,15 +278,14 @@ import {
             generateShareUrl,
             copyShareLink,
             shareToSocial,
-            openTaskFromRoute
+            openTaskFromRoute,
+            showVoiceTTSModal
         } from '../utils/other'
 
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { watch, onMounted, computed, ref, nextTick, onUnmounted } from 'vue'
 import ModelDropdown from './ModelDropdown.vue'
-import MediaTemplate from './MediaTemplate.vue'
-import Voice_tts from './Voice_tts.vue'
 import TaskCarousel from './TaskCarousel.vue'
 
 // Props
@@ -310,8 +309,13 @@ const screenSize = ref('large') // 'small' 或 'large'
 // 拖拽状态
 const isDragOver = ref(false)
 
-// 语音合成模态框状态
-const showVoiceTTSModal = ref(false)
+// 音频预览播放器相关
+const audioPreviewElement = ref(null)
+const audioPreviewIsPlaying = ref(false)
+const audioPreviewDuration = ref(0)
+const audioPreviewCurrentTime = ref(0)
+const audioPreviewIsDragging = ref(false)
+
 
 // 处理提交任务并滚动到任务区域
 const handleSubmitTask = async () => {
@@ -350,21 +354,11 @@ const scrollToTaskArea = () => {
     if (taskArea) {
         taskArea.scrollIntoView({
             behavior: 'smooth',
-            block: 'start'
+            block: 'center'
         })
     }
 }
 
-// 滚动到生成区域
-const scrollToCreationArea = () => {
-    const creationArea = document.querySelector('#task-creator')
-    if (creationArea) {
-        creationArea.scrollIntoView({
-            behavior: 'smooth',
-            block: 'start'
-        })
-    }
-}
 
 // 包装 useTemplate 函数，在应用模板后滚动到生成区域
 const handleUseTemplate = async (item) => {
@@ -373,35 +367,17 @@ const handleUseTemplate = async (item) => {
     await nextTick()
     // 延迟一下确保展开动画完成
     setTimeout(() => {
-        scrollToCreationArea()
+        // 滚动到顶部
+        const mainScrollable = document.querySelector('.main-scrollbar');
+        if (mainScrollable) {
+            mainScrollable.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        }
     }, 100)
 }
 
-// 处理语音合成完成后的回调
-const handleTTSComplete = (audioBlob) => {
-    // 创建File对象
-    const audioFile = new File([audioBlob], 'tts_audio.mp3', { type: 'audio/mpeg' })
-
-    // 模拟文件上传事件
-    const dataTransfer = new DataTransfer()
-    dataTransfer.items.add(audioFile)
-    const fileList = dataTransfer.files
-
-    const event = {
-        target: {
-            files: fileList
-        }
-    }
-
-    // 处理音频上传
-    handleAudioUpload(event)
-
-    // 关闭模态框
-    showVoiceTTSModal.value = false
-
-    // 显示成功提示
-    showAlert('语音合成完成，已自动添加到音频素材', 'success')
-}
 
 // 跳转到项目页面
 const goToProjects = () => {
@@ -679,10 +655,96 @@ const handleAudioDrop = (e) => {
     }
 }
 
+// 格式化音频预览时间
+const formatAudioPreviewTime = (seconds) => {
+    if (!seconds || isNaN(seconds)) return '0:00'
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+// 切换音频预览播放/暂停
+const toggleAudioPreviewPlayback = () => {
+    if (!audioPreviewElement.value) return
+
+    if (audioPreviewElement.value.paused) {
+        audioPreviewElement.value.play().catch(error => {
+            console.log('播放失败:', error)
+        })
+    } else {
+        audioPreviewElement.value.pause()
+    }
+}
+
+// 音频预览加载完成
+const onAudioPreviewLoaded = () => {
+    if (audioPreviewElement.value) {
+        audioPreviewDuration.value = audioPreviewElement.value.duration || 0
+    }
+}
+
+// 音频预览时间更新
+const onAudioPreviewTimeUpdate = () => {
+    if (audioPreviewElement.value && !audioPreviewIsDragging.value) {
+        audioPreviewCurrentTime.value = audioPreviewElement.value.currentTime || 0
+    }
+}
+
+// 音频预览进度条变化处理（点击或拖拽）
+const onAudioPreviewProgressChange = (event) => {
+    if (audioPreviewDuration.value > 0 && audioPreviewElement.value && event.target) {
+        const newTime = parseFloat(event.target.value)
+        audioPreviewCurrentTime.value = newTime
+        // 立即更新音频位置
+        audioPreviewElement.value.currentTime = newTime
+    }
+}
+
+// 音频预览进度条拖拽结束处理
+const onAudioPreviewProgressEnd = (event) => {
+    if (audioPreviewElement.value && audioPreviewDuration.value > 0 && event.target) {
+        const newTime = parseFloat(event.target.value)
+        audioPreviewElement.value.currentTime = newTime
+        audioPreviewCurrentTime.value = newTime
+    }
+    audioPreviewIsDragging.value = false
+}
+
+// 音频预览播放结束
+const onAudioPreviewEnded = () => {
+    audioPreviewIsPlaying.value = false
+    audioPreviewCurrentTime.value = 0
+}
+
+// 监听音频预览变化，重置状态
+watch(() => getCurrentAudioPreview(), (newPreview) => {
+    // 停止当前播放
+    if (audioPreviewElement.value) {
+        audioPreviewElement.value.pause()
+    }
+    audioPreviewIsPlaying.value = false
+    audioPreviewCurrentTime.value = 0
+    audioPreviewDuration.value = 0
+
+    if (newPreview) {
+        // 等待 DOM 更新后加载新音频
+        nextTick(() => {
+            if (audioPreviewElement.value) {
+                audioPreviewElement.value.load()
+            }
+        })
+    }
+})
+
 // 组件卸载时清理
 onUnmounted(() => {
     if (resizeHandler) {
         window.removeEventListener('resize', resizeHandler)
+    }
+    // 停止音频预览播放
+    if (audioPreviewElement.value) {
+        audioPreviewElement.value.pause()
+        audioPreviewElement.value = null
     }
 })
 
@@ -931,23 +993,73 @@ onUnmounted(() => {
                                         </div>
                                             </div>
 
-                                        <!-- 音频预览 - Apple 风格 -->
-                                            <div v-if="getCurrentAudioPreview()" class="relative w-full min-h-[220px] group flex items-center justify-center p-8">
-                                            <audio controls class="w-full max-w-md" @error="handleAudioError" @loadstart="console.log('音频开始加载')" @canplay="console.log('音频可以播放')">
-                                                    <source :src="getCurrentAudioPreviewUrl()" :type="getAudioMimeType()" preload="metadata">
-                                            </audio>
+                                        <!-- 音频预览 - Apple 风格（播放器卡片样式） -->
+                                            <div v-if="getCurrentAudioPreview()" class="relative w-full min-h-[220px] flex items-center justify-center">
+                                                <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)] w-full p-4">
+                                                    <div class="relative flex items-center mb-3">
+                                                        <!-- 头像容器 -->
+                                                        <div class="relative mr-3 flex-shrink-0">
+                                                            <!-- 透明白色头像 -->
+                                                            <div class="w-12 h-12 rounded-full bg-white/40 dark:bg-white/20 border border-white/30 dark:border-white/20 transition-all duration-200"></div>
+                                                            <!-- 播放/暂停按钮 -->
+                                                            <button
+                                                                @click="toggleAudioPreviewPlayback"
+                                                                class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white cursor-pointer hover:scale-110 transition-all duration-200 z-20 shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)]"
+                                                            >
+                                                                <i :class="audioPreviewIsPlaying ? 'fas fa-pause' : 'fas fa-play'" class="text-xs ml-0.5"></i>
+                                                            </button>
+                                                        </div>
 
-                                            <!-- 删除按钮 - Apple 风格 -->
-                                                <div
-                                                    class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200">
-                                                <div class="flex gap-3">
+                                                        <!-- 音频信息 -->
+                                                        <div class="flex-1 min-w-0">
+                                                            <div class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight truncate">
+                                                                {{ t('audio') }}
+                                                            </div>
+                                                        </div>
+
+                                                        <!-- 音频时长 -->
+                                                        <div class="text-xs font-medium text-[#86868b] dark:text-[#98989d] tracking-tight flex-shrink-0 mr-3">
+                                                            {{ formatAudioPreviewTime(audioPreviewCurrentTime) }} / {{ formatAudioPreviewTime(audioPreviewDuration) }}
+                                                        </div>
+
+                                                        <!-- 删除按钮 -->
                                                         <button @click.stop="removeAudio"
-                                                        class="w-11 h-11 flex items-center justify-center bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100"
+                                                            class="w-9 h-9 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100 flex-shrink-0"
                                                             :title="t('deleteAudio')">
-                                                        <i class="fas fa-trash text-base"></i>
-                                                    </button>
+                                                            <i class="fas fa-trash text-sm"></i>
+                                                        </button>
+                                                    </div>
+
+                                                    <!-- 进度条 -->
+                                                    <div class="flex items-center gap-2" v-if="audioPreviewDuration > 0">
+                                                        <input
+                                                            type="range"
+                                                            :min="0"
+                                                            :max="audioPreviewDuration"
+                                                            :value="audioPreviewCurrentTime"
+                                                            @input="onAudioPreviewProgressChange"
+                                                            @change="onAudioPreviewProgressChange"
+                                                            @mousedown="audioPreviewIsDragging = true"
+                                                            @mouseup="onAudioPreviewProgressEnd"
+                                                            @touchstart="audioPreviewIsDragging = true"
+                                                            @touchend="onAudioPreviewProgressEnd"
+                                                            class="flex-1 h-1 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                                                        />
+                                                    </div>
                                                 </div>
-                                            </div>
+
+                                                <!-- 隐藏的音频元素 -->
+                                                <audio
+                                                    ref="audioPreviewElement"
+                                                    :src="getCurrentAudioPreviewUrl()"
+                                                    @loadedmetadata="onAudioPreviewLoaded"
+                                                    @timeupdate="onAudioPreviewTimeUpdate"
+                                                    @ended="onAudioPreviewEnded"
+                                                    @play="audioPreviewIsPlaying = true"
+                                                    @pause="audioPreviewIsPlaying = false"
+                                                    @error="handleAudioError"
+                                                    class="hidden"
+                                                ></audio>
                                             </div>
 
                                             <input type="file" ref="audioInput" @change="handleAudioUpload" accept="audio/*"
@@ -1127,14 +1239,6 @@ onUnmounted(() => {
                 </div>
             </div>
 
-                <MediaTemplate />
-
-                <!-- 语音合成模态框 -->
-                <div v-if="showVoiceTTSModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/60 backdrop-blur-sm">
-                    <div class="relative w-full h-full max-w-6xl max-h-[100vh] mx-4 my-8 bg-gray-900 rounded-xl shadow-2xl overflow-hidden">
-                        <Voice_tts @tts-complete="handleTTSComplete" @close-modal="showVoiceTTSModal = false" />
-                    </div>
-                </div>
 
                 <!-- GitHub 仓库链接 - Apple 极简风格 -->
                 <div class="fixed bottom-6 right-6 z-50">

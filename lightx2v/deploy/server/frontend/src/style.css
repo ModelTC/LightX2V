@@ -630,7 +630,7 @@ body {
     /* 任务创建面板全屏 */
     #task-creator {
         max-width: none;
-        width: 90%;
+        width: 80%;
     }
 
     #inspiration-gallery {
@@ -642,8 +642,7 @@ body {
     /* 移动端全屏显示 */
     @media (max-width: 768px) {
         #task-creator {
-            width: 100%;
-            padding: 0 0.5rem;
+            width: 95%;
         }
 
         #inspiration-gallery {

@@ -7,7 +7,7 @@ const { t, locale } = useI18n()
 <template>
         <!-- 自定义确认对话框 - Apple 极简风格 -->
         <div v-cloak>
-            <div v-if="confirmDialog.show" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <div v-if="confirmDialog.show" class="fixed inset-0 z-[9999] flex items-center justify-center p-4">
                 <!-- 背景遮罩 - Apple 风格 -->
                 <div class="absolute inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm" @click="confirmDialog.cancel()">
                 </div>

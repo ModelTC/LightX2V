@@ -1,6 +1,7 @@
 <template>
-  <!-- 模态框容器 - Apple 极简风格 -->
-  <div class="flex flex-col h-full bg-white dark:bg-[#1e1e1e] overflow-hidden">
+  <!-- 模态框遮罩和容器 - Apple 极简风格 -->
+  <div class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-2 sm:p-1">
+    <div class="relative w-full h-full max-w-6xl max-h-[100vh] bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] backdrop-saturate-[180%] border border-black/10 dark:border-white/10 rounded-3xl shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col">
     <!-- 模态框头部 - Apple 风格 -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-black/8 dark:border-white/8 bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-[20px] flex-shrink-0">
       <h3 class="text-xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center gap-3 tracking-tight">
@@ -24,17 +25,159 @@
       </div>
     </div>
 
-    <!-- 模态框内容 - Apple 风格 -->
+    <!-- 固定区域：音频播放器和设置面板 - Apple 极简风格 -->
+    <div v-if="audioUrl || selectedVoice" class="flex-shrink-0 bg-[#f5f5f7]/30 dark:bg-[#1c1c1e]/30">
+      <div class="max-w-5xl mx-auto px-6 py-5">
+        <div class="flex flex-col lg:flex-row gap-6 lg:gap-8">
+          <!-- 音频播放器卡片 - Apple 风格 -->
+          <div v-if="audioUrl || isGenerating" class="flex-1 lg:w-1/2">
+            <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)] p-4">
+              <div class="relative flex items-center mb-3">
+                <!-- 头像容器 -->
+                <div class="relative mr-3 flex-shrink-0">
+                  <!-- 透明白色头像 -->
+                  <div class="w-12 h-12 rounded-full bg-white/40 dark:bg-white/20 border border-white/30 dark:border-white/20 transition-all duration-200"></div>
+                  <!-- Loading 指示器 - Apple 风格 -->
+                  <div v-if="isGenerating" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white z-20">
+                    <i class="fas fa-spinner fa-spin text-xs"></i>
+                  </div>
+                  <!-- 播放/暂停按钮 -->
+                  <button
+                    v-else
+                    @click="toggleAudioPlayback"
+                    class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white cursor-pointer hover:scale-110 transition-all duration-200 z-20 shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)]"
+                  >
+                    <i :class="isPlaying ? 'fas fa-pause' : 'fas fa-play'" class="text-xs ml-0.5"></i>
+                  </button>
+                </div>
+
+                <!-- 音频信息 -->
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight truncate">
+                    {{ t('synthesizedAudio') }}<span v-if="selectedVoiceData"> - {{ selectedVoiceData.name }}</span>
+                  </div>
+                </div>
+
+                <!-- 音频时长 -->
+                <div class="text-xs font-medium text-[#86868b] dark:text-[#98989d] tracking-tight flex-shrink-0">
+                  {{ formatAudioTime(currentTime) }} / {{ formatAudioTime(audioDuration) }}
+                </div>
+              </div>
+
+              <!-- 进度条 -->
+              <div class="flex items-center gap-2" v-if="audioDuration > 0">
+                <input
+                  type="range"
+                  :min="0"
+                  :max="audioDuration"
+                  :value="currentTime"
+                  @input="onProgressChange"
+                  @change="onProgressChange"
+                  @mousedown="isDragging = true"
+                  @mouseup="onProgressEnd"
+                  @touchstart="isDragging = true"
+                  @touchend="onProgressEnd"
+                  class="flex-1 h-1 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                />
+              </div>
+            </div>
+            <!-- 隐藏的音频元素 -->
+            <audio
+              v-if="audioUrl"
+              ref="audioElement"
+              :src="audioUrl"
+              @loadedmetadata="onAudioLoaded"
+              @timeupdate="onTimeUpdate"
+              @ended="onAudioEnded"
+              @play="isPlaying = true"
+              @pause="isPlaying = false"
+              class="hidden"
+            ></audio>
+          </div>
+
+          <!-- 设置面板 - Apple 极简风格（无卡片，直接显示） -->
+          <div v-if="selectedVoice" class="flex-shrink-0 lg:w-1/2">
+            <div class="space-y-3">
+              <!-- 语速控制 -->
+              <div class="flex items-center gap-3">
+                <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('speechRate') }}</label>
+                <input
+                  type="range"
+                  min="-50"
+                  max="100"
+                  v-model="speechRate"
+                  class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                />
+                <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getSpeechRateDisplayValue(speechRate) }}</span>
+              </div>
+              <!-- 音量控制 -->
+              <div class="flex items-center gap-3">
+                <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('volume') }}</label>
+                <input
+                  type="range"
+                  min="-50"
+                  max="100"
+                  v-model="loudnessRate"
+                  class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                />
+                <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getLoudnessDisplayValue(loudnessRate) }}</span>
+              </div>
+              <!-- 音调控制 -->
+              <div class="flex items-center gap-3">
+                <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('pitch') }}</label>
+                <input
+                  type="range"
+                  min="-12"
+                  max="12"
+                  v-model="pitch"
+                  class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                />
+                <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getPitchDisplayValue(pitch) }}</span>
+              </div>
+              <!-- 情感控制 - 仅当音色支持时显示 -->
+              <div v-if="selectedVoiceData && selectedVoiceData.emotions && selectedVoiceData.emotions.length > 0" class="flex items-center gap-3">
+                <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('emotionIntensity') }}</label>
+                <input
+                  type="range"
+                  min="1"
+                  max="5"
+                  v-model="emotionScale"
+                  class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                />
+                <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ emotionScale }}</span>
+              </div>
+              <div v-if="selectedVoiceData && selectedVoiceData.emotions && selectedVoiceData.emotions.length > 0" class="flex items-center gap-3">
+                <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('emotionType') }}</label>
+                <div class="flex-1">
+                  <DropdownMenu
+                    :items="emotionItems"
+                    :selected-value="selectedEmotion"
+                    :placeholder="t('neutral')"
+                    @select-item="handleEmotionSelect"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 装饰性分割线 - Apple 风格（带V形图标） -->
+      <div class="relative flex items-center justify-center py-3">
+        <!-- 左侧线条 -->
+        <div class="flex-1 h-px bg-gradient-to-r from-transparent via-black/20 dark:via-white/20 to-black/20 dark:to-white/20"></div>
+        <!-- 中间V形图标 -->
+        <div class="mx-4 flex items-center justify-center w-6 h-6 rounded-full bg-white/60 dark:bg-[#2c2c2e]/60 border border-black/10 dark:border-white/10">
+          <i class="fas fa-chevron-down text-[8px] text-[#86868b] dark:text-[#98989d]"></i>
+        </div>
+        <!-- 右侧线条 -->
+        <div class="flex-1 h-px bg-gradient-to-l from-transparent via-black/20 dark:via-white/20 to-black/20 dark:to-white/20"></div>
+      </div>
+    </div>
+
+    <!-- 模态框内容 - Apple 风格（可滚动区域） -->
     <div class="flex-1 overflow-y-auto p-6 main-scrollbar">
       <div class="max-w-5xl mx-auto space-y-6">
-        <!-- 音频播放器 - Apple 风格 -->
-            <div v-if="audioUrl" class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl p-5 transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
-          <div class="flex items-center gap-3 mb-3">
-            <i class="fas fa-music text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-            <h6 class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('generatedAudio') }}</h6>
-          </div>
-          <audio :src="audioUrl" controls class="w-full rounded-xl"></audio>
-        </div>
         <!-- 文本输入区域 - Apple 风格 -->
         <div>
           <label class="block text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-3 tracking-tight">
@@ -60,7 +203,7 @@
             v-model="contextText"
             :placeholder="t('voiceInstructionPlaceholder')"
             class="w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl px-5 py-3 text-[15px] text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 focus:shadow-[0_4px_16px_rgba(var(--brand-primary-rgb),0.12)] dark:focus:shadow-[0_4px_16px_rgba(var(--brand-primary-light-rgb),0.2)] transition-all duration-200 resize-none"
-            rows="2"
+            rows="3"
           ></textarea>
         </div>
 
@@ -109,9 +252,13 @@
                 <div
                   class="relative flex items-center p-4 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]"
                   :class="{
-                    'border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.15)] dark:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.2)]': selectedVoice === voice.voice_type
+                    'border-2 border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/12 dark:bg-[color:var(--brand-primary-light)]/20 shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.35)] ring-2 ring-[color:var(--brand-primary)]/20 dark:ring-[color:var(--brand-primary-light)]/30': selectedVoice === voice.voice_type
                   }"
                 >
+                  <!-- 选中指示器 - Apple 风格 -->
+                  <div v-if="selectedVoice === voice.voice_type" class="absolute top-2 left-2 w-5 h-5 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full flex items-center justify-center z-10 shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)]">
+                    <i class="fas fa-check text-white text-[10px]"></i>
+                  </div>
                   <!-- V2 标签 - Apple 风格 -->
                   <div v-if="voice.version === '2.0'" class="absolute top-2 right-2 px-2 py-1 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white text-[10px] font-semibold rounded-md z-10">
                     v2.0
@@ -125,7 +272,6 @@
                       src="../../public/female.svg"
                       alt="Female Avatar"
                       class="w-12 h-12 rounded-full object-cover bg-white transition-all duration-200"
-                      :class="{ 'opacity-60': selectedVoice === voice.voice_type }"
                     />
                     <!-- Male Avatar -->
                     <img
@@ -133,15 +279,10 @@
                       src="../../public/male.svg"
                       alt="Male Avatar"
                       class="w-12 h-12 rounded-full object-cover bg-white transition-all duration-200"
-                      :class="{ 'opacity-60': selectedVoice === voice.voice_type }"
                     />
                     <!-- Loading 指示器 - Apple 风格 -->
                     <div v-if="isGenerating && selectedVoice === voice.voice_type" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white z-20">
                       <i class="fas fa-spinner fa-spin text-xs"></i>
-                    </div>
-                    <!-- 设置按钮 - Apple 风格 -->
-                    <div v-if="!isGenerating && selectedVoice === voice.voice_type" @click.stop="toggleControls" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white cursor-pointer hover:scale-110 transition-all duration-200 z-20">
-                      <i class="fas fa-cog text-xs"></i>
                     </div>
                   </div>
 
@@ -163,69 +304,6 @@
                       </span>
                     </div>
                   </div>
-
-                  <!-- TTS 控制面板 - Apple 风格 -->
-                  <div v-if="selectedVoice === voice.voice_type && showControls" class="absolute top-full left-0 right-0 mt-2 bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.4)] z-50 space-y-3">
-                    <!-- 语速控制 -->
-                    <div class="flex items-center gap-3">
-                      <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-16 tracking-tight">{{ t('speechRate') }}:</label>
-                      <input
-                        type="range"
-                        min="-50"
-                        max="100"
-                        v-model="speechRate"
-                        class="flex-1 h-1 bg-black/8 dark:bg-white/8 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                      />
-                      <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getSpeechRateDisplayValue(speechRate) }}</span>
-                    </div>
-                    <!-- 音量控制 -->
-                    <div class="flex items-center gap-3">
-                      <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-16 tracking-tight">{{ t('volume') }}:</label>
-                      <input
-                        type="range"
-                        min="-50"
-                        max="100"
-                        v-model="loudnessRate"
-                        class="flex-1 h-1 bg-black/8 dark:bg-white/8 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                      />
-                      <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getLoudnessDisplayValue(loudnessRate) }}</span>
-                    </div>
-                    <!-- 音调控制 -->
-                    <div class="flex items-center gap-3">
-                      <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-16 tracking-tight">{{ t('pitch') }}:</label>
-                      <input
-                        type="range"
-                        min="-12"
-                        max="12"
-                        v-model="pitch"
-                        class="flex-1 h-1 bg-black/8 dark:bg-white/8 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                      />
-                      <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getPitchDisplayValue(pitch) }}</span>
-                    </div>
-                    <!-- 情感控制 - 仅当音色支持时显示 -->
-                    <div v-if="voice.emotions && voice.emotions.length > 0" class="flex items-center gap-3">
-                      <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-16 tracking-tight">{{ t('emotionIntensity') }}:</label>
-                      <input
-                        type="range"
-                        min="1"
-                        max="5"
-                        v-model="emotionScale"
-                        class="flex-1 h-1 bg-black/8 dark:bg-white/8 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                      />
-                      <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ emotionScale }}</span>
-                    </div>
-                    <div v-if="voice.emotions && voice.emotions.length > 0" class="flex items-center gap-3">
-                      <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-16 tracking-tight">{{ t('emotionType') }}:</label>
-                      <div class="flex-1">
-                        <DropdownMenu
-                          :items="emotionItems"
-                          :selected-value="selectedEmotion"
-                          :placeholder="t('neutral')"
-                          @select-item="handleEmotionSelect"
-                        />
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </label>
             </div>
@@ -234,10 +312,11 @@
 
       </div>
     </div>
+    </div>
   </div>
 
   <!-- 筛选面板遮罩 - Apple 风格 -->
-  <div v-if="showFilterPanel" class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" @click="closeFilterPanel">
+  <div v-if="showFilterPanel" class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" @click="closeFilterPanel">
     <div class="bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] backdrop-saturate-[180%] border border-black/10 dark:border-white/10 rounded-3xl w-full max-w-2xl max-h-[85vh] overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.6)] flex flex-col" @click.stop>
       <!-- 筛选面板头部 - Apple 风格 -->
       <div class="flex items-center justify-between px-6 py-4 border-b border-black/8 dark:border-white/8 bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-[20px]">
@@ -344,7 +423,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DropdownMenu from './DropdownMenu.vue'
 
@@ -369,6 +448,12 @@ export default {
     const isGenerating = ref(false)
     const audioUrl = ref('')
     const currentAudio = ref(null) // 当前播放的音频对象
+    const audioElement = ref(null) // 音频元素引用
+    const isPlaying = ref(false) // 播放状态
+    const audioDuration = ref(0) // 音频总时长
+    const currentTime = ref(0) // 当前播放时间
+    const shouldAutoPlay = ref(false) // 是否需要自动播放
+    const isDragging = ref(false) // 是否正在拖拽进度条
     const voices = ref([])
     const emotions = ref([])
     const voiceListContainer = ref(null)
@@ -514,31 +599,6 @@ export default {
     })
 
     // Filter voices based on search query, category, version, language, and gender
-    // Emotion items for dropdown
-    const emotionItems = computed(() => {
-      const items = []
-      const selectedVoiceData = voices.value.find(v => v.voice_type === selectedVoice.value)
-      if (selectedVoiceData && selectedVoiceData.emotions && emotions.value.length > 0) {
-        selectedVoiceData.emotions.forEach(emotionName => {
-          // Find the emotion data from emotions array
-          const emotionData = emotions.value.find(emotion => emotion.name === emotionName)
-          if (emotionData) {
-            items.push({ value: emotionName, label: emotionData.zh })
-          } else {
-            // Fallback if emotion not found in emotions data
-            items.push({ value: emotionName, label: emotionName })
-          }
-        })
-      }
-
-      // If no emotions found or no neutral emotion in the list, add neutral as default
-      if (items.length === 0 || !items.find(item => item.value === 'neutral')) {
-        items.unshift({ value: 'neutral', label: t('neutral') })
-      }
-
-      return items
-    })
-
     const filteredVoices = computed(() => {
       let filtered = [...voices.value] // 创建副本，避免修改原始数据
 
@@ -619,10 +679,38 @@ export default {
       return name.toLowerCase().includes('female')
     }
 
+    // Get selected voice data
+    const selectedVoiceData = computed(() => {
+      return voices.value.find(v => v.voice_type === selectedVoice.value)
+    })
+
+    // Emotion items for dropdown
+    const emotionItems = computed(() => {
+      const items = []
+      if (selectedVoiceData.value && selectedVoiceData.value.emotions && emotions.value.length > 0) {
+        selectedVoiceData.value.emotions.forEach(emotionName => {
+          // Find the emotion data from emotions array
+          const emotionData = emotions.value.find(emotion => emotion.name === emotionName)
+          if (emotionData) {
+            items.push({ value: emotionName, label: emotionData.zh })
+          } else {
+            // Fallback if emotion not found in emotions data
+            items.push({ value: emotionName, label: emotionName })
+          }
+        })
+      }
+
+      // If no emotions found or no neutral emotion in the list, add neutral as default
+      if (items.length === 0 || !items.find(item => item.value === 'neutral')) {
+        items.unshift({ value: 'neutral', label: t('neutral') })
+      }
+
+      return items
+    })
+
     // Get available emotions for selected voice
     const availableEmotions = computed(() => {
-      const selectedVoiceData = voices.value.find(v => v.voice_type === selectedVoice.value)
-      return selectedVoiceData?.emotions || []
+      return selectedVoiceData.value?.emotions || []
     })
 
     // Reset scroll position
@@ -647,9 +735,6 @@ export default {
         selectedEmotion.value = ''
       }
 
-      // Reset scroll position when voice is selected
-      resetScrollPosition()
-
       // Auto-generate TTS when voice is selected and text is available
       await generateTTS()
     }
@@ -663,6 +748,10 @@ export default {
       if (!selectedVoice.value) return
 
       // 停止当前播放的音频
+      if (audioElement.value) {
+        audioElement.value.pause()
+        audioElement.value.currentTime = 0
+      }
       if (currentAudio.value) {
         currentAudio.value.pause()
         currentAudio.value.currentTime = 0
@@ -693,14 +782,8 @@ export default {
         if (response.ok) {
           const blob = await response.blob()
           audioUrl.value = URL.createObjectURL(blob)
-
-          // 自动播放生成的音频
-          const audio = new Audio(audioUrl.value)
-          currentAudio.value = audio // 保存当前播放的音频对象
-          audio.play().catch(error => {
-            console.log('自动播放被阻止:', error)
-            // 如果自动播放失败，用户仍可以手动播放
-          })
+          // 标记需要自动播放
+          shouldAutoPlay.value = true
         } else {
           throw new Error('TTS generation failed')
         }
@@ -711,6 +794,98 @@ export default {
         isGenerating.value = false
       }
     }
+
+    // 格式化音频时间
+    const formatAudioTime = (seconds) => {
+      if (!seconds || isNaN(seconds)) return '0:00'
+      const mins = Math.floor(seconds / 60)
+      const secs = Math.floor(seconds % 60)
+      return `${mins}:${secs.toString().padStart(2, '0')}`
+    }
+
+    // 切换播放/暂停
+    const toggleAudioPlayback = () => {
+      if (!audioElement.value) return
+
+      if (audioElement.value.paused) {
+        audioElement.value.play().catch(error => {
+          console.log('播放失败:', error)
+        })
+      } else {
+        audioElement.value.pause()
+      }
+    }
+
+    // 音频加载完成
+    const onAudioLoaded = () => {
+      if (audioElement.value) {
+        audioDuration.value = audioElement.value.duration || 0
+        // 如果需要自动播放，则播放
+        if (shouldAutoPlay.value) {
+          setTimeout(() => {
+            if (audioElement.value && !audioElement.value.paused) {
+              return // 如果已经在播放，不重复播放
+            }
+            audioElement.value.play().catch(error => {
+              console.log('自动播放被阻止:', error)
+            })
+            shouldAutoPlay.value = false // 重置自动播放标志
+          }, 100)
+        }
+      }
+    }
+
+    // 时间更新
+    const onTimeUpdate = () => {
+      if (audioElement.value && !isDragging.value) {
+        currentTime.value = audioElement.value.currentTime || 0
+      }
+    }
+
+    // 进度条变化处理（点击或拖拽）
+    const onProgressChange = (event) => {
+      if (audioDuration.value > 0 && audioElement.value && event.target) {
+        const newTime = parseFloat(event.target.value)
+        currentTime.value = newTime
+        // 立即更新音频位置
+        audioElement.value.currentTime = newTime
+      }
+    }
+
+    // 进度条拖拽结束处理
+    const onProgressEnd = (event) => {
+      if (audioElement.value && audioDuration.value > 0 && event.target) {
+        const newTime = parseFloat(event.target.value)
+        audioElement.value.currentTime = newTime
+        currentTime.value = newTime
+      }
+      isDragging.value = false
+    }
+
+    // 播放结束
+    const onAudioEnded = () => {
+      isPlaying.value = false
+      currentTime.value = 0
+    }
+
+    // 监听音频 URL 变化，重置状态
+    watch(audioUrl, (newUrl) => {
+      if (newUrl) {
+        isPlaying.value = false
+        currentTime.value = 0
+        audioDuration.value = 0
+        // 等待 DOM 更新后加载音频
+        nextTick(() => {
+          if (audioElement.value) {
+            audioElement.value.load()
+          }
+        })
+      } else {
+        // URL 清空时重置自动播放标志
+        shouldAutoPlay.value = false
+      }
+    })
+
 
     // Apply selected voice (emit the generated audio)
     const applySelectedVoice = () => {
@@ -824,12 +999,25 @@ export default {
       selectedEmotion,
       isGenerating,
       audioUrl,
+      audioElement,
+      isPlaying,
+      audioDuration,
+      currentTime,
+      isDragging,
+      onProgressChange,
+      onProgressEnd,
       voices,
       voiceListContainer,
       showControls,
       showFilterPanel,
       filteredVoices,
       isFemaleVoice,
+      selectedVoiceData,
+      formatAudioTime,
+      toggleAudioPlayback,
+      onAudioLoaded,
+      onTimeUpdate,
+      onAudioEnded,
       availableEmotions,
       onVoiceSelect,
       generateTTS,
@@ -883,5 +1071,14 @@ export default {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border-width: 0;
+}
+
+/* 深色模式下增强滑动条可见性 */
+.dark input[type="range"]::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.dark input[type="range"]::-moz-range-thumb {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
 }
 </style>
