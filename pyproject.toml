@@ -13,25 +13,22 @@ version = "0.1.0"
 authors = [
     {name = "LightX2V Contributors"},
 ]
-description = "LightX2V: 轻量级视频生成推理框架"
+description = "LightX2V: Light Video Generation Inference Framework"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Multimedia :: Video",
 ]
-keywords = ["video generation", "AI", "deep learning", "diffusion models", "text-to-video", "image-to-video"]
 
 dependencies = [
     "numpy",
@@ -58,10 +55,6 @@ dependencies = [
     "pydantic",
     "prometheus-client",
     "gguf",
-]
-
-[project.optional-dependencies]
-full = [
     "vllm",
     "fastapi",
     "uvicorn",
@@ -81,20 +74,13 @@ full = [
 Homepage = "https://github.com/ModelTC/LightX2V"
 Documentation = "https://lightx2v-en.readthedocs.io/en/latest/"
 Repository = "https://github.com/ModelTC/LightX2V"
-"Bug Tracker" = "https://github.com/ModelTC/LightX2V/issues"
-
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["lightx2v*"]
-
-[tool.setuptools.package-data]
-lightx2v = [
-    "configs/*.json",
-    "assets/**/*",
-]
+exclude = ["lightx2v_kernel*"]
 
 [tool.ruff]
 exclude = [

@@ -80,14 +80,9 @@ conda activate lightx2v
 #### 步骤 3: 安装依赖及代码
 
 ```bash
-# 基础安装（核心推理功能）
 pip install -v -e .
-
-# 完整安装（含推理功能和服务端）
-pip install -v -e .[full]
 ```
 
-> 💡 **提示**: 混元模型需要在 4.45.2 版本的 transformers 下运行，如果您不需要运行混元模型，可以跳过 transformers 版本限制。
 
 #### 步骤 4: 安装注意力机制算子
 
