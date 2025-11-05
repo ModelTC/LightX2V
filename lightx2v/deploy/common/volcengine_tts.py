@@ -15,7 +15,7 @@ class VolcEngineTTSClient:
     VolcEngine TTS客户端
 
     参数范围说明:
-        - speed_rate: -50~100 (100代表2倍速, -50代表0.5倍速, 0为正常语速)
+        - speech_rate: -50~100 (100代表2倍速, -50代表0.5倍速, 0为正常语速)
         - loudness_rate: -50~100 (100代表2倍音量, -50代表0.5倍音量, 0为正常音量)
         - emotion_scale: 1-5
     """
@@ -86,12 +86,13 @@ class VolcEngineTTSClient:
     async def tts_request(
         self,
         text,
-        voice_type,
+        voice_type="zh_female_vv_uranus_bigtts",
         context_texts="",
         emotion="",
         emotion_scale=4,
-        speed_rate=0,
+        speech_rate=0,
         loudness_rate=0,
+        pitch=0,
         output="tts_output.mp3",
         resource_id="seed-tts-2.0",
         app_key="aGjiRDfUWi",
@@ -108,8 +109,9 @@ class VolcEngineTTSClient:
             voice_type: 声音类型
             emotion: 情感类型
             emotion_scale: 情感强度 (1-5)
-            speed_rate: 语速调节 (-50~100, 100代表2倍速, -50代表0.5倍速, 0为正常语速)
+            speech_rate: 语速调节 (-50~100, 100代表2倍速, -50代表0.5倍速, 0为正常语速)
             loudness_rate: 音量调节 (-50~100, 100代表2倍音量, -50代表0.5倍音量, 0为正常音量)
+            pitch: 音调调节 (-12~12, 12代表高音调, -12代表低音调, 0为正常音调)
             output: 输出文件路径
             resource_id: 资源ID
             app_key: 应用密钥
@@ -119,9 +121,9 @@ class VolcEngineTTSClient:
             enable_timestamp: 是否启用时间戳
         """
         # 验证参数范围
-        if not (-50 <= speed_rate <= 100):
-            logger.warning(f"speed_rate {speed_rate} 超出有效范围 [-50, 100]，将使用默认值 0")
-            speed_rate = 0
+        if not (-50 <= speech_rate <= 100):
+            logger.warning(f"speech_rate {speech_rate} 超出有效范围 [-50, 100]，将使用默认值 0")
+            speech_rate = 0
 
         if not (-50 <= loudness_rate <= 100):
             logger.warning(f"loudness_rate {loudness_rate} 超出有效范围 [-50, 100]，将使用默认值 0")
@@ -131,6 +133,10 @@ class VolcEngineTTSClient:
             logger.warning(f"emotion_scale {emotion_scale} 超出有效范围 [1, 5]，将使用默认值 3")
             emotion_scale = 3
 
+        if not (-12 <= pitch <= 12):
+            logger.warning(f"pitch {pitch} 超出有效范围 [-12, 12]，将使用默认值 0")
+            pitch = 0
+
         headers = {
             "X-Api-App-Id": self.appid,
             "X-Api-Access-Key": self.access_token,
@@ -139,7 +145,9 @@ class VolcEngineTTSClient:
             "Content-Type": "application/json",
             "Connection": "keep-alive",
         }
-        additions = json.dumps({"explicit_language": "zh", "disable_markdown_filter": True, "enable_timestamp": True, "context_texts": [context_texts] if context_texts else None})
+        additions = json.dumps(
+            {"explicit_language": "zh", "disable_markdown_filter": True, "enable_timestamp": True, "context_texts": [context_texts] if context_texts else None, "post_process": {"pitch": pitch}}
+        )
         payload = {
             "user": {"uid": uid},
             "req_params": {
@@ -151,7 +159,7 @@ class VolcEngineTTSClient:
                     "enable_timestamp": enable_timestamp,
                     "emotion": emotion,
                     "emotion_scale": emotion_scale,
-                    "speed_rate": speed_rate,
+                    "speech_rate": speech_rate,
                     "loudness_rate": loudness_rate,
                 },
                 "additions": additions,
@@ -170,24 +178,26 @@ async def test(args):
     TTS测试函数
 
     Args:
-        args: list, e.g. [text, voice_type, emotion, emotion_scale, speed_rate, loudness_rate, output, resource_id, app_key, uid, format, sample_rate, enable_timestamp]
+        args: list, e.g. [text, voice_type, emotion, emotion_scale, speech_rate, loudness_rate, output, resource_id, app_key, uid, format, sample_rate, enable_timestamp]
               Provide as many as needed, from left to right.
 
     Parameter ranges:
-        - speed_rate: -50~100 (100代表2倍速, -50代表0.5倍速, 0为正常语速)
+        - speech_rate: -50~100 (100代表2倍速, -50代表0.5倍速, 0为正常语速)
         - loudness_rate: -50~100 (100代表2倍音量, -50代表0.5倍音量, 0为正常音量)
         - emotion_scale: 1-5
+        - pitch: -12~12 (12代表高音调, -12代表低音调, 0为正常音调)
     """
     client = VolcEngineTTSClient()
     # 设置默认参数
     params = {
         "text": "",
-        "voice_type": "",
+        "voice_type": "zh_female_vv_uranus_bigtts",
         "context_texts": "",
         "emotion": "",
         "emotion_scale": 4,
-        "speed_rate": 0,
+        "speech_rate": 0,
         "loudness_rate": 0,
+        "pitch": 12,
         "output": "tts_output.mp3",
         "resource_id": "seed-tts-2.0",
         "app_key": "aGjiRDfUWi",
@@ -214,8 +224,9 @@ async def test(args):
         params["context_texts"],
         params["emotion"],
         params["emotion_scale"],
-        params["speed_rate"],
+        params["speech_rate"],
         params["loudness_rate"],
+        params["pitch"],
         params["output"],
         params["resource_id"],
         params["app_key"],

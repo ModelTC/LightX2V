@@ -11,7 +11,6 @@
     "enable_cfg": false,
     "cpu_offload": true,
     "offload_granularity": "phase",
-    "t5_offload_granularity": "block",
     "dit_quantized_ckpt": "/path/to/dit_quant_model",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-vllm",

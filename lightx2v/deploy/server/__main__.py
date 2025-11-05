@@ -41,7 +41,8 @@ class TTSRequest(BaseModel):
     context_texts: str = ""
     emotion: str = ""
     emotion_scale: int = 3
-    speed_rate: int = 0
+    speech_rate: int = 0
+    pitch: int = 0
     loudness_rate: int = 0
     resource_id: str = "seed-tts-1.0"
 
@@ -968,8 +969,9 @@ async def api_v1_tts_generate(request: TTSRequest):
             context_texts=request.context_texts,
             emotion=request.emotion,
             emotion_scale=request.emotion_scale,
-            speed_rate=request.speed_rate,
+            speech_rate=request.speech_rate,
             loudness_rate=request.loudness_rate,
+            pitch=request.pitch,
             output=output_path,
             resource_id=request.resource_id,
         )

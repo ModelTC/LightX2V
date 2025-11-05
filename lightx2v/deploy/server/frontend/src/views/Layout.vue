@@ -1,316 +1,52 @@
 <script setup>
-import FloatingParticles from '../components/FloatingParticles.vue'
 import TopBar from '../components/TopBar.vue'
 import LeftBar from '../components/LeftBar.vue'
-import { useI18n } from 'vue-i18n'
-const { t, locale } = useI18n()
-import { loadLanguageAsync, switchLang } from '../utils/i18n'
-import {
-            submitting,
-            // 任务类型下拉菜单
-            showTaskTypeMenu,
-            showModelMenu,
-            isLoggedIn,
-            loading,
-            loginLoading,
-            initLoading,
-            downloadLoading,
-            isLoading,
-
-            // 录音相关
-            isRecording,
-            recordingDuration,
-            startRecording,
-            stopRecording,
-            formatRecordingDuration,
-
-            taskSearchQuery,
-            currentUser,
-            models,
-            tasks,
-            alert,
-            showErrorDetails,
-            showFailureDetails,
-            confirmDialog,
-            showConfirmDialog,
-            showTaskDetailModal,
-            modalTask,
-            t2vForm,
-            i2vForm,
-            s2vForm,
-            getCurrentForm,
-            i2vImagePreview,
-            s2vImagePreview,
-            s2vAudioPreview,
-            getCurrentImagePreview,
-            getCurrentAudioPreview,
-            setCurrentImagePreview,
-            setCurrentAudioPreview,
-            updateUploadedContentStatus,
-            availableTaskTypes,
-            availableModelClasses,
-            currentTaskHints,
-            currentHintIndex,
-            startHintRotation,
-            stopHintRotation,
-            filteredTasks,
-            selectedTaskId,
-            selectedTask,
-            selectedTaskFiles,
-            loadingTaskFiles,
-            statusFilter,
-            pagination,
-            paginationInfo,
-            currentTaskPage,
-            taskPageSize,
-            taskPageInput,
-            paginationKey,
-            taskMenuVisible,
-            toggleTaskMenu,
-            closeAllTaskMenus,
-            handleClickOutside,
-            showAlert,
-            setLoading,
-            apiCall,
-            logout,
-            loadModels,
-            sidebarCollapsed,
-            sidebarWidth,
-            showExpandHint,
-            showGlow,
-            isDefaultStateHidden,
-            hideDefaultState,
-            showDefaultState,
-            isCreationAreaExpanded,
-            hasUploadedContent,
-            isContracting,
-            expandCreationArea,
-            contractCreationArea,
-            taskFileCache,
-            taskFileCacheLoaded,
-            templateFileCache,
-            templateFileCacheLoaded,
-            loadTaskFiles,
-            downloadFile,
-            viewFile,
-            handleImageUpload,
-            selectTask,
-            selectModel,
-            resetForm,
-            triggerImageUpload,
-            triggerAudioUpload,
-            removeImage,
-            removeAudio,
-            handleAudioUpload,
-            loadImageAudioTemplates,
-            selectImageTemplate,
-            selectAudioTemplate,
-            previewAudioTemplate,
-            getTemplateFile,
-            imageTemplates,
-            audioTemplates,
-            showImageTemplates,
-            showAudioTemplates,
-            mediaModalTab,
-            templatePagination,
-            templatePaginationInfo,
-            templateCurrentPage,
-            templatePageSize,
-            templatePageInput,
-            templatePaginationKey,
-            imageHistory,
-            audioHistory,
-            showTemplates,
-            showHistory,
-            showPromptModal,
-            promptModalTab,
-            submitTask,
-            fileToBase64,
-            formatTime,
-            refreshTasks,
-            goToPage,
-            jumpToPage,
-            getVisiblePages,
-            goToTemplatePage,
-            jumpToTemplatePage,
-            getVisibleTemplatePages,
-            goToInspirationPage,
-            jumpToInspirationPage,
-            getVisibleInspirationPages,
-            preloadTaskFilesUrl,
-            preloadTemplateFilesUrl,
-            loadTaskFilesFromCache,
-            saveTaskFilesToCache,
-            getTaskFileFromCache,
-            setTaskFileToCache,
-            getTaskFileUrlFromApi,
-            getTaskFileUrl,
-            getTaskFileUrlSync,
-            getTemplateFileUrlFromApi,
-            getTemplateFileUrl,
-            getTemplateFileUrlAsync,
-            loadTemplateFilesFromCache,
-            saveTemplateFilesToCache,
-            loadFromCache,
-            saveToCache,
-            clearAllCache,
-            getStatusBadgeClass,
-            viewSingleResult,
-            cancelTask,
-            resumeTask,
-            deleteTask,
-            startPollingTask,
-            stopPollingTask,
-            reuseTask,
-            showTaskCreator,
-            toggleSidebar,
-            clearPrompt,
-            getTaskItemClass,
-            getStatusIndicatorClass,
-            getTaskTypeBtnClass,
-            getModelBtnClass,
-            getTaskTypeIcon,
-            getTaskTypeName,
-            getPromptPlaceholder,
-            getStatusTextClass,
-            getImagePreview,
-            getTaskInputUrl,
-            getTaskInputImage,
-            getTaskInputAudio,
-            getHistoryImageUrl,
-            getUserAvatarUrl,
-            getCurrentImagePreviewUrl,
-            getCurrentAudioPreviewUrl,
-            handleThumbnailError,
-            handleImageError,
-            handleImageLoad,
-            handleAudioError,
-            handleAudioLoad,
-            getTaskStatusDisplay,
-            getTaskStatusColor,
-            getTaskStatusIcon,
-            getTaskDuration,
-            getRelativeTime,
-            getTaskHistory,
-            getActiveTasks,
-            getOverallProgress,
-            getProgressTitle,
-            getProgressInfo,
-            getSubtaskProgress,
-            getSubtaskStatusText,
-            formatEstimatedTime,
-            formatDuration,
-            searchTasks,
-            filterTasksByStatus,
-            filterTasksByType,
-            getAlertClass,
-            getAlertBorderClass,
-            getAlertTextClass,
-            getAlertIcon,
-            getAlertIconBgClass,
-            getPromptTemplates,
-            selectPromptTemplate,
-            promptHistory,
-            getPromptHistory,
-            addTaskToHistory,
-            getLocalTaskHistory,
-            selectPromptHistory,
-            clearPromptHistory,
-            getImageHistory,
-            getAudioHistory,
-            selectImageHistory,
-            selectAudioHistory,
-            previewAudioHistory,
-            clearImageHistory,
-            clearAudioHistory,
-            getAudioMimeType,
-            getAuthHeaders,
-            startResize,
-            sidebar,
-            switchToCreateView,
-            switchToProjectsView,
-            switchToInspirationView,
-            switchToLoginView,
-            openTaskDetailModal,
-            closeTaskDetailModal,
-            // 灵感广场相关
-            inspirationSearchQuery,
-            selectedInspirationCategory,
-            inspirationItems,
-            InspirationCategories,
-            loadInspirationData,
-            selectInspirationCategory,
-            handleInspirationSearch,
-            loadMoreInspiration,
-            inspirationPagination,
-            inspirationPaginationInfo,
-            inspirationCurrentPage,
-            inspirationPageSize,
-            inspirationPageInput,
-            inspirationPaginationKey,
-            // 工具函数
-            formatDate,
-            // 模板详情弹窗相关
-            showTemplateDetailModal,
-            selectedTemplate,
-            previewTemplateDetail,
-            closeTemplateDetailModal,
-            useTemplate,
-            // 图片放大弹窗相关
-            showImageZoomModal,
-            zoomedImageUrl,
-            showImageZoom,
-            closeImageZoomModal,
-            // 模板素材应用相关
-            applyTemplateImage,
-            applyTemplateAudio,
-            applyTemplatePrompt,
-            copyPrompt,
-            // 视频播放控制
-            playVideo,
-            pauseVideo,
-            toggleVideoPlay,
-            pauseAllVideos,
-            updateVideoIcon,
-            onVideoLoaded,
-            onVideoError,
-            onVideoEnded
-        } from '../utils/other'
-
-import { computed, onMounted} from 'vue';
-import {useRouter} from 'vue-router';
 import Alert from '../components/Alert.vue'
 import Confirm from '../components/Confirm.vue'
 import TaskDetails from '../components/TaskDetails.vue'
 import TemplateDetails from '../components/TemplateDetails.vue'
 import PromptTemplate from '../components/PromptTemplate.vue'
-import ImageEdit from '../components/ImageEdit.vue'
 import Loading from '../components/Loading.vue'
-const router= useRouter();
+import { useI18n } from 'vue-i18n'
+import { isLoading } from '../utils/other'
 
+const { t } = useI18n()
 </script>
+
 <template>
+  <!-- 主容器 - Apple 极简风格 - 配合80%缩放铺满屏幕 -->
+  <div class="bg-[#f5f5f7] dark:bg-[#000000] transition-colors duration-300 w-full h-full">
+    <!-- 主内容区域 -->
+    <div class="flex flex-col w-full h-full">
+      <!-- 顶部导航栏 -->
+      <TopBar />
 
-<div class="main-container">
-  <FloatingParticles />
-<div class="main-content-area flex flex-col relative h-full">
- <TopBar />
+      <!-- 内容区域 - 响应式布局 -->
+      <div class="flex flex-col sm:flex-row flex-1 h-full">
+        <!-- 左侧/底部导航栏 - 响应式 -->
+        <LeftBar />
 
-  <!-- 下方区域 -->
-<div class="flex flex-row relative flex-1 min-h-0">
-  <LeftBar />
-   <router-view></router-view>
+        <!-- 路由视图内容 -->
+        <div class="flex-1 overflow-y-auto main-scrollbar">
+          <router-view></router-view>
+        </div>
+      </div>
     </div>
-</div>
-</div>
-  <Alert />
-  <Confirm />
-  <TaskDetails />
-  <TemplateDetails />
-  <promptTemplate />
-  <ImageEdit />
-  <!-- 全局路由跳转Loading覆盖层 -->
-  <div v-show="isLoading" class="bg-gradient-main flex items-center justify-center">
-    <Loading />
+
+    <!-- 全局组件 -->
+    <Alert />
+    <Confirm />
+    <TaskDetails />
+    <TemplateDetails />
+    <PromptTemplate />
+
+    <!-- 全局加载覆盖层 - Apple 风格 -->
+    <div v-show="isLoading" class="fixed inset-0 bg-[#f5f5f7] dark:bg-[#000000] flex items-center justify-center z-[9999] transition-opacity duration-300">
+      <Loading />
+    </div>
   </div>
 </template>
+
+<style scoped>
+/* Apple 风格极简设计 - 所有样式已通过 Tailwind CSS 在 template 中定义 */
+</style>

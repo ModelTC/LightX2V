@@ -30,7 +30,7 @@ class CostWindow:
 
 
 class WorkerClient:
-    def __init__(self, queue, identity, infer_timeout, offline_timeout, avg_window, ping_timeout):
+    def __init__(self, queue, identity, infer_timeout, offline_timeout, avg_window, ping_timeout, fetching_timeout):
         self.queue = queue
         self.identity = identity
         self.status = None
@@ -41,6 +41,7 @@ class WorkerClient:
         self.infer_timeout = infer_timeout
         self.offline_timeout = offline_timeout
         self.ping_timeout = ping_timeout
+        self.fetching_timeout = fetching_timeout
 
     # FETCHING -> FETCHED -> PING * n -> REPORT -> FETCHING
     # FETCHING -> DISCONNECT -> FETCHING
@@ -163,7 +164,7 @@ class ServerMonitor:
             self.worker_clients[queue] = {}
         if identity not in self.worker_clients[queue]:
             infer_timeout = self.subtask_run_timeouts[queue]
-            self.worker_clients[queue][identity] = WorkerClient(queue, identity, infer_timeout, self.worker_offline_timeout, self.worker_avg_window, self.ping_timeout)
+            self.worker_clients[queue][identity] = WorkerClient(queue, identity, infer_timeout, self.worker_offline_timeout, self.worker_avg_window, self.ping_timeout, self.fetching_timeout)
         return self.worker_clients[queue][identity]
 
     @class_try_catch_async

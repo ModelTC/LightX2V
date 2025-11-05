@@ -4,51 +4,52 @@ import { useI18n } from 'vue-i18n'
 const { t, locale } = useI18n()
 </script>
 <template>
-  <!-- 左侧功能区 -->
-  <div class="relative w-20 pl-5 flex flex-col z-10">
-    <!-- 功能导航 -->
-    <div class="p-2 flex flex-col justify-center h-full mobile-nav-buttons" style="margin-top: -10vh;">
-      <nav class="lg:space-y-3 md:space-y-3 sm:space-x-3 flex flex-col">
+  <!-- 左侧功能区 - Apple 极简风格 - 响应式布局 -->
+  <div class="relative flex flex-col z-10 pl-0 sm:pl-5 w-full sm:w-24">
+    <!-- 功能导航 - Apple 风格统一容器 -->
+    <div class="p-2 flex flex-col justify-center h-full mobile-nav-buttons sm:mt-[-10vh]">
+      <!-- 统一的圆角矩形容器 - Apple 风格 - 响应式方向 -->
+      <nav class="bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] border border-black/10 dark:border-white/10 rounded-3xl shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)] overflow-hidden flex flex-row sm:flex-col w-full sm:w-16">
 
         <!-- 生成视频功能 -->
         <div
           @click="switchToCreateView"
-          class="w-18 h-18 flex items-center justify-center rounded-lg transition-all duration-300
-                 font-medium text-sm border border-transparent hover:scale-105 hover:shadow-lg
-                 active:scale-105 active:shadow-lg active:shadow-laser-purple/20 mobile-nav-btn"
+          class="flex items-center justify-center flex-1 sm:flex-none h-14 sm:h-16 cursor-pointer transition-all duration-200 ease-out mobile-nav-btn group"
           :class="$route.path === '/generate'
-            ? 'bg-laser-purple/40 text-white border-laser-purple/40 shadow-lg shadow-laser-purple/20'
-            : 'text-gray-400 hover:text-laser-purple active:text-white active:bg-laser-purple active:border-laser-purple/30'"
+            ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white'
+            : 'text-[#86868b] dark:text-[#98989d] hover:bg-black/4 dark:hover:bg-white/6 hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)]'"
           :title="t('generateVideo')">
-          <i class="fi fi-sr-add text-3xl transition-transform duration-300 group-hover:animate-pulse"></i>
+          <i class="fas fa-plus text-xl transition-all duration-200 group-hover:scale-110"></i>
         </div>
+
+        <!-- 分割线 - Apple 风格 - 响应式方向 -->
+        <div class="w-px sm:w-auto sm:h-px bg-black/8 dark:bg-white/8 my-3 sm:my-0 sm:mx-3"></div>
 
         <!-- 我的项目功能 -->
         <div
           @click="switchToProjectsView"
-          class="w-18 h-18 flex items-center justify-center rounded-lg transition-all duration-300
-                 font-medium text-sm border border-transparent hover:scale-105 hover:shadow-lg
-                 mobile-nav-btn"
+          class="flex items-center justify-center flex-1 sm:flex-none h-14 sm:h-16 cursor-pointer transition-all duration-200 ease-out mobile-nav-btn group"
           :class="$route.path === '/projects'
-            ? 'bg-laser-purple/40 text-white border-laser-purple/40 shadow-lg shadow-laser-purple/20'
-            : 'text-gray-400 hover:text-laser-purple active:text-white active:bg-laser-purple active:border-laser-purple/30'"
+            ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white'
+            : 'text-[#86868b] dark:text-[#98989d] hover:bg-black/4 dark:hover:bg-white/6 hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)]'"
           :title="t('myProjects')">
-          <i class="fi fi-br-house-chimney-heart text-3xl transition-transform duration-300 group-hover:animate-pulse"></i>
+          <i class="fas fa-folder-open text-lg transition-all duration-200 group-hover:scale-110"></i>
         </div>
+
+        <!-- 分割线 - Apple 风格 - 响应式方向 -->
+        <div class="w-px sm:w-auto sm:h-px bg-black/8 dark:bg-white/8 my-3 sm:my-0 sm:mx-3"></div>
 
         <!-- 灵感广场功能 -->
         <div
           @click="switchToInspirationView"
-          class="w-18 h-18 flex items-center justify-center rounded-lg transition-all duration-300
-                 font-medium text-sm border border-transparent hover:scale-105 hover:shadow-lg
-                 active:scale-105 active:shadow-lg active:shadow-laser-purple/20 mobile-nav-btn"
+          class="flex items-center justify-center flex-1 sm:flex-none h-14 sm:h-16 cursor-pointer transition-all duration-200 ease-out mobile-nav-btn group"
           :class="$route.path === '/inspirations'
-            ? 'bg-laser-purple/40 text-white border-laser-purple/40 shadow-lg shadow-laser-purple/20'
-            : 'text-gray-400 hover:text-laser-purple active:text-white active:bg-laser-purple active:border-laser-purple/30'"
+            ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white'
+            : 'text-[#86868b] dark:text-[#98989d] hover:bg-black/4 dark:hover:bg-white/6 hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)]'"
           :title="t('inspiration')">
-
-          <i class="fi fi-sr-sparkles text-3xl transition-transform duration-300 group-hover:animate-pulse"></i>
+          <i class="fas fa-lightbulb text-lg transition-all duration-200 group-hover:scale-110"></i>
         </div>
+
       </nav>
     </div>
   </div>

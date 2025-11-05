@@ -14,7 +14,8 @@ import {
     isCreationAreaExpanded,
     switchToCreateView,
     showAlert,
-    login
+    login,
+    copyPrompt
 } from '../utils/other'
 
 const { t } = useI18n()
@@ -274,45 +275,48 @@ onMounted(async () => {
 </script>
 
 <template>
-    <div class="landing-page">
+    <!-- Apple 极简风格分享页面 -->
+    <div class="min-h-screen w-full bg-[#f5f5f7] dark:bg-[#000000]">
         <!-- TopBar -->
         <topMenu />
 
         <!-- 主要内容区域 -->
-        <div class="main-content main-scrollbar overflow-y-auto">
-            <!-- 错误状态 -->
-            <div v-if="error" class="error-container">
-                <div class="error-content">
-                    <div class="error-icon">
-                        <i class="fas fa-exclamation-triangle"></i>
+        <div class="w-full min-h-[calc(100vh-80px)] overflow-y-auto main-scrollbar">
+            <!-- 错误状态 - Apple 风格 -->
+            <div v-if="error" class="flex items-center justify-center min-h-[60vh] px-6">
+                <div class="text-center max-w-md">
+                    <div class="inline-flex items-center justify-center w-20 h-20 bg-red-500/10 dark:bg-red-400/10 rounded-3xl mb-6">
+                        <i class="fas fa-exclamation-triangle text-3xl text-red-500 dark:text-red-400"></i>
                     </div>
-                    <h2 class="error-title">{{ t('shareNotFound') }}</h2>
-                    <p class="error-message">{{ error }}</p>
-                    <button @click="router.push('/')" class="error-button">
-                        <i class="fas fa-home mr-2"></i>
-                        {{ t('backToHome') }}
+                    <h2 class="text-2xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-4 tracking-tight">{{ t('shareNotFound') }}</h2>
+                    <p class="text-base text-[#86868b] dark:text-[#98989d] mb-8 tracking-tight">{{ error }}</p>
+                    <button @click="router.push('/')"
+                            class="inline-flex items-center justify-center gap-2 px-8 py-3 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full text-[15px] font-semibold tracking-tight transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100">
+                        <i class="fas fa-home text-sm"></i>
+                        <span>{{ t('backToHome') }}</span>
                     </button>
                 </div>
             </div>
 
-            <!-- 分享内容 -->
-            <div v-else-if="shareData" class="content-grid">
+            <!-- 分享内容 - Apple 风格 -->
+            <div v-else-if="shareData" class="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-16 w-full max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 py-12 lg:py-16 items-center">
                 <!-- 左侧视频区域 -->
-                <div class="video-section">
-                    <div class="video-container">
-                        <!-- 视频加载占位符 -->
-                        <div v-if="!videoUrl" class="video-placeholder">
-                            <div class="loading-spinner">
-                                <i class="fas fa-spinner fa-spin"></i>
+                <div class="flex justify-center items-center">
+                    <div class="w-full max-w-[400px] aspect-[9/16] bg-black dark:bg-[#000000] rounded-2xl overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.5)] relative">
+                        <!-- 视频加载占位符 - Apple 风格 -->
+                        <div v-if="!videoUrl" class="w-full h-full flex flex-col items-center justify-center bg-[#f5f5f7] dark:bg-[#1c1c1e]">
+                            <div class="relative w-12 h-12 mb-6">
+                                <div class="absolute inset-0 rounded-full border-2 border-black/8 dark:border-white/8"></div>
+                                <div class="absolute inset-0 rounded-full border-2 border-transparent border-t-[color:var(--brand-primary)] dark:border-t-[color:var(--brand-primary-light)] animate-spin"></div>
                             </div>
-                            <p class="loading-text">{{ t('loadingVideo') }}...</p>
+                            <p class="text-sm font-medium text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('loadingVideo') }}...</p>
                         </div>
 
                         <!-- 视频播放器 -->
                         <video
                             v-if="videoUrl"
                             :src="videoUrl"
-                            class="video-player"
+                            class="w-full h-full object-contain"
                             controls
                             autoplay
                             loop
@@ -323,146 +327,166 @@ onMounted(async () => {
                             {{ t('browserNotSupported') }}
                         </video>
 
-                        <!-- 视频错误状态 -->
-                        <div v-if="videoError" class="video-error">
-                            <i class="fas fa-exclamation-triangle"></i>
-                            <p>{{ t('videoNotAvailable') }}</p>
+                        <!-- 视频错误状态 - Apple 风格 -->
+                        <div v-if="videoError" class="w-full h-full flex flex-col items-center justify-center bg-[#fef2f2] dark:bg-[#2c1b1b]">
+                            <div class="w-16 h-16 rounded-full bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center mb-4">
+                                <i class="fas fa-exclamation-triangle text-3xl text-red-500 dark:text-red-400"></i>
+                            </div>
+                            <p class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('videoNotAvailable') }}</p>
                         </div>
                     </div>
                 </div>
 
-                <!-- 右侧信息区域 -->
-                <div class="info-section">
-                    <div class="info-content">
-                        <!-- 标题 -->
-                        <h1 class="main-title">
+                <!-- 右侧信息区域 - Apple 风格 -->
+                <div class="flex items-center justify-center">
+                    <div class="w-full max-w-[500px]">
+                        <!-- 标题 - Apple 风格 -->
+                        <h1 class="text-4xl sm:text-5xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-4 tracking-tight leading-tight">
                             {{ getShareTitle() }}
                         </h1>
 
-                        <!-- 描述 -->
-                        <p class="main-description">
+                        <!-- 描述 - Apple 风格 -->
+                        <p class="text-lg text-[#86868b] dark:text-[#98989d] mb-8 leading-relaxed tracking-tight">
                             {{ getShareDescription() }}
                         </p>
 
-                        <!-- 特性列表 -->
-                        <div class="features-list">
-                            <div class="feature-item">
-                                <i class="fas fa-rocket feature-icon"></i>
-                                <span class="feature-text">{{ t('latestAIModel') }}</span>
+                        <!-- 特性列表 - Apple 风格 -->
+                        <div class="grid grid-cols-1 gap-3 mb-8">
+                            <div class="flex items-center gap-3 p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+                                <div class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
+                                    <i class="fas fa-rocket text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                </div>
+                                <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('latestAIModel') }}</span>
                             </div>
-                            <div class="feature-item">
-                                <i class="fas fa-bolt feature-icon"></i>
-                                <span class="feature-text">{{ t('oneClickReplication') }}</span>
+                            <div class="flex items-center gap-3 p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+                                <div class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
+                                    <i class="fas fa-bolt text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                </div>
+                                <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('oneClickReplication') }}</span>
                             </div>
-                            <div class="feature-item">
-                                <i class="fas fa-user-cog feature-icon"></i>
-                                <span class="feature-text">{{ t('customizableCharacter') }}</span>
+                            <div class="flex items-center gap-3 p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+                                <div class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
+                                    <i class="fas fa-user-cog text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                </div>
+                                <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('customizableCharacter') }}</span>
                             </div>
                         </div>
 
-                        <!-- 操作按钮 -->
-                        <div class="action-buttons">
-                            <button @click="createSimilar" class="primary-button">
-                                <i class="fas fa-magic mr-2"></i>
-                                {{ getShareButtonText() }}
+                        <!-- 操作按钮 - Apple 风格 -->
+                        <div class="space-y-3 mb-8">
+                            <button @click="createSimilar"
+                                    class="w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-8 py-3.5 text-[15px] font-semibold text-white hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100 transition-all duration-200 ease-out tracking-tight flex items-center justify-center gap-2">
+                                <i class="fas fa-magic text-sm"></i>
+                                <span>{{ getShareButtonText() }}</span>
                             </button>
 
                             <!-- 详细信息按钮 -->
-                            <button @click="showDetails = !showDetails" class="secondary-button">
-                                <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="mr-2"></i>
-                                {{ showDetails ? t('hideDetails') : t('showDetails') }}
+                            <button @click="showDetails = !showDetails"
+                                    class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-8 py-3 text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
+                                <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="text-sm"></i>
+                                <span>{{ showDetails ? t('hideDetails') : t('showDetails') }}</span>
                             </button>
                         </div>
 
-                        <!-- 技术信息 -->
-                        <div class="tech-info">
-                            <p class="tech-text">
-                                <a href="https://github.com/ModelTC/LightX2V" target="_blank" rel="noopener noreferrer" class="tech-link">
-                                    {{ t('poweredByLightX2V') }}
-                                </a>
-                            </p>
+                        <!-- 技术信息 - Apple 风格 -->
+                        <div class="text-center pt-6 border-t border-black/8 dark:border-white/8">
+                            <a href="https://github.com/ModelTC/LightX2V"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               class="inline-flex items-center gap-2 text-sm text-[#86868b] dark:text-[#98989d] hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)] transition-colors tracking-tight">
+                                <i class="fab fa-github text-base"></i>
+                                <span>{{ t('poweredByLightX2V') }}</span>
+                                <i class="fas fa-external-link-alt text-xs"></i>
+                            </a>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- 详细信息面板 -->
-        <div v-if="showDetails && shareData" class="details-panel">
-            <div class="details-content">
-                <!-- 输入素材标题 -->
-                <div class="materials-header">
-                    <h2 class="materials-title">
-                        <i class="fas fa-upload mr-2"></i>
-                        {{ t('inputMaterials') }}
+            <!-- 详细信息面板 - Apple 风格 -->
+            <div v-if="showDetails && shareData" class="w-full bg-white dark:bg-[#1c1c1e] border-t border-black/8 dark:border-white/8 py-16">
+                <div class="max-w-6xl mx-auto px-6 sm:px-8 lg:px-12">
+                    <!-- 输入素材标题 - Apple 风格 -->
+                    <h2 class="text-2xl sm:text-3xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center justify-center gap-3 mb-10 tracking-tight">
+                        <i class="fas fa-upload text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                        <span>{{ t('inputMaterials') }}</span>
                     </h2>
-                </div>
 
-                <!-- 三个并列的分块卡片 -->
-                <div class="materials-cards">
-                    <!-- 图片卡片 -->
-                    <div class="material-card">
-                        <div class="card-header">
-                            <i class="fas fa-image card-icon"></i>
-                            <h3 class="card-title">{{ t('image') }}</h3>
-                        </div>
-                        <div class="card-content">
-                            <div v-if="getImageMaterials().length > 0" class="image-grid">
-                                <div v-for="[inputName, url] in getImageMaterials()" :key="inputName" class="image-item">
-                                    <div class="image-container">
-                                        <img :src="url" :alt="inputName" class="image-preview"
+                    <!-- 三个并列的分块卡片 - Apple 风格 -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <!-- 图片卡片 - Apple 风格 -->
+                        <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl overflow-hidden transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
+                            <!-- 卡片头部 -->
+                            <div class="flex items-center justify-between px-5 py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-image text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                    <h3 class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('image') }}</h3>
+                                </div>
+                            </div>
+                            <!-- 卡片内容 -->
+                            <div class="p-6 min-h-[200px]">
+                                <div v-if="getImageMaterials().length > 0">
+                                    <div v-for="[inputName, url] in getImageMaterials()" :key="inputName" class="rounded-xl overflow-hidden border border-black/8 dark:border-white/8">
+                                        <img :src="url" :alt="inputName"
+                                             class="w-full h-auto object-contain"
                                              @load="console.log('图片加载成功:', inputName, url)"
                                              @error="handleImageError($event, inputName, url)">
-                                        <div class="image-placeholder" v-if="!url">
-                                            <i class="fas fa-image"></i>
-                                        </div>
-                                        <div class="image-error-placeholder" v-if="false">
-                                            <i class="fas fa-exclamation-triangle"></i>
-                                            <p>图片加载失败</p>
-                                        </div>
                                     </div>
-\\
+                                </div>
+                                <div v-else class="flex flex-col items-center justify-center h-[150px]">
+                                    <i class="fas fa-image text-3xl text-[#86868b]/30 dark:text-[#98989d]/30 mb-3"></i>
+                                    <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('noImage') }}</p>
                                 </div>
                             </div>
-                            <div v-else class="empty-state">
-                                <i class="fas fa-image empty-icon"></i>
-                                <p class="empty-text">{{ t('noImage') }}</p>
-                            </div>
                         </div>
-                    </div>
 
-                    <!-- 音频卡片 -->
-                    <div class="material-card">
-                        <div class="card-header">
-                            <i class="fas fa-music card-icon"></i>
-                            <h3 class="card-title">{{ t('audio') }}</h3>
-                        </div>
-                        <div class="card-content">
-                            <div v-if="getAudioMaterials().length > 0" class="audio-list">
-                                <div v-for="[inputName, url] in getAudioMaterials()" :key="inputName" class="audio-item">
-                                    <audio :src="url" controls class="audio-player"></audio>
+                        <!-- 音频卡片 - Apple 风格 -->
+                        <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl overflow-hidden transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
+                            <!-- 卡片头部 -->
+                            <div class="flex items-center justify-between px-5 py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-music text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                    <h3 class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('audio') }}</h3>
                                 </div>
                             </div>
-                            <div v-else class="empty-state">
-                                <i class="fas fa-music empty-icon"></i>
-                                <p class="empty-text">{{ t('noAudio') }}</p>
+                            <!-- 卡片内容 -->
+                            <div class="p-6 min-h-[200px]">
+                                <div v-if="getAudioMaterials().length > 0" class="space-y-4">
+                                    <div v-for="[inputName, url] in getAudioMaterials()" :key="inputName">
+                                        <audio :src="url" controls class="w-full rounded-xl"></audio>
+                                    </div>
+                                </div>
+                                <div v-else class="flex flex-col items-center justify-center h-[150px]">
+                                    <i class="fas fa-music text-3xl text-[#86868b]/30 dark:text-[#98989d]/30 mb-3"></i>
+                                    <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('noAudio') }}</p>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- 提示词卡片 -->
-                    <div class="material-card">
-                        <div class="card-header">
-                            <i class="fas fa-file-alt card-icon"></i>
-                            <h3 class="card-title">{{ t('prompt') }}</h3>
-                        </div>
-                        <div class="card-content">
-                            <div v-if="shareData.prompt" class="prompt-content">
-                                <p class="prompt-text">{{ shareData.prompt }}</p>
+                        <!-- 提示词卡片 - Apple 风格 -->
+                        <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl overflow-hidden transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
+                            <!-- 卡片头部 -->
+                            <div class="flex items-center justify-between px-5 py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-file-alt text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                    <h3 class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('prompt') }}</h3>
+                                </div>
+                                <button v-if="shareData.prompt"
+                                        @click="copyPrompt(shareData.prompt)"
+                                        class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
+                                        :title="t('copy')">
+                                    <i class="fas fa-copy text-xs"></i>
+                                </button>
                             </div>
-                            <div v-else class="empty-state">
-                                <i class="fas fa-file-alt empty-icon"></i>
-                                <p class="empty-text">{{ t('noPrompt') }}</p>
+                            <!-- 卡片内容 -->
+                            <div class="p-6 min-h-[200px]">
+                                <div v-if="shareData.prompt" class="bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-[10px] border border-black/6 dark:border-white/6 rounded-xl p-4">
+                                    <p class="text-sm text-[#1d1d1f] dark:text-[#f5f5f7] leading-relaxed tracking-tight break-words">{{ shareData.prompt }}</p>
+                                </div>
+                                <div v-else class="flex flex-col items-center justify-center h-[150px]">
+                                    <i class="fas fa-file-alt text-3xl text-[#86868b]/30 dark:text-[#98989d]/30 mb-3"></i>
+                                    <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('noPrompt') }}</p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -471,588 +495,13 @@ onMounted(async () => {
         </div>
     </div>
 
-    <!-- 全局路由跳转Loading覆盖层 -->
-    <div v-show="isLoading" class="loading-overlay">
+    <!-- 全局路由跳转Loading覆盖层 - Apple 风格 -->
+    <div v-show="isLoading" class="fixed inset-0 bg-[#f5f5f7] dark:bg-[#000000] flex items-center justify-center z-[9999]">
         <Loading />
     </div>
 </template>
 
 <style scoped>
-/* Landing Page 样式 */
-.landing-page {
-    min-height: 100vh;
-    width: 100%;
-    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
-    color: white;
-}
-
-.main-content {
-    width: 100%;
-    padding: 2rem 0;
-    min-height: calc(100vh - 80px);
-    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
-}
-
-/* 错误状态 */
-.error-container {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 60vh;
-}
-
-.error-content {
-    text-align: center;
-    max-width: 500px;
-    padding: 2rem;
-}
-
-.error-icon {
-    width: 80px;
-    height: 80px;
-    margin: 0 auto 1.5rem;
-    background: rgba(239, 68, 68, 0.1);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 2rem;
-    color: #ef4444;
-}
-
-.error-title {
-    font-size: 1.5rem;
-    font-weight: 600;
-    margin-bottom: 1rem;
-    color: white;
-}
-
-.error-message {
-    color: #9ca3af;
-    margin-bottom: 2rem;
-    line-height: 1.6;
-}
-
-.error-button {
-    padding: 0.75rem 1.5rem;
-    background: rgba(139, 92, 246, 0.2);
-    border: 1px solid rgba(139, 92, 246, 0.4);
-    border-radius: 0.75rem;
-    color: white;
-    font-weight: 500;
-    transition: all 0.2s;
-    cursor: pointer;
-}
-
-.error-button:hover {
-    background: rgba(139, 92, 246, 0.3);
-    border-color: rgba(139, 92, 246, 0.6);
-    transform: translateY(-1px);
-}
-
-/* 内容网格布局 */
-.content-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4rem;
-    width: 100%;
-    margin: 0 auto;
-    padding: 0 2rem;
-    align-items: center;
-    min-height: 60vh;
-}
-
-/* 视频区域 */
-.video-section {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-.video-container {
-    width: 100%;
-    max-width: 500px;
-    aspect-ratio: 9/16;
-    background: #000;
-    border-radius: 1rem;
-    overflow: hidden;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
-    position: relative;
-}
-
-.video-placeholder {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #1f2937;
-}
-
-.loading-spinner {
-    font-size: 2rem;
-    color: #8b5cf6;
-    margin-bottom: 1rem;
-}
-
-.loading-text {
-    color: #9ca3af;
-    font-size: 0.875rem;
-}
-
-.video-player {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-}
-
-.video-error {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #1f2937;
-    color: #ef4444;
-}
-
-.video-error i {
-    font-size: 2rem;
-    margin-bottom: 1rem;
-}
-
-/* 信息区域 */
-.info-section {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.info-content {
-    max-width: 500px;
-    padding: 2rem 0;
-}
-
-.main-title {
-    font-size: 3rem;
-    font-weight: 700;
-    margin-bottom: 1.5rem;
-    background: linear-gradient(135deg, #8b5cf6, #a855f7);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    line-height: 1.2;
-}
-
-.main-description {
-    font-size: 1.25rem;
-    color: #d1d5db;
-    margin-bottom: 2.5rem;
-    line-height: 1.6;
-}
-
-/* 特性列表 */
-.features-list {
-    margin-bottom: 2.5rem;
-}
-
-.feature-item {
-    display: flex;
-    align-items: center;
-    margin-bottom: 1rem;
-    padding: 0.75rem 0;
-}
-
-.feature-icon {
-    width: 40px;
-    height: 40px;
-    background: rgba(139, 92, 246, 0.1);
-    border-radius: 0.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 1rem;
-    color: #8b5cf6;
-    font-size: 1.125rem;
-}
-
-.feature-text {
-    font-size: 1rem;
-    color: #e5e7eb;
-    font-weight: 500;
-}
-
-/* 操作按钮 */
-.action-buttons {
-    margin-bottom: 2rem;
-}
-
-.primary-button {
-    width: 100%;
-    padding: 1rem 2rem;
-    background: linear-gradient(135deg, #8b5cf6, #a855f7);
-    border: none;
-    border-radius: 0.75rem;
-    color: white;
-    font-size: 1.125rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    margin-bottom: 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.primary-button:hover {
-    background: linear-gradient(135deg, #7c3aed, #9333ea);
-    transform: translateY(-2px);
-    box-shadow: 0 10px 25px -5px rgba(139, 92, 246, 0.4);
-}
-
-.secondary-button {
-    width: 100%;
-    padding: 0.75rem 1.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 0.5rem;
-    color: white;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.secondary-button:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.3);
-}
-
-/* 技术信息 */
-.tech-info {
-    text-align: center;
-    padding-top: 1rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.tech-text {
-    color: #9ca3af;
-    font-size: 0.875rem;
-    font-weight: 500;
-}
-
-.tech-link {
-    color: #9ca3af;
-    text-decoration: underline;
-    transition: color 0.3s ease;
-}
-
-.tech-link:hover {
-    color: #8b5cf6;
-}
-
-/* 详细信息面板 */
-.details-panel {
-    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
-
-    padding: 5rem 0;
-}
-
-.details-content {
-    width: 100%;
-    margin: 0 auto;
-    padding: 0 2rem;
-}
-
-/* 输入素材标题 */
-.materials-header {
-    text-align: center;
-    margin-bottom: 2rem;
-}
-
-.materials-title {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0;
-}
-
-/* 三个并列的卡片 */
-.materials-cards {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2rem;
-}
-
-.material-card {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 1rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    overflow: hidden;
-    transition: all 0.3s ease;
-}
-
-.material-card:hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(139, 92, 246, 0.3);
-    transform: translateY(-2px);
-}
-
-.card-header {
-    background: rgba(139, 92, 246, 0.1);
-    padding: 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.card-icon {
-    font-size: 1.25rem;
-    color: #8b5cf6;
-}
-
-.card-title {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: white;
-    margin: 0;
-}
-
-.card-content {
-    padding: 1.5rem;
-    min-height: 200px;
-}
-
-/* 图片网格 */
-.image-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 1rem;
-}
-
-.image-item {
-    text-align: center;
-}
-
-.image-container {
-    position: relative;
-    width: 100%;
-    min-height: 120px;
-    margin-bottom: 0.5rem;
-    border-radius: 0.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    overflow: hidden;
-    background: rgba(255, 255, 255, 0.05);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.image-preview {
-    max-width: 100%;
-    min-height: 80px;
-    height: auto;
-    width: auto;
-    object-fit: contain;
-    display: block;
-    position: relative !important;
-}
-
-.image-placeholder {
-    width: 100%;
-    height: 80px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.1);
-    color: #9ca3af;
-    font-size: 1.5rem;
-}
-
-.image-error-placeholder {
-    width: 100%;
-    height: 80px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: rgba(239, 68, 68, 0.1);
-    color: #ef4444;
-    font-size: 0.875rem;
-    text-align: center;
-}
-
-.image-error-placeholder i {
-    font-size: 1.5rem;
-    margin-bottom: 0.25rem;
-}
-
-.image-label {
-    font-size: 0.75rem;
-    color: #9ca3af;
-    margin: 0;
-    word-break: break-all;
-}
-
-.debug-url {
-    font-size: 0.6rem;
-    color: #6b7280;
-    margin: 0.25rem 0 0 0;
-    word-break: break-all;
-    opacity: 0.7;
-}
-
-/* 音频列表 */
-.audio-list {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-.audio-item {
-    text-align: center;
-}
-
-.audio-player {
-    width: 100%;
-    height: 40px;
-    margin-bottom: 0.5rem;
-}
-
-.audio-label {
-    font-size: 0.75rem;
-    color: #9ca3af;
-    margin: 0;
-    word-break: break-all;
-}
-
-/* 提示词内容 */
-.prompt-content {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.prompt-text {
-    color: #d1d5db;
-    line-height: 1.6;
-    margin: 0;
-    word-break: break-word;
-}
-
-/* 空状态 */
-.empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 120px;
-    color: #6b7280;
-}
-
-.empty-icon {
-    font-size: 2rem;
-    margin-bottom: 0.5rem;
-    opacity: 0.5;
-}
-
-.empty-text {
-    font-size: 0.875rem;
-    margin: 0;
-    opacity: 0.7;
-}
-
-.loading-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-}
-
-/* 响应式设计 */
-@media (max-width: 1024px) {
-    .content-grid {
-        gap: 3rem;
-        padding: 0 1.5rem;
-    }
-
-    .main-title {
-        font-size: 2.5rem;
-    }
-
-    .video-container {
-        max-width: 400px;
-    }
-
-    /* 卡片响应式 */
-    .materials-cards {
-        grid-template-columns: 1fr;
-        gap: 1.5rem;
-    }
-}
-
-@media (max-width: 768px) {
-    .main-content {
-        padding: 1rem 0;
-    }
-
-    .content-grid {
-        grid-template-columns: 1fr;
-        gap: 2rem;
-        padding: 0 1rem;
-    }
-
-    .main-title {
-        font-size: 2rem;
-    }
-
-    .main-description {
-        font-size: 1.125rem;
-    }
-
-    .video-container {
-        max-width: 300px;
-    }
-
-    .info-content {
-        padding: 1rem 0;
-    }
-
-    .details-content {
-        padding: 0 1rem;
-    }
-
-    /* 移动端卡片调整 */
-    .materials-cards {
-        gap: 1rem;
-    }
-
-    .card-content {
-        padding: 1rem;
-        min-height: 150px;
-    }
-
-    .image-grid {
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    }
-
-    .materials-title {
-        font-size: 1.25rem;
-    }
-}
+/* 所有样式已通过 Tailwind CSS 的 dark: 前缀在 template 中定义 */
+/* Apple 风格极简黑白设计 */
 </style>

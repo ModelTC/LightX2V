@@ -436,134 +436,136 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
 
 </script>
 <template>
-                        <!-- 历史任务区域 -->
+    <!-- 历史任务区域 - Apple 极简风格 -->
                         <div class="flex-1 flex flex-col min-h-0 mobile-content">
                             <!-- 内容区域 -->
-                            <div class="flex-1 overflow-y-auto p-10 content-area main-scrollbar">
+        <div class="flex-1 overflow-y-auto p-6 content-area main-scrollbar">
                                 <!-- 历史任务功能区 -->
-                                <div class="max-w-4xl mx-auto" id="task-creator">
-                                    <!-- 搜索和筛选区域 -->
-                                    <div class="flex flex-col md:flex-row gap-4 mb-6">
-                                <!-- 搜索框 -->
+            <div class="max-w-7xl mx-auto" id="task-creator">
+                <!-- 标题区域 - Apple 风格 -->
+                <div class="text-center mb-10">
+                    <h1 class="text-4xl sm:text-5xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('myProjects') }}</h1>
+                                        </div>
+
+                <!-- 搜索和筛选区域 - Apple 风格 -->
+                <div class="flex flex-col md:flex-row gap-4 mb-8">
+                    <!-- 搜索框 - Apple 风格 -->
                                         <div class="relative flex-1">
-                                            <i
-                                                class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none z-10"></i>
+                        <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-[#86868b] dark:text-[#98989d] pointer-events-none z-10"></i>
                                             <input v-model="taskSearchQuery"
-                                                class="w-full bg-dark-light border border-laser-purple/30 rounded-lg py-3 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-laser-purple/50 transition-all focus:border-laser focus:shadow-laser"
-                                                :placeholder="t('searchTasks')" type="text" />
+                            class="w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl py-3 pl-11 pr-4 text-[15px] text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 focus:shadow-[0_4px_16px_rgba(var(--brand-primary-rgb),0.12)] dark:focus:shadow-[0_4px_16px_rgba(var(--brand-primary-light-rgb),0.2)] transition-all duration-200"
+                            :placeholder="t('searchTasks')"
+                            type="text" />
                             </div>
 
-                                        <!-- 分类筛选 -->
-                                        <div class="flex gap-2">
+                    <!-- 状态筛选按钮 - Apple 风格 -->
+                    <div class="flex gap-2 flex-wrap items-center">
                                             <button @click="statusFilter = 'ALL'"
+                            class="px-5 py-2.5 text-sm font-medium rounded-full transition-all duration-200 tracking-tight"
                                                 :class="statusFilter === 'ALL'
-                                                    ? 'bg-laser-purple/20 text-white border-laser-purple/40'
-                                                    : 'bg-dark-light text-gray-400 hover:text-white hover:bg-dark-light/80'"
-                                                class="px-4 py-2 rounded-lg border border-transparent transition-all duration-200 text-sm font-medium">
+                                ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.3)]'
+                                : 'bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7]'">
                                                 {{ t('all') }}
                                     </button>
                                             <button @click="statusFilter = 'SUCCEED'"
+                            class="px-5 py-2.5 text-sm font-medium rounded-full transition-all duration-200 tracking-tight"
                                                 :class="statusFilter === 'SUCCEED'
-                                                    ? 'bg-laser-purple/20 text-white border-laser-purple/40'
-                                                    : 'bg-dark-light text-gray-400 hover:text-white hover:bg-dark-light/80'"
-                                                class="px-4 py-2 rounded-lg border border-transparent transition-all duration-200 text-sm font-medium">
+                                ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.3)]'
+                                : 'bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7]'">
                                                 {{ t('success') }}
                                     </button>
                                             <button @click="statusFilter = 'RUNNING'"
+                            class="px-5 py-2.5 text-sm font-medium rounded-full transition-all duration-200 tracking-tight"
                                                 :class="statusFilter === 'RUNNING'
-                                                    ? 'bg-laser-purple/20 text-white border-laser-purple/40'
-                                                    : 'bg-dark-light text-gray-400 hover:text-white hover:bg-dark-light/80'"
-                                                class="px-4 py-2 rounded-lg border border-transparent transition-all duration-200 text-sm font-medium">
+                                ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.3)]'
+                                : 'bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7]'">
                                                 {{ t('running') }}
                                     </button>
                                             <button @click="statusFilter = 'FAILED'"
+                            class="px-5 py-2.5 text-sm font-medium rounded-full transition-all duration-200 tracking-tight"
                                                 :class="statusFilter === 'FAILED'
-                                                    ? 'bg-laser-purple/20 text-white border-laser-purple/40'
-                                                    : 'bg-dark-light text-gray-400 hover:text-white hover:bg-dark-light/80'"
-                                                class="px-4 py-2 rounded-lg border border-transparent transition-all duration-200 text-sm font-medium">
+                                ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.3)]'
+                                : 'bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7]'">
                                                 {{ t('failed') }}
                                     </button>
+                        <!-- 刷新按钮 - Apple 风格 -->
                                             <button @click="() => refreshTasks(true)"
-                                        class="text-gray-400 hover:text-gradient-primary transition-colors flex-shrink-0"
+                            class="w-9 h-9 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-full transition-all duration-200 hover:scale-110 active:scale-100 flex-shrink-0"
                                                 :title="t('refreshTasks')">
-                                        <i class="fas fa-sync-alt"></i>
+                            <i class="fas fa-sync-alt text-sm"></i>
                                     </button>
                             </div>
                         </div>
 
-                                <!-- 分页组件 -->
-                                <div v-cloak>
-                                                <div v-if="paginationInfo" :key="paginationKey" class="pagination-container mb-3">
-                                        <div class="flex items-center justify-between text-xs text-gray-400">
-                                            <div class="flex items-center space-x-1 text-gray-500">
+                <!-- 分页组件 - Apple 风格 -->
+                <div v-if="paginationInfo" :key="paginationKey" class="mb-6">
+                    <div class="flex items-center justify-between text-xs mb-4">
+                        <div class="flex items-center space-x-1 text-[#86868b] dark:text-[#98989d] tracking-tight">
                                                     <span>{{ t('total') }} {{ paginationInfo.total }} {{ t('tasks') }}</span>
+                        </div>
                             </div>
                                                 <div v-if="paginationInfo.total_pages > 1" class="flex justify-center">
-                                                    <nav class="isolate inline-flex -space-x-px rounded-md" aria-label="Pagination">
+                        <nav class="isolate inline-flex gap-1" aria-label="Pagination">
                                                         <!-- 上一页按钮 -->
                                                         <button @click="goToPage(currentTaskPage - 1)"
                                                             :disabled="currentTaskPage <= 1"
-                                                            class="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 inset-ring inset-ring-gray-700 hover:bg-white/5 focus:z-20 focus:outline-offset-0"
+                                class="relative inline-flex items-center w-9 h-9 rounded-lg bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] transition-all duration-200"
                                                             :class="{ 'opacity-50 cursor-not-allowed': currentTaskPage <= 1 }"
                                                             :title="t('previousPage')">
                                                             <span class="sr-only">{{ t('previousPage') }}</span>
-                                                            <i class="fas fa-chevron-left text-sm" aria-hidden="true"></i>
+                                <i class="fas fa-chevron-left text-xs mx-auto" aria-hidden="true"></i>
                                                         </button>
 
                                                         <!-- 页码按钮 -->
                                                         <template v-for="page in getVisiblePages()" :key="page">
                                                             <button v-if="page !== '...'" @click="goToPage(page)"
                                                                 :class="[
-                                                                    'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20 focus:outline-offset-0',
+                                        'relative inline-flex items-center justify-center min-w-[36px] h-9 px-3 text-sm font-medium rounded-lg transition-all duration-200',
                                                                     page === currentTaskPage
-                                                                        ? 'z-10 text-white focus-visible:outline-2 focus-visible:outline-offset-2 bg-laser-purple focus-visible:outline-laser-purple'
-                                                                        : 'text-gray-200 inset-ring inset-ring-gray-700 hover:bg-white/5'
+                                            ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.3)]'
+                                            : 'bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7]'
                                                                 ]"
                                                                 :aria-current="page === currentTaskPage ? 'page' : undefined">
                                                                 {{ page }}
                                                             </button>
-                                                            <span v-else class="relative inline-flex items-center px-4 py-2 text-sm font-semibold text-gray-400 inset-ring inset-ring-gray-700 focus:outline-offset-0">...</span>
+                                <span v-else class="relative inline-flex items-center px-2 text-sm font-semibold text-[#86868b] dark:text-[#98989d]">...</span>
                                                         </template>
 
                                                         <!-- 下一页按钮 -->
                                                         <button @click="goToPage(currentTaskPage + 1)"
                                                             :disabled="currentTaskPage >= paginationInfo.total_pages"
-                                                            class="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 inset-ring inset-ring-gray-700 hover:bg-white/5 focus:z-20 focus:outline-offset-0"
+                                class="relative inline-flex items-center w-9 h-9 rounded-lg bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] transition-all duration-200"
                                                             :class="{ 'opacity-50 cursor-not-allowed': currentTaskPage >= paginationInfo.total_pages }"
                                                             :title="t('nextPage')">
                                                             <span class="sr-only">{{ t('nextPage') }}</span>
-                                                            <i class="fas fa-chevron-right text-sm" aria-hidden="true"></i>
+                                <i class="fas fa-chevron-right text-xs mx-auto" aria-hidden="true"></i>
                                                         </button>
                                                     </nav>
                                         </div>
                                     </div>
+
+                <!-- 任务内容网格 - Apple 风格 -->
+                <div v-if="filteredTasks.length === 0" class="flex flex-col items-center justify-center py-16 text-center">
+                    <div class="w-20 h-20 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-full flex items-center justify-center mb-6">
+                        <i class="fas fa-video text-3xl text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                 </div>
+                    <p class="text-lg font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('noHistoryTasks') }}</p>
+                    <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('startToCreateYourFirstAIVideo') }}</p>
                             </div>
 
-                            <!-- 可滚动的任务列表区域 -->
-                                    <div class="flex-1 overflow-y-auto main-scrollbar min-h-0 p-4"
-                                        style="overflow-x: visible;">
-                                <div v-cloak>
-                                            <div v-if="filteredTasks.length === 0"
-                                                class="flex-col items-center justify-center py-12 text-center">
-                                                <p class="text-gray-400 text-sm">{{ t('noHistoryTasks') }}</p>
-                                                <p class="text-gray-500 text-xs mt-1">{{ t('startToCreateYourFirstAIVideo') }}</p>
-                                            </div>
-                                            <div v-else
-                                                class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-3">
-                                                    <!-- 任务卡片 -->
+                <div v-else class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
+                    <!-- 任务卡片 - Apple 风格 -->
                                                 <div v-for="task in filteredTasks" :key="task.task_id"
-                                                        class="break-inside-avoid mb-3 group relative bg-dark-light rounded-xl overflow-hidden border border-gray-700/50 hover:border-laser-purple/40 transition-all duration-300 hover:shadow-laser/20">
+                        class="break-inside-avoid mb-4 group relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/30 dark:hover:border-[color:var(--brand-primary-light)]/30 hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200 hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.2)]">
                                                     <!-- 缩略图区域 -->
-                                                    <div class="cursor-pointer bg-gray-800 relative flex flex-col"
+                        <div class="cursor-pointer bg-black/2 dark:bg-white/2 relative flex flex-col"
                                                     @click="openTaskDetailModal(task)"
                                                     :title="t('viewTaskDetails')">
-                                                        <!-- 视频预览 -->
                                                             <!-- 成功任务：显示视频动图 -->
                                                             <video v-if="task.status === 'SUCCEED' && task.outputs?.output_video"
                                                                 :src="getTaskFileUrlSync(task.task_id, 'output_video')"
                                                                 :poster="getTaskFileUrlSync(task.task_id, 'input_image')"
-                                                                    class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                                class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                                                                 preload="auto" playsinline webkit-playsinline
                                                                     @mouseenter="playVideo($event)"
                                                                     @mouseleave="pauseVideo($event)"
@@ -572,79 +574,90 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                                                 @error="onVideoError($event)"></video>
 
                                                         <!-- 其他状态：显示输入图片或占位符 -->
-                                                        <img v-else="task.inputs?.input_image"
+                            <img v-else-if="task.inputs?.input_image"
                                                         :src="getTaskFileUrlSync(task.task_id, 'input_image')"
-                                                        class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                                class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                                                         @error="handleThumbnailError" />
 
-                                                        <!-- 移动端播放按钮 -->
-                                                        <button v-if="task.status === 'SUCCEED'"
+                            <!-- 默认占位符 - Apple 风格 -->
+                            <div v-else class="w-full aspect-[9/16] bg-[#f5f5f7] dark:bg-[#1c1c1e] flex items-center justify-center">
+                                <i class="fas fa-video text-4xl text-[#86868b]/30 dark:text-[#98989d]/30"></i>
+                            </div>
+
+                            <!-- 移动端播放按钮 - Apple 风格 -->
+                            <button v-if="task.status === 'SUCCEED' && task.outputs?.output_video"
                                                         @click.stop="toggleVideoPlay($event)"
-                                                        class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
+                                class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.2)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 transition-all duration-200 z-20">
                                                         <i class="fas fa-play text-sm"></i>
                                                     </button>
 
-                                                            <!-- 状态指示器 -->
-                                                            <div class="absolute top-2 right-2">
-                                                            <span :class="getTaskStatusColor(task.status)"
-                                                                class="px-2 py-1 rounded-full text-xs font-medium bg-black/50 backdrop-blur-sm">
+                            <!-- 状态指示器 - Apple 风格 -->
+                            <div class="absolute top-3 right-3">
+                                <span :class="[
+                                    'px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-[20px] shadow-sm',
+                                    task.status === 'SUCCEED' ? 'bg-green-500/90 dark:bg-green-400/90 text-white' :
+                                    task.status === 'RUNNING' ? 'bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 text-white' :
+                                    task.status === 'FAILED' ? 'bg-red-500/90 dark:bg-red-400/90 text-white' :
+                                    'bg-white/90 dark:bg-[#2c2c2e]/90 text-[#86868b] dark:text-[#98989d] border border-black/8 dark:border-white/8'
+                                ]">
                                                                     {{ getTaskStatusDisplay(task.status) }}
                                                                 </span>
                                                             </div>
 
-                                                            <!-- 悬停时显示的操作按钮（桌面端） -->
-                                                        <div
-                                                            class="hidden md:block absolute bottom-2 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-                                                                <div class="flex space-x-2 sm:space-x-3 pointer-events-auto">
-                                                    <button
-                                                                        v-if="['CREATED', 'PENDING', 'RUNNING','SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
+                            <!-- 悬停时显示的操作按钮（桌面端）- Apple 风格 -->
+                            <div class="hidden md:flex absolute bottom-3 left-1/2 transform -translate-x-1/2 items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-10 w-full">
+                                <div class="flex gap-2 pointer-events-auto">
+                                    <!-- 复用按钮 - 所有状态可用 -->
+                                    <button v-if="['CREATED', 'PENDING', 'RUNNING','SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
                                                                         @click.stop="reuseTask(task)"
-                                                                        class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors"
+                                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                                                                     :title="t('reuseTask')">
-                                                                <i class="fas fa-copy text-sm sm:text-lg"></i>
+                                        <i class="fas fa-copy text-sm"></i>
                                                     </button>
-                                                            <button
-                                                                    v-if="['CREATED', 'PENDING', 'RUNNING'].includes(task.status)"
+
+                                    <!-- 取消按钮 - 进行中状态 -->
+                                    <button v-if="['CREATED', 'PENDING', 'RUNNING'].includes(task.status)"
                                                                     @click.stop="cancelTask(task.task_id)"
-                                                                    class="w-10 h-10 rounded-full bg-red-400/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                        class="w-10 h-10 rounded-full bg-white dark:bg-[#3a3a3c] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-red-500 dark:text-red-400 hover:scale-110 active:scale-100 transition-all duration-200"
                                                                     :title="t('cancelTask')">
-                                                                <i class="fas fa-times text-sm sm:text-lg"></i>
+                                        <i class="fas fa-times text-sm"></i>
                                                             </button>
-                                                            <button
-                                                                        v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
+
+                                    <!-- 重试按钮 - 失败/取消状态 -->
+                                    <button v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
                                                                         @click.stop="resumeTask(task.task_id)"
-                                                                        class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                                                                     :title="t('retryTask')">
-                                                                        <i class="fas fa-redo text-sm sm:text-lg"></i>
+                                        <i class="fas fa-redo text-sm"></i>
                                                             </button>
+
+                                    <!-- 下载按钮 - 成功状态 -->
                                                                 <button v-if="task.status === 'SUCCEED'"
                                                                         @click.stop="handleDownloadTask(task)"
-                                                                        class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-laser-purple/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                                                                     :title="t('downloadTask')">
-                                                                        <i class="fas fa-download text-sm sm:text-lg"></i>
+                                        <i class="fas fa-download text-sm"></i>
                                                             </button>
-                                                            <button
-                                                                        v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
+
+                                    <!-- 删除按钮 - 完成/失败/取消状态 -->
+                                    <button v-if="['SUCCEED', 'FAILED', 'CANCEL'].includes(task.status)"
                                                                         @click.stop="deleteTask(task.task_id)"
-                                                                        class="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-red-400/80 backdrop-blur-sm flex items-center justify-center text-white hover:bg-red-500 transition-colors"
+                                        class="w-10 h-10 rounded-full bg-white dark:bg-[#3a3a3c] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-red-500 dark:text-red-400 hover:scale-110 active:scale-100 transition-all duration-200"
                                                                     :title="t('deleteTask')">
-                                                                        <i class="fas fa-trash text-sm sm:text-lg"></i>
+                                        <i class="fas fa-trash text-sm"></i>
                                                             </button>
                                                     </div>
                                                 </div>
                                             </div>
 
-                                                        <!-- 任务信息 -->
-                                                        <div class="pl-4 pr-4 pb-4">
-                                                        <h3 class="text-white font-medium text-sm mb-2 line-clamp-2">{{
-                                                            task.params.prompt.length > 20 ? task.params.prompt.slice(0, 20)
-                                                            + '···' : task.params.prompt }}</h3>
-                                                        <div
-                                                            class="flex items-center justify-between text-xs text-gray-500">
-                                                                <span>{{ task.model_cls }}</span>
-                                                                <span>{{ getRelativeTime(task.create_t) }}</span>
-                                        </div>
-
+                        <!-- 任务信息 - Apple 风格 -->
+                        <div class="px-4 py-4">
+                            <h3 class="text-[#1d1d1f] dark:text-[#f5f5f7] font-medium text-sm mb-2 line-clamp-2 tracking-tight">
+                                {{ task.params.prompt.length > 50 ? task.params.prompt.slice(0, 50) + '...' : task.params.prompt }}
+                            </h3>
+                            <div class="flex items-center justify-between text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">
+                                <span class="truncate max-w-[60%]">{{ task.model_cls }}</span>
+                                <span class="flex-shrink-0">{{ getRelativeTime(task.create_t) }}</span>
                                     </div>
                                 </div>
                                             </div>
@@ -652,5 +665,17 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                 </div>
                             </div>
                         </div>
+
+                    <!-- GitHub 仓库链接 - Apple 极简风格 -->
+                    <div class="fixed bottom-6 right-6 z-50">
+                        <a href="https://github.com/ModelTC/LightX2V"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           class="flex items-center gap-2.5 px-4 py-2.5 bg-white/85 dark:bg-[#1e1e1e]/85 backdrop-blur-[40px] border border-black/10 dark:border-white/10 rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] hover:shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.4)] hover:scale-105 active:scale-100 transition-all duration-200 group"
+                           title="Star us on GitHub">
+                            <i class="fab fa-github text-lg text-[#1d1d1f] dark:text-[#f5f5f7] transition-transform duration-200 group-hover:rotate-12"></i>
+                            <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">LightX2V</span>
+                            <i class="fas fa-external-link-alt text-xs text-[#86868b] dark:text-[#98989d] transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"></i>
+                        </a>
                     </div>
 </template>

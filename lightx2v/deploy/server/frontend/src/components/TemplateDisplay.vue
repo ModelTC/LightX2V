@@ -125,21 +125,22 @@ onMounted(() => {
 </script>
 
 <template>
+  <!-- Apple 极简风格模板展示 -->
   <div class="template-display">
-    <!-- 瀑布流布局 -->
+    <!-- 瀑布流布局 - Apple 风格 -->
     <div v-if="layout === 'waterfall'" class="waterfall-layout">
       <div class="columns-2 md:columns-2 lg:columns-3 xl:columns-3 gap-4">
         <div v-for="item in templates" :key="item.task_id"
-             class="break-inside-avoid mb-4 group relative bg-dark-light/50 rounded-xl overflow-hidden border border-gray-700/30 hover:border-laser-purple/50 transition-all duration-300 hover:shadow-laser/30 hover:bg-dark-light/70">
+             class="break-inside-avoid mb-4 group relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/30 dark:hover:border-[color:var(--brand-primary-light)]/30 hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200 hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.2)]">
           <!-- 视频缩略图区域 -->
-          <div class="cursor-pointer bg-gray-800 relative flex flex-col"
+          <div class="cursor-pointer bg-black/2 dark:bg-white/2 relative flex flex-col"
                @click="showActions ? previewTemplateDetail(item) : null"
                :title="showActions ? t('viewTemplateDetail') : ''">
             <!-- 视频预览 -->
             <video v-if="item?.outputs?.output_video"
                    :src="getTemplateFileUrl(item.outputs.output_video,'videos')"
                    :poster="getTemplateFileUrl(item.inputs.input_image,'images')"
-                   class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                   class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                    preload="auto" playsinline webkit-playsinline
                    @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
                    @loadeddata="onVideoLoaded($event)"
@@ -149,35 +150,35 @@ onMounted(() => {
             <img v-else
                  :src="getTemplateFileUrl(item.inputs.input_image,'images')"
                  :alt="item.params?.prompt || '模板图片'"
-                 class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                 class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                  @error="handleThumbnailError" />
-            <!-- 移动端播放按钮 -->
+            <!-- 移动端播放按钮 - Apple 风格 -->
             <button v-if="item?.outputs?.output_video"
                     @click.stop="toggleVideoPlay($event)"
-                    class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
+                    class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.2)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 transition-all duration-200 z-20">
               <i class="fas fa-play text-sm"></i>
             </button>
-            <!-- 悬浮操作按钮（仅当 showActions 为 true 时显示） -->
+            <!-- 悬浮操作按钮（仅当 showActions 为 true 时显示）- Apple 风格 -->
             <div v-if="showActions"
                  class="hidden md:flex absolute bottom-3 left-1/2 transform -translate-x-1/2 items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-10 w-full">
-              <div class="flex space-x-2 pointer-events-auto">
+              <div class="flex gap-2 pointer-events-auto">
                 <button @click.stop="applyTemplateImage(item)"
-                        class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                         :title="t('applyImage')">
                   <i class="fas fa-image text-sm"></i>
                 </button>
                 <button @click.stop="applyTemplateAudio(item)"
-                        class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                         :title="t('applyAudio')">
                   <i class="fas fa-music text-sm"></i>
                 </button>
                 <button @click.stop="useTemplate(item)"
-                        class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                         :title="t('useTemplate')">
                   <i class="fas fa-clone text-sm"></i>
                 </button>
                 <button @click.stop="copyShareLink(item.task_id, 'template')"
-                        class="w-10 h-10 rounded-full bg-blue-500 backdrop-blur-sm flex items-center justify-center text-white hover:bg-blue-600 transition-colors"
+                        class="w-10 h-10 rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.1)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.3)] flex items-center justify-center text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 active:scale-100 transition-all duration-200"
                         :title="t('shareTemplate')">
                   <i class="fas fa-share-alt text-sm"></i>
                 </button>
@@ -188,7 +189,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 网格布局 -->
+    <!-- 网格布局 - Apple 风格 -->
     <div v-else class="grid-layout">
       <div class="relative min-h-[400px] lg:min-h-[600px]">
         <!-- 随机列 -->
@@ -200,18 +201,18 @@ onMounted(() => {
                top: column.top,
                animationDelay: `${columnIndex * 0.2}s`
              }">
-          <!-- 列内的模版卡片 -->
+          <!-- 列内的模版卡片 - Apple 风格 -->
           <div v-for="item in column.templates" :key="item.task_id"
-               class="mb-3 group relative bg-dark-light rounded-xl overflow-hidden border border-gray-700/50 hover:border-laser-purple/40 transition-all duration-300 hover:shadow-laser/20">
+               class="mb-3 group relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/30 dark:hover:border-[color:var(--brand-primary-light)]/30 hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200 hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.2)]">
             <!-- 视频缩略图区域 -->
-            <div class="cursor-pointer bg-gray-800 relative flex flex-col"
+            <div class="cursor-pointer bg-black/2 dark:bg-white/2 relative flex flex-col"
                  @click="showActions ? previewTemplateDetail(item) : null"
                  :title="showActions ? t('viewTemplateDetail') : ''">
               <!-- 视频预览 -->
               <video v-if="item?.outputs?.output_video"
                      :src="getTemplateFileUrl(item.outputs.output_video,'videos')"
                      :poster="getTemplateFileUrl(item.inputs.input_image,'images')"
-                     class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                     class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                      preload="auto" playsinline webkit-playsinline
                      @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
                      @loadeddata="onVideoLoaded($event)"
@@ -221,30 +222,30 @@ onMounted(() => {
               <img v-else
                    :src="getTemplateFileUrl(item.inputs.input_image,'images')"
                    :alt="item.params?.prompt || '模板图片'"
-                   class="w-full h-auto object-contain group-hover:scale-105 transition-transform duration-300"
+                   class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                    @error="handleThumbnailError" />
-              <!-- 移动端播放按钮 -->
+              <!-- 移动端播放按钮 - Apple 风格 -->
               <button v-if="item?.outputs?.output_video"
                       @click.stop="toggleVideoPlay($event)"
-                      class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors z-20">
+                      class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.2)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 transition-all duration-200 z-20">
                 <i class="fas fa-play text-sm"></i>
               </button>
-              <!-- 悬浮操作按钮（仅当 showActions 为 true 时显示） -->
+              <!-- 悬浮操作按钮（仅当 showActions 为 true 时显示）- Apple 风格 -->
               <div v-if="showActions"
                    class="hidden md:flex absolute bottom-3 left-1/2 transform -translate-x-1/2 items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-10 w-full">
-                <div class="flex space-x-3 pointer-events-auto">
+                <div class="flex gap-2 pointer-events-auto">
                   <button @click.stop="applyTemplateImage(item)"
-                          class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                          class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                           :title="t('applyImage')">
                     <i class="fas fa-image text-sm"></i>
                   </button>
                   <button @click.stop="applyTemplateAudio(item)"
-                          class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                          class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                           :title="t('applyAudio')">
                     <i class="fas fa-music text-sm"></i>
                   </button>
                   <button @click.stop="useTemplate(item)"
-                          class="w-10 h-10 rounded-full bg-laser-purple backdrop-blur-sm flex items-center justify-center text-white hover:bg-laser-purple transition-colors"
+                          class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
                           :title="t('useTemplate')">
                     <i class="fas fa-clone text-sm"></i>
                   </button>

@@ -11,10 +11,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import torch
 from loguru import logger
-from lora_loader import LoRALoader
+
+try:
+    from lora_loader import LoRALoader
+except ImportError:
+    pass
+import sys
+from pathlib import Path
+
 from safetensors import safe_open
 from safetensors import torch as st
 from tqdm import tqdm
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
+from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
+from tools.convert.quant import *
 
 
 def get_key_mapping_rules(direction, model_type):
@@ -349,7 +360,17 @@ def quantize_tensor(w, w_bit=8, dtype=torch.int8, comfyui_mode=False):
 
 
 def quantize_model(
-    weights, w_bit=8, target_keys=["attn", "ffn"], adapter_keys=None, key_idx=2, ignore_key=None, linear_dtype=torch.int8, non_linear_dtype=torch.float, comfyui_mode=False, comfyui_keys=[]
+    weights,
+    w_bit=8,
+    target_keys=["attn", "ffn"],
+    adapter_keys=None,
+    key_idx=2,
+    ignore_key=None,
+    linear_dtype=torch.int8,
+    non_linear_dtype=torch.float,
+    comfyui_mode=False,
+    comfyui_keys=[],
+    linear_quant_type=None,
 ):
     """
     Quantize model weights in-place
@@ -390,7 +411,7 @@ def quantize_model(
             # Check if key matches target modules
             parts = key.split(".")
 
-            if comfyui_mode and key in comfyui_keys:
+            if comfyui_mode and (comfyui_keys is not None and key in comfyui_keys):
                 pass
             elif len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
                 if adapter_keys is None:
@@ -414,7 +435,13 @@ def quantize_model(
             original_size += original_tensor_size
 
             # Quantize tensor and store results
-            w_q, scales = quantize_tensor(tensor, w_bit, linear_dtype, comfyui_mode)
+            if linear_quant_type:
+                quantizer = CONVERT_WEIGHT_REGISTER[linear_quant_type](tensor)
+                w_q, scales, extra = quantizer.weight_quant_func(tensor)
+                weight_global_scale = extra.get("weight_global_scale", None)  # For nvfp4
+            else:
+                w_q, scales = quantize_tensor(tensor, w_bit, linear_dtype, comfyui_mode)
+                weight_global_scale = None
 
             # Replace original tensor and store scales
             weights[key] = w_q
@@ -422,6 +449,8 @@ def quantize_model(
                 weights[key.replace(".weight", ".scale_weight")] = scales
             else:
                 weights[key + "_scale"] = scales
+            if weight_global_scale:
+                weights[key + "_global_scale"] = weight_global_scale
 
             quantized_tensor_size = w_q.numel() * w_q.element_size()
             scale_size = scales.numel() * scales.element_size()
@@ -622,6 +651,7 @@ def convert_weights(args):
                 non_linear_dtype=args.non_linear_dtype,
                 comfyui_mode=args.comfyui_mode,
                 comfyui_keys=args.comfyui_keys,
+                linear_quant_type=args.linear_quant_type,
             )
 
     os.makedirs(args.output, exist_ok=True)
@@ -791,6 +821,12 @@ def main():
         "--linear_dtype",
         type=str,
         choices=["torch.int8", "torch.float8_e4m3fn"],
+        help="Data type for linear",
+    )
+    parser.add_argument(
+        "--linear_quant_type",
+        type=str,
+        choices=["INT8", "FP8", "NVFP4", "MXFP4", "MXFP6", "MXFP8"],
         help="Data type for linear",
     )
     parser.add_argument(

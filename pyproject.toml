@@ -1,3 +1,87 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightx2v"
+version = "0.1.0"
+authors = [
+    {name = "LightX2V Contributors"},
+]
+description = "LightX2V: Light Video Generation Inference Framework"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Video",
+]
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "torch<=2.8.0",
+    "torchvision<=0.23.0",
+    "torchaudio<=2.8.0",
+    "diffusers",
+    "transformers",
+    "tokenizers",
+    "tqdm",
+    "accelerate",
+    "safetensors",
+    "opencv-python",
+    "imageio",
+    "imageio-ffmpeg",
+    "einops",
+    "loguru",
+    "sgl-kernel",
+    "qtorch",
+    "ftfy",
+    "gradio",
+    "aiohttp",
+    "pydantic",
+    "prometheus-client",
+    "gguf",
+    "vllm",
+    "fastapi",
+    "uvicorn",
+    "PyJWT",
+    "requests",
+    "aio-pika",
+    "asyncpg>=0.27.0",
+    "aioboto3>=12.0.0",
+    "alibabacloud_dypnsapi20170525==1.2.2",
+    "redis==6.4.0",
+    "tos",
+    "decord",
+    "av",
+]
+
+[project.urls]
+Homepage = "https://github.com/ModelTC/LightX2V"
+Documentation = "https://lightx2v-en.readthedocs.io/en/latest/"
+Repository = "https://github.com/ModelTC/LightX2V"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["lightx2v*"]
+exclude = ["lightx2v_kernel*"]
+
 [tool.ruff]
 exclude = [
     ".git",

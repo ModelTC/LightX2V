@@ -16,7 +16,6 @@
     "offload_granularity": "block",
     "offload_ratio": 1,
     "t5_cpu_offload": true,
-    "t5_offload_granularity": "model",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-sgl",
     "clip_cpu_offload": false,

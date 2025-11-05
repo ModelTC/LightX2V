@@ -21,6 +21,8 @@ class WanTransformerWeights(WeightModule):
         self.mm_type = config.get("dit_quant_scheme", "Default")
         if self.mm_type != "Default":
             assert config.get("dit_quantized") is True
+        if config.get("do_mm_calib", False):
+            self.mm_type = "Calib"
         self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
         self.add_module("blocks", self.blocks)
 
@@ -190,6 +192,8 @@ class WanSelfAttention(WeightModule):
                 context_length=self.config.get("svg_context_length", 0),
                 sparsity=self.config.get("svg_sparsity", 0.25),
             )
+        if self.config["self_attn_1_type"] in ["svg_attn", "nbhd_attn"]:
+            attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
