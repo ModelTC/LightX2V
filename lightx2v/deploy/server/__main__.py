@@ -6,6 +6,7 @@ import os
 import tempfile
 import traceback
 import uuid
+import copy
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -928,13 +929,17 @@ async def api_v1_share_get(share_id: str):
 
 
 @app.get("/api/v1/voices/list")
-async def api_v1_voices_list():
+async def api_v1_voices_list(request: Request):
     try:
+        version = request.query_params.get("version", "all")
         if volcengine_tts_client is None:
             return error_response("Volcengine TTS client not loaded", 500)
         voices = volcengine_tts_client.get_voice_list()
         if voices is None:
             return error_response("No voice list found", 404)
+        if version != "all":
+            voices = copy.deepcopy(voices)
+            voices["voices"] = [v for v in voices["voices"] if v["version"] == version]
         return voices
     except Exception as e:
         traceback.print_exc()

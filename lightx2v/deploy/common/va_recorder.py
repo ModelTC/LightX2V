@@ -415,7 +415,10 @@ class VARecorder:
         with self.stream_buffer_lock:
             self.stream_buffer = self.stream_buffer[:size]
             logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
-            return self.stream_buffer[-1][2] # return the last video tensor
+            if len(self.stream_buffer) > 0:
+                return self.stream_buffer[-1][2] # return the last video tensor
+            else:
+                return None
 
     def schedule_stream_buffer(self):
         schedule_interval = self.slice_frame / self.fps

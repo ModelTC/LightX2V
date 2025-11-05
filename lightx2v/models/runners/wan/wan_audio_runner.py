@@ -723,17 +723,28 @@ class WanAudioRunner(WanRunner):  # type:ignore
             audio_sr = self.config.get("audio_sr", 16000)
             prev_frames = self.config.get("prev_frame_length", 5)
             onmi_work_dir = os.getenv("OMNI_WORK_DIR", None)
-            ReaderClass = OmniVAReader if onmi_work_dir else VAReader
-            self.va_reader = ReaderClass(
-                rank=rank,
-                world_size=world_size,
-                stream_url=audio_path["data"],
-                sample_rate=audio_sr,
-                segment_duration=max_num_frames / target_fps,
-                prev_duration=prev_frames / target_fps,
-                target_rank=1,
-                model_runner=self,
+            if onmi_work_dir:
+                self.va_reader = OmniVAReader(
+                    rank=rank,
+                    world_size=world_size,
+                    stream_url=audio_path["data"],
+                    sample_rate=audio_sr,
+                    segment_duration=max_num_frames / target_fps,
+                    prev_duration=prev_frames / target_fps,
+                    target_rank=1,
+                    model_runner=self,
+                    huoshan_tts_voice_type=audio_path.get("huoshan_tts_voice_type", None),
             )
+            else:
+                self.va_reader = VAReader(
+                    rank=rank,
+                    world_size=world_size,
+                    stream_url=audio_path["data"],
+                    sample_rate=audio_sr,
+                    segment_duration=max_num_frames / target_fps,
+                    prev_duration=prev_frames / target_fps,
+                    target_rank=1,
+                )
 
     def run_main(self, total_steps=None):
         try:
@@ -771,6 +782,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             min_stay_queue_num = est_infer_end_idx * 2 + 1
             gen_tensor = torch.zeros((1, 3, self.prev_frame_length, tgt_h, tgt_w), dtype=torch.float, device="cuda")
             stream_len_tensor = torch.tensor([0], dtype=torch.int32, device="cuda")
+            gen_flag_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
 
             while True:
                 with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
@@ -781,10 +793,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
                         if rank == self.target_recorder_rank:
                             logger.warning(f"runner recv immediate switch, truncate stream buffer")
                             gen = self.va_recorder.truncate_stream_buffer(est_infer_end_idx)
-                            gen_tensor.copy_(gen)
-                        dist.broadcast(gen_tensor, src=self.target_recorder_rank)
-                        self.prev_video = gen_tensor
-
+                            if gen is not None:
+                                gen_flag_tensor.fill_(1)
+                                gen_tensor.copy_(gen)
+                            else:
+                                gen_flag_tensor.fill_(0)
+                        dist.broadcast(gen_flag_tensor, src=self.target_recorder_rank)
+                        if gen_flag_tensor.item() == 1:
+                            dist.broadcast(gen_tensor, src=self.target_recorder_rank)
+                            self.prev_video = gen_tensor
                     else:
                         # get the length of stream buffer, broadcast to all ranks
                         if rank == self.target_recorder_rank:

@@ -97,6 +97,7 @@ class ChatAdapter:
         config_schema_path: str,
         seg_duration: float,
         model_runner,
+        huoshan_tts_voice_type,
     ):
         assert os.path.exists(omni_work_dir), f"OMNI work directory {omni_work_dir} does not exist"
         self.omni_work_dir = omni_work_dir
@@ -115,6 +116,14 @@ class ChatAdapter:
             "--config-files", *config_files,
         ]
         override_config = {}
+        if huoshan_tts_voice_type is not None:
+            logger.info(f"Use Huoshan TTS voice type: {huoshan_tts_voice_type}")
+            override_config["TTS"] = {
+                "default_voice_info": {
+                    "voice_type": huoshan_tts_voice_type,
+                    "provider": "huoshan_stream_tts",
+                }
+            }
         with open(config_schema_path, "r") as f:
             schema = json.load(f)
         jsonschema.validate(instance=override_config, schema=schema)
@@ -254,6 +263,7 @@ class OmniVAReader:
         prev_duration: float = 0.3125,
         target_rank: int = 0,
         model_runner=None,
+        huoshan_tts_voice_type=None,
     ):
         self.rank = rank
         self.world_size = world_size
@@ -274,6 +284,7 @@ class OmniVAReader:
         self.audio_tensor = torch.zeros(chunk_size, dtype=torch.uint8, device="cuda")
         self.chat_adapter = None
         self.model_runner = model_runner
+        self.huoshan_tts_voice_type = huoshan_tts_voice_type
 
         assert self.audio_channels == 1, "Only mono audio is supported for OmniVAReader"
         logger.info(f"VAReader initialized for stream: {stream_url} target_rank: {self.target_rank}")
@@ -302,6 +313,7 @@ class OmniVAReader:
                 config_schema_path=self.config_schema_path,
                 seg_duration=self.segment_duration,
                 model_runner=self.model_runner,
+                huoshan_tts_voice_type=self.huoshan_tts_voice_type,
             )
             self.chat_adapter.start()
             logger.info(f"OmniVAReader {self.rank}/{self.world_size} started successfully")
