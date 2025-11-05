@@ -80,14 +80,8 @@ conda activate lightx2v
 #### Step 3: Install Dependencies
 
 ```bash
-# Install basic dependencies
 pip install -v -e .
-
-# Full dependencies
-pip install -v -e .[full]
 ```
-
-> 💡 **Note**: The Hunyuan model needs to run under transformers version 4.45.2. If you don't need to run the Hunyuan model, you can skip the transformers version restriction.
 
 #### Step 4: Install Attention Operators
 
