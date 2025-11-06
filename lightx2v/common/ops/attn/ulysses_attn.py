@@ -4,7 +4,6 @@ import torch.distributed as dist
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
-from .utils.all2all import all2all_head2seq, all2all_seq2head
 
 
 @ATTN_WEIGHT_REGISTER("ulysses")
@@ -54,9 +53,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         shard_heads = num_heads // world_size
 
         # 将 QKV 按头维度切分成 N 份,每份大小为 D/N
-        q_shards = [img_q[:, i*shard_heads:(i+1)*shard_heads, :].contiguous() for i in range(world_size)]
-        k_shards = [img_k[:, i*shard_heads:(i+1)*shard_heads, :].contiguous() for i in range(world_size)]
-        v_shards = [img_v[:, i*shard_heads:(i+1)*shard_heads, :].contiguous() for i in range(world_size)]
+        q_shards = [img_q[:, i * shard_heads : (i + 1) * shard_heads, :].contiguous() for i in range(world_size)]
+        k_shards = [img_k[:, i * shard_heads : (i + 1) * shard_heads, :].contiguous() for i in range(world_size)]
+        v_shards = [img_v[:, i * shard_heads : (i + 1) * shard_heads, :].contiguous() for i in range(world_size)]
 
         # 准备接收缓冲区
         gathered_q_shards = [None] * world_size
@@ -151,7 +150,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
 
         # 按序列维度切分成 N 份
-        attn_shards = [img_attn[i*shard_seqlen:(i+1)*shard_seqlen, :, :].contiguous() for i in range(world_size)]
+        attn_shards = [img_attn[i * shard_seqlen : (i + 1) * shard_seqlen, :, :].contiguous() for i in range(world_size)]
         # 准备接收缓冲区
         gathered_attn_shards = [None] * world_size
         for target_rank in range(world_size):
