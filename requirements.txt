@@ -1,8 +1,10 @@
 packaging
 ninja
-vllm
-torch
-torchvision
+numpy
+scipy
+torch<=2.8.0
+torchvision<=0.23.0
+torchaudio<=2.8.0
 diffusers
 transformers
 tokenizers
@@ -10,7 +12,6 @@ tqdm
 accelerate
 safetensors
 opencv-python
-numpy
 imageio
 imageio-ffmpeg
 einops
@@ -24,6 +25,8 @@ pydantic
 aio-pika
 asyncpg>=0.27.0
 aioboto3>=12.0.0
+prometheus-client
+gguf
 fastapi
 uvicorn
 PyJWT
