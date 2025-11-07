@@ -10,7 +10,7 @@ from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8, MluQuantLinearInt8
 from lightx2v.utils.utils import load_weights
 
 __all__ = [
@@ -69,6 +69,8 @@ class SelfAttention(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-tmo":
+                linear_cls = MluQuantLinearInt8
             else:
                 NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
@@ -149,6 +151,8 @@ class AttentionBlock(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-tmo":
+                linear_cls = MluQuantLinearInt8
             else:
                 NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:

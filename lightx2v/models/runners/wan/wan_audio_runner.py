@@ -843,7 +843,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if audio_adapter_offload:
             device = torch.device("cpu")
         else:
-            device = torch.device(self.init_device)
+            device = torch.device(self.config.get("run_device", "cuda"))
         audio_adapter = AudioAdapter(
             attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
