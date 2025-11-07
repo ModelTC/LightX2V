@@ -103,7 +103,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         self.device_synchronize()  # 确保CUDA操作完成
         return img_attn
 
-    def device_synchronize(self,):
+    def device_synchronize(
+        self,
+    ):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
             self.config["run_device"] = "cuda"
@@ -284,4 +286,3 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         torch.cuda.synchronize()  # 确保CUDA操作完成
         return img_attn
-

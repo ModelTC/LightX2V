@@ -856,7 +856,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quantized=self.config.get("adapter_quantized", False),
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
-            device=self.config.get("run_device", "cuda")
+            device=self.config.get("run_device", "cuda"),
         )
 
         audio_adapter.to(device)

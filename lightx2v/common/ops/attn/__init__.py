@@ -1,5 +1,5 @@
-from .nbhd_attn import NbhdAttnWeight
 from .flash_attn import FlashAttn2Weight, FlashAttn3Weight, MluFlashAttnWeight
+from .nbhd_attn import NbhdAttnWeight
 from .radial_attn import RadialAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2Weight, SageAttn3Weight

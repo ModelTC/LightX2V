@@ -78,7 +78,9 @@ class _ProfilingContext:
 
             return sync_wrapper
 
-    def device_synchronize(self,):
+    def device_synchronize(
+        self,
+    ):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         elif hasattr(torch, "mlu") and torch.mlu.is_available():
