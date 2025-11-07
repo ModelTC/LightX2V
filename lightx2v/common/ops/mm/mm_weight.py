@@ -35,19 +35,24 @@ except ImportError:
     sgl_kernel = None
 
 try:
-    import q8_kernels.functional as Q8F
+    from q8_kernels.functional.linear import q8_linear
 except ImportError:
-    Q8F = None
+    q8_linear = None
+
+try:
+    from q8_kernels.functional.linear import fp8_linear
+except ImportError:
+    fp8_linear = None
 
 try:
     import deep_gemm
 except ImportError:
     deep_gemm = None
 
-try:
-    from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
-except ModuleNotFoundError:
-    quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
+# try:
+#     from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
+# except ModuleNotFoundError:
+#     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
 try:
     import gguf
@@ -820,7 +825,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = Q8F.linear.fp8_linear(
+        output_tensor = fp8_linear(
             input_tensor_quant,
             self.weight,
             self.bias.float() if self.bias is not None else None,
@@ -850,7 +855,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = Q8F.linear.q8_linear(
+        output_tensor = q8_linear(
             input_tensor_quant,
             self.weight,
             self.bias.float() if self.bias is not None else None,
