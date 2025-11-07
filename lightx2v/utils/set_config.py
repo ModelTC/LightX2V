@@ -72,6 +72,8 @@ def set_config(args):
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
     config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
+    if config["model_cls"] == "seko_talk":
+        config["attnmap_frame_num"] += 1
 
     return config
 

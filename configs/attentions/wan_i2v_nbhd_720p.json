@@ -1,9 +1,13 @@
 {
     "infer_steps": 40,
     "target_video_length": 81,
-    "target_height": 480,
-    "target_width": 832,
+    "target_height": 720,
+    "target_width": 1280,
     "self_attn_1_type": "nbhd_attn",
+    "nbhd_attn_setting": {
+        "coefficient": [1.0, 0.5, 0.25, 0.25],
+        "min_width": 2.0
+    },
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": 5,
