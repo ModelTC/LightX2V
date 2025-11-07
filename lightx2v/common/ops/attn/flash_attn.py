@@ -1,6 +1,8 @@
 import math
 
 from loguru import logger
+import math
+
 
 try:
     import flash_attn  # noqa: F401
@@ -108,21 +110,6 @@ class MluFlashAttnWeight(AttnWeightTemplate):
         elif len(q.shape) == 4:
             bs = q.shape[0]
         softmax_scale = 1 / math.sqrt(q.shape[-1])
-        x = tmo.flash_attention(
-            q=q,
-            k=k,
-            v=v,
-            cu_seq_lens_q=cu_seqlens_q,
-            cu_seq_lens_kv=cu_seqlens_kv,
-            max_seq_len_q=max_seqlen_q,
-            max_seq_len_kv=max_seqlen_kv,
-            softmax_scale=softmax_scale,
-            return_lse=False,
-            out_dtype=q.dtype,
-            is_causal=False,
-            out=None,
-            alibi_slope=None,
-            attn_bias=None,
-        )
+        x = tmo.flash_attention(q=q,k=k,v=v,cu_seq_lens_q=cu_seqlens_q,cu_seq_lens_kv=cu_seqlens_kv,max_seq_len_q=max_seqlen_q,max_seq_len_kv=max_seqlen_kv,softmax_scale=softmax_scale,return_lse=False,out_dtype=q.dtype,is_causal=False,out=None,alibi_slope=None,attn_bias=None)
         x = x.reshape(bs * max_seqlen_q, -1)
         return x

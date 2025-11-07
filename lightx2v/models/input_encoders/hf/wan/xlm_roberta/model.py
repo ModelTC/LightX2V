@@ -10,7 +10,7 @@ from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from lightx2v.models.input_encoders.hf.q_linear import MluQuantLinearInt8, Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8, MluQuantLinearInt8
 from lightx2v.utils.utils import load_weights
 
 __all__ = [
