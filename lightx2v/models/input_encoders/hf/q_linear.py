@@ -17,9 +17,14 @@ except ModuleNotFoundError:
     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
 try:
-    import q8_kernels.functional as Q8F
+    from q8_kernels.functional.linear import q8_linear
 except ImportError:
-    Q8F = None
+    q8_linear = None
+
+try:
+    from q8_kernels.functional.linear import fp8_linear
+except ImportError:
+    fp8_linear = None
 
 
 class VllmQuantLinearInt8(nn.Module):
@@ -236,7 +241,7 @@ class Q8FQuantLinearInt8(nn.Module):
 
     def forward(self, x):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(x)
-        output_tensor = Q8F.linear.q8_linear(
+        output_tensor = q8_linear(
             input_tensor_quant,
             self.weight,
             self.bias if self.bias is not None else None,
@@ -282,7 +287,7 @@ class Q8FQuantLinearFp8(nn.Module):
 
     def forward(self, x):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(x)
-        output_tensor = Q8F.linear.fp8_linear(
+        output_tensor = fp8_linear(
             input_tensor_quant,
             self.weight,
             self.bias if self.bias is not None else None,
