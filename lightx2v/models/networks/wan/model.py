@@ -74,6 +74,7 @@ class WanModel(CompiledMethodsMixin):
                 "mxfp4",
                 "mxfp6-mxfp8",
                 "mxfp8",
+                "int8-tmo",
             ]
         self.device = device
         self._init_infer_class()
