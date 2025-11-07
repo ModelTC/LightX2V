@@ -7,4 +7,4 @@ from .spassage_attn import SageAttnWeight
 from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
-from .ulysses_attn import UlyssesAttnWeight
+from .ulysses_attn import Ulysses4090AttnWeight, UlyssesAttnWeight
