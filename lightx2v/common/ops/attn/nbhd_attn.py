@@ -11,7 +11,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .template import AttnWeightTemplate
 
 
-def generate_nbhd_mask(a, block_num, attnmap_frame_num, coefficient=[1.0, 0.5, 0.056], device="cpu"):
+def generate_nbhd_mask(a, block_num, attnmap_frame_num, coefficient=[1.0, 0.5, 0.056], min_width=1.0, device="cpu"):
     """
     a : block num per frame
     block_num : block num per col/row
@@ -21,7 +21,7 @@ def generate_nbhd_mask(a, block_num, attnmap_frame_num, coefficient=[1.0, 0.5, 0
     j_indices = torch.arange(block_num, device=device).unsqueeze(0)  # [1, block_num]
 
     assert len(coefficient) <= attnmap_frame_num, f"coefficient length {len(coefficient)} should <= attnmap_frame_num {attnmap_frame_num}"
-    width_list = [max(1.0, coefficient[i] * a) for i in range(len(coefficient))] + [1.0] * (attnmap_frame_num - len(coefficient))
+    width_list = [max(min_width, coefficient[i] * a) for i in range(len(coefficient))] + [min_width] * (attnmap_frame_num - len(coefficient))
     logger.info(f"nbhd_attn width_list: {width_list}, len={len(width_list)}")
 
     # attention sink frame: j <= a
@@ -72,6 +72,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
     k_ranges = None
     attn_type_map = None
     coefficient = [1.0, 0.5, 0.056]
+    min_width = 1.0
 
     def __init__(self):
         self.config = {}
@@ -82,7 +83,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
             return
         block_num = (seqlen + cls.block_size - 1) // cls.block_size
         block_num_per_frame = seqlen / cls.attnmap_frame_num / cls.block_size
-        mask = generate_nbhd_mask(block_num_per_frame, block_num, cls.attnmap_frame_num, coefficient=cls.coefficient, device="cpu")
+        mask = generate_nbhd_mask(block_num_per_frame, block_num, cls.attnmap_frame_num, coefficient=cls.coefficient, min_width=cls.min_width, device="cpu")
         q_ranges, k_ranges = generate_qk_ranges(mask, cls.block_size, seqlen)
         attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cuda")
         q_ranges = q_ranges.to(torch.int32).to("cuda")

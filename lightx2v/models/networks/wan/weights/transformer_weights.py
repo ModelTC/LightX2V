@@ -194,6 +194,13 @@ class WanSelfAttention(WeightModule):
             )
         if self.config["self_attn_1_type"] in ["svg_attn", "radial_attn", "nbhd_attn"]:
             attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
+        # nbhd_attn setting
+        if self.config["self_attn_1_type"] == "nbhd_attn":
+            if "nbhd_attn_setting" in self.config:
+                if "coefficient" in self.config["nbhd_attn_setting"]:
+                    attention_weights_cls.coefficient = self.config["nbhd_attn_setting"]["coefficient"]
+                if "min_width" in self.config["nbhd_attn_setting"]:
+                    attention_weights_cls.min_width = self.config["nbhd_attn_setting"]["min_width"]
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
