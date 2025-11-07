@@ -1,0 +1,26 @@
+{
+    "infer_steps": 4,
+    "target_fps": 16,
+    "video_duration": 360,
+    "audio_sr": 16000,
+    "target_video_length": 81,
+    "resize_mode": "adaptive",
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 1.0,
+    "sample_shift": 5,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "use_31_block": false,
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm",
+    "adapter_quantized": true,
+    "adapter_quant_scheme": "int8-vllm",
+    "t5_quantized": true,
+    "t5_quant_scheme": "int8-vllm",
+    "parallel": {
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
+    }
+}
