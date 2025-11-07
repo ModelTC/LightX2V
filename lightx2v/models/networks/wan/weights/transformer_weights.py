@@ -192,7 +192,7 @@ class WanSelfAttention(WeightModule):
                 context_length=self.config.get("svg_context_length", 0),
                 sparsity=self.config.get("svg_sparsity", 0.25),
             )
-        if self.config["self_attn_1_type"] in ["svg_attn", "nbhd_attn"]:
+        if self.config["self_attn_1_type"] in ["svg_attn", "radial_attn", "nbhd_attn"]:
             attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
         self.add_module("self_attn_1", attention_weights_cls())
 
