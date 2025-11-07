@@ -49,10 +49,10 @@ try:
 except ImportError:
     deep_gemm = None
 
-# try:
-#     from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
-# except ModuleNotFoundError:
-#     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
+try:
+    from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
+except ModuleNotFoundError:
+    quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
 try:
     import gguf
