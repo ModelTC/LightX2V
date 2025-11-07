@@ -1327,7 +1327,9 @@ class WanVAE:
     def decode_video(self, vid_enc):
         return self.model.decode_video(vid_enc)
 
-    def device_synchronize(self,):
+    def device_synchronize(
+        self,
+    ):
         if "cuda" in str(self.device):
             torch.cuda.synchronize()
         elif "mlu" in str(self.device):
