@@ -104,11 +104,11 @@ RUN ldconfig
 
 
 # q8f for base docker
-RUN git clone https://github.com/KONAKONA666/q8_kernels.git --depth 1
-RUN cd q8_kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
+# RUN git clone https://github.com/KONAKONA666/q8_kernels.git --depth 1
+# RUN cd q8_kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
 
 # q8f for 5090 docker
-# RUN git clone https://github.com/ModelTC/LTX-Video-Q8-Kernels.git --depth 1
-# RUN cd LTX-Video-Q8-Kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
+RUN git clone https://github.com/ModelTC/LTX-Video-Q8-Kernels.git --depth 1
+RUN cd LTX-Video-Q8-Kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
 
 WORKDIR /workspace
