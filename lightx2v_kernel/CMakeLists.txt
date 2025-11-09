@@ -26,16 +26,7 @@ if(CUTLASS_PATH)
     set(repo-cutlass_SOURCE_DIR ${CUTLASS_PATH})
     message(STATUS "Using local CUTLASS from: ${CUTLASS_PATH}")
 else()
-    message(STATUS "Start to git clone CUTLASS from GitHub...")
-    include(FetchContent)
-    FetchContent_Declare(
-        repo-cutlass
-        GIT_REPOSITORY https://github.com/NVIDIA/cutlass
-        GIT_TAG        b995f933179c22d3fe0d871c3a53d11e4681950f
-        GIT_SHALLOW    OFF
-    )
-    FetchContent_MakeAvailable(repo-cutlass)
-    message(STATUS "Using CUTLASS from ${repo-cutlass_SOURCE_DIR}")
+    message(FATAL_ERROR "CUTLASS_PATH is not set. Please manually download CUTLASS first.")
 endif()
 
 
