@@ -192,10 +192,10 @@ class WanSelfAttention(WeightModule):
                 context_length=self.config.get("svg_context_length", 0),
                 sparsity=self.config.get("svg_sparsity", 0.25),
             )
-        if self.config["self_attn_1_type"] in ["svg_attn", "radial_attn", "nbhd_attn"]:
+        if self.config["self_attn_1_type"] in ["svg_attn", "radial_attn", "nbhd_attn", "nbhd_attn_flashinfer"]:
             attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
         # nbhd_attn setting
-        if self.config["self_attn_1_type"] == "nbhd_attn":
+        if self.config["self_attn_1_type"] in ["nbhd_attn", "nbhd_attn_flashinfer"]:
             if "nbhd_attn_setting" in self.config:
                 if "coefficient" in self.config["nbhd_attn_setting"]:
                     attention_weights_cls.coefficient = self.config["nbhd_attn_setting"]["coefficient"]
