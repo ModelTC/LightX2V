@@ -107,7 +107,7 @@ class WanAudioModel(WanModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        max_audio_num_num = self.config.get("compile_max_audios", 3)
+        max_audio_num_num = self.config.get("compile_max_audios", 1)
         for audio_num in range(1, max_audio_num_num + 1):
             for shape in compile_shapes:
                 self.start_compile(shape, audio_num, with_mask=True)

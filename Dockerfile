@@ -43,9 +43,11 @@ RUN cd flash-attention && python setup.py install && rm -rf build
 
 RUN cd flash-attention/hopper && python setup.py install && rm -rf build
 
-RUN git clone https://github.com/ModelTC/SageAttention-1104.git --depth 1
+RUN git clone https://github.com/ModelTC/SageAttention.git --depth 1
 
-RUN cd SageAttention-1104 && TORCH_CUDA_ARCH_LIST="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 python setup.py install && rm -rf build
+RUN cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install --no-cache-dir -v -e .
+
+RUN git clone https://github.com/ModelTC/SageAttention-1104.git --depth 1
 
 RUN cd SageAttention-1104/sageattention3_blackwell && python setup.py install && rm -rf build
 
