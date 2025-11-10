@@ -17,6 +17,8 @@
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"
     },
+    "clip_quantized": true,
+    "clip_quant_scheme": "fp8-sgl",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
     "adapter_quantized": true,

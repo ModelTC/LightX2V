@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel AS base
 
 WORKDIR /app
 
@@ -12,18 +12,7 @@ RUN apt-get update && apt-get install -y vim tmux zip unzip bzip2 wget git git-l
     libsoup2.4-dev libnice-dev libopus-dev libvpx-dev libx264-dev libsrtp2-dev libglib2.0-dev libdrm-dev libjpeg-dev libpng-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/* && git lfs install
 
-# install miniconda with Python 3.12
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-py312_25.9.1-1-Linux-x86_64.sh -O /tmp/miniconda.sh && \
-    bash /tmp/miniconda.sh -b -p /app/miniconda && \
-    rm /tmp/miniconda.sh
-ENV PATH=/app/miniconda/bin:$PATH
-RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
-RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-
 RUN conda install conda-forge::ffmpeg=8.0.0 -y && conda clean -all -y
-
-# install torch
-RUN pip install --no-cache-dir torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
 RUN pip install --no-cache-dir packaging ninja cmake scikit-build-core uv meson ruff pre-commit fastapi uvicorn requests -U
 
