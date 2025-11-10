@@ -78,6 +78,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
         self.config = {}
 
     @classmethod
+    @torch.compiler.disable
     def prepare_mask(cls, seqlen):
         if seqlen == cls.seqlen:
             return
