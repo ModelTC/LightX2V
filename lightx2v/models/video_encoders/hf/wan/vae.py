@@ -720,6 +720,23 @@ class WanVAE_(nn.Module):
         self.clear_cache()
         return out
 
+    def cached_decode(self, z, scale):
+        # z: [b,c,t,h,w]
+        if isinstance(scale[0], torch.Tensor):
+            z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
+        else:
+            z = z / scale[1] + scale[0]
+        iter_ = z.shape[2]
+        x = self.conv2(z)
+        for i in range(iter_):
+            self._conv_idx = [0]
+            if i == 0:
+                out = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
+            else:
+                out_ = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
+                out = torch.cat([out, out_], 2)
+        return out
+
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)

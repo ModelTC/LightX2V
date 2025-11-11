@@ -15,6 +15,7 @@ class WanSFVAE:
         cpu_offload=False,
         use_2d_split=True,
         load_from_rank0=False,
+        **kwargs,
     ):
         self.dtype = dtype
         self.device = device
