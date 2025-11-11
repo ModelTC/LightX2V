@@ -5,9 +5,12 @@
     "audio_sr": 16000,
     "target_video_length": 81,
     "resize_mode": "adaptive",
-    "self_attn_1_type": "sage_attn2",
-    "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
+    "self_attn_1_type": "nbhd_attn",
+    "nbhd_attn_setting": {
+        "coefficient": [1.0, 0.25, 0.056]
+    },
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,

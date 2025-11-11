@@ -8,17 +8,16 @@ pip install scikit_build_core uv
 ```
 
 ### Build whl
-```
-MAX_JOBS=$(nproc) && CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
-uv build --wheel \
-    -Cbuild-dir=build . \
-    --verbose \
-    --color=always \
-    --no-build-isolation
-```
 
-During the above build process, the cutlass source code will be downloaded automatically. If you have already downloaded the source code, you can specify the local cutlass path:
 ```
+git clone https://github.com/NVIDIA/cutlass.git
+
+git clone https://github.com/ModelTC/LightX2V.git
+
+cd LightX2V/lightx2v_kernel
+
+# Set the /path/to/cutlass below to the absolute path of cutlass you download.
+
 MAX_JOBS=$(nproc) && CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
 uv build --wheel \
     -Cbuild-dir=build . \

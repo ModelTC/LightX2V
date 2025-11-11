@@ -55,7 +55,6 @@ dependencies = [
     "pydantic",
     "prometheus-client",
     "gguf",
-    "vllm",
     "fastapi",
     "uvicorn",
     "PyJWT",

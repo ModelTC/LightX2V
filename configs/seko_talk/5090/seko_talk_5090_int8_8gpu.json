@@ -1,3 +1,4 @@
+
 {
     "infer_steps": 4,
     "target_fps": 16,
@@ -15,9 +16,19 @@
     "cpu_offload": true,
     "offload_granularity": "block",
     "offload_ratio": 1,
-    "t5_cpu_offload": true,
+    "t5_cpu_offload": false,
     "clip_cpu_offload": false,
     "audio_encoder_cpu_offload": false,
     "audio_adapter_cpu_offload": false,
-    "vae_cpu_offload": false
+    "vae_cpu_offload": false,
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-q8f",
+    "adapter_quantized": true,
+    "adapter_quant_scheme": "int8-q8f",
+    "t5_quantized": true,
+    "t5_quant_scheme": "int8-q8f",
+    "parallel": {
+        "seq_p_size": 8,
+        "seq_p_attn_type": "ulysses"
+    }
 }
