@@ -90,3 +90,48 @@ void cutlass_scaled_mxfp8_mm_sm120(
     torch::Tensor const& B_sf,
     torch::Tensor const& alpha,
     c10::optional<torch::Tensor> const& bias);
+
+namespace lightx2v::svdq {
+
+void svdq_quantize_w4a4_act_fuse_lora_cuda(
+    c10::optional<torch::Tensor> input,
+    c10::optional<torch::Tensor> output,
+    c10::optional<torch::Tensor> oscales,
+    c10::optional<torch::Tensor> lora_down,
+    c10::optional<torch::Tensor> lora_act_out,
+    c10::optional<torch::Tensor> smooth,
+    bool fuse_glu,
+    bool fp4);
+
+void svdq_gemm_w4a4_cuda(
+    c10::optional<torch::Tensor> act,
+    c10::optional<torch::Tensor> wgt,
+    c10::optional<torch::Tensor> out,
+    c10::optional<torch::Tensor> qout,
+    c10::optional<torch::Tensor> ascales,
+    c10::optional<torch::Tensor> wscales,
+    c10::optional<torch::Tensor> oscales,
+    c10::optional<torch::Tensor> poolout,
+    c10::optional<torch::Tensor> lora_act_in,
+    c10::optional<torch::Tensor> lora_up,
+    c10::optional<torch::Tensor> lora_down,
+    c10::optional<torch::Tensor> lora_act_out,
+    c10::optional<torch::Tensor> norm_q,
+    c10::optional<torch::Tensor> norm_k,
+    c10::optional<torch::Tensor> rotary_emb,
+    c10::optional<torch::Tensor> bias,
+    c10::optional<torch::Tensor> smooth_factor,
+    c10::optional<torch::Tensor> out_vk,
+    c10::optional<torch::Tensor> out_linearattn,
+    bool act_unsigned,
+    std::vector<float> lora_scales,
+    bool fuse_silu,
+    bool fp4,
+    double alpha,
+    c10::optional<torch::Tensor> wcscales,
+    c10::optional<torch::Tensor> out_q,
+    c10::optional<torch::Tensor> out_k,
+    c10::optional<torch::Tensor> out_v,
+    int64_t attn_tokens);
+
+} // namespace lightx2v::svdq

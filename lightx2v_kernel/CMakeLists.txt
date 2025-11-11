@@ -91,6 +91,14 @@ set(SOURCES
     "csrc/gemm/mxfp6_mxfp8_scaled_mm_kernels_sm120.cu"
     "csrc/gemm/mxfp8_scaled_mm_kernels_sm120.cu"
     "csrc/common_extension.cc"
+    "csrc/svdq/kernels/zgemm/gemm_w4a4.cu"
+    "csrc/svdq/kernels/zgemm/gemm_w4a4_launch_fp16_int4.cu"
+    "csrc/svdq/kernels/zgemm/gemm_w4a4_launch_fp16_int4_fasteri2f.cu"
+    "csrc/svdq/kernels/zgemm/gemm_w4a4_launch_bf16_int4.cu"
+    "csrc/svdq/kernels/zgemm/gemm_w4a4_launch_fp16_fp4.cu"
+    "csrc/svdq/kernels/zgemm/gemm_w4a4_launch_bf16_fp4.cu"
+    "csrc/svdq/interop/torch.cpp"
+    "csrc/svdq_ops.cc"
 )
 
 Python_add_library(common_ops MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
@@ -99,5 +107,6 @@ message(STATUS "LIGHTX2V_KERNEL_CUDA_FLAGS: ${LIGHTX2V_KERNEL_CUDA_FLAGS}")
 
 target_compile_options(common_ops PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${LIGHTX2V_KERNEL_CUDA_FLAGS}>)
 target_link_libraries(common_ops PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
+target_compile_definitions(common_ops PRIVATE ENABLE_BF16=1 BUILD_NUNCHAKU=1)
 
 install(TARGETS common_ops LIBRARY DESTINATION lightx2v_kernel)

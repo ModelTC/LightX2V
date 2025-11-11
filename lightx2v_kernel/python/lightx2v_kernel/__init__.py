@@ -3,6 +3,10 @@ import os
 import platform
 from lightx2v_kernel import common_ops  # noqa: F401
 from lightx2v_kernel.version import __version__
+from lightx2v_kernel.svdq import (  # noqa: F401
+    svdq_gemm_w4a4_cuda,
+    svdq_quantize_w4a4_act_fuse_lora_cuda,
+)
 
 
 SYSTEM_ARCH = platform.machine()
