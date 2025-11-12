@@ -73,7 +73,6 @@ def set_config(args):
 
     if config["task"] not in ["t2i", "i2i"]:
         config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
-
         if config["model_cls"] == "seko_talk":
             config["attnmap_frame_num"] += 1
 
