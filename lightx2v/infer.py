@@ -96,6 +96,8 @@ def main():
     if config["parallel"]:
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(dist.get_rank())
+        _a = torch.zeros([1]).to(f"cuda:{dist.get_rank()}")
+        dist.all_reduce(_a)
         set_parallel_config(config)
 
     print_config(config)
