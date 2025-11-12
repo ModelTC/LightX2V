@@ -6,7 +6,7 @@ import torch
 def combine_data(data, num_frames=57, keyboard_dim=6, mouse=True):
     assert num_frames % 4 == 1
     keyboard_condition = torch.zeros((num_frames, keyboard_dim))
-    if mouse == True:
+    if mouse:
         mouse_condition = torch.zeros((num_frames, 2))
 
     current_frame = 0
@@ -16,22 +16,22 @@ def combine_data(data, num_frames=57, keyboard_dim=6, mouse=True):
         rd_frame = selections[random.randint(0, len(selections) - 1)]
         rd = random.randint(0, len(data) - 1)
         k = data[rd]["keyboard_condition"]
-        if mouse == True:
+        if mouse:
             m = data[rd]["mouse_condition"]
 
-        if current_frame == 0:
+        if current_frame:
             keyboard_condition[:1] = k[:1]
-            if mouse == True:
+            if mouse:
                 mouse_condition[:1] = m[:1]
             current_frame = 1
         else:
             rd_frame = min(rd_frame, num_frames - current_frame)
             repeat_time = rd_frame // 4
             keyboard_condition[current_frame : current_frame + rd_frame] = k.repeat(repeat_time, 1)
-            if mouse == True:
+            if mouse:
                 mouse_condition[current_frame : current_frame + rd_frame] = m.repeat(repeat_time, 1)
             current_frame += rd_frame
-    if mouse == True:
+    if mouse:
         return {"keyboard_condition": keyboard_condition, "mouse_condition": mouse_condition}
     return {"keyboard_condition": keyboard_condition}
 

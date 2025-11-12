@@ -7,7 +7,7 @@ try:
     import flash_attn_interface
 
     FLASH_ATTN_3_AVAILABLE = True
-except:
+except ImportError:
     from flash_attn import flash_attn_func
 
     FLASH_ATTN_3_AVAILABLE = False
@@ -292,7 +292,7 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
         freqs_cis = (self.freqs_cos, self.freqs_sin)
 
         cond1 = N_feats == tt
-        cond2 = is_causal and self.kv_cache_mouse == None
+        cond2 = is_causal and not self.kv_cache_mouse
         cond3 = (N_frames - 1) // self.vae_time_compression_ratio + 1 == current_start + self.num_frame_per_block
         assert (cond1 and ((cond2) or not is_causal)) or (cond3 and is_causal)
 
