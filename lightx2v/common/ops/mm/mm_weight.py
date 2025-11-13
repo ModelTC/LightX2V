@@ -51,7 +51,7 @@ except ImportError:
 
 try:
     from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
-except ModuleNotFoundError:
+except ImportError:
     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
 try:
@@ -61,7 +61,7 @@ except ImportError:
 
 try:
     import marlin_cuda_quant
-except ModuleNotFoundError:
+except ImportError:
     marlin_cuda_quant = None
 
 

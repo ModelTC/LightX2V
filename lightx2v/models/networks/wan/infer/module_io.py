@@ -20,3 +20,4 @@ class WanPreInferModuleOutput:
     freqs: torch.Tensor
     context: torch.Tensor
     adapter_args: Dict[str, Any] = field(default_factory=dict)
+    conditional_dict: Dict[str, Any] = field(default_factory=dict)
