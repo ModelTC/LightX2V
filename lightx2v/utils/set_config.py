@@ -1,6 +1,7 @@
 import json
 import os
 
+import torch
 import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
@@ -71,9 +72,10 @@ def set_config(args):
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
-    config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
-    if config["model_cls"] == "seko_talk":
-        config["attnmap_frame_num"] += 1
+    if config["task"] not in ["t2i", "i2i"]:
+        config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
+        if config["model_cls"] == "seko_talk":
+            config["attnmap_frame_num"] += 1
 
     return config
 
@@ -90,6 +92,9 @@ def set_parallel_config(config):
 
         if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
             config["cfg_parallel"] = True
+        # warmup dist
+        _a = torch.zeros([1]).to(f"cuda:{dist.get_rank()}")
+        dist.all_reduce(_a)
 
 
 def print_config(config):

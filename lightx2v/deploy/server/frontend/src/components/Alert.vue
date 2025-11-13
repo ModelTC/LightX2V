@@ -62,10 +62,10 @@ const handleScroll = () => {
         if (scrollY > 50) {
             // 计算Alert应该显示的位置，确保在视口内可见
             // 距离顶部80px（TopBar高度 + 一些间距）
-            alertPosition.value = { top: '80px' }
+            alertPosition.value = { top: '6rem' }
         } else {
             // 在页面顶部时，显示在固定位置
-            alertPosition.value = { top: '1rem' }
+            alertPosition.value = { top: '1.5rem' }
         }
     }, 10) // 10ms防抖延迟
 }
@@ -106,9 +106,9 @@ onUnmounted(() => {
                     @after-leave="handleAfterLeave">
                     <div v-if="alert.show"
                         :key="alert._timestamp || alert.message"
-                        class="fixed left-1/2 transform -translate-x-1/2 z-[9999] w-auto min-w-[280px] sm:min-w-[320px] max-w-[calc(100vw-3rem)] sm:max-w-xl px-6 sm:px-6 transition-all duration-500 ease-out"
-                        :style="alertPosition">
-                        <div class="alert-container">
+                        class="fixed right-6 z-[9999] w-auto min-w-[260px] sm:min-w-[300px] max-w-[calc(100vw-2.5rem)] sm:max-w-md px-4 sm:px-5 transition-all duration-500 ease-out"
+                        :style="{ top: alertPosition.top }">
+                        <div class="alert-container text-[#1d1d1f] bg-white/95 dark:text-white dark:bg-[#0d0d12]/90 dark:shadow-[0_12px_32px_rgba(0,0,0,0.6),0_4px_12px_rgba(0,0,0,0.4),0_0_0_1px_rgba(255,255,255,0.06)]">
                             <div class="alert-content">
                                 <!-- 图标 -->
                                 <div class="alert-icon-wrapper">
@@ -139,7 +139,6 @@ onUnmounted(() => {
 <style scoped>
 /* Apple 风格 Alert 容器 */
 .alert-container {
-    background: rgba(255, 255, 255, 0.95);
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     border-radius: 16px;
@@ -148,15 +147,6 @@ onUnmounted(() => {
         0 2px 4px -1px rgba(0, 0, 0, 0.06),
         0 0 0 1px rgba(0, 0, 0, 0.05);
     overflow: hidden;
-}
-
-/* 深色模式下的容器样式 */
-:global(.dark) .alert-container {
-    background: rgba(30, 30, 30, 0.95);
-    box-shadow:
-        0 4px 6px -1px rgba(0, 0, 0, 0.3),
-        0 2px 4px -1px rgba(0, 0, 0, 0.2),
-        0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 /* Alert 内容 */
@@ -178,11 +168,11 @@ onUnmounted(() => {
 /* 图标样式 */
 .alert-icon {
     font-size: 18px;
-    color: #1d1d1f;
+    color: var(--brand-primary);
 }
 
 :global(.dark) .alert-icon {
-    color: #f5f5f7;
+    color: var(--brand-primary-light);
 }
 
 /* 消息文本 */
@@ -191,13 +181,8 @@ onUnmounted(() => {
     font-size: 14px;
     font-weight: 500;
     line-height: 1.5;
-    color: #1d1d1f;
     letter-spacing: -0.01em;
     min-width: 0; /* 允许文本收缩 */
-}
-
-:global(.dark) .alert-message {
-    color: #f5f5f7;
 }
 
 /* 操作按钮和关闭按钮容器 */
@@ -273,11 +258,11 @@ onUnmounted(() => {
 }
 
 :global(.dark) .alert-action-link {
-    color: var(--brand-primary-light);
+    color: #ffffff;
 }
 
 :global(.dark) .alert-action-link:hover {
-    color: var(--brand-primary-light);
+    color: #ffffff;
 }
 
 /* 进入动画 */

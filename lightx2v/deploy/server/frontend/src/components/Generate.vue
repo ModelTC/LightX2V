@@ -2,6 +2,7 @@
 import {
             submitting,
             templateLoading,
+            templateLoadingMessage,
             // 任务类型下拉菜单
             showTaskTypeMenu,
             showModelMenu,
@@ -11,6 +12,7 @@ import {
             loginLoading,
             initLoading,
             downloadLoading,
+            downloadLoadingMessage,
 
             // 录音相关
             isRecording,
@@ -306,6 +308,39 @@ const currentFeaturedTemplates = ref([])
 // 屏幕尺寸响应式状态
 const screenSize = ref('large') // 'small' 或 'large'
 
+// 精选模版瀑布流容器高度控制
+const featuredMasonryRef = ref(null)
+const baseMasonryHeight = computed(() => (screenSize.value === 'large' ? 600 : 400))
+const masonryHeight = ref(baseMasonryHeight.value)
+
+const updateMasonryHeight = () => {
+    const container = featuredMasonryRef.value
+    if (!container) {
+        masonryHeight.value = baseMasonryHeight.value
+        return
+    }
+
+    const columnEls = container.querySelectorAll('[data-masonry-column]')
+    if (!columnEls.length) {
+        masonryHeight.value = baseMasonryHeight.value
+        return
+    }
+
+    let maxBottom = 0
+    columnEls.forEach((column) => {
+        const bottom = column.offsetTop + column.offsetHeight
+        if (bottom > maxBottom) {
+            maxBottom = bottom
+        }
+    })
+
+    masonryHeight.value = Math.max(Math.ceil(maxBottom) + 32, baseMasonryHeight.value)
+}
+
+const scheduleMasonryUpdate = () => {
+    requestAnimationFrame(() => updateMasonryHeight())
+}
+
 // 拖拽状态
 const isDragOver = ref(false)
 
@@ -348,17 +383,51 @@ const handleSubmitTask = async () => {
     }
 }
 
+const handleMasonryVideoLoaded = (event) => {
+    onVideoLoaded(event)
+    scheduleMasonryUpdate()
+}
+
+const handleMasonryVideoEnded = (event) => {
+    onVideoEnded(event)
+    scheduleMasonryUpdate()
+}
+
+const handleMasonryVideoError = (event) => {
+    onVideoError(event)
+    scheduleMasonryUpdate()
+}
+
+const handleMasonryImageLoaded = () => {
+    scheduleMasonryUpdate()
+}
+
+const handleMasonryImageError = (event) => {
+    handleThumbnailError(event)
+    scheduleMasonryUpdate()
+}
+
 // 滚动到任务区域
 const scrollToTaskArea = () => {
     const taskArea = document.querySelector('.task-carousel')
     if (taskArea) {
         taskArea.scrollIntoView({
             behavior: 'smooth',
-            block: 'center'
+            block: 'start'
         })
     }
 }
 
+// 滚动到生成区域
+const scrollToCreationArea = () => {
+    const creationArea = document.querySelector('#task-creator')
+    if (creationArea) {
+        creationArea.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+        })
+    }
+}
 
 // 包装 useTemplate 函数，在应用模板后滚动到生成区域
 const handleUseTemplate = async (item) => {
@@ -367,17 +436,35 @@ const handleUseTemplate = async (item) => {
     await nextTick()
     // 延迟一下确保展开动画完成
     setTimeout(() => {
-        // 滚动到顶部
-        const mainScrollable = document.querySelector('.main-scrollbar');
-        if (mainScrollable) {
-            mainScrollable.scrollTo({
-                top: 0,
-                behavior: 'smooth'
-            });
-        }
+        scrollToCreationArea()
     }, 100)
 }
 
+// 处理语音合成完成后的回调
+const handleTTSComplete = (audioBlob) => {
+    // 创建File对象
+    const audioFile = new File([audioBlob], 'tts_audio.mp3', { type: 'audio/mpeg' })
+
+    // 模拟文件上传事件
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(audioFile)
+    const fileList = dataTransfer.files
+
+    const event = {
+        target: {
+            files: fileList
+        }
+    }
+
+    // 处理音频上传
+    handleAudioUpload(event)
+
+    // 关闭模态框
+    showVoiceTTSModal.value = false
+
+    // 显示成功提示
+    showAlert('语音合成完成，已自动添加到音频素材', 'success')
+}
 
 // 跳转到项目页面
 const goToProjects = () => {
@@ -496,6 +583,22 @@ const templatesWithRandomColumns = computed(() => {
     return generateRandomColumnLayout(currentFeaturedTemplates.value)
 })
 
+watch(currentFeaturedTemplates, async () => {
+    masonryHeight.value = baseMasonryHeight.value
+    await nextTick()
+    scheduleMasonryUpdate()
+}, { deep: true })
+
+watch(templatesWithRandomColumns, async () => {
+    await nextTick()
+    scheduleMasonryUpdate()
+})
+
+watch(baseMasonryHeight, (value) => {
+    masonryHeight.value = value
+    scheduleMasonryUpdate()
+})
+
 // 屏幕尺寸监听器
 const updateScreenSize = () => {
     screenSize.value = window.innerWidth >= 1024 ? 'large' : 'small'
@@ -568,6 +671,7 @@ onMounted(async () => {
     // 添加屏幕尺寸监听器
     resizeHandler = () => {
         updateScreenSize()
+        scheduleMasonryUpdate()
     }
     window.addEventListener('resize', resizeHandler)
 
@@ -576,6 +680,8 @@ onMounted(async () => {
     // 获取随机精选模版
     const randomTemplates = await getRandomFeaturedTemplates(10) // 获取10个模版
     currentFeaturedTemplates.value = randomTemplates
+    await nextTick()
+    scheduleMasonryUpdate()
 })
 
 // 拖拽处理函数
@@ -633,7 +739,7 @@ const handleAudioDrop = (e) => {
     isDragOver.value = false
 
     const files = Array.from(e.dataTransfer.files)
-    const audioFile = files.find(file => file.type.startsWith('audio/'))
+    const audioFile = files.find(file => file.type.startsWith('audio/') || file.type.startsWith('video/'))
 
     if (audioFile) {
         // 创建FileList对象来模拟input[type="file"]的change事件
@@ -649,9 +755,9 @@ const handleAudioDrop = (e) => {
         }
 
         handleAudioUpload(event)
-        showAlert('音频拖拽上传成功', 'success')
+        showAlert('音频/视频拖拽上传成功', 'success')
     } else {
-        showAlert('请拖拽音频文件', 'warning')
+        showAlert('请拖拽音频或视频文件', 'warning')
     }
 }
 
@@ -750,6 +856,23 @@ onUnmounted(() => {
 
 </script>
 <template>
+    <div
+      v-if="templateLoading || downloadLoading"
+      class="fixed right-6 top-24 sm:top-20 z-[9999] w-auto min-w-[260px] sm:min-w-[300px] max-w-[calc(100vw-2.5rem)] sm:max-w-md px-4 sm:px-5 transition-all duration-300 ease-out"
+    >
+      <div
+        class="pointer-events-auto text-[#1d1d1f] bg-white/95 dark:text-white dark:bg-[#0d0d12]/90 backdrop-blur-[20px] backdrop-saturate-[180%] border border-black/8 dark:border-white/8 rounded-2xl shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1),0_2px_4px_-1px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.05)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.6),0_4px_12px_rgba(0,0,0,0.4),0_0_0_1px_rgba(255,255,255,0.06)]"
+      >
+        <div class="flex items-center gap-3 px-5 py-3">
+          <div class="flex items-center justify-center w-9 h-9 rounded-full bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]">
+            <i class="fas fa-spinner fa-spin text-sm"></i>
+          </div>
+          <div class="flex-1 text-sm font-medium tracking-tight">
+            {{ templateLoading ? (templateLoadingMessage || t('prefillLoadingDefault')) : (downloadLoadingMessage || t('downloadPreparing')) }}
+          </div>
+        </div>
+      </div>
+    </div>
                 <!-- 主内容区域 - 响应式布局 -->
                 <div class="flex-1 flex flex-col min-h-0 mobile-content">
                     <!-- 生成视频区域 -->
@@ -759,7 +882,7 @@ onUnmounted(() => {
 
 
                         <!-- 任务创建面板 -->
-                        <div class="max-w-4xl mx-auto min-h-[80vh] flex flex-col" id="task-creator">
+                        <div class="max-w-4xl mx-auto min-h-[100vh] flex flex-col" id="task-creator">
                             <!-- 合并的创作区域 -->
                             <div class="creation-area-container flex-1 flex flex-col justify-center">
 
@@ -953,7 +1076,16 @@ onUnmounted(() => {
                                                 >
                                                 <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('uploadAudio') }}</p>
                                                 <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">{{ t('supportedAudioFormats') }}</p>
-                                            <div class="flex items-center justify-center gap-3">
+
+                                                <div class="flex items-center justify-center gap-3">
+                                                    <div class="flex flex-col items-center gap-2">
+                                                        <button @click.stop="showVoiceTTSModal = true"
+                                                            class="w-12 h-12 flex items-center justify-center bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border border-black/8 dark:border-white/8 text-white rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100"
+                                                            :title="t('textToSpeech')">
+                                                            <i class="fas fa-volume-up text-base"></i>
+                                                        </button>
+                                                        <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('textToSpeech') }}</span>
+                                                    </div>
                                                     <div class="flex flex-col items-center gap-2">
                                                         <button
                                                             class="w-12 h-12 flex items-center justify-center bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.3)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100"
@@ -980,14 +1112,6 @@ onUnmounted(() => {
                                                         <i class="fas fa-microphone text-base" :class="{ 'animate-pulse': isRecording }"></i>
                                                     </button>
                                                         <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ isRecording ? formatRecordingDuration(recordingDuration) : t('recordAudio') }}</span>
-                                                    </div>
-                                                    <div class="flex flex-col items-center gap-2">
-                                                        <button @click.stop="showVoiceTTSModal = true"
-                                                            class="w-12 h-12 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 text-[#1d1d1f] dark:text-[#f5f5f7] rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100"
-                                                            :title="t(' textToSpeech ')">
-                                                            <i class="fas fa-volume-up text-base"></i>
-                                                        </button>
-                                                        <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('textToSpeech') }}</span>
                                                     </div>
 
                                         </div>
@@ -1062,7 +1186,7 @@ onUnmounted(() => {
                                                 ></audio>
                                             </div>
 
-                                            <input type="file" ref="audioInput" @change="handleAudioUpload" accept="audio/*"
+                                            <input type="file" ref="audioInput" @change="handleAudioUpload" accept="audio/*,video/*" data-role="audio-input"
                                             style="display: none;">
                                         </div>
                                     </div>
@@ -1084,10 +1208,10 @@ onUnmounted(() => {
                                         </div>
                                         <div class="relative">
                                             <textarea v-model="getCurrentForm().prompt"
-                                                class="relative w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl px-5 py-4 text-[15px] text-[#1d1d1f] dark:text-[#f5f5f7] min-h-[120px] transition-all duration-200 resize-none main-scrollbar placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 focus:shadow-[0_4px_16px_rgba(var(--brand-primary-rgb),0.12)] dark:focus:shadow-[0_4px_16px_rgba(var(--brand-primary-light-rgb),0.2)]"
+                                                class="relative w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl px-5 py-4 text-[15px] text-[#1d1d1f] dark:text-[#f5f5f7] transition-all duration-200 resize-none main-scrollbar placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 focus:shadow-[0_4px_16px_rgba(var(--brand-primary-rgb),0.12)] dark:focus:shadow-[0_4px_16px_rgba(var(--brand-primary-light-rgb),0.2)]"
                                                 :placeholder="getPromptPlaceholder()"
-                                                rows="4"
-                                                maxlength="500"
+                                                rows="2"
+                                                maxlength="1000"
                                                 required></textarea>
                                         </div>
 
@@ -1102,7 +1226,7 @@ onUnmounted(() => {
                                 <!-- 提交按钮 - Apple 极简风格 -->
                                 <div class="flex justify-center mt-8">
                                     <button @click="handleSubmitTask" :disabled="submitting || templateLoading"
-                                            class="cursor-pointer relative bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-full px-10 py-4 text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.12)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)] active:scale-100 transition-all duration-200 ease-out min-w-[250px] max-w-[400px] tracking-tight disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none"
+                                            class="gap-3 cursor-pointer relative bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-full px-10 py-4 text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.12)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)] active:scale-100 transition-all duration-200 ease-out min-w-[250px] max-w-[400px] tracking-tight disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none"
                                             :class="{ 'disabled': submitting || templateLoading }">
 
                                         <i v-if="submitting" class="fas fa-spinner fa-spin text-lg mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
@@ -1171,9 +1295,13 @@ onUnmounted(() => {
                             </div>
 
                             <!-- 精选模版随机列布局 - Apple 风格 -->
-                            <div class="relative min-h-[400px] lg:min-h-[600px]">
+                            <div
+                                ref="featuredMasonryRef"
+                                class="relative"
+                                :style="{ height: masonryHeight + 'px' }">
                             <!-- 随机列 -->
                             <div v-for="(column, columnIndex) in templatesWithRandomColumns.columns" :key="columnIndex"
+                                    data-masonry-column
                                     class="absolute transition-all duration-500 animate-fade-in"
                                     :style="{
                                         width: column.width,
@@ -1195,15 +1323,16 @@ onUnmounted(() => {
                                             class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                                             preload="auto" playsinline webkit-playsinline
                                             @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
-                                            @loadeddata="onVideoLoaded($event)"
-                                            @ended="onVideoEnded($event)"
-                                            @error="onVideoError($event)"></video>
+                                            @loadeddata="handleMasonryVideoLoaded($event)"
+                                            @ended="handleMasonryVideoEnded($event)"
+                                            @error="handleMasonryVideoError($event)"></video>
                                     <!-- 图片缩略图 -->
                                         <img v-else
                                         :src="getTemplateFileUrl(item.inputs.input_image,'images')"
                                         :alt="item.params?.prompt || '模板图片'"
                                         class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
-                                        @error="handleThumbnailError" />
+                                        @load="handleMasonryImageLoaded"
+                                        @error="handleMasonryImageError" />
                                         <!-- 移动端播放按钮 - Apple 风格 -->
                                         <button v-if="item?.outputs?.output_video"
                                             @click.stop="toggleVideoPlay($event)"
@@ -1240,18 +1369,6 @@ onUnmounted(() => {
             </div>
 
 
-                <!-- GitHub 仓库链接 - Apple 极简风格 -->
-                <div class="fixed bottom-6 right-6 z-50">
-                    <a href="https://github.com/ModelTC/LightX2V"
-                       target="_blank"
-                       rel="noopener noreferrer"
-                       class="flex items-center gap-2.5 px-4 py-2.5 bg-white/85 dark:bg-[#1e1e1e]/85 backdrop-blur-[40px] border border-black/10 dark:border-white/10 rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] hover:shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.4)] hover:scale-105 active:scale-100 transition-all duration-200 group"
-                       title="Star us on GitHub">
-                        <i class="fab fa-github text-lg text-[#1d1d1f] dark:text-[#f5f5f7] transition-transform duration-200 group-hover:rotate-12"></i>
-                        <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">LightX2V</span>
-                        <i class="fas fa-external-link-alt text-xs text-[#86868b] dark:text-[#98989d] transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"></i>
-                    </a>
-                </div>
 </template>
 
 <style scoped>

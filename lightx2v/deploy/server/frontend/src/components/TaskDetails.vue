@@ -5,7 +5,6 @@ import { showTaskDetailModal,
         closeTaskDetailModal,
         cancelTask,
         reuseTask,
-        downloadFile,
         handleDownloadFile,
         deleteTask,
         getTaskTypeName,
@@ -26,6 +25,7 @@ import { showTaskDetailModal,
         getTaskFileUrlSync,
         getTaskFileFromCache,
         getTaskFileUrl,
+        downloadLoading,
         showAlert,
         apiRequest,
         startPollingTask,
@@ -76,6 +76,31 @@ const closeWithRoute = () => {
         }
     }
     // 如果不是任务详情路由，不做任何路由跳转，保持在当前页面
+}
+
+// 滚动到生成区域（仅在 generate 页面）
+const scrollToCreationArea = () => {
+    const mainScrollable = document.querySelector('.main-scrollbar')
+    if (mainScrollable) {
+        mainScrollable.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+        })
+    }
+}
+
+// 包装 reuseTask 函数，复用任务后回到生成区域
+const handleReuseTask = () => {
+    const task = modalTask.value
+    if (!task) {
+        return
+    }
+    void reuseTask(task)
+    if (route.path === '/generate' || route.name === 'Generate') {
+        setTimeout(() => {
+            scrollToCreationArea()
+        }, 300)
+    }
 }
 
 // 键盘事件处理
@@ -303,25 +328,24 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                 <!-- 右侧信息区域 -->
                                 <div class="flex items-center justify-center">
                                     <div class="w-full max-w-[400px] aspect-[9/16] relative flex flex-col">
-                                        <!-- 右上角操作按钮 - Apple 极简风格 -->
-                                        <div class="absolute top-0 right-0 flex items-center gap-2 z-10">
-                                            <!-- 分享按钮 -->
-                                            <button @click="copyShareLink(modalTask.task_id, 'task')"
-                                                    class="w-10 h-10 flex items-center justify-center bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] border border-black/10 dark:border-white/10 rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.15)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.5)] active:scale-100 transition-all duration-200"
-                                                    :title="t('share')">
-                                                <i class="fas fa-share-alt text-xs"></i>
-                                            </button>
-                                            <!-- 删除按钮 -->
-                                            <button @click="deleteTask(modalTask.task_id, true)"
-                                                    class="w-10 h-10 flex items-center justify-center bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] border border-black/10 dark:border-white/10 rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100 transition-all duration-200"
-                                                    :title="t('delete')">
-                                                <i class="fas fa-trash text-xs"></i>
-                                            </button>
-                                        </div>
 
                                         <!-- 居中的内容区域 -->
                                         <div class="flex-1 flex items-center justify-center px-8 py-6">
                                             <div class="w-full">
+                                                <div class="flex flex-col items-center gap-3 mb-6">
+                                                    <div class="flex items-center gap-3">
+                                                        <button @click="copyShareLink(modalTask.task_id, 'task')"
+                                                            class="w-12 h-12 flex items-center justify-center bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:scale-110 active:scale-100 transition-all duration-200"
+                                                            :title="t('share')">
+                                                            <i class="fas fa-share-alt text-base"></i>
+                                                        </button>
+                                                        <button @click="deleteTask(modalTask.task_id, true)"
+                                                            class="w-12 h-12 flex items-center justify-center bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:scale-110 active:scale-100 transition-all duration-200"
+                                                            :title="t('delete')">
+                                                            <i class="fas fa-trash text-base"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
                                                 <!-- 标题 -->
                                                 <div class="text-center mb-6">
                                                     <h1 class="text-3xl sm:text-4xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-3 tracking-tight">
@@ -352,11 +376,13 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                                 <div class="space-y-2.5">
                                                     <button v-if="modalTask?.outputs?.output_video"
                                                             @click="handleDownloadFile(modalTask.task_id, 'output_video', modalTask.outputs.output_video)"
-                                                            class="w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-6 py-3 text-[15px] font-semibold text-white hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100 transition-all duration-200 ease-out tracking-tight flex items-center justify-center gap-2">
+                                                            :disabled="downloadLoading"
+                                                            class="w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-6 py-3 text-[15px] font-semibold text-white transition-all duration-200 ease-out tracking-tight flex items-center justify-center gap-2"
+                                                            :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100'">
                                                         <i class="fas fa-download text-sm"></i>
                                                         <span>{{ t('downloadVideo') }}</span>
                                                     </button>
-                                                    <button @click="reuseTask(modalTask)"
+                                                    <button @click="handleReuseTask"
                                                             class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-6 py-2.5 text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
                                                         <i class="fas fa-magic text-sm"></i>
                                                         <span>{{ t('reuseTask') }}</span>
@@ -394,7 +420,9 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                                 </div>
                                                 <button v-if="getImageMaterials().length > 0"
                                                         @click="handleDownloadFile(modalTask.task_id, 'input_image', modalTask.inputs.input_image)"
-                                                        class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
+                                                        :disabled="downloadLoading"
+                                                        class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200"
+                                                        :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-110 active:scale-100'"
                                                         :title="t('download')">
                                                     <i class="fas fa-download text-xs"></i>
                                                 </button>
@@ -423,7 +451,9 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                                 </div>
                                                 <button v-if="getAudioMaterials().length > 0"
                                                         @click="handleDownloadFile(modalTask.task_id, 'input_audio', modalTask.inputs.input_audio)"
-                                                        class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
+                                                        :disabled="downloadLoading"
+                                                        class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200"
+                                                        :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-110 active:scale-100'"
                                                         :title="t('download')">
                                                     <i class="fas fa-download text-xs"></i>
                                                 </button>
@@ -725,7 +755,7 @@ watch(() => getAudioMaterials(), (newMaterials) => {
 
                                                     <!-- 通用按钮 -->
                                                     <button v-if="['SUCCEED', 'FAILED', 'CANCEL','CREATED', 'PENDING', 'RUNNING'].includes(modalTask?.status)"
-                                                            @click="reuseTask(modalTask)"
+                                                            @click="handleReuseTask"
                                                             class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-6 py-2.5 text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
                                                         <i class="fas fa-copy text-sm"></i>
                                                         <span>{{ t('reuseTask') }}</span>
@@ -764,7 +794,9 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                             </div>
                                             <button v-if="getImageMaterials().length > 0"
                                                     @click="handleDownloadFile(modalTask.task_id, 'input_image', modalTask.inputs.input_image)"
-                                                    class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
+                                                    :disabled="downloadLoading"
+                                                    class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200"
+                                                    :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-110 active:scale-100'"
                                                     :title="t('download')">
                                                 <i class="fas fa-download text-xs"></i>
                                             </button>
@@ -793,7 +825,9 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                             </div>
                                             <button v-if="getAudioMaterials().length > 0"
                                                     @click="handleDownloadFile(modalTask.task_id, 'input_audio', modalTask.inputs.input_audio)"
-                                                    class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
+                                                    :disabled="downloadLoading"
+                                                    class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200"
+                                                    :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-110 active:scale-100'"
                                                     :title="t('download')">
                                                 <i class="fas fa-download text-xs"></i>
                                             </button>

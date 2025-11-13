@@ -9,6 +9,7 @@ import PromptTemplate from '../components/PromptTemplate.vue'
 import Voice_tts from '../components/Voice_tts.vue'
 import MediaTemplate from '../components/MediaTemplate.vue'
 import Loading from '../components/Loading.vue'
+import SiteFooter from '../components/SiteFooter.vue'
 import { useI18n } from 'vue-i18n'
 import { isLoading, showVoiceTTSModal, handleAudioUpload, showAlert } from '../utils/other'
 
@@ -59,6 +60,8 @@ const handleTTSComplete = (audioBlob) => {
           <router-view></router-view>
         </div>
       </div>
+
+      <SiteFooter />
     </div>
 
     <!-- 全局组件 -->
