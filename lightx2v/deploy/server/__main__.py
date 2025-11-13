@@ -160,6 +160,12 @@ async def root():
         return HTMLResponse(content=f.read())
 
 
+@app.get("/sitemap.xml", response_class=HTMLResponse)
+async def sitemap():
+    with open(os.path.join(os.path.dirname(__file__), "frontend", "dist", "sitemap.xml"), "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
 @app.get("/auth/login/github")
 async def github_auth(request: Request):
     client_id = auth_manager.github_client_id

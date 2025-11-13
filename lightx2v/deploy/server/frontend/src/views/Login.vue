@@ -90,6 +90,7 @@ onMounted(async () => {
         <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">LightX2V</span>
         <i class="fas fa-external-link-alt text-xs text-[#86868b] dark:text-[#98989d] transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"></i>
       </a>
+
     </div>
 
     <Alert />
@@ -99,6 +100,7 @@ onMounted(async () => {
       <Loading />
     </div>
   </div>
+
 </template>
 
 <style scoped>

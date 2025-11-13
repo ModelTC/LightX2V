@@ -4,10 +4,19 @@
     <div class="relative w-full h-full max-w-6xl max-h-[100vh] bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] backdrop-saturate-[180%] border border-black/10 dark:border-white/10 rounded-3xl shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col">
     <!-- 模态框头部 - Apple 风格 -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-black/8 dark:border-white/8 bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-[20px] flex-shrink-0">
-      <h3 class="text-xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center gap-3 tracking-tight">
-        <i class="fas fa-volume-up text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-        <span>{{ t('voiceSynthesis') }}</span>
-      </h3>
+      <div class="flex items-center gap-3">
+        <h3 class="text-xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center gap-3 tracking-tight">
+          <i class="fas fa-volume-up text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+          <span>{{ t('voiceSynthesis') }}</span>
+        </h3>
+        <button
+          @click="openHistoryPanel"
+          class="w-9 h-9 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-full transition-all duration-200 hover:scale-110 active:scale-100"
+          :title="t('ttsHistoryTitle')"
+        >
+          <i class="fas fa-history text-sm"></i>
+        </button>
+      </div>
       <div class="flex items-center gap-2">
         <!-- 应用按钮 - Apple 风格 -->
         <button
@@ -180,10 +189,20 @@
       <div class="max-w-5xl mx-auto space-y-6">
         <!-- 文本输入区域 - Apple 风格 -->
         <div>
-          <label class="block text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-3 tracking-tight">
-            <i class="fas fa-keyboard mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-            {{ t('enterTextToConvert') }}
-          </label>
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <i class="fas fa-keyboard text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+              <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('enterTextToConvert') }}</span>
+
+            <button
+              @click="openTextHistoryPanel"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
+              :title="t('ttsHistoryTabText')"
+            >
+              <i class="fas fa-history text-xs"></i>
+            </button>
+            </div>
+          </div>
           <textarea
             v-model="inputText"
             :placeholder="t('ttsPlaceholder')"
@@ -194,11 +213,21 @@
 
         <!-- 语音指令区域 - Apple 风格 -->
         <div>
-          <label class="block text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-3 tracking-tight">
-            <i class="fas fa-magic mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-            {{ t('voiceInstruction') }}
-            <span class="text-xs text-[#86868b] dark:text-[#98989d] ml-2">{{ t('voiceInstructionHint') }}</span>
-          </label>
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <i class="fas fa-magic text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+              <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('voiceInstruction') }}</span>
+              <span class="text-xs text-[#86868b] dark:text-[#98989d]">{{ t('voiceInstructionHint') }}</span>
+
+            <button
+              @click="openInstructionHistoryPanel"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
+              :title="t('ttsHistoryTabInstruction')"
+            >
+              <i class="fas fa-history text-xs"></i>
+            </button>
+            </div>
+          </div>
           <textarea
             v-model="contextText"
             :placeholder="t('voiceInstructionPlaceholder')"
@@ -210,29 +239,39 @@
         <!-- 音色选择区域 - Apple 风格 -->
         <div>
           <div class="flex items-center justify-between mb-4">
-            <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
-              <i class="fas fa-microphone-alt mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-              {{ t('selectVoice') }}
-            </label>
-            <div class="flex items-center gap-3">
-              <!-- 搜索框 - Apple 风格 -->
-              <div class="relative w-52">
-                <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[#86868b] dark:text-[#98989d] text-xs pointer-events-none z-10"></i>
-                <input
-                  v-model="searchQuery"
-                  :placeholder="t('searchVoice')"
-                  class="w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-lg py-2 pl-9 pr-3 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 transition-all duration-200"
-                  type="text"
-                />
-              </div>
+            <div class="flex items-center gap-2">
+              <i class="fas fa-microphone-alt text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+              <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('selectVoice') }}</span>
 
-              <!-- 筛选按钮 - Apple 风格 -->
-              <button @click="toggleFilterPanel"
-                class="flex items-center gap-2 px-4 py-2 bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-lg transition-all duration-200 text-sm font-medium tracking-tight">
-                <i class="fas fa-filter text-xs"></i>
-                <span>{{ t('filter') }}</span>
-              </button>
+            <button
+              @click="openVoiceHistoryPanel"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
+              :title="t('ttsHistoryTabVoice')"
+            >
+              <i class="fas fa-history text-xs"></i>
+            </button>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <!-- 搜索框 - Apple 风格 -->
+            <div class="relative w-52">
+              <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[#86868b] dark:text-[#98989d] text-xs pointer-events-none z-10"></i>
+              <input
+                v-model="searchQuery"
+                :placeholder="t('searchVoice')"
+                class="w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-lg py-2 pl-9 pr-3 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 transition-all duration-200"
+                type="text"
+              />
             </div>
+
+            <!-- 筛选按钮 - Apple 风格 -->
+            <button @click="toggleFilterPanel"
+              class="flex items-center gap-2 px-4 py-2 bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-lg transition-all duration-200 text-sm font-medium tracking-tight">
+              <i class="fas fa-filter text-xs"></i>
+              <span>{{ t('filter') }}</span>
+            </button>
+          </div>
+          </div>
           </div>
           <!-- 音色列表容器 - Apple 风格 -->
           <div class="bg-white/50 dark:bg-[#2c2c2e]/50 backdrop-blur-[10px] border border-black/6 dark:border-white/6 rounded-2xl p-5 max-h-[500px] overflow-y-auto main-scrollbar pr-3" ref="voiceListContainer">
@@ -309,11 +348,46 @@
             </div>
           </div>
         </div>
-
       </div>
     </div>
-    </div>
   </div>
+
+  <VoiceTtsHistoryPanel
+    :visible="showHistoryPanel"
+    :history="ttsHistory"
+    mode="combined"
+    :get-voice-name="getHistoryVoiceName"
+    @close="closeHistoryPanel"
+    @apply="applyCombinedHistoryEntry"
+    @delete="handleDeleteHistoryEntry"
+  />
+
+  <VoiceTtsHistoryPanel
+    :visible="showTextHistoryPanel"
+    :history="ttsHistory"
+    mode="text"
+    @close="closeTextHistoryPanel"
+    @apply="applyTextHistoryEntry"
+  />
+
+  <VoiceTtsHistoryPanel
+    :visible="showInstructionHistoryPanel"
+    :history="ttsHistory"
+    mode="instruction"
+    @close="closeInstructionHistoryPanel"
+    @apply="applyInstructionHistoryEntry"
+  />
+
+  <VoiceTtsHistoryPanel
+    :visible="showVoiceHistoryPanel"
+    :history="ttsHistory"
+    mode="voice"
+    :get-voice-name="getHistoryVoiceName"
+    @close="closeVoiceHistoryPanel"
+    @apply="applyVoiceHistoryEntry"
+  />
+
+
 
   <!-- 筛选面板遮罩 - Apple 风格 -->
   <div v-if="showFilterPanel" class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" @click="closeFilterPanel">
@@ -426,11 +500,14 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DropdownMenu from './DropdownMenu.vue'
+import VoiceTtsHistoryPanel from './VoiceTtsHistoryPanel.vue'
+import { ttsHistory, loadTtsHistory, addTtsHistoryEntry, removeTtsHistoryEntry } from '../utils/other'
 
 export default {
   name: 'VoiceTTS',
   components: {
-    DropdownMenu
+    DropdownMenu,
+    VoiceTtsHistoryPanel
   },
   emits: ['tts-complete', 'close-modal'],
   setup(props, { emit }) {
@@ -459,6 +536,10 @@ export default {
     const voiceListContainer = ref(null)
     const showControls = ref(false)
     const showFilterPanel = ref(false)
+    const showHistoryPanel = ref(false)
+    const showTextHistoryPanel = ref(false)
+    const showInstructionHistoryPanel = ref(false)
+    const showVoiceHistoryPanel = ref(false)
 
     // Category filtering - 存储原始中文值
     const selectedCategory = ref('全部场景')
@@ -508,9 +589,52 @@ export default {
       return map[gender] || gender
     }
 
+    const openHistoryPanel = () => {
+      loadTtsHistory()
+      showHistoryPanel.value = true
+    }
+
+    const closeHistoryPanel = () => {
+      showHistoryPanel.value = false
+    }
+
+    const openTextHistoryPanel = () => {
+      loadTtsHistory()
+      showTextHistoryPanel.value = true
+    }
+
+    const openInstructionHistoryPanel = () => {
+      loadTtsHistory()
+      showInstructionHistoryPanel.value = true
+    }
+
+    const openVoiceHistoryPanel = () => {
+      loadTtsHistory()
+      showVoiceHistoryPanel.value = true
+    }
+
+    const closeTextHistoryPanel = () => {
+      showTextHistoryPanel.value = false
+    }
+
+    const closeInstructionHistoryPanel = () => {
+      showInstructionHistoryPanel.value = false
+    }
+
+    const closeVoiceHistoryPanel = () => {
+      showVoiceHistoryPanel.value = false
+    }
+
+    const handleDeleteHistoryEntry = (entry) => {
+      if (!entry?.id) return
+      removeTtsHistoryEntry(entry.id)
+      loadTtsHistory()
+    }
+
 
     // Load voices data
     onMounted(async () => {
+      loadTtsHistory()
       try {
         const response = await fetch('/api/v1/voices/list')
         const data = await response.json()
@@ -784,6 +908,14 @@ export default {
           audioUrl.value = URL.createObjectURL(blob)
           // 标记需要自动播放
           shouldAutoPlay.value = true
+          addTtsHistoryEntry(
+            inputText.value,
+            contextText.value,
+            {
+              voiceType: selectedVoice.value,
+              voiceName: selectedVoiceData.value?.name || ''
+            }
+          )
         } else {
           throw new Error('TTS generation failed')
         }
@@ -793,6 +925,65 @@ export default {
       } finally {
         isGenerating.value = false
       }
+    }
+
+    const applyCombinedHistoryEntry = async (entry) => {
+      if (!entry) return
+      inputText.value = entry.text || ''
+      contextText.value = entry.instruction || ''
+
+      if (entry.voiceType) {
+        const voice = voices.value.find(v => v.voice_type === entry.voiceType)
+        if (voice) {
+          await onVoiceSelect(voice)
+          return
+        }
+
+        selectedVoice.value = entry.voiceType
+        selectedVoiceResourceId.value = ''
+      }
+
+      nextTick(() => {
+        generateTTS()
+      })
+      showHistoryPanel.value = false
+    }
+
+    const applyTextHistoryEntry = (value) => {
+      if (!value) return
+      inputText.value = value
+      showTextHistoryPanel.value = false
+    }
+
+    const applyInstructionHistoryEntry = (value) => {
+      if (!value) return
+      contextText.value = value
+      showInstructionHistoryPanel.value = false
+    }
+
+    const applyVoiceHistoryEntry = async (voiceType) => {
+      if (!voiceType) return
+      const voice = voices.value.find(v => v.voice_type === voiceType)
+      if (voice) {
+        await onVoiceSelect(voice)
+      } else {
+        selectedVoice.value = voiceType
+        selectedVoiceResourceId.value = ''
+        nextTick(() => {
+          generateTTS()
+        })
+      }
+      showVoiceHistoryPanel.value = false
+    }
+
+    const getHistoryVoiceName = (entry) => {
+      if (!entry) return ''
+      if (entry.voiceName) return entry.voiceName
+      if (entry.voiceType) {
+        const voice = voices.value.find(v => v.voice_type === entry.voiceType)
+        return voice?.name || ''
+      }
+      return ''
     }
 
     // 格式化音频时间
@@ -1051,7 +1242,26 @@ export default {
       translateCategory,
       translateVersion,
       translateLanguage,
-      translateGender
+      translateGender,
+      ttsHistory,
+      showHistoryPanel,
+      openHistoryPanel,
+      closeHistoryPanel,
+      applyCombinedHistoryEntry,
+      applyTextHistoryEntry,
+      applyInstructionHistoryEntry,
+      applyVoiceHistoryEntry,
+      getHistoryVoiceName,
+      handleDeleteHistoryEntry,
+      showTextHistoryPanel,
+      showInstructionHistoryPanel,
+      showVoiceHistoryPanel,
+      openTextHistoryPanel,
+      openInstructionHistoryPanel,
+      openVoiceHistoryPanel,
+      closeTextHistoryPanel,
+      closeInstructionHistoryPanel,
+      closeVoiceHistoryPanel
     }
   }
 }

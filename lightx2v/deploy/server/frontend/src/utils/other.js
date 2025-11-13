@@ -10,7 +10,9 @@ export const locale = i18n.global.locale
         const loginLoading = ref(false);
         const initLoading = ref(false);
         const downloadLoading = ref(false);
+        const downloadLoadingMessage = ref('');
         const isLoading = ref(false); // 页面加载loading状态
+        const isPageLoading = ref(false); // 分页加载loading状态
 
         // 录音相关状态
         const isRecording = ref(false);
@@ -45,7 +47,8 @@ export const locale = i18n.global.locale
             confirm: () => { }
         });
         const submitting = ref(false);
-        const templateLoading = ref(false); // 模板加载状态
+        const templateLoading = ref(false); // 模板/任务复用加载状态
+        const templateLoadingMessage = ref('');
         const taskSearchQuery = ref('');
         const sidebarCollapsed = ref(false);
         const showExpandHint = ref(false);
@@ -135,6 +138,7 @@ export const locale = i18n.global.locale
         const templatePaginationKey = ref(0);
         const imageHistory = ref([]);
         const audioHistory = ref([]);
+        const ttsHistory = ref([]);
 
         // 模板文件缓存，避免重复下载
         const currentUser = ref({});
@@ -1194,7 +1198,7 @@ export const locale = i18n.global.locale
         };
 
         const triggerAudioUpload = () => {
-            const audioInput = document.querySelector('input[type="file"][accept="audio/*"]');
+            const audioInput = document.querySelector('input[type="file"][data-role="audio-input"]');
             if (audioInput) {
                 audioInput.click();
             } else {
@@ -1223,7 +1227,7 @@ export const locale = i18n.global.locale
             updateUploadedContentStatus();
             console.log('音频已移除');
             // 重置音频文件输入框，确保可以重新选择相同文件
-            const audioInput = document.querySelector('input[type="file"][accept="audio/*"]');
+            const audioInput = document.querySelector('input[type="file"][data-role="audio-input"]');
             if (audioInput) {
                 audioInput.value = '';
             }
@@ -1239,7 +1243,14 @@ export const locale = i18n.global.locale
         const handleAudioUpload = (event) => {
             const file = event.target.files[0];
 
-            if (file) {
+            if (file && (file.type?.startsWith('audio/') || file.type?.startsWith('video/'))) {
+                const allowedVideoTypes = ['video/mp4', 'video/x-m4v', 'video/mpeg'];
+                if (file.type.startsWith('video/') && !allowedVideoTypes.includes(file.type)) {
+                    showAlert(t('unsupportedVideoFormat'), 'warning');
+                    setCurrentAudioPreview(null);
+                    updateUploadedContentStatus();
+                    return;
+                }
                 s2vForm.value.audioFile = file;
                 const reader = new FileReader();
                 reader.onload = (e) => {
@@ -1251,6 +1262,9 @@ export const locale = i18n.global.locale
             } else {
                 setCurrentAudioPreview(null);
                 updateUploadedContentStatus();
+                if (file) {
+                    showAlert(t('unsupportedAudioOrVideo'), 'warning');
+                }
             }
         };
 
@@ -2134,15 +2148,15 @@ export const locale = i18n.global.locale
 
         // 分页相关函数
         const goToPage = async (page) => {
-            isLoading.value = true;
+            isPageLoading.value = true;
             if (page < 1 || page > pagination.value?.total_pages || page === currentTaskPage.value) {
-                isLoading.value = false;
+                isPageLoading.value = false;
                 return;
             }
             currentTaskPage.value = page;
             taskPageInput.value = page; // 同步更新输入框
             await refreshTasks();
-            isLoading.value = false;
+            isPageLoading.value = false;
         };
 
         const jumpToPage = async () => {
@@ -2157,15 +2171,15 @@ export const locale = i18n.global.locale
 
         // Template分页相关函数
         const goToTemplatePage = async (page) => {
-            isLoading.value=true;
+            isPageLoading.value=true;
             if (page < 1 || page > templatePagination.value?.total_pages || page === templateCurrentPage.value) {
-                isLoading.value = false;
+                isPageLoading.value = false;
                 return;
             }
             templateCurrentPage.value = page;
             templatePageInput.value = page; // 同步更新输入框
             await loadImageAudioTemplates();
-            isLoading.value = false;
+            isPageLoading.value = false;
         };
 
         const jumpToTemplatePage = async () => {
@@ -2270,15 +2284,15 @@ export const locale = i18n.global.locale
 
         // 灵感广场分页相关函数
         const goToInspirationPage = async (page) => {
-            isLoading.value = true;
+            isPageLoading.value = true;
             if (page < 1 || page > inspirationPagination.value?.total_pages || page === inspirationCurrentPage.value) {
-                isLoading.value = false;
+                isPageLoading.value = false;
                 return;
             }
             inspirationCurrentPage.value = page;
             inspirationPageInput.value = page; // 同步更新输入框
             await loadInspirationData();
-            isLoading.value = false;
+            isPageLoading.value = false;
         };
 
         const jumpToInspirationPage = async () => {
@@ -2623,16 +2637,20 @@ export const locale = i18n.global.locale
                 if (!confirmed) {
                     return;
                 }
-
-                // 显示删除中的提示
-                showAlert(t('deletingTaskAlert'), 'info');
-
                 const response = await apiRequest(`/api/v1/task/delete?task_id=${taskId}`, {
                     method: 'DELETE'
                 });
 
                 if (response && response.ok) {
                     showAlert(t('taskDeletedSuccessAlert'), 'success');
+                    const deletedTaskIndex = tasks.value.findIndex(task => task.task_id === taskId);
+                    if (deletedTaskIndex !== -1) {
+                        const wasCurrent = currentTask.value?.task_id === taskId;
+                        tasks.value.splice(deletedTaskIndex, 1);
+                        if (wasCurrent) {
+                            currentTask.value = tasks.value[deletedTaskIndex] || tasks.value[deletedTaskIndex - 1] || null;
+                        }
+                    }
                     refreshTasks(true); // 强制刷新
 
                     // 如果是从任务详情页删除，删除成功后关闭详情弹窗
@@ -2727,9 +2745,16 @@ export const locale = i18n.global.locale
         };
 
         const reuseTask = async (task) => {
+            if (!task) {
+                showAlert(t('loadTaskDataFailedAlert'), 'danger');
+                return;
+            }
+
             try {
+                templateLoading.value = true;
+                templateLoadingMessage.value = t('prefillLoadingTask');
                 // 跳转到任务创建界面
-                isCreationAreaExpanded.value=true
+                isCreationAreaExpanded.value = true;
                 if (showTaskDetailModal.value) {
                     closeTaskDetailModal();
                 }
@@ -2740,6 +2765,9 @@ export const locale = i18n.global.locale
 
                 // 获取当前表单
                 const currentForm = getCurrentForm();
+
+                // 立即切换到创建视图，后续资产异步加载
+                switchToCreateView();
 
                 // 设置模型
                 if (task.params && task.params.model_cls) {
@@ -2779,6 +2807,9 @@ export const locale = i18n.global.locale
                         // 加载音频文件
                         if (audioUrl) {
                             try {
+                                currentForm.audioUrl = audioUrl;
+                                setCurrentAudioPreview(audioUrl);
+
                                 const audioResponse = await fetch(audioUrl);
                                 if (audioResponse && audioResponse.ok) {
                                     const blob = await audioResponse.blob();
@@ -2810,13 +2841,6 @@ export const locale = i18n.global.locale
                                         size: file.size,
                                         originalBlobType: blob.type
                                     });
-                                    // 使用FileReader生成data URL，与正常上传保持一致
-                                    const reader = new FileReader();
-                                    reader.onload = (e) => {
-                                        setCurrentAudioPreview(e.target.result);
-                                        console.log('复用任务 - 音频预览已设置:', e.target.result.substring(0, 50) + '...');
-                                    };
-                                    reader.readAsDataURL(file);
                                 }
                             } catch (error) {
                                 console.warn('Failed to load audio file:', error);
@@ -2828,161 +2852,169 @@ export const locale = i18n.global.locale
 
                 showAlert(t('taskMaterialReuseSuccessAlert'), 'success');
 
-                // 检查当前路由，如果已经在 generate 页面，则滚动到生成区域
-                const currentRoute = router.currentRoute.value;
-                if (currentRoute.path === '/generate') {
-                    // 关闭任务详情弹窗
-                    if (showTaskDetailModal.value) {
-                        closeTaskDetailModal();
-                    }
-                    // 等待 DOM 更新后滚动到生成区域
-                    await nextTick();
-                    // 如果之前有展开过创作区域，保持展开状态
-                    const creationArea = document.querySelector('.creation-area');
-                    if (isCreationAreaExpanded.value) {
-                        // 延迟一点时间确保DOM更新完成
-                        setTimeout(() => {
-                    if (creationArea) {
-                                creationArea.classList.add('show');
-                            }
-                        }, 50);
-                    }
-                    // 滚动到顶部
-                    const mainScrollable = document.querySelector('.main-scrollbar');
-                    if (mainScrollable) {
-                        mainScrollable.scrollTo({
-                            top: 0,
-                            behavior: 'smooth'
-                        });
-                    }
-                } else {
-                    // 不在 generate 页面，跳转过去
-                switchToCreateView();
-                }
             } catch (error) {
                 console.error('Failed to reuse task:', error);
                 showAlert(t('loadTaskDataFailedAlert'), 'danger');
+            } finally {
+                templateLoading.value = false;
+                templateLoadingMessage.value = '';
             }
         };
 
-        const downloadFile = (fileInfo) => {
+        const downloadFile = async (fileInfo) => {
             if (!fileInfo || !fileInfo.blob) {
                 showAlert(t('fileUnavailableAlert'), 'danger');
-                return;
+                return false;
+            }
+
+            const blob = fileInfo.blob;
+            const fileName = fileInfo.name || 'download';
+            const mimeType = blob.type || fileInfo.mimeType || 'application/octet-stream';
+            const isMobile = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+            if (isMobile && typeof navigator?.canShare === 'function' && typeof navigator?.share === 'function') {
+                try {
+                    const shareFile = new File([blob], fileName, { type: mimeType });
+                    if (navigator.canShare({ files: [shareFile] })) {
+                        await navigator.share({
+                            files: [shareFile],
+                            title: fileName
+                        });
+                        showAlert(t('downloadSuccessAlert'), 'success');
+                        return true;
+                    }
+                } catch (error) {
+                    if (error?.name === 'AbortError') {
+                        console.info('User cancelled share dialog');
+                        showAlert(t('downloadCancelledAlert'), 'info');
+                        return false;
+                    }
+                    console.warn('Native share failed, falling back to download link:', error);
+                }
             }
 
             try {
-                const url = URL.createObjectURL(fileInfo.blob);
+                const objectUrl = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = fileInfo.name || 'download';
+                a.href = objectUrl;
+                a.download = fileName;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                URL.revokeObjectURL(objectUrl);
                 showAlert(t('downloadSuccessAlert'), 'success');
+                return true;
             } catch (error) {
                 console.error('Download failed:', error);
                 showAlert(t('downloadFailedAlert'), 'danger');
+                return false;
             }
         };
 
-
         // 处理文件下载
         const handleDownloadFile = async (taskId, fileKey, fileName) => {
+            if (downloadLoading.value) {
+                showAlert(t('downloadInProgressNotice'), 'info');
+                return;
+            }
+
+            downloadLoading.value = true;
+            downloadLoadingMessage.value = t('downloadPreparing');
+
             try {
-                console.log('开始下载文件:', { taskId, fileKey, fileName })
+                console.log('开始下载文件:', { taskId, fileKey, fileName });
 
                 // 处理文件名，确保有正确的后缀名
-                let finalFileName = fileName
+                let finalFileName = fileName;
                 if (fileName && typeof fileName === 'string') {
-                    // 检查是否已有后缀名
-                    const hasExtension = /\.[a-zA-Z0-9]+$/.test(fileName)
+                    const hasExtension = /\.[a-zA-Z0-9]+$/.test(fileName);
                     if (!hasExtension) {
-                        // 没有后缀名，根据文件类型添加
-                        const extension = getFileExtension(fileKey)
-                        finalFileName = `${fileName}.${extension}`
-                        console.log('添加后缀名:', finalFileName)
+                        const extension = getFileExtension(fileKey);
+                        finalFileName = `${fileName}.${extension}`;
+                        console.log('添加后缀名:', finalFileName);
                     }
                 } else {
-                    // 没有文件名，使用默认名称
-                    finalFileName = `${fileKey}.${getFileExtension(fileKey)}`
+                    finalFileName = `${fileKey}.${getFileExtension(fileKey)}`;
                 }
 
-                // 先尝试从缓存获取
-                let fileData = getTaskFileFromCache(taskId, fileKey)
-                console.log('缓存中的文件数据:', fileData)
+                downloadLoadingMessage.value = t('downloadFetching');
 
-                if (fileData && fileData.blob) {
-                    // 缓存中有blob数据，直接使用
-                    console.log('使用缓存中的文件数据')
-                    downloadFile({ ...fileData, name: finalFileName })
-                    return
+                let downloadUrl = null;
+
+                const cachedData = getTaskFileFromCache(taskId, fileKey);
+                if (cachedData?.url) {
+                    downloadUrl = cachedData.url;
                 }
 
-                if (fileData && fileData.url) {
-                    // 缓存中有URL，使用URL下载
-                    console.log('使用缓存中的URL下载:', fileData.url)
-                    try {
-                        const response = await fetch(fileData.url)
-                        console.log('文件响应状态:', response.status, response.ok)
-
-                        if (response.ok) {
-                            const blob = await response.blob()
-                            console.log('文件blob大小:', blob.size)
-
-                            const downloadData = {
-                                blob: blob,
-                                name: finalFileName
-                            }
-                            console.log('构造的文件数据:', downloadData)
-                            downloadFile(downloadData)
-                            return
-                        } else {
-                            console.error('文件响应失败:', response.status, response.statusText)
-                        }
-                    } catch (error) {
-                        console.error('使用缓存URL下载失败:', error)
-                    }
+                if (!downloadUrl) {
+                    downloadUrl = await getTaskFileUrl(taskId, fileKey);
                 }
 
-                if (!fileData) {
-                    console.log('缓存中没有文件，尝试异步获取...')
-                    // 缓存中没有，尝试异步获取
-                    const url = await getTaskFileUrl(taskId, fileKey)
-                    console.log('获取到的文件URL:', url)
+                if (!downloadUrl) {
+                    throw new Error('无法获取文件URL');
+                }
 
-                    if (url) {
-                        const response = await fetch(url)
-                        console.log('文件响应状态:', response.status, response.ok)
+                const response = await fetch(downloadUrl);
+                if (!response.ok) {
+                    throw new Error(`文件响应失败: ${response.status}`);
+                }
 
-                        if (response.ok) {
-                            const blob = await response.blob()
-                            console.log('文件blob大小:', blob.size)
+                const blob = await response.blob();
+                const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
-                            fileData = {
-                                blob: blob,
-                                name: finalFileName
-                            }
-                            console.log('构造的文件数据:', fileData)
-                        } else {
-                            console.error('文件响应失败:', response.status, response.statusText)
-                        }
+                if (isMobileBrowser) {
+                    downloadLoadingMessage.value = '';
+                    downloadLoading.value = false;
+                    showAlert(t('mobileSaveToAlbumTip'), 'info');
+
+                    const blobUrl = URL.createObjectURL(blob);
+                    const previewWindow = window.open('', '_blank', 'noopener,noreferrer');
+
+                    if (previewWindow) {
+                        previewWindow.document.write(`<!DOCTYPE html>
+<html lang="${locale.value || 'en'}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${t('mobileSavePreviewTitle')}</title>
+  <style>
+    body { margin: 0; background: #000; color: #fff; font-family: system-ui, sans-serif; }
+    .wrapper { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 16px; }
+    video { width: 100%; height: auto; border-radius: 16px; max-height: calc(100vh - 160px); }
+    p { text-align: center; line-height: 1.5; font-size: 15px; color: rgba(255,255,255,0.85); }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <video controls playsinline webkit-playsinline preload="auto" src="${blobUrl}"></video>
+    <p>${t('mobileSaveInstruction')}</p>
+  </div>
+  <script>
+    window.addEventListener('pagehide', () => URL.revokeObjectURL('${blobUrl}'));
+    window.addEventListener('beforeunload', () => URL.revokeObjectURL('${blobUrl}'));
+  </script>
+</body>
+</html>`);
+                        previewWindow.document.close();
                     } else {
-                        console.error('无法获取文件URL')
+                        URL.revokeObjectURL(blobUrl);
+                        window.location.href = downloadUrl;
                     }
+                    return;
                 }
 
-                if (fileData && fileData.blob) {
-                    console.log('开始下载文件:', fileData.name)
-                    downloadFile(fileData)
-                } else {
-                    console.error('文件数据无效:', fileData)
-                    showAlert(t('fileUnavailableAlert'), 'danger')
-                }
+                downloadLoadingMessage.value = t('downloadSaving');
+                await downloadFile({
+                    blob,
+                    name: finalFileName,
+                    mimeType: blob.type
+                });
             } catch (error) {
-                console.error('下载失败:', error)
-                showAlert(t('downloadFailedAlert'), 'danger')
+                console.error('下载失败:', error);
+                showAlert(t('downloadFailedAlert'), 'danger');
+            } finally {
+                downloadLoading.value = false;
+                downloadLoadingMessage.value = '';
             }
         }
 
@@ -4750,10 +4782,10 @@ export const locale = i18n.global.locale
 
         // 选择分类
         const selectInspirationCategory = async (category) => {
-            isLoading.value = true;
+            isPageLoading.value = true;
             // 如果点击的是当前分类，不重复请求
             if (selectedInspirationCategory.value === category) {
-                isLoading.value = false;
+                isPageLoading.value = false;
                 return;
             }
 
@@ -4770,7 +4802,7 @@ export const locale = i18n.global.locale
 
             // 重新加载数据
             await loadInspirationData(); // 强制刷新，不使用缓存
-            isLoading.value = false;
+            isPageLoading.value = false;
         };
 
         // 搜索防抖定时器
@@ -4796,7 +4828,7 @@ export const locale = i18n.global.locale
 
                 // 重新加载数据
                 await loadInspirationData(); // 强制刷新，不使用缓存
-                isLoading.value = false;
+                isPageLoading.value = false;
             }, 500); // 500ms 防抖延迟
         };
 
@@ -5665,7 +5697,7 @@ export const locale = i18n.global.locale
             try {
                 // 开始模板加载
                 templateLoading.value = true;
-                showAlert('模板加载中...', 'info');
+                templateLoadingMessage.value = t('prefillLoadingTemplate');
 
                 // 先设置任务类型
                 selectedTaskId.value = item.task_type;
@@ -5679,6 +5711,12 @@ export const locale = i18n.global.locale
                 currentForm.seed = item.params?.seed || 42;
                 currentForm.model_cls = item.model_cls || '';
                 currentForm.stage = item.stage || 'single_stage';
+
+                // 立即关闭模板详情并切换到创建视图，后续资源异步加载
+                showTemplateDetailModal.value = false;
+                selectedTemplate.value = null;
+                isCreationAreaExpanded.value = true;
+                switchToCreateView();
 
                 // 创建加载Promise数组
                 const loadingPromises = [];
@@ -5783,14 +5821,6 @@ export const locale = i18n.global.locale
                     await Promise.all(loadingPromises);
                 }
 
-                // 关闭模板详情弹窗（不跳转路由）
-                showTemplateDetailModal.value = false;
-                selectedTemplate.value = null;
-
-                // 切换到创建视图
-                isCreationAreaExpanded.value=true;
-                switchToCreateView();
-
                 showAlert(`模板加载完成`, 'success');
             } catch (error) {
                 console.error('应用模板失败:', error);
@@ -5798,6 +5828,7 @@ export const locale = i18n.global.locale
             } finally {
                 // 结束模板加载
                 templateLoading.value = false;
+                templateLoadingMessage.value = '';
             }
         };
 
@@ -6212,6 +6243,75 @@ export const locale = i18n.global.locale
                 featuredTemplatesLoading.value = false;
             }
         };
+        const removeTtsHistoryEntry = (entryId) => {
+            if (!entryId) return;
+            const currentHistory = loadTtsHistory().filter(entry => entry.id !== entryId);
+            saveTtsHistory(currentHistory);
+        };
+
+    const loadTtsHistory = () => {
+        try {
+            const stored = localStorage.getItem('ttsHistory');
+            if (!stored) return [];
+            const parsed = JSON.parse(stored);
+            ttsHistory.value = Array.isArray(parsed) ? parsed : [];
+            return ttsHistory.value;
+        } catch (error) {
+            console.error('加载TTS历史失败:', error);
+            ttsHistory.value = [];
+            return [];
+        }
+    };
+
+    const saveTtsHistory = (historyList) => {
+        try {
+            localStorage.setItem('ttsHistory', JSON.stringify(historyList));
+            ttsHistory.value = historyList;
+        } catch (error) {
+            console.error('保存TTS历史失败:', error);
+        }
+    };
+
+    const addTtsHistoryEntry = (text = '', instruction = '') => {
+        const trimmedText = (text || '').trim();
+        const trimmedInstruction = (instruction || '').trim();
+
+        if (!trimmedText && !trimmedInstruction) {
+            return;
+        }
+
+        const currentHistory = loadTtsHistory();
+
+        const existingIndex = currentHistory.findIndex(entry =>
+            entry.text === trimmedText && entry.instruction === trimmedInstruction
+        );
+
+        const timestamp = new Date().toISOString();
+
+        if (existingIndex !== -1) {
+            const existingEntry = currentHistory.splice(existingIndex, 1)[0];
+            existingEntry.timestamp = timestamp;
+            currentHistory.unshift(existingEntry);
+        } else {
+            currentHistory.unshift({
+                id: Date.now(),
+                text: trimmedText,
+                instruction: trimmedInstruction,
+                timestamp
+            });
+        }
+
+        if (currentHistory.length > 20) {
+            currentHistory.length = 20;
+        }
+
+        saveTtsHistory(currentHistory);
+    };
+
+    const clearTtsHistory = () => {
+        ttsHistory.value = [];
+        localStorage.removeItem('ttsHistory');
+    };
 
 export {
             // 任务类型下拉菜单
@@ -6222,7 +6322,9 @@ export {
             loginLoading,
             initLoading,
             downloadLoading,
+            downloadLoadingMessage,
             isLoading,
+            isPageLoading,
 
             // 录音相关
             isRecording,
@@ -6245,6 +6347,7 @@ export {
             toggleSmsLogin,
             submitting,
             templateLoading,
+            templateLoadingMessage,
             taskSearchQuery,
             currentUser,
             models,
@@ -6531,4 +6634,10 @@ export {
             initTheme,
             toggleTheme,
             getThemeIcon,
+            loadTtsHistory,
+            removeTtsHistoryEntry,
+            ttsHistory,
+            addTtsHistoryEntry,
+            saveTtsHistory,
+            clearTtsHistory,
         };

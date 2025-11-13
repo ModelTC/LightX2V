@@ -42,7 +42,8 @@ import {
             onVideoError,
             onVideoEnded,
             openTemplateFromRoute,
-            copyShareLink
+            copyShareLink,
+            isPageLoading
         } from '../utils/other'
 
 // 监听模板详情路由
@@ -201,7 +202,14 @@ onMounted(() => {
                                         </div>
 
                 <!-- 灵感内容网格 - Apple 风格 -->
-                <div class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
+                <div class="space-y-4">
+                    <div v-if="isPageLoading" class="flex items-center justify-center">
+                        <div class="inline-flex items-center gap-3 px-4 py-2 rounded-full bg-white/90 dark:bg-[#2c2c2e]/90 border border-black/8 dark:border-white/8 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] shadow-[0_4px_16px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.35)]">
+                            <i class="fas fa-spinner fa-spin text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                            <span>{{ t('loading') }}</span>
+                        </div>
+                    </div>
+                    <div class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
                     <!-- 灵感卡片 - Apple 风格 -->
                                             <div v-for="item in inspirationItems" :key="item.task_id"
                         class="break-inside-avoid mb-4 group relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/30 dark:hover:border-[color:var(--brand-primary-light)]/30 hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200 hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.2)]">
@@ -259,6 +267,7 @@ onMounted(() => {
                                 </div>
                             </div>
                         </div>
+                    </div>
                     </div>
                 </div>
 
