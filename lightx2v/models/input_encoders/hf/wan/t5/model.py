@@ -48,12 +48,14 @@ class T5OffloadBlocksWeights(WeightModule):
     def __init__(self, block_nums, mm_type):
         super().__init__()
         self.block_nums = block_nums
+        self.offload_blocks = WeightModuleList([T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=True) for i in range(2)])
         self.blocks = WeightModuleList([T5OffloadSelfAttention(i, mm_type) for i in range(block_nums)])
+        self.add_module("offload_blocks", self.offload_blocks)
         self.add_module("blocks", self.blocks)
 
 
 class T5OffloadSelfAttention(WeightModule):
-    def __init__(self, block_index, mm_type, block_prefix="blocks"):
+    def __init__(self, block_index, mm_type, block_prefix="blocks", create_cuda_buffer=False):
         super().__init__()
         self.block_index = block_index
         if mm_type is None:
@@ -62,81 +64,66 @@ class T5OffloadSelfAttention(WeightModule):
 
         self.add_module(
             "norm1",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](
-                f"{block_prefix}.{self.block_index}.norm1.weight",
-            ),
+            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer),
         )
         self.add_module(
             "norm2",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](
-                f"{block_prefix}.{self.block_index}.norm2.weight",
-            ),
+            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer),
         )
         self.add_module(
             "pos_embedding",
-            EMBEDDING_WEIGHT_REGISTER["Default"](
-                f"{block_prefix}.{self.block_index}.pos_embedding.embedding.weight",
-            ),
+            EMBEDDING_WEIGHT_REGISTER["Default"](f"{block_prefix}.{self.block_index}.pos_embedding.embedding.weight", create_cuda_buffer),
         )
 
         self.compute_phases = WeightModuleList(
             [
-                T5OffloadAttention(
-                    block_index,
-                    block_prefix,
-                    mm_type,
-                ),
-                T5OffloadFeedForward(
-                    block_index,
-                    block_prefix,
-                    mm_type,
-                ),
+                T5OffloadAttention(block_index, block_prefix, mm_type, create_cuda_buffer),
+                T5OffloadFeedForward(block_index, block_prefix, mm_type, create_cuda_buffer),
             ]
         )
         self.add_module("compute_phases", self.compute_phases)
 
 
 class T5OffloadAttention(WeightModule):
-    def __init__(self, block_index, block_prefix, mm_type):
+    def __init__(self, block_index, block_prefix, mm_type, create_cuda_buffer=False):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
-
         self.add_module(
             "attn_q",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.q.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.q.weight", None, create_cuda_buffer),
         )
         self.add_module(
             "attn_k",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.k.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.k.weight", None, create_cuda_buffer),
         )
         self.add_module(
             "attn_v",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.v.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.v.weight", None, create_cuda_buffer),
         )
         self.add_module(
             "attn_o",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.o.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.attn.o.weight", None, create_cuda_buffer),
         )
 
 
 class T5OffloadFeedForward(WeightModule):
-    def __init__(self, block_index, block_prefix, mm_type):
+    def __init__(self, block_index, block_prefix, mm_type, create_cuda_buffer=False):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
 
         self.add_module(
             "ffn_fc1",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.ffn.fc1.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.ffn.fc1.weight", None, create_cuda_buffer),
         )
         self.add_module(
             "ffn_fc2",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.ffn.fc2.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.ffn.fc2.weight", None, create_cuda_buffer),
         )
         self.add_module(
             "ffn_gate_0",
-            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.ffn.gate.0.weight", None),
+            MM_WEIGHT_REGISTER[self.mm_type](f"{block_prefix}.{self.block_index}.ffn.gate.0.weight", None, create_cuda_buffer),
         )
         self.gelu = GELU()
 
@@ -453,8 +440,9 @@ class T5Encoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         if cpu_offload:
-            self.weights_stream_mgr = WeightAsyncStreamManager(blocks_num=num_layers)
+            self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
             self.blocks_weights = T5OffloadBlocksWeights(num_layers, quant_scheme)
+            self.offload_manager.init_cuda_buffer(self.blocks_weights.offload_blocks, None)
             self.blocks = self.blocks_weights.blocks
         else:
             self.blocks = nn.ModuleList(
@@ -551,15 +539,17 @@ class T5Encoder(nn.Module):
         for block_idx in range(len(self.blocks)):
             self.block_idx = block_idx
             if block_idx == 0:
-                self.weights_stream_mgr.active_weights[0] = self.blocks[0]
-                self.weights_stream_mgr.active_weights[0].to_cuda()
+                self.offload_manager.cuda_buffers[0].load_state_dict(
+                    self.blocks[block_idx].state_dict(),
+                    block_idx,
+                )
 
             if block_idx < len(self.blocks) - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, self.blocks)
+                self.offload_manager.prefetch_weights(block_idx + 1, self.blocks)
 
-            with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
-                x = self.forward_block_with_offload(self.blocks[block_idx], x, mask, pos_bias=e)
-            self.weights_stream_mgr.swap_weights()
+            with torch.cuda.stream(self.offload_manager.compute_stream):
+                x = self.forward_block_with_offload(self.offload_manager.cuda_buffers[0], x, mask, pos_bias=e)
+            self.offload_manager.swap_weights()
 
         x = self.norm(x)
         x = self.dropout(x)
@@ -826,10 +816,10 @@ if __name__ == "__main__":
     import time
 
     checkpoint_dir = ""
-    t5_checkpoint = "./models_t5_umt5-xxl-enc-bf16.pth"
-    t5_tokenizer = "./google/umt5-xxl"
+    t5_checkpoint = "models_t5_umt5-xxl-enc-bf16.pth"
+    t5_tokenizer = "google/umt5-xxl"
 
-    cpu_offload = True
+    cpu_offload = False
     if cpu_offload:
         device = torch.device("cpu")
     else:

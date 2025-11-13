@@ -151,7 +151,6 @@ class MMWeight(MMWeightTemplate):
     def _calculate_size(self):
         if self.bias is not None:
             return self.weight.numel() * self.weight.element_size() + self.bias.numel() * self.bias.element_size()
-
         return self.weight.numel() * self.weight.element_size()
 
     def apply(self, input_tensor):
@@ -191,6 +190,8 @@ class MMWeight(MMWeightTemplate):
             else:
                 bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
             self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
+        else:
+            self.bias = None
 
 
 @MM_WEIGHT_REGISTER("Default-Force-FP32")
@@ -538,6 +539,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         if self.bias_name is not None:
             bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
             self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
+        else:
+            self.bias = None
 
 
 @MM_WEIGHT_REGISTER("fp8-vllm")
