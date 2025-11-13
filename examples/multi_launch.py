@@ -1,9 +1,9 @@
 import os
+
 from lightx2v import LightGenerator
 from lightx2v.utils.utils import get_configs_dir
 
-config_json = os.path.join(
-    get_configs_dir(), 'dist_infer/wan_i2v_dist_cfg_ulysses.json')
+config_json = os.path.join(get_configs_dir(), "dist_infer/wan_i2v_dist_cfg_ulysses.json")
 
 generator = LightGenerator(
     model_path="/path/to/Wan2.1-I2V-14B-480P",

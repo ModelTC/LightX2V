@@ -1,9 +1,9 @@
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
 import torch
 import torch.distributed as dist
 from loguru import logger
-from typing import Union, Optional, Dict, Any
-from pathlib import Path
-
 
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
@@ -12,12 +12,10 @@ from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # n
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
-
-
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import set_config, set_parallel_config, print_config
 from lightx2v.utils.input_info import set_input_info
-from lightx2v.utils.utils import seed_all, get_configs_dir
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
+from lightx2v.utils.utils import get_configs_dir, seed_all
 
 
 class LightGenerator:
@@ -104,7 +102,6 @@ class LightGenerator:
         save_result_path: Optional[str] = None,
         return_result_tensor: bool = False,
     ) -> str:
-
         # Create args-like object for set_config compatibility
         class Args:
             def __init__(self):
@@ -159,7 +156,6 @@ class LightGenerator:
             "wan2.1_t2v": "wan/wan_t2v.json",
             "wan2.1_i2v": "wan/wan_i2v.json",
             "wan2.1_flf2v": "wan/wan_flf2v.json",
-
             # Wan2.2 MOE configurations
             "wan2.2_moe_t2v": "wan22/wan_moe_t2v.json",
             "wan2.2_moe_i2v": "wan22/wan_moe_i2v.json",
@@ -170,10 +166,8 @@ class LightGenerator:
 
         # Check if we have an explicit mapping for this combination
         if composite_key in explicit_config_mapping:
-            config_path = Path(get_configs_dir()) / \
-                explicit_config_mapping[composite_key]
+            config_path = Path(get_configs_dir()) / explicit_config_mapping[composite_key]
             if config_path.exists():
                 return str(config_path)
             else:
-                raise FileNotFoundError(
-                    "Default config file not found, please specify the config_json")
+                raise FileNotFoundError("Default config file not found, please specify the config_json")

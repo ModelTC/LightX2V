@@ -1,6 +1,7 @@
 import os
 import random
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 import imageio
@@ -12,7 +13,6 @@ import torch.distributed as dist
 import torchvision
 from einops import rearrange
 from loguru import logger
-from pathlib import Path
 
 
 def seed_all(seed):
@@ -485,16 +485,17 @@ def best_output_size(w, h, dw, dh, expected_area):
     else:
         return ow2, oh2
 
+
 def get_configs_dir(start_path: str = None) -> str:
     """
     从指定起点向上搜索第一个名为 "configs" 的目录，返回其绝对路径。
-    
+
     Args:
         start_path (str, optional): 搜索起点路径。默认是当前文件所在目录 (__file__)。
-    
+
     Returns:
         str: configs 目录绝对路径
-    
+
     Raises:
         FileNotFoundError: 没找到 configs 目录
     """

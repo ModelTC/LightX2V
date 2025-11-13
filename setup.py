@@ -1,6 +1,9 @@
+import os
+import shutil
+
 from setuptools import setup
 from setuptools.command.build_py import build_py
-import shutil, os
+
 
 class BuildWithConfigs(build_py):
     def run(self):
@@ -11,6 +14,7 @@ class BuildWithConfigs(build_py):
         dst = os.path.join(self.build_lib, "lightx2v", "configs")
         if os.path.exists(src):
             shutil.copytree(src, dst, dirs_exist_ok=True)
+
 
 setup(
     cmdclass={"build_py": BuildWithConfigs},
