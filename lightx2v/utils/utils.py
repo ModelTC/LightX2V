@@ -12,6 +12,7 @@ import torch.distributed as dist
 import torchvision
 from einops import rearrange
 from loguru import logger
+from pathlib import Path
 
 
 def seed_all(seed):
@@ -483,3 +484,34 @@ def best_output_size(w, h, dw, dh, expected_area):
         return ow1, oh1
     else:
         return ow2, oh2
+
+def get_configs_dir(start_path: str = None) -> str:
+    """
+    从指定起点向上搜索第一个名为 "configs" 的目录，返回其绝对路径。
+    
+    Args:
+        start_path (str, optional): 搜索起点路径。默认是当前文件所在目录 (__file__)。
+    
+    Returns:
+        str: configs 目录绝对路径
+    
+    Raises:
+        FileNotFoundError: 没找到 configs 目录
+    """
+    if start_path is None:
+        start_path = Path(__file__).resolve().parent
+    else:
+        start_path = Path(start_path).resolve()
+
+    current = start_path
+    root = current.anchor  # 根目录，例如 "/" 或 "C:\\"
+
+    while True:
+        candidate = current / "configs"
+        if candidate.is_dir():
+            return str(candidate.resolve())
+        if str(current) == root:
+            break
+        current = current.parent
+
+    raise FileNotFoundError(f'No "configs" directory found from {start_path} upwards')
