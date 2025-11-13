@@ -25,21 +25,25 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
         self.vae_time_compression_ratio = config["action_config"]["vae_time_compression_ratio"]
         self.windows_size = config["action_config"]["windows_size"]
         self.patch_size = config["action_config"]["patch_size"]
-        self.mouse_qk_dim_list = config["action_config"]["mouse_qk_dim_list"]
+
         self.rope_theta = config["action_config"]["rope_theta"]
         self.enable_keyboard = config["action_config"]["enable_keyboard"]
-        self.enable_mouse = config["action_config"]["enable_mouse"]
         self.heads_num = config["action_config"]["heads_num"]
         self.hidden_size = config["action_config"]["hidden_size"]
         self.img_hidden_size = config["action_config"]["img_hidden_size"]
         self.keyboard_dim_in = config["action_config"]["keyboard_dim_in"]
         self.keyboard_hidden_dim = config["action_config"]["keyboard_hidden_dim"]
-        self.mouse_dim_in = config["action_config"]["mouse_dim_in"]
-        self.mouse_hidden_dim = config["action_config"]["mouse_hidden_dim"]
+
         self.qk_norm = config["action_config"]["qk_norm"]
         self.qkv_bias = config["action_config"]["qkv_bias"]
         self.rope_dim_list = config["action_config"]["rope_dim_list"]
-        self.freqs_cos, self.freqs_sin = self.get_rotary_pos_embed(7500, self.patch_size[1], self.patch_size[2], 64, self.mouse_qk_dim_list, start_offset=0)
+        self.freqs_cos, self.freqs_sin = self.get_rotary_pos_embed(7500, self.patch_size[1], self.patch_size[2], 64, self.rope_dim_list, start_offset=0)
+
+        self.enable_mouse = config["action_config"]["enable_mouse"]
+        if self.enable_mouse:
+            self.mouse_dim_in = config["action_config"]["mouse_dim_in"]
+            self.mouse_hidden_dim = config["action_config"]["mouse_hidden_dim"]
+            self.mouse_qk_dim_list = config["action_config"]["mouse_qk_dim_list"]
 
     def get_rotary_pos_embed(self, video_length, height, width, head_dim, rope_dim_list=None, start_offset=0):
         target_ndim = 3
@@ -612,16 +616,27 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
         x = x + attn_out
 
         if len(block.compute_phases) == 4:
-            x = self.infer_action_model(
-                block.compute_phases[2],
-                x,
-                pre_infer_out.grid_sizes.tensor[0],
-                pre_infer_out.seq_lens,
-                pre_infer_out.conditional_dict["mouse_cond"],
-                pre_infer_out.conditional_dict["keyboard_cond"],
-                is_causal=True,
-                use_rope_keyboard=True,
-            )
+            if self.config["mode"] != "templerun":
+                x = self.infer_action_model(
+                    phase=block.compute_phases[2],
+                    x=x,
+                    grid_sizes=pre_infer_out.grid_sizes.tensor[0],
+                    seq_lens=pre_infer_out.seq_lens,
+                    mouse_condition=pre_infer_out.conditional_dict["mouse_cond"],
+                    keyboard_condition=pre_infer_out.conditional_dict["keyboard_cond"],
+                    is_causal=True,
+                    use_rope_keyboard=True,
+                )
+            else:
+                x = self.infer_action_model(
+                    phase=block.compute_phases[2],
+                    x=x,
+                    grid_sizes=pre_infer_out.grid_sizes.tensor[0],
+                    seq_lens=pre_infer_out.seq_lens,
+                    keyboard_condition=pre_infer_out.conditional_dict["keyboard_cond"],
+                    is_causal=True,
+                    use_rope_keyboard=True,
+                )
             y = self.infer_ffn(block.compute_phases[3], x, c_shift_msa, c_scale_msa)
 
         elif len(block.compute_phases) == 3:

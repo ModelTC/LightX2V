@@ -58,7 +58,12 @@ class WanMtxg2PreInfer(WanSFPreInfer):
         x = self.scheduler.latents_input
         t = self.scheduler.timestep_input
         current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_block
-        current_conditional_dict = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_block, mode=self.config["mode"])
+
+        if self.config["streaming"]:
+            current_actions = inputs["current_actions"]
+            current_conditional_dict, _ = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_block, replace=current_actions, mode=self.config["mode"])
+        else:
+            current_conditional_dict = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_block, mode=self.config["mode"])
         cond_concat = current_conditional_dict["cond_concat"]
         visual_context = current_conditional_dict["visual_context"]
 
@@ -81,9 +86,6 @@ class WanMtxg2PreInfer(WanSFPreInfer):
         context_lens = None
         context = self.img_emb(weights, visual_context)
 
-        # data = torch.load("/data/nvme2/wushuo/Matrix-Game/Matrix-Game-2/pre_infer.pt")
-        # breakpoint()
-        # print((data['x']-x).sum())
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,

@@ -19,7 +19,7 @@ def combine_data(data, num_frames=57, keyboard_dim=6, mouse=True):
         if mouse:
             m = data[rd]["mouse_condition"]
 
-        if current_frame:
+        if current_frame == 0:
             keyboard_condition[:1] = k[:1]
             if mouse:
                 mouse_condition[:1] = m[:1]

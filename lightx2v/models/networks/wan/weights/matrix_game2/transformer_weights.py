@@ -132,7 +132,6 @@ class WanActionModule(WeightModule):
 
         self.attn_rms_type = "self_forcing"
 
-        # keyboard_embed
         self.add_module(
             "keyboard_embed_0",
             MM_WEIGHT_REGISTER[self.mm_type](
@@ -151,57 +150,7 @@ class WanActionModule(WeightModule):
                 self.lazy_load_file,
             ),
         )
-        # mouse_mlp
-        self.add_module(
-            "mouse_mlp_0",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.0.weight",
-                f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.0.bias",
-                self.lazy_load,
-                self.lazy_load_file,
-            ),
-        )
-        self.add_module(
-            "mouse_mlp_2",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.2.weight",
-                f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.2.bias",
-                self.lazy_load,
-                self.lazy_load_file,
-            ),
-        )
-        self.add_module(
-            "mouse_mlp_3",
-            LN_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.weight",
-                f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.bias",
-                self.lazy_load,
-                self.lazy_load_file,
-                eps=1e-6,
-            ),
-        )
 
-        # t_qkv
-        self.add_module(
-            "t_qkv",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.action_model.t_qkv.weight",
-                bias_name=None,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
-
-        # proj
-        self.add_module(
-            "proj_mouse",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.action_model.proj_mouse.weight",
-                bias_name=None,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
         self.add_module(
             "proj_keyboard",
             MM_WEIGHT_REGISTER[self.mm_type](
@@ -212,18 +161,6 @@ class WanActionModule(WeightModule):
             ),
         )
 
-        # mouse_attn_q
-        self.add_module(
-            "mouse_attn_q",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.action_model.mouse_attn_q.weight",
-                bias_name=None,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
-
-        # keyboard_attn_kv
         self.add_module(
             "keyboard_attn_kv",
             MM_WEIGHT_REGISTER[self.mm_type](
@@ -235,6 +172,66 @@ class WanActionModule(WeightModule):
         )
 
         self.add_module("cross_attn_2", ATTN_WEIGHT_REGISTER[self.config["cross_attn_2_type"]]())
+
+        self.add_module(
+            "mouse_attn_q",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{block_prefix}.{self.block_index}.action_model.mouse_attn_q.weight",
+                bias_name=None,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            ),
+        )
+
+        if self.config["mode"] != "templerun":
+            self.add_module(
+                "t_qkv",
+                MM_WEIGHT_REGISTER[self.mm_type](
+                    f"{block_prefix}.{self.block_index}.action_model.t_qkv.weight",
+                    bias_name=None,
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
+                ),
+            )
+
+            self.add_module(
+                "proj_mouse",
+                MM_WEIGHT_REGISTER[self.mm_type](
+                    f"{block_prefix}.{self.block_index}.action_model.proj_mouse.weight",
+                    bias_name=None,
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
+                ),
+            )
+
+            self.add_module(
+                "mouse_mlp_0",
+                MM_WEIGHT_REGISTER[self.mm_type](
+                    f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.0.weight",
+                    f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.0.bias",
+                    self.lazy_load,
+                    self.lazy_load_file,
+                ),
+            )
+            self.add_module(
+                "mouse_mlp_2",
+                MM_WEIGHT_REGISTER[self.mm_type](
+                    f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.2.weight",
+                    f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.2.bias",
+                    self.lazy_load,
+                    self.lazy_load_file,
+                ),
+            )
+            self.add_module(
+                "mouse_mlp_3",
+                LN_WEIGHT_REGISTER[self.mm_type](
+                    f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.weight",
+                    f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.bias",
+                    self.lazy_load,
+                    self.lazy_load_file,
+                    eps=1e-6,
+                ),
+            )
 
 
 class WanActionCrossAttention(WeightModule):
