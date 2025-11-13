@@ -34,10 +34,9 @@ class VAEWrapper:
 
 class WanxVAEWrapper(VAEWrapper):
     def __init__(self, vae, clip):
-        # super().__init__()
         self.vae = vae
-        # self.vae.requires_grad_(False)
-        # self.vae.eval()
+        self.vae.requires_grad_(False)
+        self.vae.eval()
         self.clip = clip
         if clip is not None:
             self.clip.requires_grad_(False)
