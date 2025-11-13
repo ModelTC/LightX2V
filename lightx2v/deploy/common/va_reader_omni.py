@@ -46,28 +46,16 @@ class ByteBuffer:
     def __init__(self):
         self.buffer = deque()
         self.current_size = 0
-        self.last_add_time = None
-        self.stop_threshold = 0.2
+        # is the audio belonging to current turn finished
+        self.audio_finished = False
 
     def add(self, byte_data: bytes):
         self.buffer.append(byte_data)
         self.current_size += len(byte_data)
-        self.last_add_time = time.time()
-
-    def has_more_voice(self):
-        add_elapse = time.time() - self.last_add_time
-        # if elapse after last_add_time > stop_threshold, think no more voice
-        if add_elapse > self.stop_threshold:
-            logger.warning(f"No more voice, elapse: {add_elapse} seconds")
-            return False
-        else:
-            # maybe has more voice
-            return True
 
     def get(self, size=1024):
         data = bytearray()
-        all_size = size
-        size = all_size - len(data)
+
         while size > 0 and len(self.buffer) > 0:
             chunk = self.buffer.popleft()
             if len(chunk) <= size:
@@ -81,7 +69,14 @@ class ByteBuffer:
                 self.buffer.appendleft(chunk[size:])  # 剩余部分留在缓冲区
                 self.current_size -= size
                 size = 0
+
         return bytes(data)
+
+    def mark_finished(self):
+        self.audio_finished = True
+
+    def has_more_voice(self):
+        return not self.audio_finished
 
     def __len__(self):
         return self.current_size
@@ -102,17 +97,20 @@ class ChatAdapter:
         assert os.path.exists(omni_work_dir), f"OMNI work directory {omni_work_dir} does not exist"
         self.omni_work_dir = omni_work_dir
         self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.PULL)
-        self.url = ChatAdapter.select_and_bind(self.socket)
+        self.w2f_socket = self.context.socket(zmq.PULL)
+        self.w2f_url = ChatAdapter.select_and_bind(self.w2f_socket)
+        self.f2w_socket = self.context.socket(zmq.PUSH)
+        self.f2w_url = ChatAdapter.select_and_bind(self.f2w_socket)
         self.recv_thread = None
         self.audio_buffer = ByteBuffer()
         self.audio_info = None
         self.chat_server_cmd = [
-            os.path.join(self.omni_work_dir, "bin", "rtc-video-chat-omni"),
+            os.path.join(self.omni_work_dir, "bin", "seko-chatter"),
             "--session-id", session_id,
             "--account", account,
             "--whep-server-url", whep_url,
-            "--zmq-push-endpoint", self.url,
+            "--w2f-endpoint", self.w2f_url,
+            "--f2w-endpoint", self.f2w_url,
             "--config-files", *config_files,
         ]
         override_config = {}
@@ -175,7 +173,7 @@ class ChatAdapter:
     def recv_loop(self):
         while True:
             try:
-                message = self.socket.recv()
+                message = self.w2f_socket.recv()
             except:
                 logger.error(f"Error receiving message: {traceback.format_exc()}")
                 break
@@ -183,9 +181,13 @@ class ChatAdapter:
                 message = BSON.decode(message)
                 msg_type = message["type"]
                 logger.debug("Received message type: {}".format(msg_type))
-                if msg_type == "Audio":
-                    pcm_data = message["data"]
-                    audio_info = AudioInfo(message["info"])
+                if msg_type == "AgentAudio":
+                    audio = message["audio"]
+                    if audio["type"] != "Pcm":
+                        logger.error("Unsupported audio type: {}".format(audio["type"]))
+                        continue
+                    pcm_data = audio["data"]
+                    audio_info = AudioInfo(audio["info"])
                     logger.debug("Received audio with duration: {}".format(audio_info.duration()))
                     if self.audio_info is None:
                         self.audio_info = audio_info
@@ -197,9 +199,15 @@ class ChatAdapter:
                     # if status is blank and has voice, set immediate switch to 1
                     if self.status == "blank" and self.has_voice(self.seg_duration):
                         self.immediate_switch_to("voice")
-                elif msg_type == "Interrupt":
-                    logger.warning("Received interrupt, clear audio buffer")
+                elif msg_type == "AgentStartPlay":
+                    logger.debug("Received AgentStartPlay, create new audio buffer")
                     self.audio_buffer = ByteBuffer()
+                elif msg_type == "AgentEndPlay":
+                    logger.debug("Received AgentEndPlay, mark audio finished")
+                    self.audio_buffer.mark_finished()
+                elif msg_type == "ClearAgentAudio":
+                    logger.warning("Received ClearAgentAudio, clear audio buffer")
+                    self.audio_buffer = None
                     self.audio_info = None
                     if self.status == "voice":
                         self.status = "blank"
@@ -244,7 +252,8 @@ class ChatAdapter:
             self.chatter_proc.terminate()
             self.chatter_proc.wait()
             self.chatter_proc = None
-        self.socket.close()
+        self.w2f_socket.close()
+        self.f2w_socket.close()
 
     def __del__(self):
         self.stop()
