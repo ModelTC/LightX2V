@@ -9,13 +9,8 @@ import torch.nn.functional as F
 import torchvision.transforms as T
 from diffusers.models import ModelMixin
 
-
-from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import (
-    VisionTransformer
-)
-from lightx2v.models.input_encoders.hf.wan.matrix_game2.tokenizers import (
-    HuggingfaceTokenizer
-)
+from lightx2v.models.input_encoders.hf.wan.matrix_game2.tokenizers import HuggingfaceTokenizer
+from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import VisionTransformer
 
 
 class SelfAttention(nn.Module):
