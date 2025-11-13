@@ -365,6 +365,8 @@ class WanModel(CompiledMethodsMixin):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_blocks, self.transformer_weights.offload_phases)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

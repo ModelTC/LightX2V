@@ -9,62 +9,60 @@ from loguru import logger
 
 
 class WeightAsyncStreamManager(object):
-    def __init__(self, blocks_num, offload_ratio=1, phases_num=1):
-        self.init(blocks_num, phases_num, offload_ratio)
-        self.compute_stream = torch.cuda.Stream(priority=-1)
-        self.cpu_load_stream = torch.cuda.Stream(priority=0)
+    def __init__(self, offload_granularity):
+        self.offload_granularity = offload_granularity
         self.cuda_load_stream = torch.cuda.Stream(priority=0)
+        self.compute_stream = torch.cuda.Stream(priority=-1)
 
-    def init(self, blocks_num, phases_num, offload_ratio):
-        if hasattr(self, "active_weights"):
-            del self.active_weights[:]
-        self.active_weights = [None for _ in range(3)]
-        self.blocks_num = blocks_num
-        self.phases_num = phases_num
-        self.offload_ratio = offload_ratio
-        self.offload_blocks_num = int(self.offload_ratio * self.blocks_num)
-        self.offload_phases_num = self.blocks_num * self.phases_num * self.offload_ratio
+    def init_cuda_buffer(self, blocks_cuda_buffer, phases_cuda_buffer):
+        if self.offload_granularity == "block":
+            self.cuda_buffers = [blocks_cuda_buffer[i] for i in range(len(blocks_cuda_buffer))]
+        elif self.offload_granularity == "phase":
+            # self.cuda_buffers = [trans_weights.offload_phase[i] for i in range(trans_weights.offload_phases_num)]
+            pass
 
-    def prefetch_weights(self, block_idx, blocks_weights):
+    def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch.cuda.stream(self.cuda_load_stream):
-            self.active_weights[2] = blocks_weights[block_idx]
-            self.active_weights[2].to_cuda_async()
-        with torch.cuda.stream(self.cpu_load_stream):
-            if block_idx < self.offload_blocks_num:
-                if self.active_weights[1] is not None:
-                    self.active_weights[1].to_cpu_async()
+            self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
 
     def swap_weights(self):
-        self.compute_stream.synchronize()
-        self.cpu_load_stream.synchronize()
         self.cuda_load_stream.synchronize()
-
-        self.active_weights[0], self.active_weights[1] = (
-            self.active_weights[2],
-            self.active_weights[0],
+        self.compute_stream.synchronize()
+        self.cuda_buffers[0], self.cuda_buffers[1] = (
+            self.cuda_buffers[1],
+            self.cuda_buffers[0],
         )
 
-    def prefetch_phase(self, block_idx, phase_idx, blocks):
-        with torch.cuda.stream(self.cuda_load_stream):
-            new_phase = blocks[block_idx].compute_phases[phase_idx]
-            new_phase.to_cuda_async()
-            self.active_weights[2] = (phase_idx, blocks[block_idx].compute_phases[phase_idx])
-        with torch.cuda.stream(self.cpu_load_stream):
-            if block_idx * self.phases_num + phase_idx < self.offload_phases_num:
-                if self.active_weights[1] is not None:
-                    _, old_phase = self.active_weights[1]
-                    old_phase.to_cpu_async()
+    # def prefetch_phase(self, block_idx, phase_idx, blocks):
+    #     with torch.cuda.stream(self.cuda_load_stream):
+    #         new_phase = blocks[block_idx].compute_phases[phase_idx]
+    #         new_phase.to_cuda_async()
+    #         self.cuda_buffers[2] = (
+    #             phase_idx,
+    #             blocks[block_idx].compute_phases[phase_idx],
+    #         )
 
-    def swap_phases(self):
-        self.compute_stream.synchronize()
-        self.cpu_load_stream.synchronize()
-        self.cuda_load_stream.synchronize()
-        self.active_weights[0], self.active_weights[1] = self.active_weights[2], self.active_weights[0]
-        self.active_weights[2] = None
+    # def swap_phases(self):
+    #     self.compute_stream.synchronize()
+    #     self.cpu_load_stream.synchronize()
+    #     self.cuda_load_stream.synchronize()
+    #     self.cuda_buffers[0], self.cuda_buffers[1] = (
+    #         self.cuda_buffers[2],
+    #         self.cuda_buffers[0],
+    #     )
+    #     self.cuda_buffers[2] = None
 
 
 class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):
-    def __init__(self, blocks_num, offload_ratio=1, phases_num=1, num_disk_workers=1, max_memory=2, offload_gra="phase"):
+    def __init__(
+        self,
+        blocks_num,
+        offload_ratio=1,
+        phases_num=1,
+        num_disk_workers=1,
+        max_memory=2,
+        offload_gra="phase",
+    ):
         super().__init__(blocks_num, offload_ratio, phases_num)
         self.offload_gra = offload_gra
         self.worker_stop_event = threading.Event()
@@ -220,12 +218,12 @@ class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):
         with torch.cuda.stream(self.cuda_load_stream):
             block = self.pin_memory_buffer.get(obj_key)
             block.to_cuda_async()
-            self.active_weights[2] = (obj_key, block)
+            self.cuda_buffers[2] = (obj_key, block)
 
         with torch.cuda.stream(self.cpu_load_stream):
             if block_idx < self.offload_blocks_num:
-                if self.active_weights[1] is not None:
-                    old_key, old_block = self.active_weights[1]
+                if self.cuda_buffers[1] is not None:
+                    old_key, old_block = self.cuda_buffers[1]
                     if self.pin_memory_buffer.exists(old_key):
                         old_block.to_cpu_async()
                         self.pin_memory_buffer.pop(old_key)
@@ -258,12 +256,12 @@ class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):
         with torch.cuda.stream(self.cuda_load_stream):
             phase = self.pin_memory_buffer.get(obj_key)
             phase.to_cuda_async()
-            self.active_weights[2] = (obj_key, phase)
+            self.cuda_buffers[2] = (obj_key, phase)
 
         with torch.cuda.stream(self.cpu_load_stream):
             if block_idx * self.phases_num + phase_idx < self.offload_phases_num:
-                if self.active_weights[1] is not None:
-                    old_key, old_phase = self.active_weights[1]
+                if self.cuda_buffers[1] is not None:
+                    old_key, old_phase = self.cuda_buffers[1]
                     if self.pin_memory_buffer.exists(old_key):
                         old_phase.to_cpu_async()
                         self.pin_memory_buffer.pop(old_key)

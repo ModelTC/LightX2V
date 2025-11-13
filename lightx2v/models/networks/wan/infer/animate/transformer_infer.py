@@ -10,9 +10,26 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
         self.has_post_adapter = True
         self.phases_num = 4
 
+    def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
+        for block_idx in range(len(blocks)):
+            self.block_idx = block_idx
+            if block_idx == 0:
+                self.offload_manager.cuda_buffers[0].load_state_dict(blocks[block_idx].state_dict(), block_idx, block_idx // 5)
+            if block_idx < len(blocks) - 1:
+                self.offload_manager.prefetch_weights(block_idx + 1, blocks, (block_idx + 1) // 5)
+
+            with torch.cuda.stream(self.offload_manager.compute_stream):
+                x = self.infer_block(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
+            self.offload_manager.swap_weights()
+        return x
+
     @torch.no_grad()
     def infer_post_adapter(self, phase, x, pre_infer_out):
-        if phase.is_empty():
+        if phase.is_empty() or phase.linear1_kv.weight is None:
+            # print(phase.is_empty())
+            # print(x)
+            # print(self.block_idx)
+            # exit()
             return x
         T = pre_infer_out.adapter_args["motion_vec"].shape[0]
         x_motion = phase.pre_norm_motion.apply(pre_infer_out.adapter_args["motion_vec"])
