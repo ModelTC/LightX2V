@@ -44,7 +44,6 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
 
-
 💡 Refer to the [Model Structure Documentation](https://lightx2v-en.readthedocs.io/en/latest/getting_started/model_structure.html) to quickly get started with LightX2V
 
 ## 🚀 Frontend Interfaces
