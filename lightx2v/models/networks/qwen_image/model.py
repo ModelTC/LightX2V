@@ -1,7 +1,8 @@
+import gc
 import glob
 import json
 import os
-import gc
+
 import torch
 from safetensors import safe_open
 
@@ -119,7 +120,7 @@ class QwenImageTransformerModel:
         if self.config.get("lora_configs") and self.config["lora_configs"]:
             return True
         return False
-    
+
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
@@ -217,7 +218,7 @@ class QwenImageTransformerModel:
                     pre_post_weight_dict[k] = f.get_tensor(k).to(self.device)
 
         return pre_post_weight_dict
-    
+
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
         logger.info("Loading distributed weights")
         global_src_rank = 0
@@ -276,7 +277,7 @@ class QwenImageTransformerModel:
         logger.info(f"Weights distributed across {dist.get_world_size()} devices on {target_device}")
 
         return distributed_weight_dict
-    
+
     def _init_infer(self):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)

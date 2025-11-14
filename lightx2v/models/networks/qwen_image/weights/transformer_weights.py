@@ -24,22 +24,13 @@ class QwenImageTransformerWeights(WeightModule):
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
                 self.offload_block_buffers = WeightModuleList(
-                    [
-                        QwenImageTransformerAttentionBlock(
-                            i,
-                            self.task,
-                            self.mm_type,
-                            self.config,
-                            True,
-                            "transformer_blocks"
-                        )
-                        for i in range(self.offload_blocks_num)
-                    ]
+                    [QwenImageTransformerAttentionBlock(i, self.task, self.mm_type, self.config, True, "transformer_blocks") for i in range(self.offload_blocks_num)]
                 )
                 self.add_module("offload_block_buffers", self.offload_block_buffers)
                 self.offload_phase_buffers = None
             else:
                 raise NotImplementedError
+
 
 class QwenImageTransformerAttentionBlock(WeightModule):
     def __init__(self, block_index, task, mm_type, config, is_offload_buffer=False, block_prefix="transformer_blocks"):
@@ -74,7 +65,14 @@ class QwenImageTransformerAttentionBlock(WeightModule):
             LN_WEIGHT_REGISTER["Default"](create_cuda_buffer=is_offload_buffer, eps=1e-6),
         )
         self.attn = QwenImageCrossAttention(
-            block_index=block_index, block_prefix="transformer_blocks", task=config["task"], mm_type=mm_type, config=config, is_offload_buffer=is_offload_buffer, lazy_load=self.lazy_load, lazy_load_file=self.lazy_load_file
+            block_index=block_index,
+            block_prefix="transformer_blocks",
+            task=config["task"],
+            mm_type=mm_type,
+            config=config,
+            is_offload_buffer=is_offload_buffer,
+            lazy_load=self.lazy_load,
+            lazy_load_file=self.lazy_load_file,
         )
         self.add_module("attn", self.attn)
 

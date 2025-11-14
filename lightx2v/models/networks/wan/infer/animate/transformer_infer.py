@@ -14,7 +14,7 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
             if block_idx == 0:
-                self.offload_manager.init_first_buffer(blocks, block_idx//5)
+                self.offload_manager.init_first_buffer(blocks, block_idx // 5)
             if block_idx < len(blocks) - 1:
                 self.offload_manager.prefetch_weights(block_idx + 1, blocks, (block_idx + 1) // 5)
 

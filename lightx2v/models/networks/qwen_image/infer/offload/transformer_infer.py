@@ -41,7 +41,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 encoder_hidden_states, hidden_states = self.infer_block(
                     block_weight=self.offload_manager.cuda_buffers[0], hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb
                 )
-    
+
             self.offload_manager.swap_blocks()
 
         return encoder_hidden_states, hidden_states
