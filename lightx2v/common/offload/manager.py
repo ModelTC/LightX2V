@@ -11,6 +11,7 @@ from loguru import logger
 class WeightAsyncStreamManager(object):
     def __init__(self, offload_granularity):
         self.offload_granularity = offload_granularity
+        self.init_stream = torch.cuda.Stream(priority=0)
         self.cuda_load_stream = torch.cuda.Stream(priority=0)
         self.compute_stream = torch.cuda.Stream(priority=-1)
 
@@ -21,6 +22,17 @@ class WeightAsyncStreamManager(object):
         elif self.offload_granularity == "phase":
             assert phases_cuda_buffer is not None
             self.cuda_buffers = [phases_cuda_buffer[i] for i in range(len(phases_cuda_buffer))]
+        else:
+            raise NotImplementedError
+
+    def init_first_buffer(self, blocks, adapter_block_idx=None):
+        if self.offload_granularity == "block":
+            with torch.cuda.stream(self.init_stream):
+                self.cuda_buffers[0].load_state_dict(blocks[0].state_dict(), 0, adapter_block_idx)
+        else:
+            with torch.cuda.stream(self.init_stream):
+                self.cuda_buffers[0].load_state_dict(blocks[0].compute_phases[0].state_dict(), 0, adapter_block_idx)
+        self.init_stream.synchronize()
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch.cuda.stream(self.cuda_load_stream):

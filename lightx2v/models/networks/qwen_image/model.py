@@ -1,7 +1,7 @@
 import glob
 import json
 import os
-
+import gc
 import torch
 from safetensors import safe_open
 
@@ -34,8 +34,7 @@ class QwenImageTransformerModel:
             self.in_channels = transformer_config["in_channels"]
         self.attention_kwargs = {}
 
-        self.dit_quantized = self.config["mm_config"].get("mm_type", "Default") != "Default"
-        self.weight_auto_quant = self.config["mm_config"].get("weight_auto_quant", False)
+        self.dit_quantized = self.config.get("dit_quantized", False)
 
         self._init_infer_class()
         self._init_weights()
@@ -63,15 +62,18 @@ class QwenImageTransformerModel:
         if weight_dict is None:
             is_weight_loader = self._should_load_weights()
             if is_weight_loader:
-                if not self.dit_quantized or self.weight_auto_quant:
+                if not self.dit_quantized:
                     # Load original weights
                     weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
                 else:
                     # Load quantized weights
-                    assert NotImplementedError
+                    if not self.config.get("lazy_load", False):
+                        weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
+                    else:
+                        weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
 
-            if self.config.get("device_mesh") is not None:
-                weight_dict = self._load_weights_distribute(weight_dict, is_weight_loader)
+            if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
+                weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
 
             self.original_weight_dict = weight_dict
         else:
@@ -81,10 +83,22 @@ class QwenImageTransformerModel:
         self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
+        if not self._should_init_empty_model():
+            self._apply_weights()
+
+    def _apply_weights(self, weight_dict=None):
+        if weight_dict is not None:
+            self.original_weight_dict = weight_dict
+            del weight_dict
+            gc.collect()
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
         self.post_weight.load(self.original_weight_dict)
+
+        del self.original_weight_dict
+        torch.cuda.empty_cache()
+        gc.collect()
 
     def _should_load_weights(self):
         """Determine if current rank should load weights from disk."""
@@ -92,25 +106,120 @@ class QwenImageTransformerModel:
             # Single GPU mode
             return True
         elif dist.is_initialized():
-            # Multi-GPU mode, only rank 0 loads
-            if dist.get_rank() == 0:
-                logger.info(f"Loading weights from {self.model_path}")
+            if self.config.get("load_from_rank0", False):
+                # Multi-GPU mode, only rank 0 loads
+                if dist.get_rank() == 0:
+                    logger.info(f"Loading weights from {self.model_path}")
+                    return True
+            else:
                 return True
         return False
 
+    def _should_init_empty_model(self):
+        if self.config.get("lora_configs") and self.config["lora_configs"]:
+            return True
+        return False
+    
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
-        with safe_open(file_path, framework="pt", device=str(self.device)) as f:
-            return {key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE())) for key in f.keys()}
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+
+        if self.device.type == "cuda" and dist.is_initialized():
+            device = torch.device("cuda:{}".format(dist.get_rank()))
+        else:
+            device = self.device
+
+        with safe_open(file_path, framework="pt", device=str(device)) as f:
+            return {
+                key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
+                for key in f.keys()
+                if not any(remove_key in key for remove_key in remove_keys)
+            }
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
-        safetensors_files = glob.glob(os.path.join(self.model_path, "*.safetensors"))
+        if self.config.get("dit_original_ckpt", None):
+            safetensors_path = self.config["dit_original_ckpt"]
+        else:
+            safetensors_path = self.model_path
+
+        if os.path.isdir(safetensors_path):
+            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+        else:
+            safetensors_files = [safetensors_path]
+
         weight_dict = {}
         for file_path in safetensors_files:
+            logger.info(f"Loading weights from {file_path}")
             file_weights = self._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
             weight_dict.update(file_weights)
+
         return weight_dict
 
-    def _load_weights_distribute(self, weight_dict, is_weight_loader):
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+
+        if self.config.get("dit_quantized_ckpt", None):
+            safetensors_path = self.config["dit_quantized_ckpt"]
+        else:
+            safetensors_path = self.model_path
+
+        if os.path.isdir(safetensors_path):
+            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+        else:
+            safetensors_files = [safetensors_path]
+            safetensors_path = os.path.dirname(safetensors_path)
+
+        weight_dict = {}
+        for safetensor_path in safetensors_files:
+            with safe_open(safetensor_path, framework="pt") as f:
+                logger.info(f"Loading weights from {safetensor_path}")
+                for k in f.keys():
+                    if any(remove_key in k for remove_key in remove_keys):
+                        continue
+                    if f.get_tensor(k).dtype in [
+                        torch.float16,
+                        torch.bfloat16,
+                        torch.float,
+                    ]:
+                        if unified_dtype or all(s not in k for s in sensitive_layer):
+                            weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
+                        else:
+                            weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
+                    else:
+                        weight_dict[k] = f.get_tensor(k).to(self.device)
+
+        if self.config.get("dit_quant_scheme", "Default") == "nvfp4":
+            calib_path = os.path.join(safetensors_path, "calib.pt")
+            logger.info(f"[CALIB] Loaded calibration data from: {calib_path}")
+            calib_data = torch.load(calib_path, map_location="cpu")
+            for k, v in calib_data["absmax"].items():
+                weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
+
+        return weight_dict
+
+    def _load_quant_split_ckpt(self, unified_dtype, sensitive_layer):  # Need rewrite
+        lazy_load_model_path = self.dit_quantized_ckpt
+        logger.info(f"Loading splited quant model from {lazy_load_model_path}")
+        pre_post_weight_dict = {}
+
+        safetensor_path = os.path.join(lazy_load_model_path, "non_block.safetensors")
+        with safe_open(safetensor_path, framework="pt", device="cpu") as f:
+            for k in f.keys():
+                if f.get_tensor(k).dtype in [
+                    torch.float16,
+                    torch.bfloat16,
+                    torch.float,
+                ]:
+                    if unified_dtype or all(s not in k for s in sensitive_layer):
+                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
+                    else:
+                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
+                else:
+                    pre_post_weight_dict[k] = f.get_tensor(k).to(self.device)
+
+        return pre_post_weight_dict
+    
+    def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
+        logger.info("Loading distributed weights")
         global_src_rank = 0
         target_device = "cpu" if self.cpu_offload else "cuda"
 
@@ -165,12 +274,15 @@ class QwenImageTransformerModel:
                     tensor.copy_(tensor, non_blocking=False)
 
         logger.info(f"Weights distributed across {dist.get_world_size()} devices on {target_device}")
-        return distributed_weight_dict
 
+        return distributed_weight_dict
+    
     def _init_infer(self):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
 
     def to_cpu(self):
         self.pre_weight.to_cpu()

@@ -18,7 +18,14 @@ class WanVaceModel(WanModel):
 
     def __init__(self, model_path, config, device):
         super().__init__(model_path, config, device)
-        assert not config["cpu_offload"], "Not support offload infer of vace."
+
+    def _init_infer(self):
+        super()._init_infer()
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self.transformer_infer.offload_block_buffers = self.transformer_weights.offload_block_buffers
+            self.transformer_infer.offload_phase_buffers = self.transformer_weights.offload_phase_buffers
+            self.transformer_infer.vace_offload_block_buffers = self.transformer_weights.vace_offload_block_buffers
+            self.transformer_infer.vace_offload_phase_buffers = self.transformer_weights.vace_offload_phase_buffers
 
     def _init_infer_class(self):
         self.pre_infer_class = WanPreInfer

@@ -57,10 +57,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
             if block_idx == 0:
-                self.offload_manager.cuda_buffers[0].load_state_dict(
-                    blocks[block_idx].state_dict(),
-                    block_idx,
-                )
+                self.offload_manager.init_first_buffer(blocks)
 
             if block_idx < len(blocks) - 1:
                 self.offload_manager.prefetch_weights(block_idx + 1, blocks)
@@ -151,10 +148,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                     phase.to_cuda()
                     self.offload_manager.cuda_buffers[0] = (obj_key, phase)
                 else:
-                    self.offload_manager.cuda_buffers[phase_idx].load_state_dict(
-                        blocks[block_idx].compute_phases[phase_idx].state_dict(),
-                        block_idx,
-                    )
+                    self.offload_manager.init_first_buffer(blocks)
             is_last_phase = block_idx == len(blocks) - 1 and phase_idx == self.phases_num - 1
             if not is_last_phase:
                 next_block_idx = block_idx + 1 if phase_idx == self.phases_num - 1 else block_idx

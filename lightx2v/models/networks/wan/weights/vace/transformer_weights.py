@@ -23,6 +23,21 @@ class WanVaceTransformerWeights(WanTransformerWeights):
             CONV3D_WEIGHT_REGISTER["Default"]("vace_patch_embedding.weight", "vace_patch_embedding.bias", stride=self.patch_size),
         )
 
+    def register_offload_buffers(self, config):
+        super().register_offload_buffers(config)
+        if config["cpu_offload"]:
+            if config["offload_granularity"] == "block":
+                self.vace_offload_block_buffers = WeightModuleList(
+                    [
+                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, "vace_blocks"),
+                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, "vace_blocks"),
+                    ]
+                )
+                self.add_module("vace_offload_block_buffers", self.vace_offload_block_buffers)
+                self.vace_offload_phase_buffers = None
+            elif config["offload_granularity"] == "phase":
+                raise NotImplementedError
+
     def clear(self):
         super().clear()
         for vace_block in self.vace_blocks:

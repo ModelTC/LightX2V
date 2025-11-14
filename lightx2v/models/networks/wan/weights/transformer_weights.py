@@ -24,9 +24,7 @@ class WanTransformerWeights(WeightModule):
         if config.get("do_mm_calib", False):
             self.mm_type = "Calib"
         self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
-
         self.register_offload_buffers(config)
-
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
