@@ -25,7 +25,7 @@
     "dit_quant_scheme": "int8-q8f",
     "adapter_quantized": true,
     "adapter_quant_scheme": "int8-q8f",
-    "t5_quantized": false,
+    "t5_quantized": true,
     "t5_quant_scheme": "int8-q8f",
     "parallel": {
         "seq_p_size": 8,
