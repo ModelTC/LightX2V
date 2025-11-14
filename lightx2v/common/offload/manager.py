@@ -14,18 +14,19 @@ class WeightAsyncStreamManager(object):
         self.cuda_load_stream = torch.cuda.Stream(priority=0)
         self.compute_stream = torch.cuda.Stream(priority=-1)
 
-    def init_cuda_buffer(self, blocks_cuda_buffer, phases_cuda_buffer):
+    def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
         if self.offload_granularity == "block":
+            assert blocks_cuda_buffer is not None
             self.cuda_buffers = [blocks_cuda_buffer[i] for i in range(len(blocks_cuda_buffer))]
         elif self.offload_granularity == "phase":
-            # self.cuda_buffers = [trans_weights.offload_phase[i] for i in range(trans_weights.offload_phases_num)]
-            pass
+            assert phases_cuda_buffer is not None
+            self.cuda_buffers = [phases_cuda_buffer[i] for i in range(len(phases_cuda_buffer))]
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch.cuda.stream(self.cuda_load_stream):
             self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
 
-    def swap_weights(self):
+    def swap_blocks(self):
         self.cuda_load_stream.synchronize()
         self.compute_stream.synchronize()
         self.cuda_buffers[0], self.cuda_buffers[1] = (
@@ -33,24 +34,13 @@ class WeightAsyncStreamManager(object):
             self.cuda_buffers[0],
         )
 
-    # def prefetch_phase(self, block_idx, phase_idx, blocks):
-    #     with torch.cuda.stream(self.cuda_load_stream):
-    #         new_phase = blocks[block_idx].compute_phases[phase_idx]
-    #         new_phase.to_cuda_async()
-    #         self.cuda_buffers[2] = (
-    #             phase_idx,
-    #             blocks[block_idx].compute_phases[phase_idx],
-    #         )
+    def prefetch_phase(self, block_idx, phase_idx, blocks, adapter_block_idx=None):
+        with torch.cuda.stream(self.cuda_load_stream):
+            self.cuda_buffers[phase_idx].load_state_dict(blocks[block_idx].compute_phases[phase_idx].state_dict(), block_idx, adapter_block_idx)
 
-    # def swap_phases(self):
-    #     self.compute_stream.synchronize()
-    #     self.cpu_load_stream.synchronize()
-    #     self.cuda_load_stream.synchronize()
-    #     self.cuda_buffers[0], self.cuda_buffers[1] = (
-    #         self.cuda_buffers[2],
-    #         self.cuda_buffers[0],
-    #     )
-    #     self.cuda_buffers[2] = None
+    def swap_phases(self):
+        self.cuda_load_stream.synchronize()
+        self.compute_stream.synchronize()
 
 
 class LazyWeightAsyncStreamManager(WeightAsyncStreamManager):

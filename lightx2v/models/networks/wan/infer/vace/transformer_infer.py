@@ -22,16 +22,18 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
     def infer_vace_blocks(self, vace_blocks, pre_infer_out):
         pre_infer_out.adapter_args["hints"] = []
         self.infer_state = "vace"
-        if hasattr(self, "offload_manager"):
-            self.offload_manager.init_cuda_buffer(self.vace_offload_blocks, self.vace_offload_phases)
-        self.infer_func(vace_blocks, pre_infer_out.c, pre_infer_out)
+        self.infer_vace_without_offload(vace_blocks, pre_infer_out.c, pre_infer_out)
         self.infer_state = "base"
-        if hasattr(self, "offload_manager"):
-            self.offload_manager.init_cuda_buffer(self.offload_blocks, self.offload_phases)
 
     def post_process(self, x, y, c_gate_msa, pre_infer_out):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)
         if self.infer_state == "base" and self.block_idx in self.vace_blocks_mapping:
             hint_idx = self.vace_blocks_mapping[self.block_idx]
             x = x + pre_infer_out.adapter_args["hints"][hint_idx] * pre_infer_out.adapter_args.get("context_scale", 1.0)
+        return x
+
+    def infer_vace_without_offload(self, vace_blocks, x, pre_infer_out):
+        for block_idx in range(len(vace_blocks)):
+            self.block_idx = block_idx
+            x = self.infer_block(vace_blocks[block_idx], x, pre_infer_out)
         return x

@@ -23,21 +23,6 @@ class WanVaceTransformerWeights(WanTransformerWeights):
             CONV3D_WEIGHT_REGISTER["Default"]("vace_patch_embedding.weight", "vace_patch_embedding.bias", stride=self.patch_size),
         )
 
-    def register_offload_buffers(self, config):
-        super().register_offload_buffers(config)
-        if config["cpu_offload"]:
-            if config["offload_granularity"] == "block":
-                self.vace_offload_blocks = WeightModuleList(
-                    [
-                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, "vace_blocks"),
-                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, "vace_blocks"),
-                    ]
-                )
-                self.add_module("vace_offload_blocks", self.vace_offload_blocks)
-                self.vace_offload_phases = None
-            elif config["offload_granularity"] == "phase":
-                pass
-
     def clear(self):
         super().clear()
         for vace_block in self.vace_blocks:
@@ -54,15 +39,15 @@ class WanVaceTransformerWeights(WanTransformerWeights):
 
 
 class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
-    def __init__(self, base_block_idx, block_index, task, mm_type, config, is_offload_block, block_prefix):
-        super().__init__(block_index, task, mm_type, config, is_offload_block, block_prefix)
+    def __init__(self, base_block_idx, block_index, task, mm_type, config, is_offload_buffer, block_prefix):
+        super().__init__(block_index, task, mm_type, config, is_offload_buffer, block_prefix)
         if base_block_idx == 0:
             self.compute_phases[0].add_module(
                 "before_proj",
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.before_proj.weight",
                     f"{block_prefix}.{self.block_index}.before_proj.bias",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -73,7 +58,7 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.after_proj.weight",
                 f"{block_prefix}.{self.block_index}.after_proj.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),

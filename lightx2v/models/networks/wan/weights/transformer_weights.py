@@ -23,8 +23,10 @@ class WanTransformerWeights(WeightModule):
             assert config.get("dit_quantized") is True
         if config.get("do_mm_calib", False):
             self.mm_type = "Calib"
-        self.register_offload_buffers(config)
         self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
+
+        self.register_offload_buffers(config)
+
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
@@ -36,7 +38,7 @@ class WanTransformerWeights(WeightModule):
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
-                self.offload_blocks = WeightModuleList(
+                self.offload_block_buffers = WeightModuleList(
                     [
                         WanTransformerAttentionBlock(
                             i,
@@ -48,10 +50,18 @@ class WanTransformerWeights(WeightModule):
                         for i in range(self.offload_blocks_num)
                     ]
                 )
-                self.add_module("offload_blocks", self.offload_blocks)
-                self.offload_phases = None
+                self.add_module("offload_block_buffers", self.offload_block_buffers)
+                self.offload_phase_buffers = None
             elif config["offload_granularity"] == "phase":
-                pass
+                self.offload_phase_buffers = WanTransformerAttentionBlock(
+                    0,
+                    self.task,
+                    self.mm_type,
+                    self.config,
+                    True,
+                ).compute_phases
+                self.add_module("offload_phase_buffers", self.offload_phase_buffers)
+                self.offload_block_buffers = None
 
     def clear(self):
         for block in self.blocks:
@@ -76,7 +86,7 @@ class WanTransformerAttentionBlock(WeightModule):
         task,
         mm_type,
         config,
-        is_offload_block=False,
+        is_offload_buffer=False,
         block_prefix="blocks",
     ):
         super().__init__()
@@ -84,7 +94,7 @@ class WanTransformerAttentionBlock(WeightModule):
         self.mm_type = mm_type
         self.task = task
         self.config = config
-        self.is_offload_block = is_offload_block
+        self.is_offload_buffer = is_offload_buffer
         self.quant_method = config.get("quant_method", None)
 
         self.lazy_load = self.config.get("lazy_load", False)
@@ -102,7 +112,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -112,7 +122,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -122,7 +132,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -140,7 +150,7 @@ class WanSelfAttention(WeightModule):
         task,
         mm_type,
         config,
-        is_offload_block,
+        is_offload_buffer,
         lazy_load,
         lazy_load_file,
     ):
@@ -163,7 +173,7 @@ class WanSelfAttention(WeightModule):
             "modulation",
             TENSOR_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.modulation",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -179,7 +189,7 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.q.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -190,7 +200,7 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.k.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -200,7 +210,7 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.v.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -210,7 +220,7 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.o.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -219,7 +229,7 @@ class WanSelfAttention(WeightModule):
             "self_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -228,7 +238,7 @@ class WanSelfAttention(WeightModule):
             "self_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -270,7 +280,7 @@ class WanSelfAttention(WeightModule):
                 "smooth_norm1_weight",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm1.weight",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -279,7 +289,7 @@ class WanSelfAttention(WeightModule):
                 "smooth_norm1_bias",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm1.bias",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -294,7 +304,7 @@ class WanCrossAttention(WeightModule):
         task,
         mm_type,
         config,
-        is_offload_block,
+        is_offload_buffer,
         lazy_load,
         lazy_load_file,
     ):
@@ -316,7 +326,7 @@ class WanCrossAttention(WeightModule):
             LN_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -326,7 +336,7 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.q.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -336,7 +346,7 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.k.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -346,7 +356,7 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.v.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -356,7 +366,7 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.o.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -365,7 +375,7 @@ class WanCrossAttention(WeightModule):
             "cross_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -374,7 +384,7 @@ class WanCrossAttention(WeightModule):
             "cross_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -392,7 +402,7 @@ class WanCrossAttention(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.k_img.weight",
                     f"{block_prefix}.{self.block_index}.cross_attn.k_img.bias",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -402,7 +412,7 @@ class WanCrossAttention(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.v_img.weight",
                     f"{block_prefix}.{self.block_index}.cross_attn.v_img.bias",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -411,7 +421,7 @@ class WanCrossAttention(WeightModule):
                 "cross_attn_norm_k_img",
                 RMS_WEIGHT_REGISTER[self.attn_rms_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -427,7 +437,7 @@ class WanFFN(WeightModule):
         task,
         mm_type,
         config,
-        is_offload_block,
+        is_offload_buffer,
         lazy_load,
         lazy_load_file,
     ):
@@ -450,7 +460,7 @@ class WanFFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.ffn.0.weight",
                 f"{block_prefix}.{self.block_index}.ffn.0.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -460,7 +470,7 @@ class WanFFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.ffn.2.weight",
                 f"{block_prefix}.{self.block_index}.ffn.2.bias",
-                is_offload_block,
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -471,7 +481,7 @@ class WanFFN(WeightModule):
                 "smooth_norm2_weight",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm3.weight",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -480,7 +490,7 @@ class WanFFN(WeightModule):
                 "smooth_norm2_bias",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm3.bias",
-                    is_offload_block,
+                    is_offload_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),

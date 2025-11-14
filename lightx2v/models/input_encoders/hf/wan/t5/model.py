@@ -48,9 +48,9 @@ class T5OffloadBlocksWeights(WeightModule):
     def __init__(self, block_nums, mm_type):
         super().__init__()
         self.block_nums = block_nums
-        self.offload_blocks = WeightModuleList([T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=True) for i in range(2)])
+        self.offload_block_buffers = WeightModuleList([T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=True) for i in range(2)])
         self.blocks = WeightModuleList([T5OffloadSelfAttention(i, mm_type) for i in range(block_nums)])
-        self.add_module("offload_blocks", self.offload_blocks)
+        self.add_module("offload_block_buffers", self.offload_block_buffers)
         self.add_module("blocks", self.blocks)
 
 
@@ -442,7 +442,7 @@ class T5Encoder(nn.Module):
         if cpu_offload:
             self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
             self.blocks_weights = T5OffloadBlocksWeights(num_layers, quant_scheme)
-            self.offload_manager.init_cuda_buffer(self.blocks_weights.offload_blocks, None)
+            self.offload_manager.init_cuda_buffer(self.blocks_weights.offload_block_buffers, None)
             self.blocks = self.blocks_weights.blocks
         else:
             self.blocks = nn.ModuleList(

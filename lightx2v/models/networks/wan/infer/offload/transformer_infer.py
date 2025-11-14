@@ -68,7 +68,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             with torch.cuda.stream(self.offload_manager.compute_stream):
                 x = self.infer_block(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
 
-            self.offload_manager.swap_weights()
+            self.offload_manager.swap_blocks()
 
         return x
 
@@ -105,7 +105,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             with torch.cuda.stream(self.offload_manager.compute_stream):
                 x = self.infer_block(blocks[block_idx], x, pre_infer_out)
 
-            self.offload_manager.swap_weights()
+            self.offload_manager.swap_blocks()
 
             if block_idx == len(blocks) - 1:
                 self.offload_manager.pin_memory_buffer.pop_front()
@@ -151,31 +151,26 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                     phase.to_cuda()
                     self.offload_manager.cuda_buffers[0] = (obj_key, phase)
                 else:
-                    phase = blocks[block_idx].compute_phases[phase_idx]
-                    phase.to_cuda()
-                    self.offload_manager.cuda_buffers[0] = (phase_idx, phase)
-
-            with torch.cuda.stream(self.offload_manager.compute_stream):
-                x = self.infer_phase(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
-
+                    self.offload_manager.cuda_buffers[phase_idx].load_state_dict(
+                        blocks[block_idx].compute_phases[phase_idx].state_dict(),
+                        block_idx,
+                    )
             is_last_phase = block_idx == len(blocks) - 1 and phase_idx == self.phases_num - 1
             if not is_last_phase:
                 next_block_idx = block_idx + 1 if phase_idx == self.phases_num - 1 else block_idx
                 next_phase_idx = (phase_idx + 1) % self.phases_num
                 self.offload_manager.prefetch_phase(next_block_idx, next_phase_idx, blocks)
 
+            with torch.cuda.stream(self.offload_manager.compute_stream):
+                x = self.infer_phase(phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)
+
             self.offload_manager.swap_phases()
 
         return x
 
-    def infer_phase(self, active_weight, x, pre_infer_out):
-        if not self.config.get("lazy_load"):
-            cur_phase_idx, cur_phase = active_weight
-        else:
-            (_, cur_phase_idx), cur_phase = active_weight
-
+    def infer_phase(self, cur_phase_idx, cur_phase, x, pre_infer_out):
         if cur_phase_idx == 0:
-            if hasattr(cur_phase, "before_proj"):
+            if hasattr(cur_phase, "before_proj") and cur_phase.before_proj.weight is not None:
                 x = cur_phase.before_proj.apply(x) + pre_infer_out.x
             (
                 self.phase_params["shift_msa"],
@@ -210,11 +205,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.phase_params["c_shift_msa"],
                 self.phase_params["c_scale_msa"],
             )
-            x = self.post_process(
-                x,
-                self.phase_params["y"],
-                self.phase_params["c_gate_msa"],
-            )
+            x = self.post_process(x, self.phase_params["y"], self.phase_params["c_gate_msa"], pre_infer_out)
             if hasattr(cur_phase, "after_proj"):
                 pre_infer_out.adapter_args["hints"].append(cur_phase.after_proj.apply(x))
         elif cur_phase_idx == 3:

@@ -20,16 +20,35 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
 
             with torch.cuda.stream(self.offload_manager.compute_stream):
                 x = self.infer_block(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
-            self.offload_manager.swap_weights()
+            self.offload_manager.swap_blocks()
+        return x
+
+    def infer_phases(self, block_idx, blocks, x, pre_infer_out, lazy):
+        for phase_idx in range(self.phases_num):
+            if block_idx == 0 and phase_idx == 0:
+                if lazy:
+                    obj_key = (block_idx, phase_idx)
+                    phase = self.offload_manager.pin_memory_buffer.get(obj_key)
+                    phase.to_cuda()
+                    self.offload_manager.cuda_buffers[0] = (obj_key, phase)
+                else:
+                    self.offload_manager.cuda_buffers[phase_idx].load_state_dict(blocks[block_idx].compute_phases[phase_idx].state_dict(), block_idx, block_idx // 5)
+            is_last_phase = block_idx == len(blocks) - 1 and phase_idx == self.phases_num - 1
+            if not is_last_phase:
+                next_block_idx = block_idx + 1 if phase_idx == self.phases_num - 1 else block_idx
+                next_phase_idx = (phase_idx + 1) % self.phases_num
+                self.offload_manager.prefetch_phase(next_block_idx, next_phase_idx, blocks, (block_idx + 1) // 5)
+
+            with torch.cuda.stream(self.offload_manager.compute_stream):
+                x = self.infer_phase(phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)
+
+            self.offload_manager.swap_phases()
+
         return x
 
     @torch.no_grad()
     def infer_post_adapter(self, phase, x, pre_infer_out):
         if phase.is_empty() or phase.linear1_kv.weight is None:
-            # print(phase.is_empty())
-            # print(x)
-            # print(self.block_idx)
-            # exit()
             return x
         T = pre_infer_out.adapter_args["motion_vec"].shape[0]
         x_motion = phase.pre_norm_motion.apply(pre_infer_out.adapter_args["motion_vec"])
