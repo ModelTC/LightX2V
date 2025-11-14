@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 
 import aiohttp
 import jwt
@@ -24,8 +25,10 @@ class AuthManager:
         self.google_redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "")
 
         self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
-        self.jwt_expiration_hours = os.getenv("JWT_EXPIRATION_HOURS", 24)
         self.jwt_secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+        self.jwt_expiration_hours = int(os.getenv("JWT_EXPIRATION_HOURS", "168"))
+        self.refresh_token_expiration_days = int(os.getenv("REFRESH_TOKEN_EXPIRATION_DAYS", "30"))
+        self.refresh_jwt_secret_key = os.getenv("REFRESH_JWT_SECRET_KEY", self.jwt_secret_key)
 
         # Aliyun SMS
         self.aliyun_client = AlibabaCloudClient()
@@ -38,16 +41,32 @@ class AuthManager:
         logger.info(f"AuthManager: JWT_SECRET_KEY: {self.jwt_secret_key}")
         logger.info(f"AuthManager: WORKER_SECRET_KEY: {self.worker_secret_key}")
 
-    def create_jwt_token(self, data):
-        data2 = {
+    def _create_token(self, data, expires_in_seconds, token_type, secret_key):
+        now = int(time.time())
+        payload = {
             "user_id": data["user_id"],
             "username": data["username"],
             "email": data["email"],
             "homepage": data["homepage"],
+            "token_type": token_type,
+            "iat": now,
+            "exp": now + expires_in_seconds,
+            "jti": str(uuid.uuid4()),
         }
-        expire = time.time() + (self.jwt_expiration_hours * 3600)
-        data2.update({"exp": expire})
-        return jwt.encode(data2, self.jwt_secret_key, algorithm=self.jwt_algorithm)
+        return jwt.encode(payload, secret_key, algorithm=self.jwt_algorithm)
+
+    def create_access_token(self, data):
+        return self._create_token(data, self.jwt_expiration_hours * 3600, "access", self.jwt_secret_key)
+
+    def create_refresh_token(self, data):
+        return self._create_token(data, self.refresh_token_expiration_days * 24 * 3600, "refresh", self.refresh_jwt_secret_key)
+
+    def create_tokens(self, data):
+        return self.create_access_token(data), self.create_refresh_token(data)
+
+    def create_jwt_token(self, data):
+        # Backwards compatibility for callers that still expect this name
+        return self.create_access_token(data)
 
     async def auth_github(self, code):
         try:
@@ -163,15 +182,24 @@ class AuthManager:
             "avatar_url": "",
         }
 
-    def verify_jwt_token(self, token):
+    def _verify_token(self, token, expected_type, secret_key):
         try:
-            payload = jwt.decode(token, self.jwt_secret_key, algorithms=[self.jwt_algorithm])
+            payload = jwt.decode(token, secret_key, algorithms=[self.jwt_algorithm])
+            token_type = payload.get("token_type")
+            if token_type != expected_type:
+                raise HTTPException(status_code=401, detail="Token type mismatch")
             return payload
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token has expired")
         except Exception as e:
             logger.error(f"verify_jwt_token error: {e}")
             raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+    def verify_jwt_token(self, token):
+        return self._verify_token(token, "access", self.jwt_secret_key)
+
+    def verify_refresh_token(self, token):
+        return self._verify_token(token, "refresh", self.refresh_jwt_secret_key)
 
     def verify_worker_token(self, token):
         return token == self.worker_secret_key

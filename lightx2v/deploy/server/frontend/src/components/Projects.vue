@@ -517,13 +517,14 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
 
                             <!-- 状态指示器 - Apple 风格 -->
                             <div class="absolute top-3 right-3">
-                                <span :class="[
-                                    'px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-[20px] shadow-sm',
-                                    task.status === 'SUCCEED' ? 'bg-green-500/90 dark:bg-green-400/90 text-white' :
-                                    task.status === 'RUNNING' ? 'bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 text-white' :
-                                    task.status === 'FAILED' ? 'bg-red-500/90 dark:bg-red-400/90 text-white' :
-                                    'bg-white/90 dark:bg-[#2c2c2e]/90 text-[#86868b] dark:text-[#98989d] border border-black/8 dark:border-white/8'
-                                ]">
+                                <span class="relative inline-flex items-center gap-2 px-3 py-2 rounded-full text-xs font-semibold tracking-tight shadow-[0_8px_24px_rgba(0,0,0,0.12)] backdrop-blur-[30px] bg-white/85 dark:bg-[#1f1f24]/85 text-[#1d1d1f] dark:text-[#f5f5f7] border border-white/60 dark:border-white/10">
+                                    <span class="inline-flex h-1.5 w-1.5 rounded-full"
+                                        :class="[
+                                            task.status === 'SUCCEED' ? 'bg-[#2ecc71]' :
+                                            task.status === 'RUNNING' ? 'bg-[#5865f2]' :
+                                            task.status === 'FAILED' ? 'bg-[#ff5a65]' :
+                                            'bg-[#a0a4b8]'
+                                        ]"></span>
                                                                     {{ getTaskStatusDisplay(task.status) }}
                                                                 </span>
                                                             </div>

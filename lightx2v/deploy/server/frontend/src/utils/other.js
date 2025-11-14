@@ -89,7 +89,7 @@ export const locale = i18n.global.locale
         // 灵感广场分页相关变量
         const inspirationPagination = ref(null);
         const inspirationCurrentPage = ref(1);
-        const inspirationPageSize = ref(12);
+        const inspirationPageSize = ref(20);
         const inspirationPageInput = ref(1);
         const inspirationPaginationKey = ref(0);
 
@@ -133,7 +133,7 @@ export const locale = i18n.global.locale
         // Template分页相关变量
         const templatePagination = ref(null);
         const templateCurrentPage = ref(1);
-        const templatePageSize = ref(12); // 图片模板每页12个，音频模板每页10个
+        const templatePageSize = ref(20); // 图片模板每页12个，音频模板每页10个
         const templatePageInput = ref(1);
         const templatePaginationKey = ref(0);
         const imageHistory = ref([]);
@@ -154,7 +154,7 @@ export const locale = i18n.global.locale
         const statusFilter = ref('ALL');
         const pagination = ref(null);
         const currentTaskPage = ref(1);
-        const taskPageSize = ref(12);
+        const taskPageSize = ref(20);
         const taskPageInput = ref(1);
         const paginationKey = ref(0); // 用于强制刷新分页组件
         const taskMenuVisible = ref({}); // 管理每个任务的菜单显示状态
@@ -638,7 +638,11 @@ export const locale = i18n.global.locale
             });
 
             if (response.status === 401) {
-                logout();
+                logout(false);
+                showAlert('认证失败，请重新登录', 'warning', {
+                    label: t('login'),
+                    onClick: login
+                });
                 throw new Error('认证失败，请重新登录');
             }
             if (response.status === 400) {
@@ -728,6 +732,9 @@ export const locale = i18n.global.locale
 
                 if (response.ok) {
                     localStorage.setItem('accessToken', data.access_token);
+                    if (data.refresh_token) {
+                        localStorage.setItem('refreshToken', data.refresh_token);
+                    }
                     localStorage.setItem('currentUser', JSON.stringify(data.user_info));
                     currentUser.value = data.user_info;
 
@@ -819,6 +826,9 @@ export const locale = i18n.global.locale
                     const data = await response.json();
                     console.log(data);
                     localStorage.setItem('accessToken', data.access_token);
+                    if (data.refresh_token) {
+                        localStorage.setItem('refreshToken', data.refresh_token);
+                    }
                     localStorage.setItem('currentUser', JSON.stringify(data.user_info));
                     currentUser.value = data.user_info;
                     isLoggedIn.value = true;
@@ -864,9 +874,13 @@ export const locale = i18n.global.locale
             }
         };
 
-        const logout = () => {
+        let refreshPromise = null;
+
+        const logout = (showMessage = true) => {
             localStorage.removeItem('accessToken');
+            localStorage.removeItem('refreshToken');
             localStorage.removeItem('currentUser');
+            refreshPromise = null;
 
             clearAllCache();
             switchToLoginView();
@@ -874,7 +888,9 @@ export const locale = i18n.global.locale
 
             models.value = [];
             tasks.value = [];
-            showAlert('已退出登录', 'info');
+            if (showMessage) {
+                showAlert('已退出登录', 'info');
+            }
         };
 
         const login = () => {
@@ -1370,7 +1386,7 @@ export const locale = i18n.global.locale
                 } else if (error.name === 'NotFoundError') {
                     errorMessage = '未找到麦克风设备，请检查设备连接或使用其他设备';
                 } else if (error.name === 'NotSupportedError') {
-                    errorMessage = '浏览器不支持录音功能，请使用Chrome、Firefox、Safari或Edge浏览器';
+                    errorMessage = '移动端浏览器不支持录音功能，可以拍摄视频来代替录音';
                 } else if (error.name === 'NotReadableError') {
                     errorMessage = '麦克风被其他应用占用，请关闭其他使用麦克风的程序后重试';
                 } else if (error.name === 'OverconstrainedError') {
@@ -2870,28 +2886,6 @@ export const locale = i18n.global.locale
             const blob = fileInfo.blob;
             const fileName = fileInfo.name || 'download';
             const mimeType = blob.type || fileInfo.mimeType || 'application/octet-stream';
-            const isMobile = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-            if (isMobile && typeof navigator?.canShare === 'function' && typeof navigator?.share === 'function') {
-                try {
-                    const shareFile = new File([blob], fileName, { type: mimeType });
-                    if (navigator.canShare({ files: [shareFile] })) {
-                        await navigator.share({
-                            files: [shareFile],
-                            title: fileName
-                        });
-                        showAlert(t('downloadSuccessAlert'), 'success');
-                        return true;
-                    }
-                } catch (error) {
-                    if (error?.name === 'AbortError') {
-                        console.info('User cancelled share dialog');
-                        showAlert(t('downloadCancelledAlert'), 'info');
-                        return false;
-                    }
-                    console.warn('Native share failed, falling back to download link:', error);
-                }
-            }
 
             try {
                 const objectUrl = URL.createObjectURL(blob);
@@ -2960,49 +2954,6 @@ export const locale = i18n.global.locale
                 }
 
                 const blob = await response.blob();
-                const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-                if (isMobileBrowser) {
-                    downloadLoadingMessage.value = '';
-                    downloadLoading.value = false;
-                    showAlert(t('mobileSaveToAlbumTip'), 'info');
-
-                    const blobUrl = URL.createObjectURL(blob);
-                    const previewWindow = window.open('', '_blank', 'noopener,noreferrer');
-
-                    if (previewWindow) {
-                        previewWindow.document.write(`<!DOCTYPE html>
-<html lang="${locale.value || 'en'}">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${t('mobileSavePreviewTitle')}</title>
-  <style>
-    body { margin: 0; background: #000; color: #fff; font-family: system-ui, sans-serif; }
-    .wrapper { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 16px; }
-    video { width: 100%; height: auto; border-radius: 16px; max-height: calc(100vh - 160px); }
-    p { text-align: center; line-height: 1.5; font-size: 15px; color: rgba(255,255,255,0.85); }
-  </style>
-</head>
-<body>
-  <div class="wrapper">
-    <video controls playsinline webkit-playsinline preload="auto" src="${blobUrl}"></video>
-    <p>${t('mobileSaveInstruction')}</p>
-  </div>
-  <script>
-    window.addEventListener('pagehide', () => URL.revokeObjectURL('${blobUrl}'));
-    window.addEventListener('beforeunload', () => URL.revokeObjectURL('${blobUrl}'));
-  </script>
-</body>
-</html>`);
-                        previewWindow.document.close();
-                    } else {
-                        URL.revokeObjectURL(blobUrl);
-                        window.location.href = downloadUrl;
-                    }
-                    return;
-                }
-
                 downloadLoadingMessage.value = t('downloadSaving');
                 await downloadFile({
                     blob,
@@ -4201,10 +4152,9 @@ export const locale = i18n.global.locale
                 // 按时间戳排序，最新的在前
                 uniqueImages.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-                const result = uniqueImages.slice(0, 20); // 只显示最近20条
-                imageHistory.value = result;
-                console.log('从任务列表获取图片历史:', result.length, '条');
-                return result;
+                imageHistory.value = uniqueImages;
+                console.log('从任务列表获取图片历史:', uniqueImages.length, '条');
+                return uniqueImages;
             } catch (error) {
                 console.error('获取图片历史失败:', error);
                 imageHistory.value = [];
@@ -4228,13 +4178,15 @@ export const locale = i18n.global.locale
                     if (task.inputs && task.inputs.input_audio && !seenAudios.has(task.inputs.input_audio)) {
                         // 获取音频URL
                         const audioUrl = await getTaskFileUrl(task.task_id, 'input_audio');
+                        const imageUrl = task.inputs.input_image ? await getTaskFileUrl(task.task_id, 'input_image') : null;
                         if (audioUrl) {
                             uniqueAudios.push({
                                 filename: task.inputs.input_audio,
                                 url: audioUrl,
                                 taskId: task.task_id,
                                 timestamp: task.create_t,
-                                taskType: task.task_type
+                                taskType: task.task_type,
+                                imageUrl
                             });
                             seenAudios.add(task.inputs.input_audio);
                         }
@@ -4244,10 +4196,9 @@ export const locale = i18n.global.locale
                 // 按时间戳排序，最新的在前
                 uniqueAudios.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-                const result = uniqueAudios.slice(0, 20); // 只显示最近20条
-                audioHistory.value = result;
-                console.log('从任务列表获取音频历史:', result.length, '条');
-                return result;
+                audioHistory.value = uniqueAudios;
+                console.log('从任务列表获取音频历史:', uniqueAudios.length, '条');
+                return uniqueAudios;
             } catch (error) {
                 console.error('获取音频历史失败:', error);
                 audioHistory.value = [];
@@ -4400,6 +4351,7 @@ export const locale = i18n.global.locale
             try {
                 // 清理任务历史
                 localStorage.removeItem('taskHistory');
+                localStorage.removeItem('refreshToken');
 
                 // 清理其他可能的缓存数据
                 const keysToRemove = [];
@@ -4460,8 +4412,59 @@ export const locale = i18n.global.locale
             }
         };
 
+        const refreshAccessToken = async () => {
+            if (refreshPromise) {
+                return refreshPromise;
+            }
+            const refreshToken = localStorage.getItem('refreshToken');
+            if (!refreshToken) {
+                return false;
+            }
+
+            refreshPromise = (async () => {
+                try {
+                    const response = await fetch('/auth/refresh', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ refresh_token: refreshToken })
+                    });
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    if (!response.ok) {
+                        throw new Error(`Refresh failed with status ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    if (data.access_token) {
+                        localStorage.setItem('accessToken', data.access_token);
+                    }
+                    if (data.refresh_token) {
+                        localStorage.setItem('refreshToken', data.refresh_token);
+                    }
+                    if (data.user_info) {
+                        currentUser.value = data.user_info;
+                        localStorage.setItem('currentUser', JSON.stringify(data.user_info));
+                    }
+                    return true;
+                } catch (error) {
+                    console.error('Refresh token failed:', error);
+                    logout(false);
+                    showAlert('登录已过期，请重新登录', 'warning', {
+                        label: t('login'),
+                        onClick: login
+                    });
+                    return false;
+                } finally {
+                    refreshPromise = null;
+                }
+            })();
+
+            return refreshPromise;
+        };
+
         // 增强的API请求函数，自动处理认证错误
-        const apiRequest = async (url, options = {}) => {
+        const apiRequest = async (url, options = {}, allowRetry = true) => {
             const headers = getAuthHeaders();
 
             try {
@@ -4474,12 +4477,14 @@ export const locale = i18n.global.locale
                 });
                 await new Promise(resolve => setTimeout(resolve, 100));
                 // 检查是否是认证错误
-                if (response.status === 401 || response.status === 403) {
-                    // Token无效，清除本地存储并跳转到登录页
-                    logout();
-                    showAlert('登录已过期，请重新登录', 'warning');
+                if ((response.status === 401 || response.status === 403) && allowRetry) {
+                    const refreshed = await refreshAccessToken();
+                    if (refreshed) {
+                        return await apiRequest(url, options, false);
+                    }
                     return null;
                 }
+
                 return response;
             } catch (error) {
                 console.error('API request failed:', error);

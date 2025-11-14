@@ -3,7 +3,7 @@ import torch.nn as nn
 
 try:
     from vllm import _custom_ops as ops
-except ModuleNotFoundError:
+except ImportError:
     ops = None
 
 try:
@@ -13,7 +13,7 @@ except ImportError:
 
 try:
     from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
-except ModuleNotFoundError:
+except ImportError:
     quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
 
 try:

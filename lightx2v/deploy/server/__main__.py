@@ -47,6 +47,10 @@ class TTSRequest(BaseModel):
     resource_id: str = "seed-tts-1.0"
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 # =========================
 # FastAPI Related Code
 # =========================
@@ -148,6 +152,18 @@ def error_response(e, code):
     return JSONResponse({"message": f"error: {e}!"}, status_code=code)
 
 
+def format_user_response(user):
+    return {
+        "user_id": user.get("user_id"),
+        "id": user.get("id"),
+        "source": user.get("source"),
+        "username": user.get("username") or "",
+        "email": user.get("email") or "",
+        "homepage": user.get("homepage") or "",
+        "avatar_url": user.get("avatar_url") or "",
+    }
+
+
 def guess_file_type(name, default_type):
     content_type, _ = mimetypes.guess_type(name)
     if content_type is None:
@@ -158,6 +174,12 @@ def guess_file_type(name, default_type):
 @app.get("/", response_class=HTMLResponse)
 async def root():
     with open(os.path.join(static_dir, "index.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
+@app.get("/sitemap.xml", response_class=HTMLResponse)
+async def sitemap():
+    with open(os.path.join(os.path.dirname(__file__), "frontend", "dist", "sitemap.xml"), "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 
@@ -178,9 +200,10 @@ async def github_callback(request: Request):
         user_info = await auth_manager.auth_github(code)
         user_id = await task_manager.create_user(user_info)
         user_info["user_id"] = user_id
-        access_token = auth_manager.create_jwt_token(user_info)
-        logger.info(f"GitHub callback: user_info: {user_info}, access_token: {access_token}")
-        return {"access_token": access_token, "user_info": user_info}
+        user_response = format_user_response(user_info)
+        access_token, refresh_token = auth_manager.create_tokens(user_response)
+        logger.info(f"GitHub callback: user_info: {user_response}, access token issued")
+        return {"access_token": access_token, "refresh_token": refresh_token, "user_info": user_response}
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
@@ -204,9 +227,10 @@ async def google_callback(request: Request):
         user_info = await auth_manager.auth_google(code)
         user_id = await task_manager.create_user(user_info)
         user_info["user_id"] = user_id
-        access_token = auth_manager.create_jwt_token(user_info)
-        logger.info(f"Google callback: user_info: {user_info}, access_token: {access_token}")
-        return {"access_token": access_token, "user_info": user_info}
+        user_response = format_user_response(user_info)
+        access_token, refresh_token = auth_manager.create_tokens(user_response)
+        logger.info(f"Google callback: user_info: {user_response}, access token issued")
+        return {"access_token": access_token, "refresh_token": refresh_token, "user_info": user_response}
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)
@@ -240,10 +264,31 @@ async def sms_callback(request: Request):
 
         user_id = await task_manager.create_user(user_info)
         user_info["user_id"] = user_id
-        access_token = auth_manager.create_jwt_token(user_info)
-        logger.info(f"SMS callback: user_info: {user_info}, access_token: {access_token}")
-        return {"access_token": access_token, "user_info": user_info}
+        user_response = format_user_response(user_info)
+        access_token, refresh_token = auth_manager.create_tokens(user_response)
+        logger.info(f"SMS callback: user_info: {user_response}, access token issued")
+        return {"access_token": access_token, "refresh_token": refresh_token, "user_info": user_response}
 
+    except Exception as e:
+        traceback.print_exc()
+        return error_response(str(e), 500)
+
+
+@app.post("/auth/refresh")
+async def refresh_access_token(request: RefreshTokenRequest):
+    try:
+        payload = auth_manager.verify_refresh_token(request.refresh_token)
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        user = await task_manager.query_user(user_id)
+        if user is None or user.get("user_id") != user_id:
+            raise HTTPException(status_code=401, detail="Invalid user")
+        user_info = format_user_response(user)
+        access_token, refresh_token = auth_manager.create_tokens(user_info)
+        return {"access_token": access_token, "refresh_token": refresh_token, "user_info": user_info}
+    except HTTPException as exc:
+        raise exc
     except Exception as e:
         traceback.print_exc()
         return error_response(str(e), 500)

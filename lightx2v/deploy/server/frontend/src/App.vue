@@ -12,7 +12,9 @@ import { currentUser,
   initLoading,
   pollingInterval,
   pollingTasks,
-  showAlert
+  showAlert,
+  logout,
+  login
  } from './utils/other'
 import { useI18n } from 'vue-i18n'
 import Loading from './components/Loading.vue'
@@ -74,7 +76,10 @@ onMounted(async () => {
         localStorage.removeItem('currentUser')
         isLoggedIn.value = false
         console.log('Token已过期')
-        showAlert('请重新登录', 'warning')
+        showAlert('请重新登录', 'warning', {
+          label: t('login'),
+          onClick: login
+        })
       }
     } else {
       isLoggedIn.value = false
