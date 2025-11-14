@@ -349,7 +349,9 @@ class VARecorder:
     def start(self, width: int, height: int):
         self.set_video_size(width, height)
         duration = 1.0
-        self.pub_livestream(torch.zeros((int(self.fps * duration), height, width, 3), dtype=torch.float16), torch.zeros(int(self.sample_rate * duration), dtype=torch.float16))
+        frames = int(self.fps * duration)
+        samples = int(self.sample_rate * (frames / self.fps))
+        self.pub_livestream(torch.zeros((frames, height, width, 3), dtype=torch.float16), torch.zeros(samples, dtype=torch.float16))
         time.sleep(duration)
 
     def set_video_size(self, width: int, height: int):

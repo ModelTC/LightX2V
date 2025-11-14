@@ -1,6 +1,7 @@
 import gc
 import io
 import json
+import math
 import os
 import warnings
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
+from lightx2v.models.runners.vsr.vsr_wrapper import compute_scaled_and_target_dims
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
@@ -678,8 +680,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 target_fps=target_fps,
             )
 
-        if "video_super_resolution" in self.config and self.vsr_model is not None:
-            logger.info(f"Applying video super resolution with scale {self.config['video_super_resolution']['scale']}")
+        if self.va_recorder and "video_super_resolution" in self.config and self.vsr_model is not None:
+            # logger.info(f"Applying video super resolution with scale {self.config['video_super_resolution']['scale']}")
             video_seg = self.vsr_model.super_resolve_frames(
                 video_seg,
                 seed=self.config["video_super_resolution"]["seed"],
@@ -717,6 +719,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_sr = self.config.get("audio_sr", 16000)
         if "video_frame_interpolation" in self.config and self.vfi_model is not None:
             self.record_fps = self.config["video_frame_interpolation"]["target_fps"]
+        self.record_fps = self.config.get("record_fps", self.record_fps)
         if output_video_path and rank == self.target_recorder_rank:
             whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
             if whip_shared_path and output_video_path.startswith("http"):
@@ -773,6 +776,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         try:
             rank, world_size = self.get_rank_and_world_size()
             tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
+            record_h, record_w = tgt_h, tgt_w
+            if "video_super_resolution" in self.config:
+                _, _, record_w, record_h = compute_scaled_and_target_dims(
+                record_w,
+                record_h,
+                scale=self.config["video_super_resolution"]["scale"],
+                multiple=128,
+            )
             self.target_recorder_rank = -1 % world_size
             self.slice_frame = self.config.get("slice_frame", 1)
 
@@ -785,7 +796,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.va_reader.start()
             if rank == self.target_recorder_rank:
                 assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
-                self.va_recorder.start(tgt_w, tgt_h)
+                self.va_recorder.start(record_w, record_h)
             if world_size > 1:
                 dist.barrier()
 
@@ -801,7 +812,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             est_max_infer_secs = 0.6
             slice_interval = self.slice_frame / self.record_fps
-            est_infer_end_idx = round(est_max_infer_secs / slice_interval)
+            est_infer_end_idx = math.ceil(est_max_infer_secs / slice_interval)
             min_stay_queue_num = est_infer_end_idx * 2 + 1
             gen_tensor = torch.zeros((1, 3, self.prev_frame_length, tgt_h, tgt_w), dtype=torch.float, device="cuda")
             stream_len_tensor = torch.tensor([0], dtype=torch.int32, device="cuda")
