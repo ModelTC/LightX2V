@@ -17,14 +17,17 @@ import {
     showAlert,
     cancelTask,
     resumeTask,
-    downloadFile,
+    downloadLoading,
     handleDownloadFile,
     getTaskFileFromCache,
     apiRequest,
     copyShareLink,
+    deleteTask,
     currentTask,
     startPollingTask,
     openTaskDetailModal,
+    playVideo,
+    pauseVideo,
 } from '../utils/other'
 
 const { t } = useI18n()
@@ -42,6 +45,7 @@ const props = defineProps({
 const isVideoLoaded = ref(false)
 const isVideoError = ref(false)
 const videoElement = ref(null)
+const isMuted = ref(true)
 
 // 计算属性
 const sortedTasks = computed(() => {
@@ -147,11 +151,32 @@ const resetVideoState = () => {
 const onVideoLoaded = () => {
     isVideoLoaded.value = true
     isVideoError.value = false
+    if (videoElement.value && isMuted.value) {
+        videoElement.value.muted = true
+    }
 }
 
 const onVideoError = () => {
     isVideoError.value = true
     isVideoLoaded.value = false
+}
+
+const toggleMute = (event) => {
+    event.stopPropagation()
+    isMuted.value = !isMuted.value
+    if (videoElement.value) {
+        videoElement.value.muted = isMuted.value
+        if (!isMuted.value) {
+            videoElement.value.play().catch(() => {})
+        }
+    }
+}
+
+const openDetail = (event) => {
+    event?.stopPropagation()
+    if (currentTask.value) {
+        openTaskDetailModal(currentTask.value)
+    }
 }
 
 
@@ -257,8 +282,15 @@ onUnmounted(() => {
 
             <!-- 视频容器 - Apple 圆角和阴影 -->
             <div class="w-full max-w-[280px] sm:max-w-[300px] md:max-w-[400px] lg:max-w-[400px] aspect-[9/16] bg-black dark:bg-[#000000] rounded-[16px] overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.5)] relative cursor-pointer transition-all duration-200 hover:shadow-[0_12px_32px_rgba(0,0,0,0.2)] dark:hover:shadow-[0_12px_32px_rgba(0,0,0,0.6)]"
-                @click="openTaskDetailModal(currentTask)"
+                @click="openDetail"
                 :title="t('viewTaskDetails')">
+                <button
+                    class="absolute top-3 left-3 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/55 active:scale-95"
+                    @click.stop="openDetail"
+                    :title="t('viewTaskDetails')"
+                    :aria-label="t('viewTaskDetails')">
+                    <i class="fas fa-info"></i>
+                </button>
                 <!-- 已完成：显示视频播放器 -->
                 <video
                     v-if="isCompleted && videoUrl"
@@ -266,12 +298,26 @@ onUnmounted(() => {
                     :poster="imageUrl"
                     class="w-full h-full object-contain"
                     controls
-                    preload="metadata"
-                    @loadeddata="onVideoLoaded"
-                    @error="onVideoError"
+                    preload="auto"
+                    autoplay
+                    muted
+                    playsinline
+                    webkit-playsinline
+                    @mouseenter="playVideo($event)"
+                    @mouseleave="pauseVideo($event)"
+                    @loadeddata="onVideoLoaded($event)"
+                    @ended="onVideoEnded($event)"
+                    @error="onVideoError($event)"
                     ref="videoElement">
                     {{ t('browserNotSupported') }}
                 </video>
+                <button
+                    v-if="isCompleted && videoUrl"
+                    class="absolute top-3 right-3 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/55 active:scale-95"
+                    @click.stop="toggleMute"
+                    :title="isMuted ? t('unmute') : t('mute')">
+                    <i :class="isMuted ? 'fas fa-volume-mute' : 'fas fa-volume-up'"></i>
+                </button>
 
                 <!-- 进行中：Apple 风格加载状态 -->
                 <div v-else-if="isRunning" class="w-full h-full flex flex-col items-center justify-center relative bg-[#f5f5f7] dark:bg-[#1c1c1e]">
@@ -370,11 +416,20 @@ onUnmounted(() => {
 
             <!-- Apple 风格操作按钮 -->
             <div class="flex justify-center gap-3">
+                <button
+                    v-if="(isCompleted || isFailed || isCancelled) && currentTask?.task_id"
+                    @click="deleteTask(currentTask.task_id, false)"
+                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all.duration-200.ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-red-500 dark:text-red-400 hover:scale-105 active:scale-95"
+                    :title="t('delete')">
+                    <i class="fas fa-trash"></i>
+                </button>
                 <!-- 已完成：下载按钮 -->
                 <button
                     v-if="isCompleted && currentTask?.outputs?.output_video"
                     @click="handleDownloadFile(currentTask.task_id, 'output_video', currentTask.outputs.output_video)"
-                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95"
+                    :disabled="downloadLoading"
+                    class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7]"
+                    :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105 active:scale-95'"
                     :title="t('download')">
                     <i class="fas fa-download"></i>
                 </button>

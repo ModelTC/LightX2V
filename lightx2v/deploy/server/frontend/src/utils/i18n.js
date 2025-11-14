@@ -55,7 +55,7 @@ async function switchLang() {
       // };
 
   const languageOptions = ref([
-    { code: 'zh', name: '中文', flag: 'ZH' },
+    { code: 'zh', name: '中文', flag: '中' },
     { code: 'en', name: 'English', flag: 'EN' }
 ]);
 

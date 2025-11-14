@@ -16,21 +16,13 @@ import { showTemplateDetailModal,
          } from '../utils/other'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
 // 添加响应式变量
 const showDetails = ref(false)
-
-// 音频播放器相关
-const audioElement = ref(null)
-const isPlaying = ref(false)
-const audioDuration = ref(0)
-const currentTime = ref(0)
-const isDragging = ref(false)
-const currentAudioUrl = ref('')
 
 // 获取图片素材
 const getImageMaterials = () => {
@@ -62,19 +54,22 @@ const closeWithRoute = () => {
 
 // 滚动到生成区域（仅在 generate 页面）
 const scrollToCreationArea = () => {
-    const mainScrollable = document.querySelector('.main-scrollbar');
-    if (mainScrollable) {
-        mainScrollable.scrollTo({
-            top: 0,
-            behavior: 'smooth'
-        });
+    const creationArea = document.querySelector('#task-creator')
+    if (creationArea) {
+        creationArea.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+        })
     }
-
 }
 
 // 包装 useTemplate 函数，在 generate 页面时滚动到生成区域
-const handleUseTemplate = async () => {
-    await useTemplate(selectedTemplate.value)
+const handleUseTemplate = () => {
+    const template = selectedTemplate.value
+    if (!template) {
+        return
+    }
+    void useTemplate(template)
     // 如果当前在 generate 页面，滚动到生成区域
     if (route.path === '/generate' || route.name === 'Generate') {
         // 等待 DOM 更新和展开动画完成
@@ -98,100 +93,7 @@ onMounted(() => {
 
 onUnmounted(() => {
     document.removeEventListener('keydown', handleKeydown)
-    // 清理音频资源
-    const audio = getCurrentAudioElement()
-    if (audio) {
-        audio.pause()
-    }
 })
-
-// 格式化音频时间
-const formatAudioTime = (seconds) => {
-    if (!seconds || isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-}
-
-// 获取当前音频元素（处理可能是数组的情况）
-const getCurrentAudioElement = () => {
-    return Array.isArray(audioElement.value) ? audioElement.value[0] : audioElement.value
-}
-
-// 切换播放/暂停
-const toggleAudioPlayback = () => {
-    const audio = getCurrentAudioElement()
-    if (!audio) return
-
-    if (audio.paused) {
-        audio.play().catch(error => {
-            console.log('播放失败:', error)
-        })
-    } else {
-        audio.pause()
-    }
-}
-
-// 音频加载完成
-const onAudioLoaded = () => {
-    const audio = getCurrentAudioElement()
-    if (audio) {
-        audioDuration.value = audio.duration || 0
-    }
-}
-
-// 时间更新
-const onTimeUpdate = () => {
-    const audio = getCurrentAudioElement()
-    if (audio && !isDragging.value) {
-        currentTime.value = audio.currentTime || 0
-    }
-}
-
-// 进度条变化处理
-const onProgressChange = (event) => {
-    const audio = getCurrentAudioElement()
-    if (audioDuration.value > 0 && audio && event.target) {
-        const newTime = parseFloat(event.target.value)
-        currentTime.value = newTime
-        audio.currentTime = newTime
-    }
-}
-
-// 进度条拖拽结束处理
-const onProgressEnd = (event) => {
-    const audio = getCurrentAudioElement()
-    if (audio && audioDuration.value > 0 && event.target) {
-        const newTime = parseFloat(event.target.value)
-        audio.currentTime = newTime
-        currentTime.value = newTime
-    }
-    isDragging.value = false
-}
-
-// 播放结束
-const onAudioEnded = () => {
-    isPlaying.value = false
-    currentTime.value = 0
-}
-
-// 监听音频URL变化
-watch(() => getAudioMaterials(), (newMaterials) => {
-    if (newMaterials && newMaterials.length > 0) {
-        currentAudioUrl.value = newMaterials[0][1]
-        nextTick(() => {
-            const audio = getCurrentAudioElement()
-            if (audio) {
-                audio.load()
-            }
-        })
-    } else {
-        currentAudioUrl.value = ''
-        isPlaying.value = false
-        currentTime.value = 0
-        audioDuration.value = 0
-    }
-}, { immediate: true })
 </script>
 <template>
             <!-- 模板详情弹窗 - Apple 极简风格 -->
@@ -370,64 +272,7 @@ watch(() => getAudioMaterials(), (newMaterials) => {
                                             <div class="p-6 min-h-[200px]">
                                                 <div v-if="getAudioMaterials().length > 0" class="space-y-4">
                                                     <div v-for="[inputName, url] in getAudioMaterials()" :key="inputName">
-                                                        <!-- 音频播放器卡片 - Apple 风格 -->
-                                                        <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)] w-full p-4">
-                                                            <div class="relative flex items-center mb-3">
-                                                                <!-- 头像容器 -->
-                                                                <div class="relative mr-3 flex-shrink-0">
-                                                                    <!-- 透明白色头像 -->
-                                                                    <div class="w-12 h-12 rounded-full bg-white/40 dark:bg-white/20 border border-white/30 dark:border-white/20 transition-all duration-200"></div>
-                                                                    <!-- 播放/暂停按钮 -->
-                                                                    <button
-                                                                        @click="toggleAudioPlayback"
-                                                                        class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white cursor-pointer hover:scale-110 transition-all duration-200 z-20 shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)]"
-                                                                    >
-                                                                        <i :class="isPlaying ? 'fas fa-pause' : 'fas fa-play'" class="text-xs ml-0.5"></i>
-                                                                    </button>
-                                                                </div>
-
-                                                                <!-- 音频信息 -->
-                                                                <div class="flex-1 min-w-0">
-                                                                    <div class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight truncate">
-                                                                        {{ t('audio') }}
-                                                                    </div>
-                                                                </div>
-
-                                                                <!-- 音频时长 -->
-                                                                <div class="text-xs font-medium text-[#86868b] dark:text-[#98989d] tracking-tight flex-shrink-0">
-                                                                    {{ formatAudioTime(currentTime) }} / {{ formatAudioTime(audioDuration) }}
-                                                                </div>
-                                                            </div>
-
-                                                            <!-- 进度条 -->
-                                                            <div class="flex items-center gap-2" v-if="audioDuration > 0">
-                                                                <input
-                                                                    type="range"
-                                                                    :min="0"
-                                                                    :max="audioDuration"
-                                                                    :value="currentTime"
-                                                                    @input="onProgressChange"
-                                                                    @change="onProgressChange"
-                                                                    @mousedown="isDragging = true"
-                                                                    @mouseup="onProgressEnd"
-                                                                    @touchstart="isDragging = true"
-                                                                    @touchend="onProgressEnd"
-                                                                    class="flex-1 h-1 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                                                                />
-                                                            </div>
-                                                        </div>
-
-                                                        <!-- 隐藏的音频元素 -->
-                                                        <audio
-                                                            ref="audioElement"
-                                                            :src="url"
-                                                            @loadedmetadata="onAudioLoaded"
-                                                            @timeupdate="onTimeUpdate"
-                                                            @ended="onAudioEnded"
-                                                            @play="isPlaying = true"
-                                                            @pause="isPlaying = false"
-                                                            class="hidden"
-                                                        ></audio>
+                                                        <audio :src="url" controls class="w-full rounded-xl"></audio>
                                                     </div>
                                                 </div>
                                                 <div v-else class="flex flex-col items-center justify-center h-[150px]">

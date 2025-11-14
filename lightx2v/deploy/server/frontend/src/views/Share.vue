@@ -276,35 +276,33 @@ onMounted(async () => {
 
 <template>
     <!-- Apple 极简风格分享页面 -->
-    <div class="bg-[#f5f5f7] dark:bg-[#000000] transition-colors duration-300 w-full h-full">
-        <!-- 主内容区域 -->
-        <div class="flex flex-col w-full h-full">
-            <!-- TopBar -->
-            <topMenu />
+    <div class="min-h-screen w-full bg-[#f5f5f7] dark:bg-[#000000]">
+        <!-- TopBar -->
+        <topMenu />
 
-            <!-- 滚动内容区域 - 带滚动条 -->
-            <div class="flex-1 overflow-y-auto main-scrollbar">
-            <!-- 错误状态 - Apple 风格 - 响应式 -->
-            <div v-if="error" class="flex items-center justify-center min-h-[60vh] px-4 sm:px-6">
+        <!-- 主要内容区域 -->
+        <div class="w-full min-h-[calc(100vh-80px)] overflow-y-auto main-scrollbar">
+            <!-- 错误状态 - Apple 风格 -->
+            <div v-if="error" class="flex items-center justify-center min-h-[60vh] px-6">
                 <div class="text-center max-w-md">
-                    <div class="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-red-500/10 dark:bg-red-400/10 rounded-2xl sm:rounded-3xl mb-4 sm:mb-6">
-                        <i class="fas fa-exclamation-triangle text-2xl sm:text-3xl text-red-500 dark:text-red-400"></i>
+                    <div class="inline-flex items-center justify-center w-20 h-20 bg-red-500/10 dark:bg-red-400/10 rounded-3xl mb-6">
+                        <i class="fas fa-exclamation-triangle text-3xl text-red-500 dark:text-red-400"></i>
                     </div>
-                    <h2 class="text-xl sm:text-2xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-3 sm:mb-4 tracking-tight">{{ t('shareNotFound') }}</h2>
-                    <p class="text-sm sm:text-base text-[#86868b] dark:text-[#98989d] mb-6 sm:mb-8 tracking-tight">{{ error }}</p>
+                    <h2 class="text-2xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-4 tracking-tight">{{ t('shareNotFound') }}</h2>
+                    <p class="text-base text-[#86868b] dark:text-[#98989d] mb-8 tracking-tight">{{ error }}</p>
                     <button @click="router.push('/')"
-                            class="inline-flex items-center justify-center gap-2 px-6 sm:px-8 py-2.5 sm:py-3 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full text-sm sm:text-[15px] font-semibold tracking-tight transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100">
-                        <i class="fas fa-home text-xs sm:text-sm"></i>
+                            class="inline-flex items-center justify-center gap-2 px-8 py-3 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full text-[15px] font-semibold tracking-tight transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100">
+                        <i class="fas fa-home text-sm"></i>
                         <span>{{ t('backToHome') }}</span>
                     </button>
                 </div>
             </div>
 
-            <!-- 分享内容 - Apple 风格 - 响应式布局 -->
-            <div v-else-if="shareData" class="flex flex-col lg:grid lg:grid-cols-2 gap-8 lg:gap-16 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12 lg:py-16 items-center">
-                <!-- 左侧视频区域 - 响应式尺寸 -->
-                <div class="flex justify-center items-center w-full order-1">
-                    <div class="w-full max-w-[300px] sm:max-w-[350px] lg:max-w-[400px] aspect-[9/16] bg-black dark:bg-[#000000] rounded-2xl overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.5)] relative">
+            <!-- 分享内容 - Apple 风格 -->
+            <div v-else-if="shareData" class="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-16 w-full max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 py-12 lg:py-16 items-center">
+                <!-- 左侧视频区域 -->
+                <div class="flex justify-center items-center">
+                    <div class="w-full max-w-[400px] aspect-[9/16] bg-black dark:bg-[#000000] rounded-2xl overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.5)] relative">
                         <!-- 视频加载占位符 - Apple 风格 -->
                         <div v-if="!videoUrl" class="w-full h-full flex flex-col items-center justify-center bg-[#f5f5f7] dark:bg-[#1c1c1e]">
                             <div class="relative w-12 h-12 mb-6">
@@ -339,94 +337,94 @@ onMounted(async () => {
                     </div>
                 </div>
 
-                <!-- 右侧信息区域 - Apple 风格 - 响应式 -->
-                <div class="flex items-center justify-center w-full order-2">
-                    <div class="w-full max-w-[300px] sm:max-w-[500px]">
-                        <!-- 标题 - Apple 风格 - 响应式字体 -->
-                        <h1 class="text-2xl sm:text-3xl lg:text-4xl xl:text-5xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-3 sm:mb-4 tracking-tight leading-tight text-center lg:text-left">
+                <!-- 右侧信息区域 - Apple 风格 -->
+                <div class="flex items-center justify-center">
+                    <div class="w-full max-w-[500px]">
+                        <!-- 标题 - Apple 风格 -->
+                        <h1 class="text-4xl sm:text-5xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-4 tracking-tight leading-tight">
                             {{ getShareTitle() }}
                         </h1>
 
-                        <!-- 描述 - Apple 风格 - 响应式字体 -->
-                        <p class="text-base sm:text-lg text-[#86868b] dark:text-[#98989d] mb-6 sm:mb-8 leading-relaxed tracking-tight text-center lg:text-left">
+                        <!-- 描述 - Apple 风格 -->
+                        <p class="text-lg text-[#86868b] dark:text-[#98989d] mb-8 leading-relaxed tracking-tight">
                             {{ getShareDescription() }}
                         </p>
 
-                        <!-- 特性列表 - Apple 风格 - 响应式 -->
-                        <div class="grid grid-cols-1 gap-2 sm:gap-3 mb-6 sm:mb-8">
-                            <div class="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
-                                <div class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
-                                    <i class="fas fa-rocket text-sm sm:text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                        <!-- 特性列表 - Apple 风格 -->
+                        <div class="grid grid-cols-1 gap-3 mb-8">
+                            <div class="flex items-center gap-3 p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+                                <div class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
+                                    <i class="fas fa-rocket text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                 </div>
-                                <span class="text-xs sm:text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('latestAIModel') }}</span>
+                                <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('latestAIModel') }}</span>
                             </div>
-                            <div class="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
-                                <div class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
-                                    <i class="fas fa-bolt text-sm sm:text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                            <div class="flex items-center gap-3 p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+                                <div class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
+                                    <i class="fas fa-bolt text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                 </div>
-                                <span class="text-xs sm:text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('oneClickReplication') }}</span>
+                                <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('oneClickReplication') }}</span>
                             </div>
-                            <div class="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
-                                <div class="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
-                                    <i class="fas fa-user-cog text-sm sm:text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                            <div class="flex items-center gap-3 p-3 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+                                <div class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-lg flex-shrink-0">
+                                    <i class="fas fa-user-cog text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                 </div>
-                                <span class="text-xs sm:text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('customizableCharacter') }}</span>
+                                <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('customizableCharacter') }}</span>
                             </div>
                         </div>
 
-                        <!-- 操作按钮 - Apple 风格 - 响应式 -->
-                        <div class="space-y-2.5 sm:space-y-3 mb-6 sm:mb-8">
+                        <!-- 操作按钮 - Apple 风格 -->
+                        <div class="space-y-3 mb-8">
                             <button @click="createSimilar"
-                                    class="w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-6 sm:px-8 py-3 sm:py-3.5 text-sm sm:text-[15px] font-semibold text-white hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100 transition-all duration-200 ease-out tracking-tight flex items-center justify-center gap-2">
+                                    class="w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-8 py-3.5 text-[15px] font-semibold text-white hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100 transition-all duration-200 ease-out tracking-tight flex items-center justify-center gap-2">
                                 <i class="fas fa-magic text-sm"></i>
                                 <span>{{ getShareButtonText() }}</span>
                             </button>
 
                             <!-- 详细信息按钮 -->
                             <button @click="showDetails = !showDetails"
-                                    class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-6 sm:px-8 py-2.5 sm:py-3 text-sm sm:text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
+                                    class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-8 py-3 text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
                                 <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="text-sm"></i>
                                 <span>{{ showDetails ? t('hideDetails') : t('showDetails') }}</span>
                             </button>
                         </div>
 
                         <!-- 技术信息 - Apple 风格 - 响应式 -->
-                        <div class="text-center lg:text-left pt-4 sm:pt-6 border-t border-black/8 dark:border-white/8">
+                        <div class="text-center pt-4 sm:pt-6 border-t border-black/8 dark:border-white/8">
                             <a href="https://github.com/ModelTC/LightX2V"
                                target="_blank"
                                rel="noopener noreferrer"
-                               class="inline-flex items-center gap-2 text-xs sm:text-sm text-[#86868b] dark:text-[#98989d] hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)] transition-colors tracking-tight">
-                                <i class="fab fa-github text-sm sm:text-base"></i>
+                               class="inline-flex items-center gap-2 text-sm text-[#86868b] dark:text-[#98989d] hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)] transition-colors tracking-tight">
+                                <i class="fab fa-github text-base"></i>
                                 <span>{{ t('poweredByLightX2V') }}</span>
-                                <i class="fas fa-external-link-alt text-[10px] sm:text-xs"></i>
+                                <i class="fas fa-external-link-alt text-xs"></i>
                             </a>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 详细信息面板 - Apple 风格 - 响应式 -->
-            <div v-if="showDetails && shareData" class="w-full bg-white dark:bg-[#1c1c1e] border-t border-black/8 dark:border-white/8 py-8 sm:py-12 lg:py-16">
-                <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-12">
-                    <!-- 输入素材标题 - Apple 风格 - 响应式 -->
-                    <h2 class="text-xl sm:text-2xl lg:text-3xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 mb-6 sm:mb-8 lg:mb-10 tracking-tight">
+            <!-- 详细信息面板 - Apple 风格 -->
+            <div v-if="showDetails && shareData" class="w-full bg-white dark:bg-[#1c1c1e] border-t border-black/8 dark:border-white/8 py-16">
+                <div class="max-w-6xl mx-auto px-6 sm:px-8 lg:px-12">
+                    <!-- 输入素材标题 - Apple 风格 -->
+                    <h2 class="text-2xl sm:text-3xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center justify-center gap-3 mb-10 tracking-tight">
                         <i class="fas fa-upload text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                         <span>{{ t('inputMaterials') }}</span>
                     </h2>
 
-                    <!-- 三个卡片 - Apple 风格 - 响应式竖向排列 -->
-                    <div class="flex flex-col md:grid md:grid-cols-3 gap-4 sm:gap-6">
+                    <!-- 三个并列的分块卡片 - Apple 风格 -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <!-- 图片卡片 - Apple 风格 -->
                         <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl overflow-hidden transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
-                            <!-- 卡片头部 - 响应式 -->
-                            <div class="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
-                                <div class="flex items-center gap-2 sm:gap-3">
-                                    <i class="fas fa-image text-base sm:text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-                                    <h3 class="text-sm sm:text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('image') }}</h3>
+                            <!-- 卡片头部 -->
+                            <div class="flex items-center justify-between px-5 py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-image text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                    <h3 class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('image') }}</h3>
                                 </div>
                             </div>
-                            <!-- 卡片内容 - 响应式 - 带滚动条 -->
-                            <div class="p-4 sm:p-6 min-h-[150px] sm:min-h-[200px] max-h-[300px] overflow-y-auto main-scrollbar">
+                            <!-- 卡片内容 -->
+                            <div class="p-6 min-h-[200px]">
                                 <div v-if="getImageMaterials().length > 0">
                                     <div v-for="[inputName, url] in getImageMaterials()" :key="inputName" class="rounded-xl overflow-hidden border border-black/8 dark:border-white/8">
                                         <img :src="url" :alt="inputName"
@@ -442,17 +440,17 @@ onMounted(async () => {
                             </div>
                         </div>
 
-                        <!-- 音频卡片 - Apple 风格 - 响应式 -->
+                        <!-- 音频卡片 - Apple 风格 -->
                         <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl overflow-hidden transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
-                            <!-- 卡片头部 - 响应式 -->
-                            <div class="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
-                                <div class="flex items-center gap-2 sm:gap-3">
-                                    <i class="fas fa-music text-base sm:text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-                                    <h3 class="text-sm sm:text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('audio') }}</h3>
+                            <!-- 卡片头部 -->
+                            <div class="flex items-center justify-between px-5 py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-music text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                    <h3 class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('audio') }}</h3>
                                 </div>
                             </div>
-                            <!-- 卡片内容 - 响应式 - 带滚动条 -->
-                            <div class="p-4 sm:p-6 min-h-[150px] sm:min-h-[200px] max-h-[300px] overflow-y-auto main-scrollbar">
+                            <!-- 卡片内容 -->
+                            <div class="p-6 min-h-[200px]">
                                 <div v-if="getAudioMaterials().length > 0" class="space-y-4">
                                     <div v-for="[inputName, url] in getAudioMaterials()" :key="inputName">
                                         <audio :src="url" controls class="w-full rounded-xl"></audio>
@@ -465,23 +463,23 @@ onMounted(async () => {
                             </div>
                         </div>
 
-                        <!-- 提示词卡片 - Apple 风格 - 响应式 -->
+                        <!-- 提示词卡片 - Apple 风格 -->
                         <div class="bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl overflow-hidden transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
-                            <!-- 卡片头部 - 响应式 -->
-                            <div class="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
-                                <div class="flex items-center gap-2 sm:gap-3">
-                                    <i class="fas fa-file-alt text-base sm:text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-                                    <h3 class="text-sm sm:text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('prompt') }}</h3>
+                            <!-- 卡片头部 -->
+                            <div class="flex items-center justify-between px-5 py-4 bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10 border-b border-black/8 dark:border-white/8">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-file-alt text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                    <h3 class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('prompt') }}</h3>
                                 </div>
                                 <button v-if="shareData.prompt"
                                         @click="copyPrompt(shareData.prompt)"
-                                        class="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
+                                        class="w-8 h-8 flex items-center justify-center bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 border border-[color:var(--brand-primary)]/20 dark:border-[color:var(--brand-primary-light)]/20 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded-lg transition-all duration-200 hover:scale-110 active:scale-100"
                                         :title="t('copy')">
-                                    <i class="fas fa-copy text-[10px] sm:text-xs"></i>
+                                    <i class="fas fa-copy text-xs"></i>
                                 </button>
                             </div>
-                            <!-- 卡片内容 - 响应式 -->
-                            <div class="p-4 sm:p-6 min-h-[150px] sm:min-h-[200px]">
+                            <!-- 卡片内容 -->
+                            <div class="p-6 min-h-[200px]">
                                 <div v-if="shareData.prompt" class="bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-[10px] border border-black/6 dark:border-white/6 rounded-xl p-4">
                                     <p class="text-sm text-[#1d1d1f] dark:text-[#f5f5f7] leading-relaxed tracking-tight break-words">{{ shareData.prompt }}</p>
                                 </div>
@@ -494,13 +492,12 @@ onMounted(async () => {
                     </div>
                 </div>
             </div>
-            </div>
         </div>
+    </div>
 
-        <!-- 全局路由跳转Loading覆盖层 - Apple 风格 -->
-        <div v-show="isLoading" class="fixed inset-0 bg-[#f5f5f7] dark:bg-[#000000] flex items-center justify-center z-[9999]">
-            <Loading />
-        </div>
+    <!-- 全局路由跳转Loading覆盖层 - Apple 风格 -->
+    <div v-show="isLoading" class="fixed inset-0 bg-[#f5f5f7] dark:bg-[#000000] flex items-center justify-center z-[9999]">
+        <Loading />
     </div>
 </template>
 

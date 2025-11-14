@@ -2,24 +2,125 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LightX2V</title>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- 主要图标库 -->
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>LightX2V — AI数字人视频生成平台</title>
+  <meta name="description" content="LightX2V：轻量、快速的AI数字人视频生成平台。在线体验、示例视频与使用说明。">
+  <meta name="keywords" content="AI数字人, 文生视频, 图生视频, LightX2V, Light AI, 视频生成, 文本生成视频, 数字人视频平台">
+  <meta name="robots" content="index,follow" />
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f1329">
+  <link rel="canonical" href="https://x2v.light-ai.top/" />
+  <link rel="alternate" hreflang="zh-CN" href="https://x2v.light-ai.top/" />
+  <link rel="alternate" hreflang="en" href="https://x2v.light-ai.top/" />
+  <link rel="alternate" hreflang="x-default" href="https://x2v.light-ai.top/" />
+
+  <!-- Open Graph for social platforms -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="LightX2V">
+  <meta property="og:title" content="LightX2V — AI数字人视频生成平台">
+  <meta property="og:description" content="轻量、快速的AI数字人视频生成平台。在线体验、示例视频与使用说明。">
+  <meta property="og:url" content="https://x2v.light-ai.top/">
+  <meta property="og:image" content="/public/cover.png">
+
+  <!-- Twitter Card (for X/Twitter) -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LightX2V — AI数字人视频生成平台">
+  <meta name="twitter:description" content="轻量、快速的AI数字人视频生成平台。由 Light AI 工具链驱动，支持文本/图像到视频的高效生成。">
+  <meta name="twitter:image" content="/public/cover.png">
+  <meta name="twitter:site" content="@LightX2V">
+
+  <!-- Favicon & App icons -->
+  <link rel="icon" href="/public/logo_black.png" sizes="32x32">
+  <link rel="icon" href="/public/logo_black.png" type="image/png">
+  <link rel="icon" href="/public/logo_black.png" type="image/x-icon">
+  <link rel="apple-touch-icon" sizes="180x180" href="/public/logo_black.png">
+
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="preconnect" href="https://x2v.light-ai.top" crossorigin>
+  <link rel="preconnect" href="https://cdn.bootcdn.net" crossorigin>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="dns-prefetch" href="https://x2v.light-ai.top">
+  <link rel="dns-prefetch" href="https://cdn.bootcdn.net">
+  <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+  <link rel="preload" href="/src/style.css" as="style">
+  <link rel="preload" href="/src/main.js" as="script" type="module">
   <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-  <!-- 备用图标库 -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"
-      media="print" onload="this.media='all'">
-      <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-solid-rounded/css/uicons-solid-rounded.css'>
-      <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-bold-rounded/css/uicons-bold-rounded.css'>
-      <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-solid-rounded/css/uicons-solid-rounded.css'>
-      <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-regular-rounded/css/uicons-regular-rounded.css'>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-solid-rounded/css/uicons-solid-rounded.css'>
+  <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-bold-rounded/css/uicons-bold-rounded.css'>
+  <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-solid-rounded/css/uicons-solid-rounded.css'>
+  <link rel='stylesheet' href='https://cdn-uicons.flaticon.com/3.0.0/uicons-regular-rounded/css/uicons-regular-rounded.css'>
   <link href="/src/style.css" rel="stylesheet">
+  <style>
+    .seo-shell {
+      position: absolute !important;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
+      border: 0;
+      white-space: nowrap;
+    }
+  </style>
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"Organization",
+    "name":"Light AI",
+    "url":"https://www.light-ai.top/",
+    "logo":"https://x2v.light-ai.top/og-cover.jpg",
+    "sameAs":[
+      "https://github.com/ModelTC/LightX2V"
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"WebSite",
+    "name":"LightX2V",
+    "url":"https://x2v.light-ai.top/",
+    "publisher":{"@type":"Organization","name":"Light AI"},
+    "inLanguage":"zh-CN"
+  }
+  </script>
 </head>
 <body>
-  <div id="app">
+  <main id="app">
+    <!-- 这是爬虫可读的首屏静态内容；JS 启动后可增强或替换 -->
+    <div class="seo-shell">
+      <header>
+      <h1>LightX2V</h1>
+      <p>免费、轻量、快速的AI数字人视频生成平台，由 Light AI 工具链提供端到端加速支持。</p>
+      <p>了解更多关于工具链与最新动态，请访问 <a href="https://www.light-ai.top/" rel="noopener" target="_blank">Light AI 官网</a> 与 <a href="https://github.com/ModelTC/LightX2V" rel="noopener" target="_blank">LightX2V GitHub</a>。</p>
+    </header>
+    <section>
+      <h2>功能亮点</h2>
+      <ul>
+        <li>电影级数字人视频生成</li>
+        <li>20倍生成提速</li>
+        <li>超低成本生成</li>
+        <li>精准口型对齐</li>
+        <li>分钟级视频时长</li>
+        <li>多场景应用</li>
+        <li>最新tts语音合成技术，支持多种语言，支持100+种音色，支持语音指令控制合成语音细节</li>
+      </ul>
+    </section>
+    <section>
+      <h2>快速开始</h2>
+      <ol>
+        <li>上传图片及音频，输入视频生成提示词，点击开始生成</li>
+        <li>生成并下载视频</li>
+        <li>应用模版，一键生成同款数字人视频</li>
+      </ol>
+    </section>
   </div>
+  </main>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

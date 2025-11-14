@@ -32,6 +32,7 @@ import {
             loginLoading,
             initLoading,
             downloadLoading,
+            downloadLoadingMessage,
 
             // 录音相关
             isRecording,
@@ -105,7 +106,7 @@ import {
             templateFileCache,
             templateFileCacheLoaded,
             loadTaskFiles,
-            downloadFile,
+            handleDownloadFile,
             viewFile,
             handleImageUpload,
             selectTask,
@@ -292,106 +293,13 @@ import {
             generateShareUrl,
             copyShareLink,
             shareToSocial,
-            openTaskFromRoute
+            openTaskFromRoute,
+            isPageLoading
         } from '../utils/other'
 
 // 路由监听
 const route = useRoute()
 const router = useRouter()
-
-// 处理任务下载
-const handleDownloadTask = async (task) => {
-    try {
-        console.log('开始下载任务文件:', { taskId: task.task_id, outputs: task.outputs })
-
-        // 处理文件名，确保有正确的后缀名
-        let fileName = task.outputs?.output_video || 'video.mp4'
-        if (fileName && typeof fileName === 'string') {
-            // 检查是否已有后缀名
-            const hasExtension = /\.[a-zA-Z0-9]+$/.test(fileName)
-            if (!hasExtension) {
-                // 没有后缀名，添加mp4后缀
-                fileName = `${fileName}.mp4`
-                console.log('添加后缀名:', fileName)
-            }
-        }
-
-        // 先尝试从缓存获取
-        let fileData = getTaskFileFromCache(task.task_id, 'output_video')
-        console.log('缓存中的文件数据:', fileData)
-
-        if (fileData && fileData.blob) {
-            // 缓存中有blob数据，直接使用
-            console.log('使用缓存中的文件数据')
-            downloadFile({ ...fileData, name: fileName })
-            return
-        }
-
-        if (fileData && fileData.url) {
-            // 缓存中有URL，使用URL下载
-            console.log('使用缓存中的URL下载:', fileData.url)
-            try {
-                const response = await fetch(fileData.url)
-                console.log('文件响应状态:', response.status, response.ok)
-
-                if (response.ok) {
-                    const blob = await response.blob()
-                    console.log('文件blob大小:', blob.size)
-
-                    const downloadData = {
-                        blob: blob,
-                        name: fileName
-                    }
-                    console.log('构造的文件数据:', downloadData)
-                    downloadFile(downloadData)
-                    return
-                } else {
-                    console.error('文件响应失败:', response.status, response.statusText)
-                }
-            } catch (error) {
-                console.error('使用缓存URL下载失败:', error)
-            }
-        }
-
-        if (!fileData) {
-            console.log('缓存中没有文件，尝试异步获取...')
-            // 缓存中没有，尝试异步获取
-            const url = await getTaskFileUrl(task.task_id, 'output_video')
-            console.log('获取到的文件URL:', url)
-
-            if (url) {
-                const response = await fetch(url)
-                console.log('文件响应状态:', response.status, response.ok)
-
-                if (response.ok) {
-                    const blob = await response.blob()
-                    console.log('文件blob大小:', blob.size)
-
-                    fileData = {
-                        blob: blob,
-                        name: fileName
-                    }
-                    console.log('构造的文件数据:', fileData)
-                } else {
-                    console.error('文件响应失败:', response.status, response.statusText)
-                }
-            } else {
-                console.error('无法获取文件URL')
-            }
-        }
-
-        if (fileData && fileData.blob) {
-            console.log('开始下载文件:', fileData.name)
-            downloadFile(fileData)
-        } else {
-            console.error('文件数据无效:', fileData)
-            showAlert(t('fileUnavailableAlert'), 'danger')
-        }
-    } catch (error) {
-        console.error('下载失败:', error)
-        showAlert(t('downloadFailedAlert'), 'danger')
-    }
-}
 
 // 监听路由变化，处理任务详情路由
 watch(() => route.params.taskId, (newTaskId) => {
@@ -436,6 +344,12 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
 
 </script>
 <template>
+    <div v-if="downloadLoading" class="fixed inset-0 z-[120] flex justify-center items-center bg-black/10 dark:bg-black/30 pointer-events-none backdrop-blur-sm">
+        <div class="pointer-events-auto px-5 py-3 rounded-2xl bg-white/85 dark:bg-[#2c2c2e]/85 border border-black/10 dark:border-white/10 backdrop-blur-[14px] shadow-[0_16px_40px_rgba(0,0,0,0.18)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.5)] flex items-center gap-2 text-sm text-[#1d1d1f] dark:text-[#f5f5f7]">
+            <i class="fas fa-spinner fa-spin text-base text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+            <span>{{ downloadLoadingMessage || t('downloadPreparing') }}</span>
+        </div>
+    </div>
     <!-- 历史任务区域 - Apple 极简风格 -->
                         <div class="flex-1 flex flex-col min-h-0 mobile-content">
                             <!-- 内容区域 -->
@@ -545,15 +459,25 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                     </div>
 
                 <!-- 任务内容网格 - Apple 风格 -->
-                <div v-if="filteredTasks.length === 0" class="flex flex-col items-center justify-center py-16 text-center">
-                    <div class="w-20 h-20 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-full flex items-center justify-center mb-6">
-                        <i class="fas fa-video text-3xl text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-                                </div>
-                    <p class="text-lg font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('noHistoryTasks') }}</p>
-                    <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('startToCreateYourFirstAIVideo') }}</p>
-                            </div>
+                <div class="space-y-4">
+                    <div v-if="isPageLoading" class="flex items-center justify-center">
+                        <div class="inline-flex items-center gap-3 px-4 py-2 rounded-full bg-white/90 dark:bg-[#2c2c2e]/90 border border-black/8 dark:border-white/8 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] shadow-[0_4px_16px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.35)]">
+                            <i class="fas fa-spinner fa-spin text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                            <span>{{ t('loading') }}</span>
+                        </div>
+                    </div>
 
-                <div v-else class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
+                    <template v-if="filteredTasks.length === 0">
+                        <div class="flex flex-col items-center justify-center py-16 text-center">
+                            <div class="w-20 h-20 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-full flex items-center justify-center mb-6">
+                                <i class="fas fa-video text-3xl text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                            </div>
+                            <p class="text-lg font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('noHistoryTasks') }}</p>
+                            <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('startToCreateYourFirstAIVideo') }}</p>
+                        </div>
+                    </template>
+
+                    <div v-else class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
                     <!-- 任务卡片 - Apple 风格 -->
                                                 <div v-for="task in filteredTasks" :key="task.task_id"
                         class="break-inside-avoid mb-4 group relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/30 dark:hover:border-[color:var(--brand-primary-light)]/30 hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200 hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.2)]">
@@ -593,13 +517,14 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
 
                             <!-- 状态指示器 - Apple 风格 -->
                             <div class="absolute top-3 right-3">
-                                <span :class="[
-                                    'px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-[20px] shadow-sm',
-                                    task.status === 'SUCCEED' ? 'bg-green-500/90 dark:bg-green-400/90 text-white' :
-                                    task.status === 'RUNNING' ? 'bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 text-white' :
-                                    task.status === 'FAILED' ? 'bg-red-500/90 dark:bg-red-400/90 text-white' :
-                                    'bg-white/90 dark:bg-[#2c2c2e]/90 text-[#86868b] dark:text-[#98989d] border border-black/8 dark:border-white/8'
-                                ]">
+                                <span class="relative inline-flex items-center gap-2 px-3 py-2 rounded-full text-xs font-semibold tracking-tight shadow-[0_8px_24px_rgba(0,0,0,0.12)] backdrop-blur-[30px] bg-white/85 dark:bg-[#1f1f24]/85 text-[#1d1d1f] dark:text-[#f5f5f7] border border-white/60 dark:border-white/10">
+                                    <span class="inline-flex h-1.5 w-1.5 rounded-full"
+                                        :class="[
+                                            task.status === 'SUCCEED' ? 'bg-[#2ecc71]' :
+                                            task.status === 'RUNNING' ? 'bg-[#5865f2]' :
+                                            task.status === 'FAILED' ? 'bg-[#ff5a65]' :
+                                            'bg-[#a0a4b8]'
+                                        ]"></span>
                                                                     {{ getTaskStatusDisplay(task.status) }}
                                                                 </span>
                                                             </div>
@@ -633,8 +558,10 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
 
                                     <!-- 下载按钮 - 成功状态 -->
                                                                 <button v-if="task.status === 'SUCCEED'"
-                                                                        @click.stop="handleDownloadTask(task)"
-                                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white hover:scale-110 active:scale-100 transition-all duration-200"
+                                                                        @click.stop="handleDownloadFile(task.task_id, 'output_video', task.outputs.output_video)"
+                                        :disabled="downloadLoading"
+                                        class="w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)] flex items-center justify-center text-white transition-all duration-200"
+                                        :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-110 active:scale-100'"
                                                                     :title="t('downloadTask')">
                                         <i class="fas fa-download text-sm"></i>
                                                             </button>
@@ -662,9 +589,10 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                 </div>
                                             </div>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
                     <!-- GitHub 仓库链接 - Apple 极简风格 -->
                     <div class="fixed bottom-6 right-6 z-50">

@@ -28,10 +28,10 @@
     color: white;
 
     /* Apple 极简黑白风格 - 品牌色 */
-    --brand-primary: #a68ee7;
-    --brand-primary-light: #cdbbfe;
-    --brand-primary-rgb: 179, 151, 255;
-    --brand-primary-light-rgb: 210, 193, 255;
+    --brand-primary: #90dce1;
+    --brand-primary-light: #90dce1;
+    --brand-primary-rgb: 89, 194, 233;
+    --brand-primary-light-rgb: 142, 220, 255;
 
     /* Apple 极简黑白风格 - 基础颜色 */
     --text-primary: #1d1d1f;          /* 浅色模式主要文字 */
@@ -839,12 +839,6 @@ body {
         .flex.gap-2 button {
             font-size: 0.75rem !important;
             padding: 0.5rem 0.75rem !important;
-        }
-
-        /* 创建视频页面移动端适配 */
-        .max-w-4xl.mx-auto {
-            max-width: 100% !important;
-            padding: 0 1rem !important;
         }
 
         /* 上传区域在移动端调整 */
