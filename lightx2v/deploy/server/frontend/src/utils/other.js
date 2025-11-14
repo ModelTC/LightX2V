@@ -544,7 +544,7 @@ export const locale = i18n.global.locale
                 clearTimeout(alertTimeout);
                 alertTimeout = null;
             }
-            
+
             // 如果当前有alert正在显示，先关闭它
             if (alert.value && alert.value.show) {
                 alert.value.show = false;
@@ -562,7 +562,7 @@ export const locale = i18n.global.locale
                 createNewAlert(message, type, action);
             }
         };
-        
+
         // 创建新alert的辅助函数
         const createNewAlert = (message, type, action) => {
             // 再次清除定时器，防止重复设置
@@ -570,7 +570,7 @@ export const locale = i18n.global.locale
                 clearTimeout(alertTimeout);
                 alertTimeout = null;
             }
-            
+
             // 创建全新的对象，使用时间戳确保每次都是新对象
             const newAlert = {
                 show: true,
@@ -583,10 +583,10 @@ export const locale = i18n.global.locale
                 // 添加一个时间戳确保每次都是新对象，用于key
                 _timestamp: Date.now()
             };
-            
+
             // 直接赋值新对象
             alert.value = newAlert;
-            
+
             // 设置自动关闭定时器
             alertTimeout = setTimeout(() => {
                 if (alert.value && alert.value.show && alert.value._timestamp === newAlert._timestamp) {
@@ -4484,7 +4484,7 @@ export const locale = i18n.global.locale
                     }
                     return null;
                 }
-                
+
                 return response;
             } catch (error) {
                 console.error('API request failed:', error);
@@ -4937,13 +4937,13 @@ export const locale = i18n.global.locale
                 console.error('toggleVideoPlay: 未找到按钮元素');
                 return;
             }
-            
+
             const video = button.parentElement.querySelector('video');
             if (!video) {
                 console.error('toggleVideoPlay: 未找到视频元素');
                 return;
             }
-            
+
             const icon = button.querySelector('i');
 
             if (video.paused) {
@@ -4997,7 +4997,7 @@ export const locale = i18n.global.locale
                     // 等待视频可以播放
                     const playHandler = () => {
                         clearTimeout(loadingTimeout);
-                        
+
                         // 检查这个视频是否仍然是当前等待加载的视频
                         if (currentLoadingVideo === video) {
                             currentLoadingVideo = null;
@@ -5016,18 +5016,18 @@ export const locale = i18n.global.locale
                             icon.className = 'fas fa-play text-sm';
                             console.log('视频加载完成但等待已被取消（移动端）');
                         }
-                        
+
                         // 移除事件监听器
                         video.removeEventListener('canplay', playHandler);
                         video.removeEventListener('error', errorHandler);
                     };
-                    
+
                     const errorHandler = () => {
                         clearTimeout(loadingTimeout);
                         console.error('视频加载失败（移动端）');
                         icon.className = 'fas fa-play text-sm';
                         currentLoadingVideo = null;
-                        
+
                         // 移除事件监听器
                         video.removeEventListener('canplay', playHandler);
                         video.removeEventListener('error', errorHandler);
@@ -5142,21 +5142,21 @@ export const locale = i18n.global.locale
                 // 尝试通过后端API代理获取文件
                 const proxyUrl = `/api/v1/template/asset/${fileType}/${fileKey}`;
                 const response = await apiRequest(proxyUrl);
-                
+
                 if (response && response.ok) {
                     return await response.blob();
                 }
-                
+
                 // 如果代理API不存在，尝试直接获取URL然后fetch
                 const fileUrl = await getTemplateFileUrlAsync(fileKey, fileType);
                 if (!fileUrl) {
                     return null;
                 }
-                
+
                 // 检查是否是同源URL
                 const urlObj = new URL(fileUrl, window.location.origin);
                 const isSameOrigin = urlObj.origin === window.location.origin;
-                
+
                 if (isSameOrigin) {
                     // 同源，直接fetch
                     const directResponse = await fetch(fileUrl);
@@ -5178,7 +5178,7 @@ export const locale = i18n.global.locale
                         // 如果没有，这里会返回null，然后调用方会显示错误
                     }
                 }
-                
+
                 return null;
             } catch (error) {
                 console.error('获取文件失败:', error);
@@ -5251,7 +5251,7 @@ export const locale = i18n.global.locale
                     return;
                 }
                 updateUploadedContentStatus();
-                
+
                 // 关闭所有弹窗的辅助函数
                 const closeAllModals = () => {
                     closeTaskDetailModal(); // 使用函数确保状态完全重置
@@ -5262,12 +5262,12 @@ export const locale = i18n.global.locale
                     showPromptModal.value = false;
                     closeImageZoomModal(); // 使用函数确保状态完全重置
                 };
-                
+
                 // 跳转到创作区域的函数
                 const scrollToCreationArea = () => {
                     // 先关闭所有弹窗
                     closeAllModals();
-                    
+
                     // 如果不在生成页面，先切换视图
                     if (router.currentRoute.value.path !== '/generate') {
                         switchToCreateView();
@@ -5300,7 +5300,7 @@ export const locale = i18n.global.locale
                         }, 100);
                     }
                 };
-                
+
                 showAlert(t('imageApplied'), 'success', {
                     label: t('view'),
                     onClick: scrollToCreationArea
@@ -5392,7 +5392,7 @@ export const locale = i18n.global.locale
                     return;
                 }
                         updateUploadedContentStatus();
-                
+
                 // 关闭所有弹窗的辅助函数
                 const closeAllModals = () => {
                     closeTaskDetailModal(); // 使用函数确保状态完全重置
@@ -5403,12 +5403,12 @@ export const locale = i18n.global.locale
                     showPromptModal.value = false;
                     closeImageZoomModal(); // 使用函数确保状态完全重置
                 };
-                
+
                 // 跳转到创作区域的函数
                 const scrollToCreationArea = () => {
                     // 先关闭所有弹窗
                     closeAllModals();
-                    
+
                     // 如果不在生成页面，先切换视图
                     if (router.currentRoute.value.path !== '/generate') {
                         switchToCreateView();
@@ -5441,7 +5441,7 @@ export const locale = i18n.global.locale
                         }, 100);
                     }
                 };
-                
+
                 showAlert(t('audioApplied'), 'success', {
                     label: t('view'),
                     onClick: scrollToCreationArea
@@ -5476,12 +5476,12 @@ export const locale = i18n.global.locale
                     // 降级到传统方法
                 }
             }
-            
+
             // 降级方案：使用传统方法（适用于移动端和不支持Clipboard API的浏览器）
             try {
                 const textArea = document.createElement('textarea');
                 textArea.value = text;
-                
+
                 // 移动端需要元素可见且可聚焦，所以先设置可见样式
                 textArea.style.position = 'fixed';
                 textArea.style.left = '0';
@@ -5498,18 +5498,18 @@ export const locale = i18n.global.locale
                 textArea.setAttribute('readonly', '');
                 textArea.setAttribute('aria-hidden', 'true');
                 textArea.setAttribute('tabindex', '-1');
-                
+
                 document.body.appendChild(textArea);
-                
+
                 // 聚焦元素（移动端需要）
                 textArea.focus();
                 textArea.select();
-                
+
                 // 移动端需要 setSelectionRange
                 if (textArea.setSelectionRange) {
                     textArea.setSelectionRange(0, text.length);
                 }
-                
+
                 // 尝试复制
                 let successful = false;
                 try {
@@ -5517,10 +5517,10 @@ export const locale = i18n.global.locale
                 } catch (e) {
                     console.warn('execCommand 执行失败:', e);
                 }
-                
+
                 // 立即移除元素
                 document.body.removeChild(textArea);
-                
+
                 if (successful) {
                     return true;
                 } else {
@@ -5533,7 +5533,7 @@ export const locale = i18n.global.locale
                 return await fallbackCopyToClipboard(text);
             }
         };
-        
+
         // 备用复制方案：显示一个可选择的文本区域（Apple风格）
         const fallbackCopyToClipboard = async (text) => {
             return new Promise((resolve) => {
@@ -5554,7 +5554,7 @@ export const locale = i18n.global.locale
                     justify-content: center;
                     padding: 20px;
                 `;
-                
+
                 // 创建弹窗容器（Apple风格）
                 const container = document.createElement('div');
                 container.style.cssText = `
@@ -5568,12 +5568,12 @@ export const locale = i18n.global.locale
                     max-width: 500px;
                     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
                 `;
-                
+
                 // 深色模式支持
                 if (document.documentElement.classList.contains('dark')) {
                     container.style.background = 'rgba(30, 30, 30, 0.95)';
                 }
-                
+
                 const title = document.createElement('div');
                 title.textContent = t('copyLink') || '复制链接';
                 title.style.cssText = `
@@ -5586,7 +5586,7 @@ export const locale = i18n.global.locale
                 if (document.documentElement.classList.contains('dark')) {
                     title.style.color = '#f5f5f7';
                 }
-                
+
                 const message = document.createElement('div');
                 message.textContent = t('pleaseCopyManually') || '请手动选择并复制下面的文本';
                 message.style.cssText = `
@@ -5598,7 +5598,7 @@ export const locale = i18n.global.locale
                 if (document.documentElement.classList.contains('dark')) {
                     message.style.color = '#98989d';
                 }
-                
+
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.value = text;
@@ -5621,7 +5621,7 @@ export const locale = i18n.global.locale
                     input.style.background = 'rgba(44, 44, 46, 0.8)';
                     input.style.color = '#f5f5f7';
                 }
-                
+
                 const button = document.createElement('button');
                 button.textContent = t('close') || '关闭';
                 button.style.cssText = `
@@ -5644,25 +5644,25 @@ export const locale = i18n.global.locale
                     button.style.opacity = '1';
                     button.style.transform = 'scale(1)';
                 };
-                
+
                 container.appendChild(title);
                 container.appendChild(message);
                 container.appendChild(input);
                 container.appendChild(button);
                 overlay.appendChild(container);
-                
+
                 const close = () => {
                     document.body.removeChild(overlay);
                     resolve(false); // 返回false表示需要用户手动复制
                 };
-                
+
                 button.onclick = close;
                 overlay.onclick = (e) => {
                     if (e.target === overlay) close();
                 };
-                
+
                 document.body.appendChild(overlay);
-                
+
                 // 选中文本（延迟以确保DOM已渲染）
                 setTimeout(() => {
                     input.focus();
@@ -5997,7 +5997,7 @@ export const locale = i18n.global.locale
                 const shareUrl = generateTemplateShareUrl(templateId);
                 // 使用辅助函数复制，支持移动端
                 const success = await copyToClipboard(shareUrl);
-                
+
                 // 如果成功复制，显示成功提示
                 if (success) {
                 showAlert(t('templateShareLinkCopied'), 'success', {

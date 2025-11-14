@@ -66,13 +66,13 @@
                     {{ t('synthesizedAudio') }}<span v-if="selectedVoiceData"> - {{ selectedVoiceData.name }}</span>
                   </div>
                 </div>
-                
+
                 <!-- 音频时长 -->
                 <div class="text-xs font-medium text-[#86868b] dark:text-[#98989d] tracking-tight flex-shrink-0">
                   {{ formatAudioTime(currentTime) }} / {{ formatAudioTime(audioDuration) }}
                 </div>
               </div>
-              
+
               <!-- 进度条 -->
               <div class="flex items-center gap-2" v-if="audioDuration > 0">
                 <input
@@ -103,7 +103,7 @@
               class="hidden"
             ></audio>
           </div>
-          
+
           <!-- 设置面板 - Apple 极简风格（无卡片，直接显示） -->
           <div v-if="selectedVoice" class="flex-shrink-0 lg:w-1/2">
             <div class="space-y-3">
@@ -170,7 +170,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- 装饰性分割线 - Apple 风格（带V形图标） -->
       <div class="relative flex items-center justify-center py-3">
         <!-- 左侧线条 -->
@@ -193,7 +193,7 @@
             <div class="flex items-center gap-2">
               <i class="fas fa-keyboard text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
               <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('enterTextToConvert') }}</span>
-            
+
             <button
               @click="openTextHistoryPanel"
               class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
@@ -218,7 +218,7 @@
               <i class="fas fa-magic text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
               <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('voiceInstruction') }}</span>
               <span class="text-xs text-[#86868b] dark:text-[#98989d]">{{ t('voiceInstructionHint') }}</span>
-            
+
             <button
               @click="openInstructionHistoryPanel"
               class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
@@ -242,7 +242,7 @@
             <div class="flex items-center gap-2">
               <i class="fas fa-microphone-alt text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
               <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('selectVoice') }}</span>
-            
+
             <button
               @click="openVoiceHistoryPanel"
               class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
@@ -251,7 +251,7 @@
               <i class="fas fa-history text-xs"></i>
             </button>
           </div>
-          
+
           <div class="flex items-center gap-3">
             <!-- 搜索框 - Apple 风格 -->
             <div class="relative w-52">
@@ -997,7 +997,7 @@ export default {
     // 切换播放/暂停
     const toggleAudioPlayback = () => {
       if (!audioElement.value) return
-      
+
       if (audioElement.value.paused) {
         audioElement.value.play().catch(error => {
           console.log('播放失败:', error)

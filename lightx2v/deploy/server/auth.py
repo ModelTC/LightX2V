@@ -59,9 +59,7 @@ class AuthManager:
         return self._create_token(data, self.jwt_expiration_hours * 3600, "access", self.jwt_secret_key)
 
     def create_refresh_token(self, data):
-        return self._create_token(
-            data, self.refresh_token_expiration_days * 24 * 3600, "refresh", self.refresh_jwt_secret_key
-        )
+        return self._create_token(data, self.refresh_token_expiration_days * 24 * 3600, "refresh", self.refresh_jwt_secret_key)
 
     def create_tokens(self, data):
         return self.create_access_token(data), self.create_refresh_token(data)

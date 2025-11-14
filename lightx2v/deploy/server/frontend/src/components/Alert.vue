@@ -21,7 +21,7 @@ const handleAfterLeave = () => {
     if (alert.value && !alert.value.show) {
         // 记录当前alert的时间戳，用于后续检查
         const currentTimestamp = alert.value._timestamp
-        
+
         // 延迟一小段时间再重置，确保不会影响后续的alert显示
         setTimeout(() => {
             // 只有当alert仍然关闭，且时间戳没有变化（没有新alert创建）时才重置
@@ -73,14 +73,14 @@ const handleScroll = () => {
 onMounted(() => {
     // 查找实际的滚动容器
     scrollContainer = document.querySelector('.main-scrollbar')
-    
+
     if (scrollContainer) {
         scrollContainer.addEventListener('scroll', handleScroll, { passive: true })
     }
-    
+
     // 也监听 window 的滚动（作为后备）
     window.addEventListener('scroll', handleScroll, { passive: true })
-    
+
     // 初始化时也调用一次，确保位置正确
     handleScroll()
 })
