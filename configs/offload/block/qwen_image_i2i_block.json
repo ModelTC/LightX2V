@@ -61,7 +61,6 @@
     "true_cfg_scale": 4.0,
     "cpu_offload": true,
     "offload_granularity": "block",
-    "mm_config": {},
     "CONDITION_IMAGE_SIZE": 1048576,
     "USE_IMAGE_ID_IN_PROMPT": false
 }

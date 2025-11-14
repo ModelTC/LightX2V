@@ -88,7 +88,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         return x
 
     def infer_block(self, block, x, pre_infer_out):
-        if hasattr(block.compute_phases[0], "before_proj"):
+        if hasattr(block.compute_phases[0], "before_proj") and block.compute_phases[0].before_proj.weight is not None:
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
 
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.pre_process(

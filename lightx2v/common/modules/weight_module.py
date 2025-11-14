@@ -63,6 +63,17 @@ class WeightModule:
                 module.state_dict(destination)
         return destination
 
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        if destination is None:
+            destination = {}
+        for _, param in self._parameters.items():
+            if param is not None:
+                param.load_state_dict(destination, block_index, adapter_block_index)
+        for _, module in self._modules.items():
+            if module is not None:
+                module.load_state_dict(destination, block_index, adapter_block_index)
+        return destination
+
     def named_parameters(self, prefix=""):
         for name, param in self._parameters.items():
             if param is not None:

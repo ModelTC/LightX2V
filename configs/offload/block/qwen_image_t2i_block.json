@@ -82,6 +82,5 @@
     "attn_type": "flash_attn3",
     "do_true_cfg": false,
     "cpu_offload": true,
-    "offload_granularity": "block",
-    "mm_config": {}
+    "offload_granularity": "block"
 }
