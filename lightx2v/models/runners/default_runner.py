@@ -209,7 +209,7 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
-        self.input_info.latent_shape = self.get_latent_shape_with_target_hw(self.config["target_height"], self.config["target_width"])  # Important: set latent_shape in input_info
+        self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
