@@ -22,6 +22,41 @@
 
 For comprehensive usage instructions, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
 
+### Installation from Git
+```bash
+pip install -v git+https://github.com/ModelTC/LightX2V.git
+```
+
+### Building from Source
+```bash
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
+uv pip install -v . # pip install -v .
+```
+
+### (Optional) Install Attention Operators
+For attention operators installation, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
+
+### Quick Start
+```python
+# examples/simple_launch.py
+from lightx2v import LightGenerator
+
+generator = LightGenerator(
+    model_path="/path/to/Wan2.1-T2V-1.3B", # refer to https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B
+    model_cls="wan2.1",
+    task="t2v",
+)
+
+video_path = generator.generate(
+    prompt="Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+    negative_prompt="Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards",
+    seed=42,
+    save_result_path="output.mp4",
+)
+```
+
+
 
 ## 🤖 Supported Model Ecosystem
 
