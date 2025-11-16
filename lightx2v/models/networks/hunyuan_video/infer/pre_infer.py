@@ -133,11 +133,6 @@ class HunyuanVideo15PreInfer:
 
         image_encoder_output = image_encoder_output + weights.cond_type_embedding.apply(2 * torch.ones_like(image_encoder_output[:, :, 0], dtype=torch.long, device=torch.device("cuda")))
         txt, text_mask = self.reorder_txt_token(image_encoder_output, txt, image_encoder_mask, text_mask)
-        # print(f"img: {img}, {img.shape}, {img.sum()}")
-        # print(f"txt: {txt}, {txt.shape}, {txt.sum()}")
-        # print(f"vec: {vec}, {vec.shape}, {vec.sum()}")
-        # print(f"freqs_cos: {freqs_cos}, freqs_cos: {freqs_cos.shape}")
-        # print(f"freqs_sin: {freqs_sin}, freqs_sin: {freqs_sin.shape}")
 
         return HunyuanVideo15InferModuleOutput(
             img=img,

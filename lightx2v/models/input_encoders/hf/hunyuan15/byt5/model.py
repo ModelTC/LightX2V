@@ -142,7 +142,6 @@ class ByT5Mapper(nn.Module):
             Tensor: Output tensor of shape (..., out_dim1).
         """
         residual = x
-        print(f"x {x.dtype}, self.layernorm : {self.layernorm.weight.dtype}")
         x = self.layernorm(x)
         x = self.fc1(x)
         x = self.act_fn(x)
