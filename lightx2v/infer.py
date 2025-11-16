@@ -31,7 +31,7 @@ def init_runner(config):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=123, help="The seed for random generator")
+    parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
     parser.add_argument(
         "--model_cls",
         type=str,
