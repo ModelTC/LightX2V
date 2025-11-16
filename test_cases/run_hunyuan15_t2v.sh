@@ -2,7 +2,7 @@
 
 # set path and first
 lightx2v_path=/data/nvme1/yongyang/LightX2V-HY
-model_path=/data/nvme1/yongyang/models/HunyuanVideo-1.5/ckpts/hunyuanvideo-1.5
+model_path=/data/nvme1/models/hy15day0/i2v_new/ckpts/hunyuanvideo-1.5
 
 export CUDA_VISIBLE_DEVICES=2
 

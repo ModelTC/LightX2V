@@ -18,7 +18,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.prepare_latents(seed, latent_shape, dtype=torch.bfloat16)
         self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
         self.multitask_mask = self.get_task_mask(self.config["task"], latent_shape[-3])
-        self.cond_latents_concat, self.mask_concat = self._prepare_cond_latents_and_mask(self.config["task"], None, self.latents, self.multitask_mask, self.reorg_token)
+        self.cond_latents_concat, self.mask_concat = self._prepare_cond_latents_and_mask(self.config["task"], image_encoder_output["cond_latents"], self.latents, self.multitask_mask, self.reorg_token)
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.bfloat16):
         self.generator = torch.Generator(device=self.device).manual_seed(seed)

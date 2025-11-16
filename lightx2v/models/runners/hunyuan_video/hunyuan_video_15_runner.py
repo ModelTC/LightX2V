@@ -3,6 +3,8 @@ import os
 
 import numpy as np
 import torch
+import torchvision.transforms as transforms
+from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.hunyuan15.byt5.model import ByT5TextEncoder
@@ -12,6 +14,7 @@ from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15Scheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
+from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -51,19 +54,18 @@ class HunyuanVideo15Runner(DefaultRunner):
         model = HunyuanVideo15Model(self.config["model_path"], self.config, self.init_device)
         return model
 
-    def load_vae(self):
-        logger.info("Loading vae encoder")
-        return None, None
-
-    def get_latent_shape_with_target_hw(self):
-        width, height = self.config["aspect_ratio"].split(":")
+    def get_latent_shape_with_target_hw(self, origin_size=None):
+        if origin_size is None:
+            width, height = self.config["aspect_ratio"].split(":")
+        else:
+            width, height = origin_size
         target_size = self.config["transformer_model_name"].split("_")[0]
-        target_height, target_width = self.get_closest_resolution_given_original_size((int(width), int(height)), target_size)
+        self.target_height, self.target_width = self.get_closest_resolution_given_original_size((int(width), int(height)), target_size)
         latent_shape = [
             self.config.get("in_channels", 32),
             (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-            target_height // self.config["vae_stride"][1],
-            target_width // self.config["vae_stride"][2],
+            self.target_height // self.config["vae_stride"][1],
+            self.target_width // self.config["vae_stride"][2],
         ]
         return latent_shape
 
@@ -158,14 +160,100 @@ class HunyuanVideo15Runner(DefaultRunner):
         text_encoder_output = self.run_text_encoder(self.input_info)
 
         # vision_states is all zero, because we don't have any image input
-        image_encoder_output = torch.zeros(1, self.vision_num_semantic_tokens, self.vision_states_dim, dtype=torch.bfloat16).cuda()
-        image_encoder_output = self.image_encoder.infer(image_encoder_output) * 0.0
-        image_encoder_mask = torch.zeros((1, image_encoder_output.shape[1]), dtype=torch.bfloat16, device=torch.device("cuda"))
+        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.vision_states_dim, dtype=torch.bfloat16).cuda()
+        siglip_output = self.image_encoder.infer(siglip_output) * 0.0
+        siglip_mask = torch.zeros((1, siglip_output.shape[1]), dtype=torch.bfloat16, device=torch.device("cuda"))
 
         torch.cuda.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
-            "image_encoder_output": image_encoder_output,
-            "image_encoder_mask": image_encoder_mask,
+            "image_encoder_output": {
+                "siglip_output": siglip_output,
+                "siglip_mask": siglip_mask,
+            },
         }
+
+    def read_image_input(self, img_path):
+        if isinstance(img_path, Image.Image):
+            img_ori = img_path
+        else:
+            img_ori = Image.open(img_path).convert("RGB")
+        return img_ori
+
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_i2v(self):
+        img_ori = self.read_image_input(self.input_info.image_path)
+        self.input_info.latent_shape = self.get_latent_shape_with_target_hw(origin_size=img_ori.size)  # Important: set latent_shape in input_info
+        siglip_output, siglip_mask = self.run_image_encoder(img_ori) if self.config.get("use_image_encoder", True) else None
+        cond_latents = self.run_vae_encoder(img_ori)
+        text_encoder_output = self.run_text_encoder(self.input_info)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": {
+                "siglip_output": siglip_output,
+                "siglip_mask": siglip_mask,
+                "cond_latents": cond_latents,
+            },
+        }
+
+    @ProfilingContext4DebugL1(
+        "Run Image Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_img_encode_duration,
+        metrics_labels=["WanRunner"],
+    )
+    def run_image_encoder(self, first_frame, last_frame=None):
+        input_image_np = self.resize_and_center_crop(first_frame, target_width=self.target_width, target_height=self.target_height)
+        vision_states = self.image_encoder.encode_images(input_image_np).last_hidden_state.to(device=torch.device("cuda"), dtype=torch.bfloat16)
+        image_encoder_output = self.image_encoder.infer(vision_states)
+        image_encoder_mask = torch.ones((1, image_encoder_output.shape[1]), dtype=torch.bfloat16, device=torch.device("cuda"))
+        return image_encoder_output, image_encoder_mask
+
+    def resize_and_center_crop(self, image, target_width, target_height):
+        image = np.array(image)
+        if target_height == image.shape[0] and target_width == image.shape[1]:
+            return image
+
+        pil_image = Image.fromarray(image)
+        original_width, original_height = pil_image.size
+        scale_factor = max(target_width / original_width, target_height / original_height)
+        resized_width = int(round(original_width * scale_factor))
+        resized_height = int(round(original_height * scale_factor))
+        resized_image = pil_image.resize((resized_width, resized_height), Image.LANCZOS)
+        left = (resized_width - target_width) / 2
+        top = (resized_height - target_height) / 2
+        right = (resized_width + target_width) / 2
+        bottom = (resized_height + target_height) / 2
+        cropped_image = resized_image.crop((left, top, right, bottom))
+        return np.array(cropped_image)
+
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+        metrics_labels=["WanRunner"],
+    )
+    def run_vae_encoder(self, first_frame):
+        origin_size = first_frame.size
+        original_width, original_height = origin_size
+
+        scale_factor = max(self.target_width / original_width, self.target_height / original_height)
+        resize_width = int(round(original_width * scale_factor))
+        resize_height = int(round(original_height * scale_factor))
+
+        ref_image_transform = transforms.Compose(
+            [
+                transforms.Resize((resize_height, resize_width), interpolation=transforms.InterpolationMode.LANCZOS),
+                transforms.CenterCrop((self.target_height, self.target_width)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+
+        ref_images_pixel_values = ref_image_transform(first_frame).unsqueeze(0).unsqueeze(2).cuda()
+
+        cond_latents = self.vae_encoder.encode(ref_images_pixel_values.to(GET_DTYPE()))
+        return cond_latents

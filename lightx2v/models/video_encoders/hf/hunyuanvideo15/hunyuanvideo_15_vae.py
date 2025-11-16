@@ -780,7 +780,7 @@ class HunyuanVideo15VAE:
 
     @torch.no_grad()
     def encode(self, x):
-        pass
+        return self.vae.encode(x).latent_dist.mode() * self.vae.config.scaling_factor
 
     @torch.no_grad()
     def decode(self, z):

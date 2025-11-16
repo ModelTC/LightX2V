@@ -247,6 +247,10 @@ class SiglipVisionEncoder:
     def infer(self, vision_states):
         return self.vision_in(vision_states)
 
+    @torch.no_grad()
+    def encode_images(self, images):
+        return self.vision_encoder.encode_images(images)
+
 
 class VisionProjection(torch.nn.Module):
     """
@@ -263,6 +267,7 @@ class VisionProjection(torch.nn.Module):
         if flf_pos_emb:  # NOTE: we only use this for `flf2v`
             self.emb_pos = nn.Parameter(torch.zeros(1, FIRST_LAST_FRAME_CONTEXT_TOKEN_NUMBER, 1280))
 
+    @torch.no_grad()
     def forward(self, image_embeds):
         if hasattr(self, "emb_pos"):
             bs, n, d = image_embeds.shape

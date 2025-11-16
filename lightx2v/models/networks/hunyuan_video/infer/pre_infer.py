@@ -90,7 +90,7 @@ class HunyuanVideo15PreInfer:
             txt, text_mask = inputs["text_encoder_output"]["context_null"][0], inputs["text_encoder_output"]["context_null"][1]
 
         byt5_txt, byt5_text_mask = inputs["text_encoder_output"]["byt5_features"], inputs["text_encoder_output"]["byt5_masks"]
-        image_encoder_output, image_encoder_mask = inputs["image_encoder_output"], inputs["image_encoder_mask"]
+        siglip_output, siglip_mask = inputs["image_encoder_output"]["siglip_output"], inputs["image_encoder_output"]["siglip_mask"]
         txt = txt.to(torch.bfloat16)
 
         img = x = latent_model_input = torch.concat([latents, cond_latents_concat, mask_concat], dim=1)
@@ -137,8 +137,8 @@ class HunyuanVideo15PreInfer:
         byt5_txt = byt5_txt + weights.cond_type_embedding.apply(torch.ones_like(byt5_txt[:, :, 0], device=byt5_txt.device, dtype=torch.long))
         txt, text_mask = self.reorder_txt_token(byt5_txt, txt, byt5_text_mask, text_mask, zero_feat=True)
 
-        image_encoder_output = image_encoder_output + weights.cond_type_embedding.apply(2 * torch.ones_like(image_encoder_output[:, :, 0], dtype=torch.long, device=torch.device("cuda")))
-        txt, text_mask = self.reorder_txt_token(image_encoder_output, txt, image_encoder_mask, text_mask)
+        siglip_output = siglip_output + weights.cond_type_embedding.apply(2 * torch.ones_like(siglip_output[:, :, 0], dtype=torch.long, device=torch.device("cuda")))
+        txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
 
         return HunyuanVideo15InferModuleOutput(
             img=img,
