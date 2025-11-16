@@ -116,7 +116,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         neg_prompt = input_info.negative_prompt
 
         # run qwen25vl
-        if self.config["cfg_parallel"]:
+        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -127,7 +127,7 @@ class HunyuanVideo15Runner(DefaultRunner):
                 text_encoder_output = {"context_null": context_null}
         else:
             context = self.text_encoders[0].infer([prompt])
-            context_null = self.text_encoders[0].infer([neg_prompt])
+            context_null = self.text_encoders[0].infer([neg_prompt]) if self.config.get("enable_cfg", False) else None
             text_encoder_output = {
                 "context": context,
                 "context_null": context_null,

@@ -12,6 +12,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.sample_shift = self.config["sample_shift"]
         self.reorg_token = False
         self.keep_latents_dtype_in_scheduler = True
+        self.sample_guide_scale = self.config["sample_guide_scale"]
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.bfloat16)

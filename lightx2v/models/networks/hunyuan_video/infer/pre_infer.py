@@ -83,6 +83,12 @@ class HunyuanVideo15PreInfer:
         timesteps = self.scheduler.timesteps
         t = timesteps[self.scheduler.step_index]
         txt, text_mask = inputs["text_encoder_output"]["context"][0], inputs["text_encoder_output"]["context"][1]
+
+        if self.scheduler.infer_condition:
+            txt, text_mask = inputs["text_encoder_output"]["context"][0], inputs["text_encoder_output"]["context"][1]
+        else:
+            txt, text_mask = inputs["text_encoder_output"]["context_null"][0], inputs["text_encoder_output"]["context_null"][1]
+
         byt5_txt, byt5_text_mask = inputs["text_encoder_output"]["byt5_features"], inputs["text_encoder_output"]["byt5_masks"]
         image_encoder_output, image_encoder_mask = inputs["image_encoder_output"], inputs["image_encoder_mask"]
         txt = txt.to(torch.bfloat16)

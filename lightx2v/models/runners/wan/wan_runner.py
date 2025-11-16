@@ -222,7 +222,7 @@ class WanRunner(DefaultRunner):
             monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
         neg_prompt = input_info.negative_prompt
 
-        if self.config["cfg_parallel"]:
+        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -236,8 +236,11 @@ class WanRunner(DefaultRunner):
         else:
             context = self.text_encoders[0].infer([prompt])
             context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-            context_null = self.text_encoders[0].infer([neg_prompt])
-            context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+            if self.config.get("enable_cfg", False):
+                context_null = self.text_encoders[0].infer([neg_prompt])
+                context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+            else:
+                context_null = None
             text_encoder_output = {
                 "context": context,
                 "context_null": context_null,

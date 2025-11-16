@@ -23,6 +23,8 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.model_path = model_path
         self.config = config
         self.device = device
+        self.cpu_offload = self.config.get("cpu_offload", False)
+        self.offload_granularity = self.config.get("offload_granularity", "block")
 
         self._init_infer_class()
         self._init_weights()
@@ -109,11 +111,31 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
 
     @torch.no_grad()
     def infer(self, inputs):
-        # print(f"inputs: {inputs}")
-        # ==================== CFG Processing ====================
-        noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
-        # noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
-        self.scheduler.noise_pred = noise_pred_cond
+        if self.config["enable_cfg"]:
+            if self.config["cfg_parallel"]:
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+
+                if cfg_p_rank == 0:
+                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+                else:
+                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
+
+                noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
+                dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
+                noise_pred_cond = noise_pred_list[0]  # cfg_p_rank == 0
+                noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
+            else:
+                # ==================== CFG Processing ====================
+                noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
+                noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
+
+            self.scheduler.noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+        else:
+            # ==================== No CFG ====================
+            self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):

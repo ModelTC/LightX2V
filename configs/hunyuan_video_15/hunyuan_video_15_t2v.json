@@ -5,5 +5,7 @@
     "target_video_length": 121,
     "aspect_ratio": "16:9",
     "vae_stride": [4, 16, 16],
-    "sample_shift": 7.0
+    "sample_shift": 7.0,
+    "sample_guide_scale": 6.0,
+    "enable_cfg": true
 }

@@ -160,12 +160,11 @@ class ByT5TextEncoder:
         device=torch.cuda.current_device(),
         checkpoint_path=None,
         byt5_max_length=256,
-        enable_cfg=True,
     ):
         self.config = config
         self.device = device
         self.byt5_max_length = byt5_max_length
-        self.enable_cfg = enable_cfg
+        self.enable_cfg = config.get("enable_cfg", False)
         byT5_google_path = os.path.join(checkpoint_path, "text_encoder", "byt5-small")
         byT5_ckpt_path = os.path.join(checkpoint_path, "text_encoder", "Glyph-SDXL-v2", "checkpoints/byt5_model.pt")
         multilingual_prompt_format_color_path = os.path.join(checkpoint_path, "text_encoder", "Glyph-SDXL-v2", "assets/color_idx.json")
