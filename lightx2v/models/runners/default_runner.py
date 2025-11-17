@@ -133,7 +133,7 @@ class DefaultRunner(BaseRunner):
         self.progress_callback = callback
 
     @peak_memory_decorator
-    def run_segment(self, total_steps=None):
+    def run_segment(self, total_steps=None, segment_idx=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
         for step_index in range(total_steps):
@@ -160,6 +160,10 @@ class DefaultRunner(BaseRunner):
                 if self.progress_callback:
                     self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
+        if segment_idx is not None and segment_idx == self.video_segment_num - 1:
+            del self.inputs
+            torch.cuda.empty_cache()
+
         return self.model.scheduler.latents
 
     def run_step(self):
@@ -168,7 +172,8 @@ class DefaultRunner(BaseRunner):
 
     def end_run(self):
         self.model.scheduler.clear()
-        del self.inputs
+        if hasattr(self, "inputs"):
+            del self.inputs
         self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
@@ -288,7 +293,7 @@ class DefaultRunner(BaseRunner):
                 # 1. default do nothing
                 self.init_run_segment(segment_idx)
                 # 2. main inference loop
-                latents = self.run_segment(total_steps=total_steps)
+                latents = self.run_segment(total_steps=total_steps, segment_idx=segment_idx)
                 # 3. vae decoder
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing

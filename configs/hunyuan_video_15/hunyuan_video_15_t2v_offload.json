@@ -8,5 +8,11 @@
     "sample_shift": 7.0,
     "sample_guide_scale": 6.0,
     "enable_cfg": true,
-    "attn_type": "sage_attn2"
+    "attn_type": "sage_attn2",
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "vae_cpu_offload": false,
+    "byt5_cpu_offload": false,
+    "qwen25vl_cpu_offload": true,
+    "siglip_cpu_offload": false
 }

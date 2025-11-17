@@ -7,6 +7,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
 from lightx2v.models.networks.hunyuan_video.infer.post_infer import HunyuanVideo15PostInfer
 from lightx2v.models.networks.hunyuan_video.infer.pre_infer import HunyuanVideo15PreInfer
 from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import HunyuanVideo15TransformerInfer
@@ -25,7 +26,7 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.device = device
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
-
+        self.remove_keys = ["byt5_in", "vision_in"]
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
@@ -33,7 +34,10 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
     def _init_infer_class(self):
         self.pre_infer_class = HunyuanVideo15PreInfer
         self.post_infer_class = HunyuanVideo15PostInfer
-        self.transformer_infer_class = HunyuanVideo15TransformerInfer
+        if self.config["feature_caching"] == "NoCaching":
+            self.transformer_infer_class = HunyuanVideo15TransformerInfer if not self.cpu_offload else HunyuanVideo15OffloadTransformerInfer
+        else:
+            raise NotImplementedError
 
     def _init_weights(self):
         unified_dtype = GET_DTYPE() == GET_SENSITIVE_DTYPE()
@@ -41,11 +45,8 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
         self.original_weight_dict = weight_dict
         self.pre_weight = HunyuanVideo15PreWeights(self.config)
-        self.transformer_weight = HunyuanVideo15TransformerWeights(self.config)
+        self.transformer_weights = HunyuanVideo15TransformerWeights(self.config)
         self.post_weight = HunyuanVideo15PostWeights(self.config)
-        # print(f"original_weight_dict: {self.original_weight_dict}")
-        # for k in self.original_weight_dict.keys():
-        #     print(k, self.original_weight_dict[k].shape)
         self._apply_weights()
 
     def _apply_weights(self, weight_dict=None):
@@ -55,7 +56,7 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
             gc.collect()
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
-        self.transformer_weight.load(self.original_weight_dict)
+        self.transformer_weights.load(self.original_weight_dict)
 
         del self.original_weight_dict
         torch.cuda.empty_cache()
@@ -65,6 +66,8 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -109,8 +112,23 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
                 if not any(remove_key in key for remove_key in remove_keys)
             }
 
+    def to_cpu(self):
+        self.pre_weight.to_cpu()
+        self.transformer_weights.to_cpu()
+
+    def to_cuda(self):
+        self.pre_weight.to_cuda()
+        self.transformer_weights.to_cuda()
+
     @torch.no_grad()
     def infer(self, inputs):
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
+                self.to_cuda()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
+
         if self.config["enable_cfg"]:
             if self.config["cfg_parallel"]:
                 # ==================== CFG Parallel Processing ====================
@@ -137,13 +155,20 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
             # ==================== No CFG ====================
             self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
+                self.to_cpu()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cpu()
+                self.transformer_weights.non_block_weights_to_cpu()
+
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         self.scheduler.infer_condition = infer_condition
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
-        x = self.transformer_infer.infer(self.transformer_weight, pre_infer_out)
+        x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
         noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
 

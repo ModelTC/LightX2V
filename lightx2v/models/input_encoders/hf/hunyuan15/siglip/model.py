@@ -94,8 +94,10 @@ class VisionEncoder(nn.Module):
         output_key: Optional[str] = None,
         logger=None,
         device=None,
+        cpu_offload=False,
     ):
         super().__init__()
+        self.cpu_offload = cpu_offload
         self.vision_encoder_type = vision_encoder_type
         self.precision = vision_encoder_precision
         self.model_path = vision_encoder_path
@@ -141,7 +143,9 @@ class VisionEncoder(nn.Module):
         # Handle both 4D and 5D latents (for video, take first frame)
         first_image_latents = latents[:, :, 0, ...] if len(latents.shape) == 5 else latents
         first_image_latents = 1 / vae.config.scaling_factor * first_image_latents
+
         first_image = vae.decode(first_image_latents.unsqueeze(2).to(vae.dtype), return_dict=False)[0].cpu()
+
         first_image = first_image[:, :, 0, :, :]
         first_image = (first_image / 2 + 0.5).clamp(0, 1)
         first_image = (first_image * 255.0).clamp(0, 255.0)
@@ -164,14 +168,22 @@ class VisionEncoder(nn.Module):
         Returns:
             VisionEncoderModelOutput with encoded features
         """
+        if self.cpu_offload:
+            self.model = self.model.to("cuda")
+            self.processor = self.processor.to("cuda")
+
         if isinstance(images, np.ndarray):
             # Preprocess images if they're numpy arrays
-            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device=self.model.device, dtype=self.model.dtype)
+            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device="cuda", dtype=self.model.dtype)
         else:
             # Assume already preprocessed
             preprocessed = images
 
         outputs = self.model(**preprocessed)
+
+        if self.cpu_offload:
+            self.model = self.model.to("cpu")
+            self.processor = self.processor.to("cpu")
 
         return VisionEncoderModelOutput(
             last_hidden_state=outputs.last_hidden_state,
@@ -218,9 +230,11 @@ class SiglipVisionEncoder:
         config,
         device=torch.cuda.current_device(),
         checkpoint_path=None,
+        cpu_offload=False,
     ):
         self.config = config
         self.device = device
+        self.cpu_offload = cpu_offload
         self.vision_states_dim = 1152
         vision_encoder_path = os.path.join(checkpoint_path, "vision_encoder", "siglip")
 
@@ -233,6 +247,7 @@ class SiglipVisionEncoder:
             output_key=None,
             logger=None,
             device=self.device,
+            cpu_offload=self.cpu_offload,
         )
 
         self.vision_in = VisionProjection(in_dim=self.vision_states_dim, out_dim=self.config["hidden_size"], flf_pos_emb=False).to(torch.bfloat16)
@@ -245,7 +260,12 @@ class SiglipVisionEncoder:
 
     @torch.no_grad()
     def infer(self, vision_states):
-        return self.vision_in(vision_states)
+        if self.cpu_offload:
+            self.vision_in = self.vision_in.to("cuda")
+        vision_states = self.vision_in(vision_states)
+        if self.cpu_offload:
+            self.vision_in = self.vision_in.to("cpu")
+        return vision_states
 
     @torch.no_grad()
     def encode_images(self, images):

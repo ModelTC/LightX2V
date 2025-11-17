@@ -13,34 +13,61 @@ class HunyuanVideo15TransformerWeights(WeightModule):
         self.task = config["task"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self.double_blocks_num = config["mm_double_blocks_depth"]
-
+        self.register_offload_buffers(config)
         self.add_module("double_blocks", WeightModuleList([MMDoubleStreamBlock(i, self.task, self.mm_type, self.config, block_prefix="double_blocks") for i in range(self.double_blocks_num)]))
         self.add_module("final_layer", FinalLayerWeights(self.mm_type))
 
+    def register_offload_buffers(self, config):
+        if config["cpu_offload"]:
+            if config.get("offload_granularity", "block") == "block":
+                self.offload_blocks_num = 2
+                self.offload_block_buffers = WeightModuleList(
+                    [
+                        MMDoubleStreamBlock(
+                            i,
+                            self.task,
+                            self.mm_type,
+                            self.config,
+                            "double_blocks",
+                            True,
+                        )
+                        for i in range(self.offload_blocks_num)
+                    ]
+                )
+                self.add_module("offload_block_buffers", self.offload_block_buffers)
+                self.offload_phase_buffers = None
+
+    def non_block_weights_to_cuda(self):
+        self.final_layer.to_cuda()
+
+    def non_block_weights_to_cpu(self):
+        self.final_layer.to_cpu()
+
 
 class MMDoubleStreamBlock(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, block_prefix="double_blocks"):
+    def __init__(self, block_index, task, mm_type, config, block_prefix="double_blocks", is_offload_buffer=False):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
         self.task = task
         self.config = config
+        self.is_offload_buffer = is_offload_buffer
 
         self.lazy_load = False
         self.lazy_load_file = None
 
         self.add_module(
             "img_branch",
-            MMDoubleStreamBlockImgBranch(block_index, task, mm_type, config, block_prefix),
+            MMDoubleStreamBlockImgBranch(block_index, task, mm_type, config, block_prefix, is_offload_buffer),
         )
         self.add_module(
             "txt_branch",
-            MMDoubleStreamBlockTxtBranch(block_index, task, mm_type, config, block_prefix),
+            MMDoubleStreamBlockTxtBranch(block_index, task, mm_type, config, block_prefix, is_offload_buffer),
         )
 
 
 class MMDoubleStreamBlockImgBranch(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, block_prefix="double_blocks"):
+    def __init__(self, block_index, task, mm_type, config, block_prefix="double_blocks", is_offload_buffer=False):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -55,6 +82,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_mod.linear.weight",
                 f"{block_prefix}.{self.block_index}.img_mod.linear.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -73,6 +101,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_attn_q.weight",
                 f"{block_prefix}.{self.block_index}.img_attn_q.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -82,6 +111,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_attn_k.weight",
                 f"{block_prefix}.{self.block_index}.img_attn_k.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -91,6 +121,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_attn_v.weight",
                 f"{block_prefix}.{self.block_index}.img_attn_v.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -99,6 +130,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             "img_attn_q_norm",
             RMS_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.img_attn_q_norm.weight",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -107,6 +139,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             "img_attn_k_norm",
             RMS_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.img_attn_k_norm.weight",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -116,6 +149,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_attn_proj.weight",
                 f"{block_prefix}.{self.block_index}.img_attn_proj.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -134,6 +168,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_mlp.fc1.weight",
                 f"{block_prefix}.{self.block_index}.img_mlp.fc1.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -143,6 +178,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.img_mlp.fc2.weight",
                 f"{block_prefix}.{self.block_index}.img_mlp.fc2.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -150,7 +186,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
 
 
 class MMDoubleStreamBlockTxtBranch(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, block_prefix="double_blocks"):
+    def __init__(self, block_index, task, mm_type, config, block_prefix="double_blocks", is_offload_buffer=False):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -165,6 +201,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_mod.linear.weight",
                 f"{block_prefix}.{self.block_index}.txt_mod.linear.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -183,6 +220,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_attn_q.weight",
                 f"{block_prefix}.{self.block_index}.txt_attn_q.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -192,6 +230,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_attn_k.weight",
                 f"{block_prefix}.{self.block_index}.txt_attn_k.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -201,6 +240,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_attn_v.weight",
                 f"{block_prefix}.{self.block_index}.txt_attn_v.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -209,6 +249,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             "txt_attn_q_norm",
             RMS_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.txt_attn_q_norm.weight",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -217,6 +258,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             "txt_attn_k_norm",
             RMS_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.txt_attn_k_norm.weight",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -226,6 +268,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_attn_proj.weight",
                 f"{block_prefix}.{self.block_index}.txt_attn_proj.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -244,6 +287,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_mlp.fc1.weight",
                 f"{block_prefix}.{self.block_index}.txt_mlp.fc1.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -253,6 +297,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.txt_mlp.fc2.weight",
                 f"{block_prefix}.{self.block_index}.txt_mlp.fc2.bias",
+                is_offload_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),

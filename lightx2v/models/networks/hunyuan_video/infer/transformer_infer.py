@@ -4,7 +4,7 @@ from einops import rearrange
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .flash_attn_no_pad import flash_attn_no_pad_v3
+from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
 from .posemb_layers import apply_rotary_emb
 
@@ -54,12 +54,17 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.heads_num = config["heads_num"]
+        self.infer_func = self.infer_without_offload
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
     @torch.no_grad()
     def infer(self, weights, infer_module_out):
+        return self.infer_func(weights, infer_module_out)
+
+    @torch.no_grad()
+    def infer_without_offload(self, weights, infer_module_out):
         for i in range(self.double_blocks_num):
             infer_module_out.img, infer_module_out.txt = self.infer_double_block(weights.double_blocks[i], infer_module_out)
         x = self.infer_final_layer(weights, infer_module_out)
@@ -160,7 +165,12 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         # B, S, 3, H, D
         qkv = torch.stack([query, key, value], dim=2)
         attn_mask = F.pad(text_mask, (sequence_length, 0), value=True)
-        hidden_states = flash_attn_no_pad_v3(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
+        if self.config["attn_type"] == "flash_attn2":
+            hidden_states = flash_attn_no_pad(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
+        elif self.config["attn_type"] == "flash_attn3":
+            hidden_states = flash_attn_no_pad_v3(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
+        elif self.config["attn_type"] == "sage_attn2":
+            hidden_states = sage_attn_no_pad_v2(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
         b, s, a, d = hidden_states.shape
         hidden_states = hidden_states.reshape(b, s, -1)
         img_attn, txt_attn = hidden_states[:, : img_q.shape[1]].contiguous(), hidden_states[:, img_q.shape[1] :].contiguous()

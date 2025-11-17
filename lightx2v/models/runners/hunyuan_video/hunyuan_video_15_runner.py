@@ -36,17 +36,23 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.scheduler = HunyuanVideo15Scheduler(self.config)
 
     def load_text_encoder(self):
-        qwen25vl_device = torch.device("cuda")
+        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload"))
+        if qwen25vl_offload:
+            qwen25vl_device = torch.device("cpu")
+        else:
+            qwen25vl_device = torch.device("cuda")
+
         text_encoder_path = os.path.join(self.config["model_path"], "text_encoder/llm")
         logger.info(f"Loading text encoder from {text_encoder_path}")
-        text_encoder = Qwen25VL_TextEncoder(
-            dtype=torch.float16,
-            device=qwen25vl_device,
-            checkpoint_path=text_encoder_path,
-        )
+        text_encoder = Qwen25VL_TextEncoder(dtype=torch.float16, device=qwen25vl_device, checkpoint_path=text_encoder_path, cpu_offload=qwen25vl_offload)
 
-        byt5_device = torch.device("cuda")
-        byt5 = ByT5TextEncoder(config=self.config, device=byt5_device, checkpoint_path=self.config["model_path"])
+        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload"))
+        if byt5_offload:
+            byt5_device = torch.device("cpu")
+        else:
+            byt5_device = torch.device("cuda")
+
+        byt5 = ByT5TextEncoder(config=self.config, device=byt5_device, checkpoint_path=self.config["model_path"], cpu_offload=byt5_offload)
         text_encoders = [text_encoder, byt5]
         return text_encoders
 
@@ -142,15 +148,26 @@ class HunyuanVideo15Runner(DefaultRunner):
         return text_encoder_output
 
     def load_image_encoder(self):
+        siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload"))
+        if siglip_offload:
+            siglip_device = torch.device("cpu")
+        else:
+            siglip_device = torch.device("cuda")
         image_encoder = SiglipVisionEncoder(
             config=self.config,
-            device=torch.device("cuda"),
+            device=siglip_device,
             checkpoint_path=self.config["model_path"],
+            cpu_offload=siglip_offload,
         )
         return image_encoder
 
     def load_vae(self):
-        vae_encoder = HunyuanVideo15VAE(checkpoint_path=self.config["model_path"], dtype=torch.bfloat16, device="cuda")
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if vae_offload:
+            vae_device = torch.device("cpu")
+        else:
+            vae_device = torch.device("cuda")
+        vae_encoder = HunyuanVideo15VAE(checkpoint_path=self.config["model_path"], dtype=torch.bfloat16, device=vae_device, cpu_offload=vae_offload)
         vae_decoder = vae_encoder
         return vae_encoder, vae_decoder
 

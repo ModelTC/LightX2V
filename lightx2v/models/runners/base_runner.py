@@ -121,7 +121,7 @@ class BaseRunner(ABC):
     def init_run_segment(self, segment_idx):
         self.segment_idx = segment_idx
 
-    def run_segment(self, total_steps=None):
+    def run_segment(self, total_steps=None, segment_idx=None):
         pass
 
     def end_run_segment(self, segment_idx=None):
