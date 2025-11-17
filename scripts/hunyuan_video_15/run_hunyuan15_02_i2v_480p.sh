@@ -10,6 +10,7 @@ export CUDA_VISIBLE_DEVICES=2
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
+--seed 123 \
 --model_cls hunyuan_video_1.5 \
 --task i2v \
 --model_path $model_path \

@@ -175,11 +175,8 @@ class HunyuanVideo15Runner(DefaultRunner):
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-
-        # vision_states is all zero, because we don't have any image input
-        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.vision_states_dim, dtype=torch.bfloat16).cuda()
-        siglip_output = self.image_encoder.infer(siglip_output) * 0.0
-        siglip_mask = torch.zeros((1, siglip_output.shape[1]), dtype=torch.bfloat16, device=torch.device("cuda"))
+        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.config["hidden_size"], dtype=torch.bfloat16).cuda()
+        siglip_mask = torch.zeros(1, self.vision_num_semantic_tokens, dtype=torch.bfloat16, device=torch.device("cuda"))
 
         torch.cuda.empty_cache()
         gc.collect()
