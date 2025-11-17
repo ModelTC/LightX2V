@@ -27,6 +27,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
 from tools.convert.quant import *
 
+dtype_mapping = {
+    "int8": torch.int8,
+    "fp8": torch.float8_e4m3fn,
+}
+
 
 def get_key_mapping_rules(direction, model_type):
     if model_type == "wan_dit":
@@ -306,59 +311,6 @@ def get_key_mapping_rules(direction, model_type):
         raise ValueError(f"Unsupported model type: {model_type}")
 
 
-def quantize_tensor(w, w_bit=8, dtype=torch.int8, comfyui_mode=False):
-    """
-    Quantize a 2D tensor to specified bit width using symmetric min-max quantization
-
-    Args:
-        w: Input tensor to quantize (must be 2D)
-        w_bit: Quantization bit width (default: 8)
-
-    Returns:
-        quantized: Quantized tensor (int8)
-        scales: Scaling factors per row
-    """
-    if w.dim() != 2:
-        raise ValueError(f"Only 2D tensors supported. Got {w.dim()}D tensor")
-    if torch.isnan(w).any():
-        raise ValueError("Tensor contains NaN values")
-    if w_bit != 8:
-        raise ValueError("Only support 8 bits")
-
-    org_w_shape = w.shape
-    # Calculate quantization parameters
-    if not comfyui_mode:
-        max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
-    else:
-        max_val = w.abs().max()
-
-    if dtype == torch.float8_e4m3fn:
-        finfo = torch.finfo(dtype)
-        qmin, qmax = finfo.min, finfo.max
-    elif dtype == torch.int8:
-        qmin, qmax = -128, 127
-    # Quantize tensor
-    scales = max_val / qmax
-
-    if dtype == torch.float8_e4m3fn:
-        from qtorch.quant import float_quantize
-
-        scaled_tensor = w / scales
-        scaled_tensor = torch.clip(scaled_tensor, qmin, qmax)
-        w_q = float_quantize(scaled_tensor.float(), 4, 3, rounding="nearest").to(dtype)
-    else:
-        w_q = torch.clamp(torch.round(w / scales), qmin, qmax).to(dtype)
-
-    assert torch.isnan(scales).sum() == 0
-    assert torch.isnan(w_q).sum() == 0
-
-    if not comfyui_mode:
-        scales = scales.view(org_w_shape[0], -1)
-        w_q = w_q.reshape(org_w_shape)
-
-    return w_q, scales
-
-
 def quantize_model(
     weights,
     w_bit=8,
@@ -366,11 +318,10 @@ def quantize_model(
     adapter_keys=None,
     key_idx=2,
     ignore_key=None,
-    linear_dtype=torch.int8,
+    linear_type="int8",
     non_linear_dtype=torch.float,
     comfyui_mode=False,
     comfyui_keys=[],
-    linear_quant_type=None,
 ):
     """
     Quantize model weights in-place
@@ -435,13 +386,9 @@ def quantize_model(
             original_size += original_tensor_size
 
             # Quantize tensor and store results
-            if linear_quant_type:
-                quantizer = CONVERT_WEIGHT_REGISTER[linear_quant_type](tensor)
-                w_q, scales, extra = quantizer.weight_quant_func(tensor)
-                weight_global_scale = extra.get("weight_global_scale", None)  # For nvfp4
-            else:
-                w_q, scales = quantize_tensor(tensor, w_bit, linear_dtype, comfyui_mode)
-                weight_global_scale = None
+            quantizer = CONVERT_WEIGHT_REGISTER[linear_type](tensor)
+            w_q, scales, extra = quantizer.weight_quant_func(tensor, comfyui_mode)
+            weight_global_scale = extra.get("weight_global_scale", None)  # For nvfp4
 
             # Replace original tensor and store scales
             weights[key] = w_q
@@ -637,6 +584,7 @@ def convert_weights(args):
     if args.quantized:
         if args.full_quantized and args.comfyui_mode:
             logger.info("Quant all tensors...")
+            assert args.linear_dtype, f"Error: only support 'torch.int8' and 'torch.float8_e4m3fn'."
             for k in converted_weights.keys():
                 converted_weights[k] = converted_weights[k].float().to(args.linear_dtype)
         else:
@@ -647,11 +595,10 @@ def convert_weights(args):
                 adapter_keys=args.adapter_keys,
                 key_idx=args.key_idx,
                 ignore_key=args.ignore_key,
-                linear_dtype=args.linear_dtype,
+                linear_type=args.linear_type,
                 non_linear_dtype=args.non_linear_dtype,
                 comfyui_mode=args.comfyui_mode,
                 comfyui_keys=args.comfyui_keys,
-                linear_quant_type=args.linear_quant_type,
             )
 
     os.makedirs(args.output, exist_ok=True)
@@ -818,16 +765,10 @@ def main():
         help="Device to use for quantization (cpu/cuda)",
     )
     parser.add_argument(
-        "--linear_dtype",
+        "--linear_type",
         type=str,
-        choices=["torch.int8", "torch.float8_e4m3fn"],
-        help="Data type for linear",
-    )
-    parser.add_argument(
-        "--linear_quant_type",
-        type=str,
-        choices=["INT8", "FP8", "NVFP4", "MXFP4", "MXFP6", "MXFP8"],
-        help="Data type for linear",
+        choices=["int8", "fp8", "nvfp4", "mxfp4", "mxfp6", "mxfp8"],
+        help="Quant type for linear",
     )
     parser.add_argument(
         "--non_linear_dtype",
@@ -870,7 +811,7 @@ def main():
         logger.warning("--chunk_size is ignored when using --single_file option.")
 
     if args.quantized:
-        args.linear_dtype = eval(args.linear_dtype)
+        args.linear_dtype = dtype_mapping.get(args.linear_type, None)
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
         model_type_keys_map = {

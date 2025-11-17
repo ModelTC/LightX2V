@@ -22,16 +22,19 @@ class QuantTemplate(metaclass=ABCMeta):
         self.extra = {}
 
 
-@CONVERT_WEIGHT_REGISTER("INT8")
+@CONVERT_WEIGHT_REGISTER("int8")
 class QuantWeightINT8(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         self.weight_quant_func = self.load_int8_weight
 
     @torch.no_grad()
-    def load_int8_weight(self, w):
+    def load_int8_weight(self, w, comfyui_mode=False):
         org_w_shape = w.shape
-        max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+        if not comfyui_mode:
+            max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+        else:
+            max_val = w.abs().max()
         qmin, qmax = -128, 127
         scales = max_val / qmax
         w_q = torch.clamp(torch.round(w / scales), qmin, qmax).to(torch.int8)
@@ -39,22 +42,26 @@ class QuantWeightINT8(QuantTemplate):
         assert torch.isnan(scales).sum() == 0
         assert torch.isnan(w_q).sum() == 0
 
-        scales = scales.view(org_w_shape[0], -1)
-        w_q = w_q.reshape(org_w_shape)
+        if not comfyui_mode:
+            scales = scales.view(org_w_shape[0], -1)
+            w_q = w_q.reshape(org_w_shape)
 
         return w_q, scales, self.extra
 
 
-@CONVERT_WEIGHT_REGISTER("FP8")
+@CONVERT_WEIGHT_REGISTER("fp8")
 class QuantWeightFP8(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         self.weight_quant_func = self.load_fp8_weight
 
     @torch.no_grad()
-    def load_fp8_weight(self, w):
+    def load_fp8_weight(self, w, comfyui_mode=False):
         org_w_shape = w.shape
-        max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+        if not comfyui_mode:
+            max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+        else:
+            max_val = w.abs().max()
         finfo = torch.finfo(torch.float8_e4m3fn)
         qmin, qmax = finfo.min, finfo.max
         scales = max_val / qmax
@@ -65,20 +72,21 @@ class QuantWeightFP8(QuantTemplate):
         assert torch.isnan(scales).sum() == 0
         assert torch.isnan(w_q).sum() == 0
 
-        scales = scales.view(org_w_shape[0], -1)
-        w_q = w_q.reshape(org_w_shape)
+        if not comfyui_mode:
+            scales = scales.view(org_w_shape[0], -1)
+            w_q = w_q.reshape(org_w_shape)
 
         return w_q, scales, self.extra
 
 
-@CONVERT_WEIGHT_REGISTER("MXFP4")
+@CONVERT_WEIGHT_REGISTER("mxfp4")
 class QuantWeightMxFP4(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         self.weight_quant_func = self.load_mxfp4_weight
 
     @torch.no_grad()
-    def load_mxfp4_weight(self, w):
+    def load_mxfp4_weight(self, w, comfyui_mode=False):
         device = w.device
         w = w.cuda().to(torch.bfloat16)
         w_q, scales = scaled_mxfp4_quant(w)
@@ -86,14 +94,14 @@ class QuantWeightMxFP4(QuantTemplate):
         return w_q, scales, self.extra
 
 
-@CONVERT_WEIGHT_REGISTER("MXFP6")
+@CONVERT_WEIGHT_REGISTER("mxfp6")
 class QuantWeightMxFP6(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         self.weight_quant_func = self.load_mxfp6_weight
 
     @torch.no_grad()
-    def load_mxfp6_weight(self, w):
+    def load_mxfp6_weight(self, w, comfyui_mode=False):
         device = w.device
         w = w.cuda().to(torch.bfloat16)
         w_q, scales = scaled_mxfp6_quant(w)
@@ -101,14 +109,14 @@ class QuantWeightMxFP6(QuantTemplate):
         return w_q, scales, self.extra
 
 
-@CONVERT_WEIGHT_REGISTER("MXFP8")
+@CONVERT_WEIGHT_REGISTER("mxfp8")
 class QuantWeightMxFP8(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         self.weight_quant_func = self.load_mxfp8_weight
 
     @torch.no_grad()
-    def load_mxfp8_weight(self, w):
+    def load_mxfp8_weight(self, w, comfyui_mode=False):
         device = w.device
         w = w.cuda().to(torch.bfloat16)
         w_q, scales = scaled_mxfp8_quant(w)
@@ -116,14 +124,14 @@ class QuantWeightMxFP8(QuantTemplate):
         return w_q, scales, self.extra
 
 
-@CONVERT_WEIGHT_REGISTER("NVFP4")
+@CONVERT_WEIGHT_REGISTER("nvfp4")
 class QuantWeightNVFP4(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         self.weight_quant_func = self.load_fp4_weight
 
     @torch.no_grad()
-    def load_fp4_weight(self, w):
+    def load_fp4_weight(self, w, comfyui_mode=False):
         device = w.device
         w = w.cuda().to(torch.bfloat16)
         weight_global_scale = (2688.0 / torch.max(torch.abs(w))).to(torch.float32)
