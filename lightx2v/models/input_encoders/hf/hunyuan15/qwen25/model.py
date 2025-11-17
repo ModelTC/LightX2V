@@ -476,16 +476,11 @@ class TextEncoder(nn.Module):
 
 
 class Qwen25VL_TextEncoder:
-    def __init__(
-        self,
-        text_len=1000,
-        dtype=torch.float16,
-        device=torch.cuda.current_device(),
-        checkpoint_path=None,
-    ):
+    def __init__(self, text_len=1000, dtype=torch.float16, device=torch.cuda.current_device(), checkpoint_path=None, cpu_offload=False):
         self.text_len = text_len
         self.dtype = dtype
         self.device = device
+        self.cpu_offload = cpu_offload
         self.num_videos_per_prompt = 1
 
         self.text_encoder = TextEncoder(
@@ -504,17 +499,21 @@ class Qwen25VL_TextEncoder:
         )
 
     def infer(self, texts):
+        if self.cpu_offload:
+            self.text_encoder = self.text_encoder.to("cuda")
         text_inputs = self.text_encoder.text2tokens(texts, data_type="video", max_length=self.text_len)
-        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=self.device)
+        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device="cuda")
+        if self.cpu_offload:
+            self.text_encoder = self.text_encoder.to("cpu")
         prompt_embeds = prompt_outputs.hidden_state
         attention_mask = prompt_outputs.attention_mask
 
         if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device)
+            attention_mask = attention_mask.cuda()
             _, seq_len = attention_mask.shape
             attention_mask = attention_mask.repeat(1, self.num_videos_per_prompt)
             attention_mask = attention_mask.view(self.num_videos_per_prompt, seq_len)
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.device)
+        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device="cuda")
 
         seq_len = prompt_embeds.shape[1]
         # duplicate text embeddings for each generation per prompt, using mps friendly method

@@ -184,7 +184,7 @@ def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_
         torch.Tensor: Causal attention mask.
     """
     seq_len = n_frame * n_hw
-    mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
+    mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device="cuda")
     for i in range(seq_len):
         i_frame = i // n_hw
         mask[i, : (i_frame + 1) * n_hw] = 0
@@ -724,6 +724,9 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
 
     @torch.no_grad()
     def encode(self, x: Tensor, return_dict: bool = True):
+        if self.cpu_offload:
+            self.encoder = self.encoder.to("cuda")
+
         def _encode(x):
             if self.use_temporal_tiling and x.shape[-3] > self.tile_sample_min_tsize:
                 return self.temporal_tiled_encode(x)
@@ -739,7 +742,8 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
         else:
             h = _encode(x)
         posterior = DiagonalGaussianDistribution(h)
-
+        if self.cpu_offload:
+            self.encoder = self.encoder.to("cpu")
         if not return_dict:
             return (posterior,)
 
@@ -747,6 +751,9 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
 
     @torch.no_grad()
     def decode(self, z: Tensor, return_dict: bool = True, generator=None):
+        if self.cpu_offload:
+            self.decoder = self.decoder.to("cuda")
+
         def _decode(z):
             if self.use_temporal_tiling and z.shape[-3] > self.tile_latent_min_tsize:
                 return self.temporal_tiled_decode(z)
@@ -759,7 +766,8 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
             decoded = torch.cat(decoded_slices)
         else:
             decoded = _decode(z)
-
+        if self.cpu_offload:
+            self.decoder = self.decoder.to("cpu")
         if not return_dict:
             return (decoded,)
 
@@ -775,8 +783,9 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
 
 
 class HunyuanVideo15VAE:
-    def __init__(self, checkpoint_path=None, dtype=torch.float16, device="cuda"):
+    def __init__(self, checkpoint_path=None, dtype=torch.float16, device="cuda", cpu_offload=False):
         self.vae = AutoencoderKLConv3D.from_pretrained(os.path.join(checkpoint_path, "vae")).to(dtype).to(device)
+        self.vae.cpu_offload = cpu_offload
 
     @torch.no_grad()
     def encode(self, x):
@@ -785,6 +794,7 @@ class HunyuanVideo15VAE:
     @torch.no_grad()
     def decode(self, z):
         z = z / self.vae.config.scaling_factor
+
         self.vae.enable_tiling()
         video_frames = self.vae.decode(z, return_dict=False)[0]
         self.vae.disable_tiling()

@@ -6,7 +6,7 @@ from einops import rearrange
 
 from lightx2v.utils.envs import *
 
-from .flash_attn_no_pad import flash_attn_no_pad
+from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
 from .posemb_layers import get_nd_rotary_pos_embed
 
@@ -32,12 +32,7 @@ def apply_gate(x, gate=None, tanh=False):
 
 @torch.compiler.disable
 def attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    drop_rate: float = 0.0,
-    attn_mask: Optional[torch.Tensor] = None,
-    causal: bool = False,
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, drop_rate: float = 0.0, attn_mask: Optional[torch.Tensor] = None, causal: bool = False, attn_type: str = "flash_attn2"
 ) -> torch.Tensor:
     """
     Compute attention using flash_attn_no_pad.
@@ -56,7 +51,12 @@ def attention(
     qkv = torch.stack([q, k, v], dim=2)
     if attn_mask is not None and attn_mask.dtype != torch.bool:
         attn_mask = attn_mask.bool()
-    x = flash_attn_no_pad(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
+    if attn_type == "flash_attn2":
+        x = flash_attn_no_pad(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
+    elif attn_type == "flash_attn3":
+        x = flash_attn_no_pad_v3(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
+    elif attn_type == "sage_attn2":
+        x = sage_attn_no_pad_v2(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
     b, s, a, d = x.shape
     out = x.reshape(b, s, -1)
     return out
@@ -158,7 +158,7 @@ class HunyuanVideo15PreInfer:
             norm_x = block.norm1.apply(out.unsqueeze(0)).squeeze(0)
             qkv = block.self_attn_qkv.apply(norm_x).unsqueeze(0)
             q, k, v = rearrange(qkv, "B L (K H D) -> K B L H D", K=3, H=self.heads_num)
-            attn = attention(q, k, v, attn_mask=mask).squeeze(0)
+            attn = attention(q, k, v, attn_mask=mask, attn_type=self.config["attn_type"]).squeeze(0)
             out = out + apply_gate(block.self_attn_proj.apply(attn).unsqueeze(0), gate_msa).squeeze(0)
             tmp = block.mlp_fc1.apply(block.norm2.apply(out))
             tmp = torch.nn.functional.silu(tmp)
