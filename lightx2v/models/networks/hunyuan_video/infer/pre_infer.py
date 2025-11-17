@@ -107,6 +107,10 @@ class HunyuanVideo15PreInfer:
         )
 
         freqs_cos, freqs_sin = self.get_rotary_pos_embed((tt, th, tw))
+        if self.config.get("freqs_force_bf16", False):
+            freqs_cos = freqs_cos.to(torch.bfloat16)
+            freqs_sin = freqs_sin.to(torch.bfloat16)
+
         img = weights.img_in.apply(img)
         img = img.flatten(2).transpose(1, 2)
 

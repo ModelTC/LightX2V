@@ -6,7 +6,7 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
-from .posemb_layers import apply_rotary_emb
+from .posemb_layers import apply_rotary_emb, apply_rotary_emb_force_bf16
 
 
 def modulate(x, shift=None, scale=None):
@@ -109,7 +109,10 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_q = weights.img_branch.img_attn_q_norm.apply(img_q).to(img_v)
         img_k = weights.img_branch.img_attn_k_norm.apply(img_k).to(img_v)
 
-        img_q, img_k = apply_rotary_emb(img_q.unsqueeze(0), img_k.unsqueeze(0), (infer_module_out.freqs_cos, infer_module_out.freqs_sin), head_first=False)
+        if self.config.get("freqs_force_bf16", False):
+            img_q, img_k = apply_rotary_emb_force_bf16(img_q.unsqueeze(0), img_k.unsqueeze(0), (infer_module_out.freqs_cos, infer_module_out.freqs_sin))
+        else:
+            img_q, img_k = apply_rotary_emb(img_q.unsqueeze(0), img_k.unsqueeze(0), (infer_module_out.freqs_cos, infer_module_out.freqs_sin))
         return (
             img_q,
             img_k,
