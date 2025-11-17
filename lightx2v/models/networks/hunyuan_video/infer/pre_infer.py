@@ -158,7 +158,7 @@ class HunyuanVideo15PreInfer:
             norm_x = block.norm1.apply(out.unsqueeze(0)).squeeze(0)
             qkv = block.self_attn_qkv.apply(norm_x).unsqueeze(0)
             q, k, v = rearrange(qkv, "B L (K H D) -> K B L H D", K=3, H=self.heads_num)
-            attn = attention(q, k, v, attn_mask=mask, attn_type=self.config["attn_type"]).squeeze(0)
+            attn = attention(q, k, v, attn_mask=mask, attn_type="flash_attn2").squeeze(0)
             out = out + apply_gate(block.self_attn_proj.apply(attn).unsqueeze(0), gate_msa).squeeze(0)
             tmp = block.mlp_fc1.apply(block.norm2.apply(out))
             tmp = torch.nn.functional.silu(tmp)
