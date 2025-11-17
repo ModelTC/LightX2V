@@ -171,6 +171,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             "image_encoder_output": {
                 "siglip_output": siglip_output,
                 "siglip_mask": siglip_mask,
+                "cond_latents": None,
             },
         }
 
