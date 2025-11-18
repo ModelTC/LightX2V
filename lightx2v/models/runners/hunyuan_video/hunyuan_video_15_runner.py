@@ -14,9 +14,11 @@ from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15Scheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
+from lightx2v.models.video_encoders.hf.hunyuanvideo15.lighttae_hy15 import LightTaeHy15
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import *
 
 
 @RUNNER_REGISTER("hunyuan_video_1.5")
@@ -31,6 +33,8 @@ class HunyuanVideo15Runner(DefaultRunner):
         }
         self.vision_num_semantic_tokens = 729
         self.vision_states_dim = 1152
+        self.vae_cls = HunyuanVideo15VAE
+        self.tae_cls = LightTaeHy15
 
     def init_scheduler(self):
         self.scheduler = HunyuanVideo15Scheduler(self.config)
@@ -161,20 +165,60 @@ class HunyuanVideo15Runner(DefaultRunner):
         )
         return image_encoder
 
-    def load_vae(self):
+    def load_vae_encoder(self):
+        # offload config
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
             vae_device = torch.device("cuda")
-        vae_encoder = HunyuanVideo15VAE(checkpoint_path=self.config["model_path"], dtype=torch.bfloat16, device=vae_device, cpu_offload=vae_offload)
-        vae_decoder = vae_encoder
+
+        vae_config = {
+            "checkpoint_path": self.config["model_path"],
+            "device": vae_device,
+            "cpu_offload": vae_offload,
+            "dtype": GET_DTYPE(),
+        }
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
+            return None
+        else:
+            return self.vae_cls(**vae_config)
+
+    def load_vae_decoder(self):
+        # offload config
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if vae_offload:
+            vae_device = torch.device("cpu")
+        else:
+            vae_device = torch.device("cuda")
+
+        vae_config = {
+            "checkpoint_path": self.config["model_path"],
+            "device": vae_device,
+            "cpu_offload": vae_offload,
+            "dtype": GET_DTYPE(),
+        }
+        if self.config.get("use_tae", False):
+            tae_path = self.config["tae_path"]
+            vae_decoder = self.tae_cls(vae_path=tae_path, dtype=GET_DTYPE()).to("cuda")
+        else:
+            vae_decoder = self.vae_cls(**vae_config)
+        return vae_decoder
+
+    def load_vae(self):
+        vae_encoder = self.load_vae_encoder()
+        if vae_encoder is None or self.config.get("use_tae", False):
+            vae_decoder = self.load_vae_decoder()
+        else:
+            vae_decoder = vae_encoder
         return vae_encoder, vae_decoder
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
+
+        # vision_states is all zero, because we don't have any image input
         siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.config["hidden_size"], dtype=torch.bfloat16).cuda()
         siglip_mask = torch.zeros(1, self.vision_num_semantic_tokens, dtype=torch.bfloat16, device=torch.device("cuda"))
 

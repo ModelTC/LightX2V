@@ -27,6 +27,23 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.remove_keys = ["byt5_in", "vision_in"]
+        self.dit_quantized = self.config.get("dit_quantized", False)
+        if self.dit_quantized:
+            assert self.config.get("dit_quant_scheme", "Default") in [
+                "Default-Force-FP32",
+                "fp8-vllm",
+                "int8-vllm",
+                "fp8-q8f",
+                "int8-q8f",
+                "fp8-b128-deepgemm",
+                "fp8-sgl",
+                "int8-sgl",
+                "int8-torchao",
+                "nvfp4",
+                "mxfp4",
+                "mxfp6-mxfp8",
+                "mxfp8",
+            ]
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
@@ -42,7 +59,11 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
     def _init_weights(self):
         unified_dtype = GET_DTYPE() == GET_SENSITIVE_DTYPE()
         sensitive_layer = {}
-        weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
+        if not self.dit_quantized:
+            weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
+        else:
+            weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
+
         self.original_weight_dict = weight_dict
         self.pre_weight = HunyuanVideo15PreWeights(self.config)
         self.transformer_weights = HunyuanVideo15TransformerWeights(self.config)
@@ -74,6 +95,51 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.pre_infer.set_scheduler(scheduler)
         self.transformer_infer.set_scheduler(scheduler)
         self.post_infer.set_scheduler(scheduler)
+
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+
+        if self.config.get("dit_quantized_ckpt", None):
+            safetensors_path = self.config["dit_quantized_ckpt"]
+        else:
+            safetensors_path = self.model_path
+
+        if os.path.isdir(safetensors_path):
+            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+        else:
+            safetensors_files = [safetensors_path]
+            safetensors_path = os.path.dirname(safetensors_path)
+
+        weight_dict = {}
+        for safetensor_path in safetensors_files:
+            if self.config.get("adapter_model_path", None) is not None:
+                if self.config["adapter_model_path"] == safetensor_path:
+                    continue
+            with safe_open(safetensor_path, framework="pt") as f:
+                logger.info(f"Loading weights from {safetensor_path}")
+                for k in f.keys():
+                    if any(remove_key in k for remove_key in remove_keys):
+                        continue
+                    if f.get_tensor(k).dtype in [
+                        torch.float16,
+                        torch.bfloat16,
+                        torch.float,
+                    ]:
+                        if unified_dtype or all(s not in k for s in sensitive_layer):
+                            weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
+                        else:
+                            weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
+                    else:
+                        weight_dict[k] = f.get_tensor(k).to(self.device)
+
+        if self.config.get("dit_quant_scheme", "Default") == "nvfp4":
+            calib_path = os.path.join(safetensors_path, "calib.pt")
+            logger.info(f"[CALIB] Loaded calibration data from: {calib_path}")
+            calib_data = torch.load(calib_path, map_location="cpu")
+            for k, v in calib_data["absmax"].items():
+                weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
+
+        return weight_dict
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         if self.config.get("dit_original_ckpt", None):

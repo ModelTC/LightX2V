@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/data/nvme1/yongyang/LightX2V-HY
-model_path=/data/nvme1/models/hy15day0/i2v_new/ckpts/hunyuanvideo-1.5
+lightx2v_path=
+model_path=
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -15,7 +15,7 @@ python -m lightx2v.infer \
 --task i2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/hunyuan_video_15/hunyuan_video_15_02_i2v_480p.json \
---prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside." \
---negative_prompt "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" \
---image_path ${lightx2v_path}/assets/inputs/imgs/img_0.jpg \
+--prompt "镜头跟随猪大哥和猪二哥的背影，他们仓皇地从木屋废墟中向远处的砖屋拼命奔跑。木屋废墟的碎片在地面上微微颤动，砖屋在远处显得越来越近。" \
+--negative_prompt "" \
+--image_path /data/nvme1/yongyang/hy15_demo/0.jpg \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_hunyuan_video_15_i2v.mp4

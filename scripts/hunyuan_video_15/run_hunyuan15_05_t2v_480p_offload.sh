@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/data/nvme0/gushiqiao/models/LightX2V-HY
-model_path=/data/nvme4/models/HunyuanVideo-1.5/ckpts/hunyuanvideo-1.5/
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=2
 
