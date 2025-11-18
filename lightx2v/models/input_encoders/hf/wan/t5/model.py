@@ -1,12 +1,10 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-# 1. 标准库导入
 import gc
 import math
 import os
 import sys
 from pathlib import Path
 
-# 2. 第三方库导入
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

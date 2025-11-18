@@ -244,7 +244,7 @@ class Q8FQuantLinearInt8(nn.Module):
         output_tensor = q8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias if self.bias is not None else None,
+            self.bias.float() if self.bias is not None else None,
             input_tensor_scale,
             self.weight_scale.float(),
             fuse_gelu=False,
@@ -290,7 +290,7 @@ class Q8FQuantLinearFp8(nn.Module):
         output_tensor = fp8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias if self.bias is not None else None,
+            self.bias.float() if self.bias is not None else None,
             input_tensor_scale,
             self.weight_scale,
             out_dtype=torch.bfloat16,

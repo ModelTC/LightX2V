@@ -8,5 +8,8 @@
     "sample_shift": 7.0,
     "sample_guide_scale": 6.0,
     "enable_cfg": true,
-    "attn_type": "flash_attn3"
+    "attn_type": "flash_attn3",
+    "dit_quantized_ckpt": "/path/to/quant_model.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl"
 }

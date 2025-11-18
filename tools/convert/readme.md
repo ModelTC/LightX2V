@@ -14,6 +14,7 @@ A powerful model weight conversion tool that supports format conversion, quantiz
 
 ## Supported Model Types
 
+- `hunyuan_dit`: hunyuan DiT 1.5 models
 - `wan_dit`: Wan DiT series models (default)
 - `wan_animate_dit`: Wan Animate DiT models
 - `qwen_image_dit`: Qwen Image DiT models

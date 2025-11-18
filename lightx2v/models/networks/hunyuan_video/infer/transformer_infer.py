@@ -4,7 +4,7 @@ from einops import rearrange
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
+from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2, sage_attn_no_pad_v3
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
 from .posemb_layers import apply_rotary_emb, apply_rotary_emb_force_bf16
 
@@ -174,6 +174,8 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             hidden_states = flash_attn_no_pad_v3(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
         elif self.config["attn_type"] == "sage_attn2":
             hidden_states = sage_attn_no_pad_v2(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
+        elif self.config["attn_type"] == "sage_attn3":
+            hidden_states = sage_attn_no_pad_v3(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
         b, s, a, d = hidden_states.shape
         hidden_states = hidden_states.reshape(b, s, -1)
         img_attn, txt_attn = hidden_states[:, : img_q.shape[1]].contiguous(), hidden_states[:, img_q.shape[1] :].contiguous()

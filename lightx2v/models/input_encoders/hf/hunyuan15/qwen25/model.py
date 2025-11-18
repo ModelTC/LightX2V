@@ -1,16 +1,37 @@
 import os
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import gc
+import sys
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple
 
 import loguru
 import torch
 import torch.nn as nn
+from accelerate import init_empty_weights
 from transformers import (
+    AutoConfig,
     AutoModel,
     AutoTokenizer,
 )
 from transformers.utils import ModelOutput
+
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent.parent.parent.parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
+    Q8FQuantLinearFp8,  # noqa E402
+    Q8FQuantLinearInt8,  # noqa E402
+    SglQuantLinearFp8,  # noqa E402
+    TorchaoQuantLinearInt8,  # noqa E402
+    VllmQuantLinearInt8,  # noqa E402
+)
+from safetensors.torch import load_file
 
 
 def use_default(value, default):
@@ -77,22 +98,60 @@ PRECISION_TO_TYPE = {
 }
 
 
+def replace_linear(module, new_linear_cls):
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.Linear):
+            new_linear = new_linear_cls(child.in_features, child.out_features, bias=(child.bias is not None))
+            new_linear.to(device=next(child.parameters(), None).device if any(True for _ in child.parameters()) else torch.device("cpu"))
+            setattr(module, name, new_linear)
+        else:
+            replace_linear(child, new_linear_cls)
+
+
 def load_text_encoder(
-    text_encoder_type,
-    text_encoder_precision=None,
-    text_encoder_path=None,
-    logger=None,
-    device=None,
+    text_encoder_type, text_encoder_precision=None, text_encoder_path=None, logger=None, device=None, text_encoder_quantized=False, text_encoder_quant_scheme=None, text_encoder_quant_ckpt=None
 ):
     if text_encoder_path is None:
         if text_encoder_type not in TEXT_ENCODER_PATH:
             raise ValueError(f"Unsupported text encoder type: {text_encoder_type}")
         text_encoder_path = TEXT_ENCODER_PATH[text_encoder_type]
 
-    text_encoder = AutoModel.from_pretrained(text_encoder_path, low_cpu_mem_usage=True)
-
-    if hasattr(text_encoder, "language_model"):
+    if text_encoder_quantized:
+        config = AutoConfig.from_pretrained(text_encoder_path)
+        with init_empty_weights():
+            text_encoder = AutoModel.from_config(config)
         text_encoder = text_encoder.language_model
+
+        if text_encoder_quant_scheme in ["int8", "int8-vllm"]:
+            linear_cls = VllmQuantLinearInt8
+        elif text_encoder_quant_scheme in ["fp8", "fp8-sgl"]:
+            linear_cls = SglQuantLinearFp8
+        elif text_encoder_quant_scheme == "int8-torchao":
+            linear_cls = TorchaoQuantLinearInt8
+        elif text_encoder_quant_scheme == "int8-q8f":
+            linear_cls = Q8FQuantLinearInt8
+        elif text_encoder_quant_scheme == "fp8-q8f":
+            linear_cls = Q8FQuantLinearFp8
+        else:
+            NotImplementedError(f"Unsupported Qwen25_vl quant scheme: {text_encoder_quant_scheme}")
+
+        replace_linear(text_encoder.layers, linear_cls)
+
+        weight_dict = load_file(text_encoder_quant_ckpt, device=device)
+        new_w_dict = {}
+        for key in weight_dict.keys():
+            if key == "lm_head.weight":
+                continue
+            new_w_dict[key.replace("model.", "")] = weight_dict[key]
+        del weight_dict
+        torch.cuda.empty_cache()
+        gc.collect()
+        text_encoder.load_state_dict(new_w_dict, assign=True)
+
+    else:
+        text_encoder = AutoModel.from_pretrained(text_encoder_path, low_cpu_mem_usage=True)
+        text_encoder = text_encoder.language_model
+
     text_encoder.final_layer_norm = text_encoder.norm
 
     # from_pretrained will ensure that the model is in eval mode.
@@ -162,6 +221,9 @@ class TextEncoder(nn.Module):
         reproduce: bool = False,
         logger=None,
         device=None,
+        qwen25vl_quantized=False,
+        qwen25vl_quant_scheme=None,
+        qwen25vl_quant_ckpt=None,
     ):
         super().__init__()
         self.text_encoder_type = text_encoder_type
@@ -205,6 +267,9 @@ class TextEncoder(nn.Module):
             text_encoder_path=self.model_path,
             logger=self.logger,
             device=device,
+            text_encoder_quantized=qwen25vl_quantized,
+            text_encoder_quant_scheme=qwen25vl_quant_scheme,
+            text_encoder_quant_ckpt=qwen25vl_quant_ckpt,
         )
 
         self.tokenizer, self.tokenizer_path, self.processor = load_tokenizer(
@@ -476,11 +541,26 @@ class TextEncoder(nn.Module):
 
 
 class Qwen25VL_TextEncoder:
-    def __init__(self, text_len=1000, dtype=torch.float16, device=torch.cuda.current_device(), checkpoint_path=None, cpu_offload=False):
+    def __init__(
+        self,
+        text_len=1000,
+        dtype=torch.float16,
+        device=torch.cuda.current_device(),
+        checkpoint_path=None,
+        cpu_offload=False,
+        qwen25vl_quantized=False,
+        qwen25vl_quant_scheme=None,
+        qwen25vl_quant_ckpt=None,
+    ):
         self.text_len = text_len
         self.dtype = dtype
         self.device = device
         self.cpu_offload = cpu_offload
+        self.qwen25vl_quantized = qwen25vl_quantized
+        self.qwen25vl_quant_scheme = qwen25vl_quant_scheme
+        if self.qwen25vl_quantized:
+            assert self.qwen25vl_quant_scheme is not None
+        self.qwen25vl_quant_ckpt = qwen25vl_quant_ckpt
         self.num_videos_per_prompt = 1
 
         self.text_encoder = TextEncoder(
@@ -496,6 +576,9 @@ class Qwen25VL_TextEncoder:
             reproduce=False,
             logger=loguru.logger,
             device=device,
+            qwen25vl_quantized=qwen25vl_quantized,
+            qwen25vl_quant_scheme=qwen25vl_quant_scheme,
+            qwen25vl_quant_ckpt=qwen25vl_quant_ckpt,
         )
 
     def infer(self, texts):
@@ -523,8 +606,9 @@ class Qwen25VL_TextEncoder:
 
 
 if __name__ == "__main__":
-    text_encoder_path = "/data/nvme1/yongyang/models/HunyuanVideo-1.5/ckpts/hunyuanvideo-1.5/text_encoder/llm"
+    text_encoder_path = "/data/nvme0/models/hy1118/ckpts/hunyuanvideo-1.5/text_encoder/llm"
     device = "cuda"
+    import torch.nn.functional as F
 
     prompt = "A close-up shot captures a scene on a polished, light-colored granite kitchen counter, illuminated by soft natural light from an unseen window. Initially, the frame focuses on a tall, clear glass filled with golden, translucent apple juice standing next to a single, shiny red apple with a green leaf still attached to its stem. The camera moves horizontally to the right. As the shot progresses, a white ceramic plate smoothly enters the frame, revealing a fresh arrangement of about seven or eight more apples, a mix of vibrant reds and greens, piled neatly upon it. A shallow depth of field keeps the focus sharply on the fruit and glass, while the kitchen backsplash in the background remains softly blurred. The scene is in a realistic style."
     negative_prompt = ""
@@ -534,12 +618,21 @@ if __name__ == "__main__":
         dtype=torch.float16,
         device=device,
         checkpoint_path=text_encoder_path,
+        cpu_offload=False,
+        qwen25vl_quantized=True,
+        qwen25vl_quant_scheme="int8-q8f",
+        qwen25vl_quant_ckpt="/data/nvme0/models/hy1118/quant_ckpts/qwen25vl-llm-int8.safetensors",
     )
 
     prompt_embeds, attention_mask = model.infer([prompt])
     print(f"prompt_embeds: {prompt_embeds}, {prompt_embeds.shape}")
-    print(f"attention_mask: {attention_mask}, {attention_mask.sum()}, {attention_mask.shape}")
+    a = torch.load("prompt_embeds.pth")
+    #  print(f"attention_mask: {attention_mask}, {attention_mask.sum()}, {attention_mask.shape}")
+    print(F.cosine_similarity(prompt_embeds.flatten().unsqueeze(0), a.flatten().unsqueeze(0), dim=1))
 
     negative_prompt_embeds, negative_attention_mask = model.infer([negative_prompt])
     print(f"negative_prompt_embeds: {negative_prompt_embeds}, {negative_prompt_embeds.shape}")
-    print(f"negative_attention_mask: {negative_attention_mask}, {negative_attention_mask.sum()}, {negative_attention_mask.shape}")
+    b = torch.load("negative_prompt_embeds.pth")
+    print(F.cosine_similarity(negative_prompt_embeds.flatten().unsqueeze(0), b.flatten().unsqueeze(0), dim=1))
+
+# print(f"negative_attention_mask: {negative_attention_mask}, {negative_attention_mask.sum()}, {negative_attention_mask.shape}")
