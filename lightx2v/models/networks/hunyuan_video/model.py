@@ -7,11 +7,11 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.models.networks.hunyuan_video.infer.feature_caching.transformer_infer import HunyuanVideo15TransformerInferMagCaching
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
 from lightx2v.models.networks.hunyuan_video.infer.post_infer import HunyuanVideo15PostInfer
 from lightx2v.models.networks.hunyuan_video.infer.pre_infer import HunyuanVideo15PreInfer
 from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import HunyuanVideo15TransformerInfer
-from lightx2v.models.networks.hunyuan_video.infer.feature_caching.transformer_infer import HunyuanVideo15TransformerInferMagCaching
 from lightx2v.models.networks.hunyuan_video.weights.post_weights import HunyuanVideo15PostWeights
 from lightx2v.models.networks.hunyuan_video.weights.pre_weights import HunyuanVideo15PreWeights
 from lightx2v.models.networks.hunyuan_video.weights.transformer_weights import HunyuanVideo15TransformerWeights

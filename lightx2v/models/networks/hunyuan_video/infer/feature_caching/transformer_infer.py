@@ -1,8 +1,8 @@
-import torch
 import gc
 import json
-import numpy as np
 
+import numpy as np
+import torch
 import torch.nn.functional as F
 
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
@@ -26,7 +26,6 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
         self.norm_ratio = [[1.0], [1.0]]  # mean of magnitude ratio
         self.norm_std = [[0.0], [0.0]]  # std of magnitude ratio
         self.cos_dis = [[0.0], [0.0]]  # cosine distance of residual features
-
 
     @torch.no_grad()
     def infer(self, weights, infer_module_out):
@@ -74,7 +73,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
 
         previous_residual = infer_module_out.img - ori_img
         previous_residual_txt = infer_module_out.txt - ori_txt
-        
+
         if self.config["cpu_offload"]:
             previous_residual = previous_residual.cpu()
 
@@ -103,7 +102,6 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
         residual_txt = self.residual_cache_txt[self.scheduler.infer_condition]
         infer_module_out.img.add_(residual_img.cuda())
         infer_module_out.txt.add_(residual_txt.cuda())
-
 
     def clear(self):
         self.accumulated_err = {True: 0.0, False: 0.0}
