@@ -96,33 +96,21 @@ def fuse_scale_shift_kernel_blc_opt(
     mask_c = c_offsets < C
     mask = mask_l[:, None] & mask_c[None, :]
 
-    x_off = (
-        pid_b * stride_x_b
-        + l_offsets[:, None] * stride_x_l
-        + c_offsets[None, :] * stride_x_c
-    )
+    x_off = pid_b * stride_x_b + l_offsets[:, None] * stride_x_l + c_offsets[None, :] * stride_x_c
     x = tl.load(x_ptr + x_off, mask=mask, other=0)
 
     if SHIFT_IS_SCALAR:
         shift_val = tl.load(shift_ptr)
         shift = tl.full((BLOCK_L, BLOCK_C), shift_val, dtype=shift_val.dtype)
     else:
-        s_off = (
-            pid_b * stride_s_b
-            + l_offsets[:, None] * stride_s_l
-            + c_offsets[None, :] * stride_s_c
-        )
+        s_off = pid_b * stride_s_b + l_offsets[:, None] * stride_s_l + c_offsets[None, :] * stride_s_c
         shift = tl.load(shift_ptr + s_off, mask=mask, other=0)
 
     if SCALE_IS_SCALAR:
         scale_val = tl.load(scale_ptr)
         scale = tl.full((BLOCK_L, BLOCK_C), scale_val, dtype=scale_val.dtype)
     else:
-        sc_off = (
-            pid_b * stride_sc_b
-            + l_offsets[:, None] * stride_sc_l
-            + c_offsets[None, :] * stride_sc_c
-        )
+        sc_off = pid_b * stride_sc_b + l_offsets[:, None] * stride_sc_l + c_offsets[None, :] * stride_sc_c
         scale = tl.load(scale_ptr + sc_off, mask=mask, other=0)
 
     y = x * (1 + scale) + shift
@@ -147,11 +135,9 @@ def fuse_scale_shift_kernel(
         rows = B * L
         x_2d = x.view(rows, C)
         output_2d = output.view(rows, C)
-        grid = lambda META: (rows, triton.cdiv(C, META["BLOCK_N"]))
+        grid = lambda META: (rows, triton.cdiv(C, META["BLOCK_N"]))  # noqa
         num_frames = scale.shape[1]
-        assert (
-            L % num_frames == 0
-        ), "seq_len must be divisible by num_frames for 4D scale/shift"
+        assert L % num_frames == 0, "seq_len must be divisible by num_frames for 4D scale/shift"
         frame_seqlen = L // num_frames
 
         # Compact [B, F, C] without the singleton dim into [B*F, C]
@@ -300,9 +286,7 @@ def _rotary_embedding_kernel(
         tl.store(output_row_ptr + offsets_x2, o2_vals.to(x2_vals.dtype), mask=mask)
 
 
-def apply_rotary_embedding(
-    x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool = False
-) -> torch.Tensor:
+def apply_rotary_embedding(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool = False) -> torch.Tensor:
     output = torch.empty_like(x)
 
     if x.dim() > 3:
@@ -358,15 +342,9 @@ def triton_autotune_configs():
     # Maximum threads per block is architecture-dependent in theory, but in reality all are 1024
     max_threads_per_block = 1024
     # Default to warp size 32 if not defined by device
-    warp_size = getattr(
-        torch.cuda.get_device_properties(torch.cuda.current_device()), "warp_size", 32
-    )
+    warp_size = getattr(torch.cuda.get_device_properties(torch.cuda.current_device()), "warp_size", 32)
     # Autotune for warp counts which are powers of 2 and do not exceed thread per block limit
-    return [
-        triton.Config({}, num_warps=warp_count)
-        for warp_count in [1, 2, 4, 8, 16, 32]
-        if warp_count * warp_size <= max_threads_per_block
-    ]
+    return [triton.Config({}, num_warps=warp_count) for warp_count in [1, 2, 4, 8, 16, 32] if warp_count * warp_size <= max_threads_per_block]
     # return [triton.Config({}, num_warps=8)]
 
 
@@ -454,9 +432,7 @@ def _layer_norm_fwd_1pass_kernel(
     if HAS_DROPOUT:
         # Compute dropout mask
         # 7 rounds is good enough, and reduces register pressure
-        keep_mask = (
-            tl.rand(tl.load(SEEDS + row).to(tl.uint32), cols, n_rounds=7) > dropout_p
-        )
+        keep_mask = tl.rand(tl.load(SEEDS + row).to(tl.uint32), cols, n_rounds=7) > dropout_p
         x = tl.where(keep_mask, x / (1.0 - dropout_p), 0.0)
         if STORE_DROPOUT_MASK:
             tl.store(DROPOUT_MASK + row * N + cols, keep_mask, mask=cols < N)
@@ -468,10 +444,7 @@ def _layer_norm_fwd_1pass_kernel(
         if HAS_DROPOUT:
             # Compute dropout mask
             # 7 rounds is good enough, and reduces register pressure
-            keep_mask = (
-                tl.rand(tl.load(SEEDS + M + row).to(tl.uint32), cols, n_rounds=7)
-                > dropout_p
-            )
+            keep_mask = tl.rand(tl.load(SEEDS + M + row).to(tl.uint32), cols, n_rounds=7) > dropout_p
             x1 = tl.where(keep_mask, x1 / (1.0 - dropout_p), 0.0)
             if STORE_DROPOUT_MASK:
                 tl.store(DROPOUT_MASK1 + row * N + cols, keep_mask, mask=cols < N)
@@ -542,16 +515,8 @@ def _layer_norm_fwd(
         out = torch.empty_like(x, dtype=x.dtype if out_dtype is None else out_dtype)
     if residual is not None:
         residual_dtype = residual.dtype
-    if residual_out is None and (
-        residual is not None
-        or (residual_dtype is not None and residual_dtype != x.dtype)
-        or dropout_p > 0.0
-        or rowscale is not None
-        or x1 is not None
-    ):
-        residual_out = torch.empty_like(
-            x, dtype=residual_dtype if residual_dtype is not None else x.dtype
-        )
+    if residual_out is None and (residual is not None or (residual_dtype is not None and residual_dtype != x.dtype) or dropout_p > 0.0 or rowscale is not None or x1 is not None):
+        residual_out = torch.empty_like(x, dtype=residual_dtype if residual_dtype is not None else x.dtype)
     else:
         residual_out = None
     y1, mean, rstd, seeds, dropout_mask, dropout_mask1 = _layer_norm_fwd_impl(
@@ -630,16 +595,10 @@ def _layer_norm_fwd_impl(
         assert y1.stride(-1) == 1
     else:
         y1 = None
-    mean = (
-        torch.empty((M,), dtype=torch.float32, device=x.device)
-        if not is_rms_norm
-        else None
-    )
+    mean = torch.empty((M,), dtype=torch.float32, device=x.device) if not is_rms_norm else None
     rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
     if dropout_p > 0.0:
-        seeds = torch.randint(
-            2**32, (M if x1 is None else 2 * M,), device=x.device, dtype=torch.int64
-        )
+        seeds = torch.randint(2**32, (M if x1 is None else 2 * M,), device=x.device, dtype=torch.int64)
     else:
         seeds = None
     if return_dropout_mask and dropout_p > 0.0:
@@ -702,7 +661,6 @@ def _layer_norm_fwd_impl(
 
 
 class LayerNormFn:
-
     @staticmethod
     def forward(
         x,
@@ -729,9 +687,7 @@ class LayerNormFn:
         x = maybe_contiguous_lastdim(x.reshape(-1, x.shape[-1]))
         if residual is not None:
             assert residual.shape == x_shape_og
-            residual = maybe_contiguous_lastdim(
-                residual.reshape(-1, residual.shape[-1])
-            )
+            residual = maybe_contiguous_lastdim(residual.reshape(-1, residual.shape[-1]))
         if x1 is not None:
             assert x1.shape == x_shape_og
             assert rowscale is None, "rowscale is not supported with parallel LayerNorm"
@@ -744,35 +700,29 @@ class LayerNormFn:
         bias1 = maybe_contiguous(bias1)
         if rowscale is not None:
             rowscale = rowscale.reshape(-1).contiguous()
-        residual_dtype = (
-            residual.dtype
-            if residual is not None
-            else (torch.float32 if residual_in_fp32 else None)
-        )
+        residual_dtype = residual.dtype if residual is not None else (torch.float32 if residual_in_fp32 else None)
         if out is not None:
             out = out.reshape(-1, out.shape[-1])
         if residual_out is not None:
             residual_out = residual_out.reshape(-1, residual_out.shape[-1])
-        y, y1, mean, rstd, residual_out, seeds, dropout_mask, dropout_mask1 = (
-            _layer_norm_fwd(
-                x,
-                weight,
-                bias,
-                eps,
-                residual,
-                x1,
-                weight1,
-                bias1,
-                dropout_p=dropout_p,
-                rowscale=rowscale,
-                out_dtype=out_dtype,
-                residual_dtype=residual_dtype,
-                zero_centered_weight=zero_centered_weight,
-                is_rms_norm=is_rms_norm,
-                return_dropout_mask=return_dropout_mask,
-                out=out,
-                residual_out=residual_out,
-            )
+        y, y1, mean, rstd, residual_out, seeds, dropout_mask, dropout_mask1 = _layer_norm_fwd(
+            x,
+            weight,
+            bias,
+            eps,
+            residual,
+            x1,
+            weight1,
+            bias1,
+            dropout_p=dropout_p,
+            rowscale=rowscale,
+            out_dtype=out_dtype,
+            residual_dtype=residual_dtype,
+            zero_centered_weight=zero_centered_weight,
+            is_rms_norm=is_rms_norm,
+            return_dropout_mask=return_dropout_mask,
+            out=out,
+            residual_out=residual_out,
         )
         y = y.reshape(x_shape_og)
         return y
