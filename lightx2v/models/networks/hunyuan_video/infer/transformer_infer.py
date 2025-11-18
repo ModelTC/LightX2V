@@ -62,14 +62,13 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, infer_module_out):
-        return self.infer_func(weights, infer_module_out)
+        self.infer_func(weights, infer_module_out)
+        return self.infer_final_layer(weights, infer_module_out)
 
     @torch.no_grad()
     def infer_without_offload(self, weights, infer_module_out):
         for i in range(self.double_blocks_num):
             infer_module_out.img, infer_module_out.txt = self.infer_double_block(weights.double_blocks[i], infer_module_out)
-        x = self.infer_final_layer(weights, infer_module_out)
-        return x
 
     def infer_final_layer(self, weights, infer_module_out):
         x = torch.cat((infer_module_out.img, infer_module_out.txt), 1)

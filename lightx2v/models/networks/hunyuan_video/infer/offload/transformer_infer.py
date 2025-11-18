@@ -29,6 +29,3 @@ class HunyuanVideo15OffloadTransformerInfer(HunyuanVideo15TransformerInfer):
             with torch.cuda.stream(self.offload_manager.compute_stream):
                 infer_module_out.img, infer_module_out.txt = self.infer_double_block(self.offload_manager.cuda_buffers[0], infer_module_out)
             self.offload_manager.swap_blocks()
-
-        x = self.infer_final_layer(weights, infer_module_out)
-        return x

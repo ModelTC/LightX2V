@@ -21,6 +21,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
         self.accumulated_steps = {True: 0, False: 0}
         self.accumulated_ratio = {True: 1.0, False: 1.0}
         self.residual_cache = {True: None, False: None}
+        self.residual_cache_txt = {True: None, False: None}
         # calibration args
         self.norm_ratio = [[1.0], [1.0]]  # mean of magnitude ratio
         self.norm_std = [[0.0], [0.0]]  # std of magnitude ratio
@@ -28,7 +29,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
 
 
     @torch.no_grad()
-    def infer(self, weights, pre_infer_out):
+    def infer(self, weights, infer_module_out):
         skip_forward = False
         step_index = self.scheduler.step_index
         infer_condition = self.scheduler.infer_condition
@@ -55,23 +56,25 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
                     self.accumulated_ratio[infer_condition] = 1.0
 
         if not skip_forward:
-            x = self.infer_calculating(weights, pre_infer_out)
+            self.infer_calculating(weights, infer_module_out)
         else:
-            x = self.infer_using_cache(pre_infer_out.x)
+            self.infer_using_cache(infer_module_out)
 
-        torch.cuda.empty_cache()
+        x = self.infer_final_layer(weights, infer_module_out)
 
         return x
 
-    def infer_calculating(self, weights, pre_infer_out):
+    def infer_calculating(self, weights, infer_module_out):
         step_index = self.scheduler.step_index
         infer_condition = self.scheduler.infer_condition
 
-        ori_x = pre_infer_out.x.clone()
+        ori_img = infer_module_out.img.clone()
+        ori_txt = infer_module_out.txt.clone()
+        self.infer_func(weights, infer_module_out)
 
-        x = self.infer_func(weights, pre_infer_out)
-
-        previous_residual = x - ori_x
+        previous_residual = infer_module_out.img - ori_img
+        previous_residual_txt = infer_module_out.txt - ori_txt
+        
         if self.config["cpu_offload"]:
             previous_residual = previous_residual.cpu()
 
@@ -86,24 +89,28 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
             print(f"time: {step_index}, infer_condition: {infer_condition}, norm_ratio: {norm_ratio}, norm_std: {norm_std}, cos_dis: {cos_dis}")
 
         self.residual_cache[infer_condition] = previous_residual
+        self.residual_cache_txt[infer_condition] = previous_residual_txt
 
         if self.config["cpu_offload"]:
-            ori_x = ori_x.to("cpu")
-            del ori_x
+            ori_img = ori_img.to("cpu")
+            ori_txt = ori_txt.to("cpu")
+            del ori_img, ori_txt
             torch.cuda.empty_cache()
             gc.collect()
-        return x
 
-    def infer_using_cache(self, x):
-        residual_x = self.residual_cache[self.scheduler.infer_condition]
-        x.add_(residual_x.cuda())
-        return x
+    def infer_using_cache(self, infer_module_out):
+        residual_img = self.residual_cache[self.scheduler.infer_condition]
+        residual_txt = self.residual_cache_txt[self.scheduler.infer_condition]
+        infer_module_out.img.add_(residual_img.cuda())
+        infer_module_out.txt.add_(residual_txt.cuda())
+
 
     def clear(self):
         self.accumulated_err = {True: 0.0, False: 0.0}
         self.accumulated_steps = {True: 0, False: 0}
         self.accumulated_ratio = {True: 1.0, False: 1.0}
         self.residual_cache = {True: None, False: None}
+        self.residual_cache_txt = {True: None, False: None}
         if self.enable_magcache_calibration:
             print("norm ratio")
             print(self.norm_ratio)
