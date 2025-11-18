@@ -12,24 +12,7 @@ from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOut
 
 
 def modulate(x, shift=None, scale=None):
-    """modulate by shift and scale
-
-    Args:
-        x (torch.Tensor): input tensor.
-        shift (torch.Tensor, optional): shift tensor. Defaults to None.
-        scale (torch.Tensor, optional): scale tensor. Defaults to None.
-
-    Returns:
-        torch.Tensor: the output tensor after modulate.
-    """
-    if scale is None and shift is None:
-        return x
-    elif shift is None:
-        return x * (1 + scale.unsqueeze(1))
-    elif scale is None:
-        return x + shift.unsqueeze(1)
-    else:
-        return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
 def apply_gate(x, gate=None, tanh=False):
@@ -129,18 +112,16 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             img_mod2_scale,
             img_mod2_gate,
         ) = weights.img_branch.img_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
-        img_modulated = weights.img_branch.img_norm1.apply(infer_module_out.img)
-        img_modulated = modulate(img_modulated, shift=img_mod1_shift, scale=img_mod1_scale)
-        img_modulated = img_modulated.squeeze(0)
+        img_modulated = weights.img_branch.img_norm1.apply(infer_module_out.img).squeeze(0)
+        img_modulated = img_modulated * (1 + img_mod1_scale) + img_mod1_shift
         img_q = weights.img_branch.img_attn_q.apply(img_modulated)
         img_k = weights.img_branch.img_attn_k.apply(img_modulated)
         img_v = weights.img_branch.img_attn_v.apply(img_modulated)
         img_q = rearrange(img_q, "L (H D) -> L H D", H=self.heads_num)
         img_k = rearrange(img_k, "L (H D) -> L H D", H=self.heads_num)
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
-        img_q = weights.img_branch.img_attn_q_norm.apply(img_q).to(img_v)
-        img_k = weights.img_branch.img_attn_k_norm.apply(img_k).to(img_v)
-
+        img_q = weights.img_branch.img_attn_q_norm.apply(img_q)
+        img_k = weights.img_branch.img_attn_k_norm.apply(img_k)
         img_q, img_k = apply_hunyuan_rope_with_flashinfer(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
         return (
             img_q,
