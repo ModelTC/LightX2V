@@ -11,6 +11,7 @@ from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer impo
 from lightx2v.models.networks.hunyuan_video.infer.post_infer import HunyuanVideo15PostInfer
 from lightx2v.models.networks.hunyuan_video.infer.pre_infer import HunyuanVideo15PreInfer
 from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import HunyuanVideo15TransformerInfer
+from lightx2v.models.networks.hunyuan_video.infer.feature_caching.transformer_infer import HunyuanVideo15TransformerInferMagCaching
 from lightx2v.models.networks.hunyuan_video.weights.post_weights import HunyuanVideo15PostWeights
 from lightx2v.models.networks.hunyuan_video.weights.pre_weights import HunyuanVideo15PreWeights
 from lightx2v.models.networks.hunyuan_video.weights.transformer_weights import HunyuanVideo15TransformerWeights
@@ -53,6 +54,8 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.post_infer_class = HunyuanVideo15PostInfer
         if self.config["feature_caching"] == "NoCaching":
             self.transformer_infer_class = HunyuanVideo15TransformerInfer if not self.cpu_offload else HunyuanVideo15OffloadTransformerInfer
+        elif self.config["feature_caching"] == "Mag":
+            self.transformer_infer_class = HunyuanVideo15TransformerInferMagCaching
         else:
             raise NotImplementedError
 
