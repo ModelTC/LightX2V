@@ -8,7 +8,7 @@
     "sample_shift": 7.0,
     "sample_guide_scale": 6.0,
     "enable_cfg": true,
-    "attn_type": "flash_attn3",
+    "attn_type": "sage_attn2",
     "cpu_offload": true,
     "offload_granularity": "block",
     "vae_cpu_offload": false,
