@@ -12,6 +12,7 @@ import loguru
 import torch
 import torch.nn as nn
 from accelerate import init_empty_weights
+from safetensors.torch import load_file
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -31,7 +32,6 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402
 )
-from safetensors.torch import load_file
 
 
 def use_default(value, default):

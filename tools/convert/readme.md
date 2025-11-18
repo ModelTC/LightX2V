@@ -243,6 +243,38 @@ python converter.py \
     --quantized
 ```
 
+
+
+#### 1.5 Qwen25_vl llm Quantization
+
+**INT8 Quantization**
+```bash
+python converter.py \
+    --source /path/to/hunyuanvideo-1.5/text_encoder/llm \
+    --output /path/to/output \
+    --output_ext .safetensors \
+    --output_name qwen25vl-llm-int8 \
+    --linear_dtype torch.int8 \
+    --non_linear_dtype torch.float16 \
+    --model_type qwen25vl_llm \
+    --quantized \
+    --single_file
+```
+
+**FP8 Quantization**
+```bash
+python converter.py \
+    --source /path/to/hunyuanvideo-1.5/text_encoder/llm \
+    --output /path/to/output \
+    --output_ext .safetensors \
+    --output_name qwen25vl-llm-fp8 \
+    --linear_dtype torch.float8_e4m3fn \
+    --non_linear_dtype torch.float16 \
+    --model_type qwen25vl_llm \
+    --quantized \
+    --single_file
+```
+
 ### 2. LoRA Merging
 
 #### 2.1 Merge Single LoRA
