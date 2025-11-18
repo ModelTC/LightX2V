@@ -128,7 +128,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         )
         self.add_module(
             "img_attn_q_norm",
-            RMS_WEIGHT_REGISTER["Default"](
+            RMS_WEIGHT_REGISTER["sgl-kernel"](
                 f"{block_prefix}.{self.block_index}.img_attn_q_norm.weight",
                 is_offload_buffer,
                 self.lazy_load,
@@ -137,7 +137,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         )
         self.add_module(
             "img_attn_k_norm",
-            RMS_WEIGHT_REGISTER["Default"](
+            RMS_WEIGHT_REGISTER["sgl-kernel"](
                 f"{block_prefix}.{self.block_index}.img_attn_k_norm.weight",
                 is_offload_buffer,
                 self.lazy_load,
@@ -247,7 +247,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         )
         self.add_module(
             "txt_attn_q_norm",
-            RMS_WEIGHT_REGISTER["Default"](
+            RMS_WEIGHT_REGISTER["sgl-kernel"](
                 f"{block_prefix}.{self.block_index}.txt_attn_q_norm.weight",
                 is_offload_buffer,
                 self.lazy_load,
@@ -256,7 +256,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         )
         self.add_module(
             "txt_attn_k_norm",
-            RMS_WEIGHT_REGISTER["Default"](
+            RMS_WEIGHT_REGISTER["sgl-kernel"](
                 f"{block_prefix}.{self.block_index}.txt_attn_k_norm.weight",
                 is_offload_buffer,
                 self.lazy_load,
