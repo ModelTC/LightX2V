@@ -1,12 +1,14 @@
+from typing import Tuple
+
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2, sage_attn_no_pad_v3
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
-from .posemb_layers import apply_rotary_emb, apply_rotary_emb_force_bf16
 
 
 def modulate(x, shift=None, scale=None):
@@ -47,6 +49,36 @@ def apply_gate(x, gate=None, tanh=False):
         return x * gate.unsqueeze(1).tanh()
     else:
         return x * gate.unsqueeze(1)
+
+
+def apply_hunyuan_rope_with_flashinfer(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    B, L, H, D = xq.shape
+
+    # flatten 为 [B*L, H*D]（这里 B=1）
+    query = xq.reshape(B * L, H * D).contiguous()
+    key = xk.reshape(B * L, H * D).contiguous()
+
+    # 位置索引 [B*L]，与 flatten 顺序严格对应
+    positions = torch.arange(B * L, device=xq.device, dtype=torch.long)
+
+    # 使用 GPT-J 风格（偶/奇交错），与 Hunyuan 的 rotate_half 一致
+    apply_rope_with_cos_sin_cache_inplace(
+        positions=positions,
+        query=query,
+        key=key,
+        head_size=D,
+        cos_sin_cache=cos_sin_cache,
+        is_neox=False,
+    )
+
+    # reshape 回 [1, L, H, D]
+    xq_out = query.view(B, L, H, D)
+    xk_out = key.view(B, L, H, D)
+    return xq_out, xk_out
 
 
 class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
@@ -109,10 +141,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_q = weights.img_branch.img_attn_q_norm.apply(img_q).to(img_v)
         img_k = weights.img_branch.img_attn_k_norm.apply(img_k).to(img_v)
 
-        if self.config.get("freqs_force_bf16", False):
-            img_q, img_k = apply_rotary_emb_force_bf16(img_q.unsqueeze(0), img_k.unsqueeze(0), (infer_module_out.freqs_cos, infer_module_out.freqs_sin))
-        else:
-            img_q, img_k = apply_rotary_emb(img_q.unsqueeze(0), img_k.unsqueeze(0), (infer_module_out.freqs_cos, infer_module_out.freqs_sin))
+        img_q, img_k = apply_hunyuan_rope_with_flashinfer(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
         return (
             img_q,
             img_k,

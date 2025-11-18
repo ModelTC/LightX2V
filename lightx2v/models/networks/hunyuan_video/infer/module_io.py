@@ -8,8 +8,6 @@ class HunyuanVideo15InferModuleOutput:
     img: torch.Tensor
     txt: torch.Tensor
     vec: torch.Tensor
-    freqs_cos: torch.Tensor
-    freqs_sin: torch.Tensor
     text_mask: torch.Tensor
     grid_sizes: tuple
 

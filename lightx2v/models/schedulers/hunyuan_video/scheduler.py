@@ -2,6 +2,8 @@ import torch
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
+from .posemb_layers import get_nd_rotary_pos_embed
+
 
 class HunyuanVideo15Scheduler(BaseScheduler):
     def __init__(self, config):
@@ -19,6 +21,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
         self.multitask_mask = self.get_task_mask(self.config["task"], latent_shape[-3])
         self.cond_latents_concat, self.mask_concat = self._prepare_cond_latents_and_mask(self.config["task"], image_encoder_output["cond_latents"], self.latents, self.multitask_mask, self.reorg_token)
+        self.cos_sin = self.prepare_cos_sin((latent_shape[1], latent_shape[2], latent_shape[3]))
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.bfloat16):
         self.generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -109,3 +112,22 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         sample = self.latents.to(torch.float32)
         dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
         self.latents = sample + model_output * dt
+
+    def prepare_cos_sin(self, rope_sizes):
+        target_ndim = 3
+        head_dim = self.config["hidden_size"] // self.config["heads_num"]
+        rope_dim_list = self.config["rope_dim_list"]
+        if rope_dim_list is None:
+            rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
+        assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal to head_dim of attention layer"
+        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(
+            rope_dim_list,
+            rope_sizes,
+            theta=self.config["rope_theta"],
+            use_real=True,
+            theta_rescale_factor=1,
+        )
+        cos_half = freqs_cos[:, ::2].contiguous()
+        sin_half = freqs_sin[:, ::2].contiguous()
+        cos_sin = torch.cat([cos_half, sin_half], dim=-1)
+        return cos_sin
