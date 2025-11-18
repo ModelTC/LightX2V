@@ -132,8 +132,8 @@ class HunyuanVideo15PreInfer:
         txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
 
         return HunyuanVideo15InferModuleOutput(
-            img=img,
-            txt=txt,
+            img=img.contiguous(),
+            txt=txt.contiguous(),
             vec=torch.nn.functional.silu(vec),
             text_mask=text_mask,
             grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
