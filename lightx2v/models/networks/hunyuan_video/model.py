@@ -208,9 +208,9 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
                 cfg_p_rank = dist.get_rank(cfg_p_group)
 
                 if cfg_p_rank == 0:
-                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=True).contiguous()
                 else:
-                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
+                    noise_pred = self._infer_cond_uncond(inputs, infer_condition=False).contiguous()
 
                 noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
                 dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
