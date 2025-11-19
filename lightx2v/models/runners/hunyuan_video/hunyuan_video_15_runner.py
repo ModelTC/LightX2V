@@ -40,7 +40,7 @@ class HunyuanVideo15Runner(DefaultRunner):
     def init_scheduler(self):
         if self.config["feature_caching"] == "NoCaching":
             scheduler_class = HunyuanVideo15Scheduler
-        elif self.config.feature_caching in ["Mag"]:
+        elif self.config.feature_caching in ["Mag", "Tea"]:
             scheduler_class = HunyuanVideo15SchedulerCaching
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
