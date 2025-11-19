@@ -4,6 +4,7 @@ import os
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from loguru import logger
 from safetensors import safe_open
 
@@ -25,6 +26,10 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.model_path = model_path
         self.config = config
         self.device = device
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.remove_keys = ["byt5_in", "vision_in"]
@@ -239,8 +244,35 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
+        if self.config["seq_parallel"]:
+            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
+
+        if self.config["seq_parallel"]:
+            x = self._seq_parallel_post_process(x)
 
         noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
 
         return noise_pred
+
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        seqlen = pre_infer_out.img.shape[1]
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            pre_infer_out.img = F.pad(pre_infer_out.img, (0, 0, 0, padding_size))
+
+        pre_infer_out.img = torch.chunk(pre_infer_out.img, world_size, dim=1)[cur_rank]
+        return pre_infer_out
+
+    @torch.no_grad()
+    def _seq_parallel_post_process(self, x):
+        world_size = dist.get_world_size(self.seq_p_group)
+        gathered_x = [torch.empty_like(x) for _ in range(world_size)]
+        dist.all_gather(gathered_x, x, group=self.seq_p_group)
+        combined_output = torch.cat(gathered_x, dim=1)
+        return combined_output

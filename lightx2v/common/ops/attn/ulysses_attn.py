@@ -27,6 +27,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        if len(q.shape) == 4:
+            q = q.reshape(-1, q.shape[-2], q.shape[-1])
+            k = k.reshape(-1, k.shape[-2], k.shape[-1])
+            v = v.reshape(-1, v.shape[-2], v.shape[-1])
+
         # 获取当前进程的排名和全局进程数
         world_size = dist.get_world_size(seq_p_group)
         cur_rank = dist.get_rank(seq_p_group)
@@ -134,6 +139,10 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        if len(q.shape) == 4:
+            q = q.reshape(-1, q.shape[-2], q.shape[-1])
+            k = k.reshape(-1, k.shape[-2], k.shape[-1])
+            v = v.reshape(-1, v.shape[-2], v.shape[-1])
         # 获取当前进程的排名和全局进程数
         world_size = dist.get_world_size(seq_p_group)
         cur_rank = dist.get_rank(seq_p_group)

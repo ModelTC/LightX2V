@@ -378,7 +378,7 @@ class HunyuanVideo15Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2v(self):
         img_ori = self.read_image_input(self.input_info.image_path)
-        if self.config_sr["is_sr_running"]:
+        if self.sr_version and self.config_sr["is_sr_running"]:
             self.latent_sr_shape = self.get_sr_latent_shape_with_target_hw()
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw(origin_size=img_ori.size)  # Important: set latent_shape in input_info
         siglip_output, siglip_mask = self.run_image_encoder(img_ori) if self.config.get("use_image_encoder", True) else None
@@ -402,7 +402,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         metrics_labels=["WanRunner"],
     )
     def run_image_encoder(self, first_frame, last_frame=None):
-        if self.config_sr["is_sr_running"]:
+        if self.sr_version and self.config_sr["is_sr_running"]:
             target_width = self.target_sr_width
             target_height = self.target_sr_height
         else:
@@ -443,7 +443,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         origin_size = first_frame.size
         original_width, original_height = origin_size
 
-        if self.config_sr["is_sr_running"]:
+        if self.sr_version and self.config_sr["is_sr_running"]:
             target_width = self.target_sr_width
             target_height = self.target_sr_height
         else:

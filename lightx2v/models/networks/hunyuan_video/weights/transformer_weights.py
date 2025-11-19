@@ -67,6 +67,11 @@ class MMDoubleStreamBlock(WeightModule):
         )
         attention_weights_cls = ATTN_WEIGHT_REGISTER[self.config["attn_type"]]
         self.add_module("self_attention", attention_weights_cls())
+        if self.config["seq_parallel"]:
+            self.add_module(
+                "self_attention_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
 
 class MMDoubleStreamBlockImgBranch(WeightModule):

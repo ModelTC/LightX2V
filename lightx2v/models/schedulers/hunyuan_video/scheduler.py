@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from einops import rearrange
 from torch.nn import functional as F
 
@@ -17,6 +18,10 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.reorg_token = False
         self.keep_latents_dtype_in_scheduler = True
         self.sample_guide_scale = self.config["sample_guide_scale"]
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.bfloat16)
@@ -132,6 +137,14 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         cos_half = freqs_cos[:, ::2].contiguous()
         sin_half = freqs_sin[:, ::2].contiguous()
         cos_sin = torch.cat([cos_half, sin_half], dim=-1)
+        if self.seq_p_group is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+            seqlen = cos_sin.shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
+            cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
         return cos_sin
 
 

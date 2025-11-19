@@ -32,7 +32,7 @@ class HunyuanVideo15PostInfer:
         """
         c = self.unpatchify_channels
         pt, ph, pw = self.patch_size
-        assert t * h * w == x.shape[1]
+        x = x[:, : t * h * w]  # remove padding from seq parallel
         x = x.reshape(shape=(x.shape[0], t, h, w, c, pt, ph, pw))
         x = torch.einsum("nthwcopq->nctohpwq", x)
         imgs = x.reshape(shape=(x.shape[0], c, t * pt, h * ph, w * pw))

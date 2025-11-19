@@ -96,6 +96,10 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.heads_num = config["heads_num"]
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
         self.infer_func = self.infer_without_offload
 
     def set_scheduler(self, scheduler):
@@ -113,6 +117,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         for i in range(self.double_blocks_num):
             infer_module_out.img, infer_module_out.txt = self.infer_double_block(weights.double_blocks[i], infer_module_out)
 
+    @torch.no_grad()
     def infer_final_layer(self, weights, infer_module_out):
         x = torch.cat((infer_module_out.img, infer_module_out.txt), 1)
         img = x[:, : infer_module_out.img.shape[1], ...]
@@ -216,15 +221,27 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         seqlen = query.shape[1]
         cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to("cuda", non_blocking=True)
 
-        attn_out = weights.self_attention.apply(
-            q=query,
-            k=key,
-            v=value,
-            cu_seqlens_q=cu_seqlens_qkv,
-            cu_seqlens_kv=cu_seqlens_qkv,
-            max_seqlen_q=seqlen,
-            max_seqlen_kv=seqlen,
-        )
+        if self.config["seq_parallel"]:
+            attn_out = weights.self_attention_parallel.apply(
+                q=query,
+                k=key,
+                v=value,
+                img_qkv_len=img_seqlen,
+                cu_seqlens_qkv=cu_seqlens_qkv,
+                attention_module=weights.self_attention,
+                seq_p_group=self.seq_p_group,
+            )
+        else:
+            attn_out = weights.self_attention.apply(
+                q=query,
+                k=key,
+                v=value,
+                cu_seqlens_q=cu_seqlens_qkv,
+                cu_seqlens_kv=cu_seqlens_qkv,
+                max_seqlen_q=seqlen,
+                max_seqlen_kv=seqlen,
+            )
+
         img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn
 
