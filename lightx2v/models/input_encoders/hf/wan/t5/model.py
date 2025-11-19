@@ -549,7 +549,7 @@ class T5Encoder(nn.Module):
 
             with torch.cuda.stream(self.offload_manager.compute_stream):
                 x = self.forward_block_with_offload(self.offload_manager.cuda_buffers[0], x, mask, pos_bias=e)
-            self.offload_manager.swap_weights()
+            self.offload_manager.swap_blocks()
 
         x = self.norm(x)
         x = self.dropout(x)
