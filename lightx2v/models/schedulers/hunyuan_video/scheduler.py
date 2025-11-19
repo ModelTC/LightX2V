@@ -1,4 +1,6 @@
 import torch
+from einops import rearrange
+from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
@@ -131,3 +133,78 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         sin_half = freqs_sin[:, ::2].contiguous()
         cos_sin = torch.cat([cos_half, sin_half], dim=-1)
         return cos_sin
+
+
+class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
+    def __init__(self, config):
+        super().__init__(config)
+        self.noise_scale = 0.7
+
+    def prepare(self, seed, latent_shape, lq_latents, upsampler, image_encoder_output=None):
+        dtype = lq_latents.dtype
+        device = lq_latents.device
+        self.prepare_latents(seed, latent_shape, lq_latents, dtype=dtype)
+        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
+        self.cos_sin = self.prepare_cos_sin((latent_shape[1], latent_shape[2], latent_shape[3]))
+
+        tgt_shape = latent_shape[-2:]
+        bsz = lq_latents.shape[0]
+        lq_latents = rearrange(lq_latents, "b c f h w -> (b f) c h w")
+        lq_latents = F.interpolate(lq_latents, size=tgt_shape, mode="bilinear", align_corners=False)
+        lq_latents = rearrange(lq_latents, "(b f) c h w -> b c f h w", b=bsz)
+
+        lq_latents = upsampler(lq_latents.to(dtype=torch.float32, device=device))
+        lq_latents = lq_latents.to(dtype=dtype)
+
+        lq_latents = self.add_noise_to_lq(lq_latents, self.noise_scale)
+
+        condition = self.get_condition(lq_latents, image_encoder_output["cond_latents"], self.config["task"])
+        c = lq_latents.shape[1]
+
+        zero_condition = condition.clone()
+        zero_condition[:, c + 1 : 2 * c + 1] = torch.zeros_like(lq_latents)
+        zero_condition[:, 2 * c + 1] = 0
+
+        self.condition = condition
+        self.zero_condition = zero_condition
+
+    def prepare_latents(self, seed, latent_shape, lq_latents, dtype=torch.bfloat16):
+        self.generator = torch.Generator(device=lq_latents.device).manual_seed(seed)
+        self.latents = torch.randn(
+            1,
+            latent_shape[0],
+            latent_shape[1],
+            latent_shape[2],
+            latent_shape[3],
+            dtype=dtype,
+            device=lq_latents.device,
+            generator=self.generator,
+        )
+
+    def get_condition(self, lq_latents, img_cond, task):
+        """
+        latents: shape (b c f h w)
+        """
+        b, c, f, h, w = self.latents.shape
+        cond = torch.zeros([b, c * 2 + 2, f, h, w], device=lq_latents.device, dtype=lq_latents.dtype)
+
+        cond[:, c + 1 : 2 * c + 1] = lq_latents
+        cond[:, 2 * c + 1] = 1
+        if "t2v" in task:
+            return cond
+        elif "i2v" in task:
+            cond[:, :c, :1] = img_cond
+            cond[:, c + 1, 0] = 1
+            return cond
+        else:
+            raise ValueError(f"Unsupported task: {task}")
+
+    def add_noise_to_lq(self, lq_latents, strength=0.7):
+        def expand_dims(tensor: torch.Tensor, ndim: int):
+            shape = tensor.shape + (1,) * (ndim - tensor.ndim)
+            return tensor.reshape(shape)
+
+        noise = torch.randn_like(lq_latents)
+        timestep = torch.tensor([1000.0], device=lq_latents.device) * strength
+        t = expand_dims(timestep, lq_latents.ndim)
+        return (1 - t / 1000.0) * lq_latents + (t / 1000.0) * noise

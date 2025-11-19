@@ -36,7 +36,21 @@ class HunyuanVideo15PreWeights(WeightModule):
                 "time_in.mlp.2.bias",
             ),
         )
-
+        if self.config["is_sr_running"]:
+            self.add_module(
+                "time_r_in_0",
+                MM_WEIGHT_REGISTER["Default"](
+                    "time_r_in.mlp.0.weight",
+                    "time_r_in.mlp.0.bias",
+                ),
+            )
+            self.add_module(
+                "time_r_in_2",
+                MM_WEIGHT_REGISTER["Default"](
+                    "time_r_in.mlp.2.weight",
+                    "time_r_in.mlp.2.bias",
+                ),
+            )
         self.add_module(
             "txt_in_t_embedder_0",
             MM_WEIGHT_REGISTER["Default"](

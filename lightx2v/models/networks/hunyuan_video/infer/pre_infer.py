@@ -77,8 +77,6 @@ class HunyuanVideo15PreInfer:
         latents = self.scheduler.latents
         grid_sizes_t, grid_sizes_h, grid_sizes_w = latents.shape[2:]
 
-        cond_latents_concat = self.scheduler.cond_latents_concat
-        mask_concat = self.scheduler.mask_concat
         timesteps = self.scheduler.timesteps
         t = timesteps[self.scheduler.step_index]
 
@@ -91,7 +89,18 @@ class HunyuanVideo15PreInfer:
         siglip_output, siglip_mask = inputs["image_encoder_output"]["siglip_output"], inputs["image_encoder_output"]["siglip_mask"]
         txt = txt.to(torch.bfloat16)
 
-        img = x = latent_model_input = torch.concat([latents, cond_latents_concat, mask_concat], dim=1)
+        if self.config["is_sr_running"]:
+            if t < 1000 * self.scheduler.noise_scale:
+                condition = self.scheduler.zero_condition
+            else:
+                condition = self.scheduler.condition
+
+            img = x = latent_model_input = torch.concat([latents, condition], dim=1)
+        else:
+            cond_latents_concat = self.scheduler.cond_latents_concat
+            mask_concat = self.scheduler.mask_concat
+            img = x = latent_model_input = torch.concat([latents, cond_latents_concat, mask_concat], dim=1)
+
         img = img.to(torch.bfloat16)
 
         t_expand = t.repeat(latent_model_input.shape[0])
@@ -104,6 +113,24 @@ class HunyuanVideo15PreInfer:
         vec = weights.time_in_0.apply(t_freq)
         vec = torch.nn.functional.silu(vec)
         vec = weights.time_in_2.apply(vec)
+
+        if self.config["is_sr_running"]:
+            use_meanflow = self.config.get("video_super_resolution", {}).get("use_meanflow", False)
+            if use_meanflow:
+                if self.scheduler.step_index == len(timesteps) - 1:
+                    timesteps_r = torch.tensor([0.0], device=latent_model_input.device)
+                else:
+                    timesteps_r = timesteps[self.scheduler.step_index + 1]
+                timesteps_r = timesteps_r.repeat(latent_model_input.shape[0])
+            else:
+                timesteps_r = None
+
+            if timesteps_r is not None:
+                t_freq = self.timestep_embedding(timesteps_r, self.frequency_embedding_size, self.max_period).to(torch.bfloat16)
+                vec_res = weights.time_r_in_0.apply(t_freq)
+                vec_res = torch.nn.functional.silu(vec_res)
+                vec_res = weights.time_r_in_2.apply(vec_res)
+                vec = vec + vec_res
 
         t_freq = self.timestep_embedding(t_expand, self.frequency_embedding_size, self.max_period).to(torch.bfloat16)
         timestep_aware_representations = weights.txt_in_t_embedder_0.apply(t_freq)
