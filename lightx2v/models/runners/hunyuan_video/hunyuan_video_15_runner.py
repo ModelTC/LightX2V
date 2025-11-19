@@ -12,6 +12,7 @@ from lightx2v.models.input_encoders.hf.hunyuan15.qwen25.model import Qwen25VL_Te
 from lightx2v.models.input_encoders.hf.hunyuan15.siglip.model import SiglipVisionEncoder
 from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15Scheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.lighttae_hy15 import LightTaeHy15
@@ -37,7 +38,13 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.tae_cls = LightTaeHy15
 
     def init_scheduler(self):
-        self.scheduler = HunyuanVideo15Scheduler(self.config)
+        if self.config["feature_caching"] == "NoCaching":
+            scheduler_class = HunyuanVideo15Scheduler
+        elif self.config.feature_caching in ["Mag", "Tea"]:
+            scheduler_class = HunyuanVideo15SchedulerCaching
+        else:
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+        self.scheduler = scheduler_class(self.config)
 
     def load_text_encoder(self):
         qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload"))

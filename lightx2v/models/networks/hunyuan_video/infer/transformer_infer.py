@@ -70,6 +70,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self.scheduler.transformer_infer = self
 
     @torch.no_grad()
     def infer(self, weights, infer_module_out):
