@@ -76,6 +76,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
 
         if self.config["cpu_offload"]:
             previous_residual = previous_residual.cpu()
+            previous_residual_txt = previous_residual_txt.cpu()
 
         if self.enable_magcache_calibration and step_index >= 1:
             norm_ratio = ((previous_residual.norm(dim=-1) / self.residual_cache[infer_condition].norm(dim=-1)).mean()).item()
