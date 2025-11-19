@@ -1,5 +1,6 @@
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
+    ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
@@ -64,6 +65,8 @@ class MMDoubleStreamBlock(WeightModule):
             "txt_branch",
             MMDoubleStreamBlockTxtBranch(block_index, task, mm_type, config, block_prefix, is_offload_buffer),
         )
+        attention_weights_cls = ATTN_WEIGHT_REGISTER[self.config["attn_type"]]
+        self.add_module("self_attention", attention_weights_cls())
 
 
 class MMDoubleStreamBlockImgBranch(WeightModule):

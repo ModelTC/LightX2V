@@ -156,12 +156,12 @@ class HunyuanVideo15PreInfer:
 
         siglip_output = siglip_output + weights.cond_type_embedding.apply(2 * torch.ones_like(siglip_output[:, :, 0], dtype=torch.long, device=torch.device("cuda")))
         txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
+        txt = txt[:, : text_mask.sum(), :]
 
         return HunyuanVideo15InferModuleOutput(
             img=img.contiguous(),
             txt=txt.contiguous(),
             vec=torch.nn.functional.silu(vec),
-            text_mask=text_mask,
             grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
         )
 

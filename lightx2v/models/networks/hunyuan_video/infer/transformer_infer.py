@@ -7,7 +7,6 @@ from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2, sage_attn_no_pad_v3
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
 from .triton_ops import fuse_scale_shift_kernel, norm_infer
 
@@ -129,7 +128,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     def infer_double_block(self, weights, infer_module_out):
         img_q, img_k, img_v, img_branch_out = self._infer_img_branch_before_attn(weights, infer_module_out)
         txt_q, txt_k, txt_v, txt_branch_out = self._infer_txt_branch_before_attn(weights, infer_module_out)
-        img_attn, txt_attn = self._infer_attn(img_q, img_k, img_v, txt_q, txt_k, txt_v, infer_module_out.text_mask)
+        img_attn, txt_attn = self._infer_attn(weights, img_q, img_k, img_v, txt_q, txt_k, txt_v)
         img = self._infer_img_branch_after_attn(weights, img_attn, infer_module_out.img, img_branch_out)
         txt = self._infer_txt_branch_after_attn(weights, txt_attn, infer_module_out.txt, txt_branch_out)
         return img, txt
@@ -209,31 +208,29 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         )
 
     @torch.no_grad()
-    def _infer_attn(self, img_q, img_k, img_v, txt_q, txt_k, txt_v, text_mask):
-        # Attention
-        sequence_length = img_q.size(1)
+    def _infer_attn(self, weights, img_q, img_k, img_v, txt_q, txt_k, txt_v):
+        img_seqlen = img_q.shape[1]
         query = torch.cat([img_q, txt_q], dim=1)
         key = torch.cat([img_k, txt_k], dim=1)
         value = torch.cat([img_v, txt_v], dim=1)
-        # B, S, 3, H, D
-        qkv = torch.stack([query, key, value], dim=2)
-        attn_mask = F.pad(text_mask, (sequence_length, 0), value=True)
-        if self.config["attn_type"] == "flash_attn2":
-            hidden_states = flash_attn_no_pad(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
-        elif self.config["attn_type"] == "flash_attn3":
-            hidden_states = flash_attn_no_pad_v3(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
-        elif self.config["attn_type"] == "sage_attn2":
-            hidden_states = sage_attn_no_pad_v2(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
-        elif self.config["attn_type"] == "sage_attn3":
-            hidden_states = sage_attn_no_pad_v3(qkv, attn_mask, causal=False, dropout_p=0.0, softmax_scale=None)
-        b, s, a, d = hidden_states.shape
-        hidden_states = hidden_states.reshape(b, s, -1)
-        img_attn, txt_attn = hidden_states[:, : img_q.shape[1]].contiguous(), hidden_states[:, img_q.shape[1] :].contiguous()
+        seqlen = query.shape[1]
+        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to("cuda", non_blocking=True)
+
+        attn_out = weights.self_attention.apply(
+            q=query,
+            k=key,
+            v=value,
+            cu_seqlens_q=cu_seqlens_qkv,
+            cu_seqlens_kv=cu_seqlens_qkv,
+            max_seqlen_q=seqlen,
+            max_seqlen_kv=seqlen,
+        )
+        img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn
 
     @torch.no_grad()
     def _infer_img_branch_after_attn(self, weights, img_attn, img, img_branch_out):
-        img = img + apply_gate(weights.img_branch.img_attn_proj.apply(img_attn.squeeze(0)).unsqueeze(0), gate=img_branch_out.img_mod1_gate)
+        img = img + apply_gate(weights.img_branch.img_attn_proj.apply(img_attn).unsqueeze(0), gate=img_branch_out.img_mod1_gate)
         if self.config.get("modulate_type", "triton") == "triton":
             out = weights.img_branch.img_mlp_fc1.apply(
                 fuse_scale_shift_kernel(norm_infer(img.squeeze(0), None, None, 1e-6).unsqueeze(0), img_branch_out.img_mod2_scale, img_branch_out.img_mod2_shift).squeeze(0)
@@ -246,7 +243,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def _infer_txt_branch_after_attn(self, weights, txt_attn, txt, txt_branch_out):
-        txt = txt + apply_gate(weights.txt_branch.txt_attn_proj.apply(txt_attn.squeeze(0)).unsqueeze(0), gate=txt_branch_out.txt_mod1_gate)
+        txt = txt + apply_gate(weights.txt_branch.txt_attn_proj.apply(txt_attn).unsqueeze(0), gate=txt_branch_out.txt_mod1_gate)
         if self.config.get("modulate_type", "triton") == "triton":
             out = weights.txt_branch.txt_mlp_fc1.apply(
                 fuse_scale_shift_kernel(norm_infer(txt.squeeze(0), None, None, 1e-6).unsqueeze(0), txt_branch_out.txt_mod2_scale, txt_branch_out.txt_mod2_shift).squeeze(0)
