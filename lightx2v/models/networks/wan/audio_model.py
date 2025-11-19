@@ -22,15 +22,15 @@ class WanAudioModel(WanModel):
 
     def __init__(self, model_path, config, device):
         self.config = config
-        self._load_adapter_ckpt()
         super().__init__(model_path, config, device)
+        self._load_adapter_ckpt()
 
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
             if self.config.get("adapter_quantized", False):
                 if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl"]:
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
-                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-sgl"]:
+                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-sgl", "int8-tmo"]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
                 elif self.config.get("adapter_quant_scheme", None) in ["mxfp4"]:
                     adapter_model_name = "audio_adapter_model_mxfp4.safetensors"
@@ -50,7 +50,7 @@ class WanAudioModel(WanModel):
         if not adapter_offload:
             if not dist.is_initialized() or not load_from_rank0:
                 for key in self.adapter_weights_dict:
-                    self.adapter_weights_dict[key] = self.adapter_weights_dict[key].cuda()
+                    self.adapter_weights_dict[key] = self.adapter_weights_dict[key].to(torch.device(self.device))
 
     def _init_infer_class(self):
         super()._init_infer_class()

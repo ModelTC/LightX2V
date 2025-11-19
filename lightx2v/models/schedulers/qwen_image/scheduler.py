@@ -133,7 +133,7 @@ class QwenImageScheduler(BaseScheduler):
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config["model_path"], "scheduler"))
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
-        self.device = torch.device("cuda")
+        self.device = torch.device(self.config.get("run_device", "cuda"))
         self.dtype = torch.bfloat16
         self.guidance_scale = 1.0
 
@@ -223,7 +223,7 @@ class QwenImageScheduler(BaseScheduler):
         if self.config["task"] == "i2i":
             self.generator = torch.Generator().manual_seed(input_info.seed)
         elif self.config["task"] == "t2i":
-            self.generator = torch.Generator(device="cuda").manual_seed(input_info.seed)
+            self.generator = torch.Generator(device=self.device).manual_seed(input_info.seed)
         self.prepare_latents(input_info)
         self.prepare_guidance()
         self.set_timesteps()

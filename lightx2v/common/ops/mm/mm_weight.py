@@ -65,6 +65,11 @@ try:
 except ImportError:
     marlin_cuda_quant = None
 
+try:
+    import torch_mlu_ops as tmo
+except ImportError:
+    tmo = None
+
 
 class MMWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
@@ -121,7 +126,7 @@ class MMWeight(MMWeightTemplate):
                 self.bias_cuda_buffer = weight_dict[self.bias_name].cuda()
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name].t()
                 if self.bias_name is not None:
                     self.bias = weight_dict[self.bias_name]
@@ -266,7 +271,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight_scale_cuda_buffer = weight_dict[self.weight_scale_name].float().cuda()
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name]
                 self.weight_scale = weight_dict[self.weight_scale_name].float()
             elif device.type == "cpu":
@@ -330,7 +335,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name]
                 self.weight_scale = weight_dict[self.weight_scale_name]
             elif device.type == "cpu":
@@ -1013,4 +1018,32 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         marlin_cuda_quant.mul(input_tensor, self.weight, output_tensor, self.weight_scale.half(), self.workspace, -1, -1, -1, -1)
         if hasattr(self, "bias") and self.bias is not None:
             output_tensor.add_(self.bias)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("int8-tmo")
+class MMWeightWint8channelAint8channeldynamicMlu(MMWeightQuantTemplate):
+    """
+    Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Mlu
+
+    Quant MM:
+        Weight: int8 perchannel sym
+        Act: int8 perchannel dynamic sym
+        Kernel: mlu
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_int8_perchannel_sym
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_int8_perchannel_sym_tmo
+
+    def act_quant_int8_perchannel_sym_tmo(self, x):
+        input_tensor_quant, input_tensor_scale = tmo.scaled_quantize(x)
+        return input_tensor_quant, input_tensor_scale
+
+    def apply(self, input_tensor):
+        dtype = input_tensor.dtype
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        output_tensor = tmo.scaled_matmul(input_tensor_quant, self.weight.contiguous(), input_tensor_scale, self.weight_scale.squeeze(-1), output_dtype=dtype, use_hp_active=True)
         return output_tensor
