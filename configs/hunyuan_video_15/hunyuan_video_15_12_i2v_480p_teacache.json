@@ -1,0 +1,20 @@
+{
+    "infer_steps": 50,
+    "transformer_model_name": "480p_i2v",
+    "fps": 24,
+    "target_video_length": 121,
+    "vae_stride": [4, 16, 16],
+    "sample_shift": 5.0,
+    "sample_guide_scale": 6.0,
+    "enable_cfg": true,
+    "attn_type": "flash_attn3",
+    "feature_caching": "Tea",
+    "coefficients": [1.88388606e+04, -5.69783846e+03,  5.74389864e+02, -2.10913158e+01, 2.61716524e-01],
+    "teacache_thresh": 0.15,
+    "cpu_offload": false,
+    "offload_granularity": "block",
+    "vae_cpu_offload": false,
+    "byt5_cpu_offload": false,
+    "qwen25vl_cpu_offload": true,
+    "siglip_cpu_offload": false
+}
