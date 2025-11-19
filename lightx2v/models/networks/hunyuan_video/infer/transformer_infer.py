@@ -38,14 +38,11 @@ def apply_hunyuan_rope_with_flashinfer(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     B, L, H, D = xq.shape
 
-    # flatten 为 [B*L, H*D]（这里 B=1）
     query = xq.reshape(B * L, H * D).contiguous()
     key = xk.reshape(B * L, H * D).contiguous()
 
-    # 位置索引 [B*L]，与 flatten 顺序严格对应
     positions = torch.arange(B * L, device=xq.device, dtype=torch.long)
 
-    # 使用 GPT-J 风格（偶/奇交错），与 Hunyuan 的 rotate_half 一致
     apply_rope_with_cos_sin_cache_inplace(
         positions=positions,
         query=query,
@@ -55,9 +52,39 @@ def apply_hunyuan_rope_with_flashinfer(
         is_neox=False,
     )
 
-    # reshape 回 [1, L, H, D]
     xq_out = query.view(B, L, H, D)
     xk_out = key.view(B, L, H, D)
+    return xq_out, xk_out
+
+
+def apply_hunyuan_rope_with_torch(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    B, L, H, D = xq.shape
+
+    cos = cos_sin_cache[:, : D // 2]
+    sin = cos_sin_cache[:, D // 2 :]
+
+    def _apply_rope(x: torch.Tensor) -> torch.Tensor:
+        x_flat = x.view(B * L, H, D)
+        x1 = x_flat[..., ::2]
+        x2 = x_flat[..., 1::2]
+
+        cos_ = cos.unsqueeze(1)
+        sin_ = sin.unsqueeze(1)
+
+        o1 = x1.float() * cos_ - x2.float() * sin_
+        o2 = x2.float() * cos_ + x1.float() * sin_
+
+        out = torch.empty_like(x_flat)
+        out[..., ::2] = o1
+        out[..., 1::2] = o2
+        return out.view(B, L, H, D)
+
+    xq_out = _apply_rope(xq)
+    xk_out = _apply_rope(xk)
     return xq_out, xk_out
 
 
@@ -120,7 +147,10 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
         img_q = weights.img_branch.img_attn_q_norm.apply(img_q)
         img_k = weights.img_branch.img_attn_k_norm.apply(img_k)
-        img_q, img_k = apply_hunyuan_rope_with_flashinfer(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            img_q, img_k = apply_hunyuan_rope_with_flashinfer(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
+        else:
+            img_q, img_k = apply_hunyuan_rope_with_torch(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
         return (
             img_q,
             img_k,
