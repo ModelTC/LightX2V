@@ -30,7 +30,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
                 self.weight_cuda_buffer = weight_dict[self.weight_name].cuda()
             else:
                 device = weight_dict[self.weight_name].device
-                if device.type == "cuda":
+                if device.type in ["cuda", "mlu", "npu"]:
                     self.weight = weight_dict[self.weight_name]
                 elif device.type == "cpu":
                     weight_shape = weight_dict[self.weight_name].shape

@@ -98,8 +98,13 @@ def main():
     config = set_config(args)
 
     if config["parallel"]:
-        dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(dist.get_rank())
+        run_device = config.get("run_device", "cuda")
+        if "cuda" in run_device:
+            dist.init_process_group(backend="nccl")
+            torch.cuda.set_device(dist.get_rank())
+        elif "mlu" in run_device:
+            dist.init_process_group(backend="cncl")
+            torch.mlu.set_device(dist.get_rank())
         set_parallel_config(config)
 
     print_config(config)

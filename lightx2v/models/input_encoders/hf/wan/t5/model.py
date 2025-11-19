@@ -23,7 +23,8 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
     SglQuantLinearFp8,  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
-    VllmQuantLinearInt8,  # noqa E402
+    VllmQuantLinearInt8,  # noqa E402,
+    MluQuantLinearInt8,
 )
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
 from lightx2v.utils.envs import *  # noqa E402
@@ -199,6 +200,8 @@ class T5Attention(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-tmo":
+                linear_cls = MluQuantLinearInt8
             else:
                 NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
@@ -270,6 +273,8 @@ class T5FeedForward(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-tmo":
+                linear_cls = MluQuantLinearInt8
             else:
                 NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
@@ -739,7 +744,7 @@ class T5EncoderModel:
         self,
         text_len,
         dtype=torch.bfloat16,
-        device=torch.cuda.current_device(),
+        device=torch.device("cuda"),
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -800,8 +805,8 @@ class T5EncoderModel:
 
     def infer(self, texts):
         ids, mask = self.tokenizer(texts, return_mask=True, add_special_tokens=True)
-        ids = ids.cuda()
-        mask = mask.cuda()
+        ids = ids.to(self.device)
+        mask = mask.to(self.device)
         seq_lens = mask.gt(0).sum(dim=1).long()
 
         with torch.no_grad():

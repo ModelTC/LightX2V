@@ -13,6 +13,7 @@ class WanPreInfer:
         d = config["dim"] // config["num_heads"]
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.task = config["task"]
+        self.device = torch.device(self.config.get("run_device", "cuda"))
         self.freqs = torch.cat(
             [
                 rope_params(1024, d - 4 * (d // 6)),
@@ -20,7 +21,7 @@ class WanPreInfer:
                 rope_params(1024, 2 * (d // 6)),
             ],
             dim=1,
-        ).cuda()
+        ).to(self.device)
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
         self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)

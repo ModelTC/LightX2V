@@ -28,7 +28,7 @@ class QwenImageTransformerModel:
         self.model_path = os.path.join(config["model_path"], "transformer")
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
-        self.device = torch.device("cpu") if self.cpu_offload else torch.device("cuda")
+        self.device = torch.device("cpu") if self.cpu_offload else torch.device(self.config.get("run_device", "cuda"))
 
         with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
             transformer_config = json.load(f)
@@ -124,8 +124,8 @@ class QwenImageTransformerModel:
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if self.device.type == "cuda" and dist.is_initialized():
-            device = torch.device("cuda:{}".format(dist.get_rank()))
+        if self.device.type in ["cuda", "mlu", "npu"] and dist.is_initialized():
+            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
         else:
             device = self.device
 

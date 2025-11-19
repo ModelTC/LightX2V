@@ -74,6 +74,7 @@ class WanModel(CompiledMethodsMixin):
                 "mxfp4",
                 "mxfp6-mxfp8",
                 "mxfp8",
+                "int8-tmo",
             ]
         self.device = device
         self._init_infer_class()
@@ -137,8 +138,8 @@ class WanModel(CompiledMethodsMixin):
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if self.device.type == "cuda" and dist.is_initialized():
-            device = torch.device("cuda:{}".format(dist.get_rank()))
+        if (self.device.type == "cuda" or self.device.type == "mlu") and dist.is_initialized():
+            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
         else:
             device = self.device
 

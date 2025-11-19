@@ -27,12 +27,12 @@ class _ProfilingContext:
         self.metrics_labels = metrics_labels
 
     def __enter__(self):
-        torch.cuda.synchronize()
+        self.device_synchronize()
         self.start_time = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        torch.cuda.synchronize()
+        self.device_synchronize()
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
@@ -44,12 +44,12 @@ class _ProfilingContext:
         return False
 
     async def __aenter__(self):
-        torch.cuda.synchronize()
+        self.device_synchronize()
         self.start_time = time.perf_counter()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        torch.cuda.synchronize()
+        self.device_synchronize()
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
@@ -77,6 +77,15 @@ class _ProfilingContext:
                     return func(*args, **kwargs)
 
             return sync_wrapper
+
+    def device_synchronize(
+        self,
+    ):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif hasattr(torch, "mlu") and torch.mlu.is_available():
+            torch.mlu.synchronize()
+        return
 
 
 class _NullContext:
