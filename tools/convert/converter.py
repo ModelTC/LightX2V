@@ -800,7 +800,7 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit"],
+        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm"],
         default="wan_dit",
         help="Model type",
     )
@@ -897,16 +897,17 @@ def main():
                 "key_idx": 2,
                 "target_keys": [
                     "img_mod",
-                    "img_attn_qkv",
+                    "img_attn_q",
+                    "img_attn_k",
+                    "img_attn_v",
                     "img_attn_proj",
                     "img_mlp",
                     "txt_mod",
-                    "txt_attn_qkv",
+                    "txt_attn_q",
+                    "txt_attn_k",
+                    "txt_attn_v",
                     "txt_attn_proj",
                     "txt_mlp",
-                    "linear1",
-                    "linear2",
-                    "modulation",
                 ],
                 "ignore_key": None,
             },
@@ -914,7 +915,12 @@ def main():
             "wan_clip": {
                 "key_idx": 3,
                 "target_keys": ["attn", "mlp"],
-                "ignore_key": "textual",
+                "ignore_key": ["textual"],
+            },
+            "qwen25vl_llm": {
+                "key_idx": 3,
+                "target_keys": ["self_attn", "mlp"],
+                "ignore_key": ["visual"],
             },
         }
 

@@ -8,7 +8,6 @@ from lightx2v.utils.envs import *
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
-from .posemb_layers import get_nd_rotary_pos_embed
 
 
 def apply_gate(x, gate=None, tanh=False):
@@ -99,18 +98,6 @@ class HunyuanVideo15PreInfer:
         t_expand = t.repeat(latent_model_input.shape[0])
         guidance_expand = None
 
-        bs, _, ot, oh, ow = x.shape
-        tt, th, tw = (
-            ot // self.patch_size[0],
-            oh // self.patch_size[1],
-            ow // self.patch_size[2],
-        )
-
-        freqs_cos, freqs_sin = self.get_rotary_pos_embed((tt, th, tw))
-        if self.config.get("freqs_force_bf16", False):
-            freqs_cos = freqs_cos.to(torch.bfloat16)
-            freqs_sin = freqs_sin.to(torch.bfloat16)
-
         img = weights.img_in.apply(img)
         img = img.flatten(2).transpose(1, 2)
 
@@ -145,11 +132,9 @@ class HunyuanVideo15PreInfer:
         txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
 
         return HunyuanVideo15InferModuleOutput(
-            img=img,
-            txt=txt,
+            img=img.contiguous(),
+            txt=txt.contiguous(),
             vec=torch.nn.functional.silu(vec),
-            freqs_cos=freqs_cos,
-            freqs_sin=freqs_sin,
             text_mask=text_mask,
             grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
         )
@@ -174,22 +159,6 @@ class HunyuanVideo15PreInfer:
         c = torch.nn.functional.silu(c)
         gate_msa, gate_mlp = weights.adaLN_modulation.apply(c).chunk(2, dim=1)
         return gate_msa, gate_mlp
-
-    def get_rotary_pos_embed(self, rope_sizes):
-        target_ndim = 3
-        head_dim = self.config["hidden_size"] // self.config["heads_num"]
-        rope_dim_list = self.config["rope_dim_list"]
-        if rope_dim_list is None:
-            rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
-        assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal to head_dim of attention layer"
-        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(
-            rope_dim_list,
-            rope_sizes,
-            theta=self.config["rope_theta"],
-            use_real=True,
-            theta_rescale_factor=1,
-        )
-        return freqs_cos, freqs_sin
 
     def timestep_embedding(self, t, dim, max_period=10000):
         """

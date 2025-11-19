@@ -8,6 +8,7 @@ from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.models.networks.hunyuan_video.infer.feature_caching.transformer_infer import HunyuanVideo15TransformerInferMagCaching
+from lightx2v.models.networks.hunyuan_video.infer.feature_caching.transformer_infer import HunyuanTransformerInferTeaCaching
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
 from lightx2v.models.networks.hunyuan_video.infer.post_infer import HunyuanVideo15PostInfer
 from lightx2v.models.networks.hunyuan_video.infer.pre_infer import HunyuanVideo15PreInfer
@@ -56,6 +57,8 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
             self.transformer_infer_class = HunyuanVideo15TransformerInfer if not self.cpu_offload else HunyuanVideo15OffloadTransformerInfer
         elif self.config["feature_caching"] == "Mag":
             self.transformer_infer_class = HunyuanVideo15TransformerInferMagCaching
+        elif self.config["feature_caching"] == "Tea":
+            self.transformer_infer_class = HunyuanTransformerInferTeaCaching
         else:
             raise NotImplementedError
 

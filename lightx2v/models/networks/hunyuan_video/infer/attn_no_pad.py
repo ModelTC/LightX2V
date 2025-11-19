@@ -22,6 +22,12 @@ else:
         logger.info("sageattn not found, please install sageattention first")
         sageattn = None
 
+try:
+    from sageattn3 import sageattn3_blackwell
+except ImportError:
+    logger.info("sageattn3 not found, please install sageattention first")
+    sageattn3_blackwell = None
+
 
 def flash_attn_no_pad(qkv, key_padding_mask, causal=False, dropout_p=0.0, softmax_scale=None, deterministic=False):
     batch_size = qkv.shape[0]
@@ -56,9 +62,7 @@ def flash_attn_no_pad_v3(qkv, key_padding_mask, causal=False, dropout_p=0.0, sof
     query, key, value = qkv.unbind(dim=2)
 
     query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
-    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(  # 复用max_seqlen_q
-        rearrange(key, "b s h d -> b s (h d)"), key_padding_mask
-    )
+    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
     value_unpad, _, _, _, _ = unpad_input(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
 
     query_unpad = rearrange(query_unpad, "nnz (h d) -> nnz h d", h=nheads)
@@ -78,9 +82,7 @@ def sage_attn_no_pad_v2(qkv, key_padding_mask, causal=False, dropout_p=0.0, soft
     query, key, value = qkv.unbind(dim=2)
 
     query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
-    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(  # 复用max_seqlen_q
-        rearrange(key, "b s h d -> b s (h d)"), key_padding_mask
-    )
+    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
     value_unpad, _, _, _, _ = unpad_input(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
 
     query_unpad = rearrange(query_unpad, "nnz (h d) -> nnz h d", h=nheads)
@@ -93,6 +95,24 @@ def sage_attn_no_pad_v2(qkv, key_padding_mask, causal=False, dropout_p=0.0, soft
         value_unpad.unsqueeze(0),
         tensor_layout="NHD",
     ).squeeze(0)
+
+    output = rearrange(pad_input(rearrange(output_unpad, "nnz h d -> nnz (h d)"), indices, batch_size, seqlen), "b s (h d) -> b s h d", h=nheads)
+    return output
+
+
+def sage_attn_no_pad_v3(qkv, key_padding_mask, causal=False, dropout_p=0.0, softmax_scale=None, deterministic=False):
+    batch_size, seqlen, _, nheads, head_dim = qkv.shape
+    query, key, value = qkv.unbind(dim=2)
+
+    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
+    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
+    value_unpad, _, _, _, _ = unpad_input(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
+
+    query_unpad = rearrange(query_unpad, "nnz (h d) -> nnz h d", h=nheads)
+    key_unpad = rearrange(key_unpad, "nnz (h d) -> nnz h d", h=nheads)
+    value_unpad = rearrange(value_unpad, "nnz (h d) -> nnz h d", h=nheads)
+
+    output_unpad = sageattn3_blackwell(query_unpad.unsqueeze(0).transpose(1, 2), key_unpad.unsqueeze(0).transpose(1, 2), value_unpad.unsqueeze(0).transpose(1, 2)).transpose(1, 2).squeeze(0)
 
     output = rearrange(pad_input(rearrange(output_unpad, "nnz h d -> nnz (h d)"), indices, batch_size, seqlen), "b s (h d) -> b s h d", h=nheads)
     return output
