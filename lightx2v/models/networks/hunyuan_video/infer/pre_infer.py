@@ -81,7 +81,6 @@ class HunyuanVideo15PreInfer:
         mask_concat = self.scheduler.mask_concat
         timesteps = self.scheduler.timesteps
         t = timesteps[self.scheduler.step_index]
-        txt, text_mask = inputs["text_encoder_output"]["context"][0], inputs["text_encoder_output"]["context"][1]
 
         if self.scheduler.infer_condition:
             txt, text_mask = inputs["text_encoder_output"]["context"][0], inputs["text_encoder_output"]["context"][1]
