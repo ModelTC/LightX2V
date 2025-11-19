@@ -168,6 +168,11 @@ class DefaultRunner(BaseRunner):
 
     def run_step(self):
         self.inputs = self.run_input_encoder()
+        if self.sr_version is not None:
+            self.config_sr["is_sr_running"] = True
+            self.inputs_sr = self.run_input_encoder()
+            self.config_sr["is_sr_running"] = False
+
         self.run_main(total_steps=1)
 
     def end_run(self):
@@ -275,6 +280,14 @@ class DefaultRunner(BaseRunner):
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
+
+        if self.sr_version is not None:
+            self.lq_latents_shape = self.model.scheduler.latents.shape
+            self.model_sr.set_scheduler(self.scheduler_sr)
+
+            self.config_sr["is_sr_running"] = True
+            self.inputs_sr = self.run_input_encoder()
+            self.config_sr["is_sr_running"] = False
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
