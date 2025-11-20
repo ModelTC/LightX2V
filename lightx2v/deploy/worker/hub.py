@@ -332,7 +332,7 @@ class DiTWorker(BaseWorker):
     def run_dit(self):
         self.runner.init_run()
         assert self.runner.video_segment_num == 1, "DiTWorker only support single segment"
-        latents = self.runner.run_segment(total_steps=None)
+        latents = self.runner.run_segment()
         self.runner.end_run()
         return latents
 
