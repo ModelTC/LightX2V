@@ -209,7 +209,7 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         return x
 
     def clear(self):
-        if self.previous_residua_odd is not None:
+        if self.previous_residual_odd is not None:
             self.previous_residual_odd = self.previous_residual_odd.cpu()
 
         if self.previous_modulated_input_odd is not None:
