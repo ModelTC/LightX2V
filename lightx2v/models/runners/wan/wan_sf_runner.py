@@ -70,17 +70,16 @@ class WanSFRunner(WanRunner):
         self.gen_video_final = torch.cat([self.gen_video_final, self.gen_video], dim=0) if self.gen_video_final is not None else self.gen_video
 
     @peak_memory_decorator
-    def run_segment(self, total_steps=None):
-        if total_steps is None:
-            total_steps = self.model.scheduler.infer_steps
-        for step_index in range(total_steps):
+    def run_segment(self, segment_idx=0):
+        infer_steps = self.model.scheduler.infer_steps
+        for step_index in range(infer_steps):
             # only for single segment, check stop signal every step
             if self.video_segment_num == 1:
                 self.check_stop()
-            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
 
             with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(seg_index=self.segment_idx, step_index=step_index, is_rerun=False)
+                self.model.scheduler.step_pre(seg_index=segment_idx, step_index=step_index, is_rerun=False)
 
             with ProfilingContext4DebugL1("🚀 infer_main"):
                 self.model.infer(self.inputs)
@@ -89,6 +88,8 @@ class WanSFRunner(WanRunner):
                 self.model.scheduler.step_post()
 
             if self.progress_callback:
-                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+                current_step = segment_idx * infer_steps + step_index + 1
+                total_all_steps = self.video_segment_num * infer_steps
+                self.progress_callback((current_step / total_all_steps) * 100, 100)
 
         return self.model.scheduler.stream_output

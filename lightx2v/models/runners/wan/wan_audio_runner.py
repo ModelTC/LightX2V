@@ -753,14 +753,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 target_rank=1,
             )
 
-    def run_main(self, total_steps=None):
+    def run_main(self):
         try:
             self.init_va_recorder()
             self.init_va_reader()
             logger.info(f"init va_recorder: {self.va_recorder} and va_reader: {self.va_reader}")
 
             if self.va_reader is None:
-                return super().run_main(total_steps)
+                return super().run_main()
 
             self.va_reader.start()
             rank, world_size = self.get_rank_and_world_size()
@@ -794,7 +794,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
                     fail_count = 0
                     self.init_run_segment(segment_idx, audio_array)
-                    latents = self.run_segment(total_steps=None)
+                    latents = self.run_segment(segment_idx)
                     self.gen_video = self.run_vae_decoder(latents)
                     self.end_run_segment(segment_idx)
                     segment_idx += 1
