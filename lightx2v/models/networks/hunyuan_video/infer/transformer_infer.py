@@ -8,7 +8,7 @@ from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
-from .triton_ops import fuse_scale_shift_kernel, norm_infer
+from .triton_ops import fuse_scale_shift_kernel
 
 
 def modulate(x, scale, shift):
@@ -101,6 +101,14 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         else:
             self.seq_p_group = None
         self.infer_func = self.infer_without_offload
+        if self.config.get("modulate_type", "triton") == "triton":
+            self.modulate_func = fuse_scale_shift_kernel
+        else:
+            self.modulate_func = modulate
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            self.apply_rope_func = apply_hunyuan_rope_with_flashinfer
+        else:
+            self.apply_rope_func = apply_hunyuan_rope_with_torch
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -122,10 +130,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         x = torch.cat((infer_module_out.img, infer_module_out.txt), 1)
         img = x[:, : infer_module_out.img.shape[1], ...]
         shift, scale = weights.final_layer.adaLN_modulation.apply(infer_module_out.vec).chunk(2, dim=1)
-        if self.config.get("modulate_type", "triton") == "triton":
-            img = fuse_scale_shift_kernel(norm_infer(img.squeeze(0), None, None, 1e-6).unsqueeze(0), scale, shift).squeeze(0)
-        else:
-            img = modulate(norm_infer(img.squeeze(0), None, None, 1e-6), scale=scale, shift=shift).squeeze(0)
+        img = self.modulate_func(weights.final_layer.norm_final.apply(img.squeeze(0)), scale=scale, shift=shift).squeeze(0)
         img = weights.final_layer.linear.apply(img)
         return img.unsqueeze(0)
 
@@ -148,11 +153,8 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             img_mod2_scale,
             img_mod2_gate,
         ) = weights.img_branch.img_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
-        img_modulated = norm_infer(infer_module_out.img.squeeze(0), None, None, 1e-6)
-        if self.config.get("modulate_type", "triton") == "triton":
-            img_modulated = fuse_scale_shift_kernel(img_modulated.unsqueeze(0), img_mod1_scale, img_mod1_shift).squeeze(0)
-        else:
-            img_modulated = modulate(img_modulated, scale=img_mod1_scale, shift=img_mod1_shift).squeeze(0)
+        img_modulated = weights.img_branch.img_norm1.apply(infer_module_out.img.squeeze(0))
+        img_modulated = self.modulate_func(img_modulated, scale=img_mod1_scale, shift=img_mod1_shift).squeeze(0)
         img_q = weights.img_branch.img_attn_q.apply(img_modulated)
         img_k = weights.img_branch.img_attn_k.apply(img_modulated)
         img_v = weights.img_branch.img_attn_v.apply(img_modulated)
@@ -161,10 +163,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
         img_q = weights.img_branch.img_attn_q_norm.apply(img_q)
         img_k = weights.img_branch.img_attn_k_norm.apply(img_k)
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            img_q, img_k = apply_hunyuan_rope_with_flashinfer(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
-        else:
-            img_q, img_k = apply_hunyuan_rope_with_torch(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
+        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
         return (
             img_q,
             img_k,
@@ -187,11 +186,8 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             txt_mod2_scale,
             txt_mod2_gate,
         ) = weights.txt_branch.txt_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
-        txt_modulated = norm_infer(infer_module_out.txt.squeeze(0), None, None, 1e-6)
-        if self.config.get("modulate_type", "triton") == "triton":
-            txt_modulated = fuse_scale_shift_kernel(txt_modulated.unsqueeze(0), txt_mod1_scale, txt_mod1_shift).squeeze(0)
-        else:
-            txt_modulated = modulate(txt_modulated, scale=txt_mod1_scale, shift=txt_mod1_shift).squeeze(0)
+        txt_modulated = weights.txt_branch.txt_norm1.apply(infer_module_out.txt.squeeze(0))
+        txt_modulated = self.modulate_func(txt_modulated, scale=txt_mod1_scale, shift=txt_mod1_shift).squeeze(0)
         txt_q = weights.txt_branch.txt_attn_q.apply(txt_modulated)
         txt_k = weights.txt_branch.txt_attn_k.apply(txt_modulated)
         txt_v = weights.txt_branch.txt_attn_v.apply(txt_modulated)
@@ -248,12 +244,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     @torch.no_grad()
     def _infer_img_branch_after_attn(self, weights, img_attn, img, img_branch_out):
         img = img + apply_gate(weights.img_branch.img_attn_proj.apply(img_attn).unsqueeze(0), gate=img_branch_out.img_mod1_gate)
-        if self.config.get("modulate_type", "triton") == "triton":
-            out = weights.img_branch.img_mlp_fc1.apply(
-                fuse_scale_shift_kernel(norm_infer(img.squeeze(0), None, None, 1e-6).unsqueeze(0), img_branch_out.img_mod2_scale, img_branch_out.img_mod2_shift).squeeze(0)
-            )
-        else:
-            out = weights.img_branch.img_mlp_fc1.apply(modulate(norm_infer(img.squeeze(0), None, None, 1e-6), scale=img_branch_out.img_mod2_scale, shift=img_branch_out.img_mod2_shift).squeeze(0))
+        out = weights.img_branch.img_mlp_fc1.apply(
+            self.modulate_func(weights.img_branch.img_norm2.apply(img.squeeze(0)), scale=img_branch_out.img_mod2_scale, shift=img_branch_out.img_mod2_shift).squeeze(0)
+        )
         out = weights.img_branch.img_mlp_fc2.apply(F.gelu(out, approximate="tanh"))
         img = img + apply_gate(out.unsqueeze(0), gate=img_branch_out.img_mod2_gate)
         return img
@@ -261,12 +254,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     @torch.no_grad()
     def _infer_txt_branch_after_attn(self, weights, txt_attn, txt, txt_branch_out):
         txt = txt + apply_gate(weights.txt_branch.txt_attn_proj.apply(txt_attn).unsqueeze(0), gate=txt_branch_out.txt_mod1_gate)
-        if self.config.get("modulate_type", "triton") == "triton":
-            out = weights.txt_branch.txt_mlp_fc1.apply(
-                fuse_scale_shift_kernel(norm_infer(txt.squeeze(0), None, None, 1e-6).unsqueeze(0), txt_branch_out.txt_mod2_scale, txt_branch_out.txt_mod2_shift).squeeze(0)
-            )
-        else:
-            out = weights.txt_branch.txt_mlp_fc1.apply(modulate(norm_infer(txt.squeeze(0), None, None, 1e-6), scale=txt_branch_out.txt_mod2_scale, shift=txt_branch_out.txt_mod2_shift).squeeze(0))
+        out = weights.txt_branch.txt_mlp_fc1.apply(
+            self.modulate_func(weights.txt_branch.txt_norm2.apply(txt.squeeze(0)), scale=txt_branch_out.txt_mod2_scale, shift=txt_branch_out.txt_mod2_shift).squeeze(0)
+        )
         out = weights.txt_branch.txt_mlp_fc2.apply(F.gelu(out, approximate="tanh"))
         txt = txt + apply_gate(out.unsqueeze(0), gate=txt_branch_out.txt_mod2_gate)
         return txt
