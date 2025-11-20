@@ -137,7 +137,7 @@ def load_text_encoder(
 
         replace_linear(text_encoder.layers, linear_cls)
 
-        weight_dict = load_file(text_encoder_quant_ckpt, device=device)
+        weight_dict = load_file(text_encoder_quant_ckpt, device=str(device))
         new_w_dict = {}
         for key in weight_dict.keys():
             if key == "lm_head.weight":

@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 import re
@@ -184,9 +185,12 @@ class ByT5TextEncoder:
 
         self.byt5_mapper = ByT5Mapper(in_dim=1472, out_dim=2048, hidden_dim=2048, out_dim1=self.config["hidden_size"], use_residual=False).to(torch.bfloat16)
 
-        byt5_mapper_model_path = os.path.join(checkpoint_path, "transformer", self.config["transformer_model_name"], "diffusion_pytorch_model-00001-of-00004.safetensors")
-        with safe_open(byt5_mapper_model_path, framework="pt", device="cpu") as f:
-            byt5_mapper_state_dict = {key.replace("byt5_in.", ""): f.get_tensor(key).to(torch.bfloat16) for key in f.keys() if "byt5_in" in key}
+        byt5_mapper_model_path = os.path.join(checkpoint_path, "transformer", self.config["transformer_model_name"])
+        safetensors_files = glob.glob(os.path.join(byt5_mapper_model_path, "*.safetensors"))
+        byt5_mapper_state_dict = {}
+        for safetensor_path in safetensors_files:
+            with safe_open(safetensor_path, framework="pt", device="cpu") as f:
+                byt5_mapper_state_dict.update({key.replace("byt5_in.", ""): f.get_tensor(key).to(torch.bfloat16) for key in f.keys() if "byt5_in" in key})
 
         self.byt5_mapper.load_state_dict(byt5_mapper_state_dict)
         self.byt5_mapper.to(device=device)

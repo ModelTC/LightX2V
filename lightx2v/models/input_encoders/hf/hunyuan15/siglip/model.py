@@ -1,3 +1,4 @@
+import glob
 import os
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -252,9 +253,12 @@ class SiglipVisionEncoder:
 
         self.vision_in = VisionProjection(in_dim=self.vision_states_dim, out_dim=self.config["hidden_size"], flf_pos_emb=False).to(torch.bfloat16)
 
-        vision_in_model_path = os.path.join(checkpoint_path, "transformer", self.config["transformer_model_name"], "diffusion_pytorch_model-00001-of-00004.safetensors")
-        with safe_open(vision_in_model_path, framework="pt", device="cpu") as f:
-            vision_in_state_dict = {key.replace("vision_in.", ""): f.get_tensor(key).to(torch.bfloat16) for key in f.keys() if "vision_in" in key}
+        vision_in_model_path = os.path.join(checkpoint_path, "transformer", self.config["transformer_model_name"])
+        safetensors_files = glob.glob(os.path.join(vision_in_model_path, "*.safetensors"))
+        vision_in_state_dict = {}
+        for safetensor_path in safetensors_files:
+            with safe_open(safetensor_path, framework="pt", device="cpu") as f:
+                vision_in_state_dict.update({key.replace("vision_in.", ""): f.get_tensor(key).to(torch.bfloat16) for key in f.keys() if "vision_in" in key})
         self.vision_in.load_state_dict(vision_in_state_dict)
         self.vision_in.to(device=device)
 

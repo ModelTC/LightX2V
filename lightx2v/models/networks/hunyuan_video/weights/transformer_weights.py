@@ -330,7 +330,7 @@ class FinalLayerWeights(WeightModule):
 
         self.add_module(
             "adaLN_modulation",
-            MM_WEIGHT_REGISTER[self.mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 "final_layer.adaLN_modulation.1.weight",
                 "final_layer.adaLN_modulation.1.bias",
                 self.lazy_load,
@@ -339,7 +339,7 @@ class FinalLayerWeights(WeightModule):
         )
         self.add_module(
             "linear",
-            MM_WEIGHT_REGISTER[self.mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 "final_layer.linear.weight",
                 "final_layer.linear.bias",
                 self.lazy_load,

@@ -73,9 +73,21 @@ class HunyuanVideo15Runner(DefaultRunner):
         else:
             qwen25vl_device = torch.device("cuda")
 
+        qwen25vl_quantized = self.config.get("qwen25vl_quantized", False)
+        qwen25vl_quant_scheme = self.config.get("qwen25vl_quant_scheme", None)
+        qwen25vl_quantized_ckpt = self.config.get("qwen25vl_quantized_ckpt", None)
+
         text_encoder_path = os.path.join(self.config["model_path"], "text_encoder/llm")
         logger.info(f"Loading text encoder from {text_encoder_path}")
-        text_encoder = Qwen25VL_TextEncoder(dtype=torch.float16, device=qwen25vl_device, checkpoint_path=text_encoder_path, cpu_offload=qwen25vl_offload)
+        text_encoder = Qwen25VL_TextEncoder(
+            dtype=torch.float16,
+            device=qwen25vl_device,
+            checkpoint_path=text_encoder_path,
+            cpu_offload=qwen25vl_offload,
+            qwen25vl_quantized=qwen25vl_quantized,
+            qwen25vl_quant_scheme=qwen25vl_quant_scheme,
+            qwen25vl_quant_ckpt=qwen25vl_quantized_ckpt,
+        )
 
         byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload"))
         if byt5_offload:

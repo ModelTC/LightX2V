@@ -162,7 +162,7 @@ class SglQuantLinearFp8(nn.Module):
             input_tensor_quant,
             self.weight.t(),
             input_tensor_scale,
-            self.weight_scale,
+            self.weight_scale.float(),
             dtype,
             bias=self.bias,
         )
@@ -297,7 +297,7 @@ class Q8FQuantLinearFp8(nn.Module):
             self.weight,
             self.bias.float() if self.bias is not None else None,
             input_tensor_scale,
-            self.weight_scale,
+            self.weight_scale.float(),
             out_dtype=torch.bfloat16,
         )
         return output_tensor
