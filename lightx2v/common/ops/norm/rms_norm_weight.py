@@ -80,14 +80,14 @@ class RMSWeight(RMSWeightTemplate):
         else:
             self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(GET_DTYPE())
 
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+
     def apply(self, input_tensor):
         if GET_SENSITIVE_DTYPE() != GET_DTYPE():
-            input_tensor = input_tensor * torch.rsqrt(input_tensor.pow(2).mean(-1, keepdim=True) + self.eps)
-            input_tensor = input_tensor * self.weight
+            input_tensor = self._norm(input_tensor).type_as(input_tensor) * self.weight
         else:
-            input_tensor = input_tensor * torch.rsqrt(input_tensor.float().pow(2).mean(-1, keepdim=True) + self.eps)
-            input_tensor = (input_tensor * self.weight).to(GET_DTYPE())
-
+            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * self.weight
         return input_tensor
 
     def state_dict(self, destination=None):
@@ -111,7 +111,15 @@ class RMSWeight(RMSWeightTemplate):
 
 @RMS_WEIGHT_REGISTER("sgl-kernel")
 class RMSWeightSgl(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+    ):
         super().__init__(weight_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def load_from_disk(self):

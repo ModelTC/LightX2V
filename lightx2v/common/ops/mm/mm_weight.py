@@ -809,7 +809,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
             self.weight_scale,
             out_dtype=self.infer_dtype,
         )
-        return output_tensor.squeeze(0)
+        return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
 @MM_WEIGHT_REGISTER("int8-q8f")
@@ -840,7 +840,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
             fuse_gelu=False,
             out_dtype=self.infer_dtype,
         )
-        return output_tensor.squeeze(0)
+        return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
 @MM_WEIGHT_REGISTER("fp8-b128-deepgemm")

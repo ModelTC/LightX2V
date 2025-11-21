@@ -65,7 +65,7 @@ class WanRunner(DefaultRunner):
             if clip_offload:
                 clip_device = torch.device("cpu")
             else:
-                clip_device = torch.device(self.init_device)
+                clip_device = torch.device(self.run_device)
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -84,6 +84,7 @@ class WanRunner(DefaultRunner):
             image_encoder = CLIPModel(
                 dtype=torch.float16,
                 device=clip_device,
+                run_device=self.run_device,
                 checkpoint_path=clip_original_ckpt,
                 clip_quantized=clip_quantized,
                 clip_quantized_ckpt=clip_quantized_ckpt,
@@ -101,7 +102,7 @@ class WanRunner(DefaultRunner):
         if t5_offload:
             t5_device = torch.device("cpu")
         else:
-            t5_device = torch.device(self.init_device)
+            t5_device = torch.device(self.run_device)
 
         # quant_config
         t5_quantized = self.config.get("t5_quantized", False)
@@ -123,6 +124,7 @@ class WanRunner(DefaultRunner):
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
+            run_device=self.run_device,
             device=t5_device,
             checkpoint_path=t5_original_ckpt,
             tokenizer_path=tokenizer_path,
@@ -142,11 +144,12 @@ class WanRunner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.init_device)
+            vae_device = torch.device(self.run_device)
 
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
+            "run_device": self.run_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
@@ -170,6 +173,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
+            "run_device": self.run_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
@@ -222,7 +226,7 @@ class WanRunner(DefaultRunner):
             monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
         neg_prompt = input_info.negative_prompt
 
-        if self.config["cfg_parallel"]:
+        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -236,8 +240,11 @@ class WanRunner(DefaultRunner):
         else:
             context = self.text_encoders[0].infer([prompt])
             context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-            context_null = self.text_encoders[0].infer([neg_prompt])
-            context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+            if self.config.get("enable_cfg", False):
+                context_null = self.text_encoders[0].infer([neg_prompt])
+                context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+            else:
+                context_null = None
             text_encoder_output = {
                 "context": context,
                 "context_null": context_null,
@@ -376,12 +383,12 @@ class WanRunner(DefaultRunner):
         ]
         return latent_shape
 
-    def get_latent_shape_with_target_hw(self, target_h, target_w):
+    def get_latent_shape_with_target_hw(self):
         latent_shape = [
             self.config.get("num_channels_latents", 16),
             (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-            int(target_h) // self.config["vae_stride"][1],
-            int(target_w) // self.config["vae_stride"][2],
+            int(self.config["target_height"]) // self.config["vae_stride"][1],
+            int(self.config["target_width"]) // self.config["vae_stride"][2],
         ]
         return latent_shape
 

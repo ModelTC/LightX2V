@@ -27,6 +27,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        if len(q.shape) == 4:
+            q = q.reshape(-1, q.shape[-2], q.shape[-1])
+            k = k.reshape(-1, k.shape[-2], k.shape[-1])
+            v = v.reshape(-1, v.shape[-2], v.shape[-1])
+
         # 获取当前进程的排名和全局进程数
         world_size = dist.get_world_size(seq_p_group)
         cur_rank = dist.get_rank(seq_p_group)
@@ -134,9 +139,16 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        if len(q.shape) == 4:
+            q = q.reshape(-1, q.shape[-2], q.shape[-1])
+            k = k.reshape(-1, k.shape[-2], k.shape[-1])
+            v = v.reshape(-1, v.shape[-2], v.shape[-1])
         # 获取当前进程的排名和全局进程数
         world_size = dist.get_world_size(seq_p_group)
         cur_rank = dist.get_rank(seq_p_group)
+        global_world_size = dist.get_world_size()
+        global_rank = dist.get_global_rank(seq_p_group, cur_rank)
+        cfg_p_group_index = global_rank // world_size
 
         # 获取序列长度和文本相关的长度
         seq_len = q.shape[0]
@@ -181,22 +193,23 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         # 异步发起通信后同步
         for target_rank in range(world_size):
+            target_global_rank = cfg_p_group_index * world_size + target_rank
             if target_rank != cur_rank:
                 # 避免死锁: 按 rank 顺序决定发送/接收顺序
                 if cur_rank < target_rank:
-                    sendq_req = dist.isend(q_shards[target_rank], dst=target_rank, group=seq_p_group)
-                    sendk_req = dist.isend(k_shards[target_rank], dst=target_rank, group=seq_p_group)
-                    sendv_req = dist.isend(v_shards[target_rank], dst=target_rank, group=seq_p_group)
-                    recvq_req = dist.irecv(gathered_q_shards[target_rank], src=target_rank, group=seq_p_group)
-                    recvk_req = dist.irecv(gathered_k_shards[target_rank], src=target_rank, group=seq_p_group)
-                    recvv_req = dist.irecv(gathered_v_shards[target_rank], src=target_rank, group=seq_p_group)
+                    sendq_req = dist.isend(q_shards[target_rank], dst=target_global_rank, group=seq_p_group)
+                    sendk_req = dist.isend(k_shards[target_rank], dst=target_global_rank, group=seq_p_group)
+                    sendv_req = dist.isend(v_shards[target_rank], dst=target_global_rank, group=seq_p_group)
+                    recvq_req = dist.irecv(gathered_q_shards[target_rank], src=target_global_rank, group=seq_p_group)
+                    recvk_req = dist.irecv(gathered_k_shards[target_rank], src=target_global_rank, group=seq_p_group)
+                    recvv_req = dist.irecv(gathered_v_shards[target_rank], src=target_global_rank, group=seq_p_group)
                 else:
-                    recvq_req = dist.irecv(gathered_q_shards[target_rank], src=target_rank, group=seq_p_group)
-                    recvk_req = dist.irecv(gathered_k_shards[target_rank], src=target_rank, group=seq_p_group)
-                    recvv_req = dist.irecv(gathered_v_shards[target_rank], src=target_rank, group=seq_p_group)
-                    sendq_req = dist.isend(q_shards[target_rank], dst=target_rank, group=seq_p_group)
-                    sendk_req = dist.isend(k_shards[target_rank], dst=target_rank, group=seq_p_group)
-                    sendv_req = dist.isend(v_shards[target_rank], dst=target_rank, group=seq_p_group)
+                    recvq_req = dist.irecv(gathered_q_shards[target_rank], src=target_global_rank, group=seq_p_group)
+                    recvk_req = dist.irecv(gathered_k_shards[target_rank], src=target_global_rank, group=seq_p_group)
+                    recvv_req = dist.irecv(gathered_v_shards[target_rank], src=target_global_rank, group=seq_p_group)
+                    sendq_req = dist.isend(q_shards[target_rank], dst=target_global_rank, group=seq_p_group)
+                    sendk_req = dist.isend(k_shards[target_rank], dst=target_global_rank, group=seq_p_group)
+                    sendv_req = dist.isend(v_shards[target_rank], dst=target_global_rank, group=seq_p_group)
                 sendq_req.wait()
                 sendk_req.wait()
                 sendv_req.wait()
@@ -254,6 +267,9 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
     @torch.compiler.disable
     def _reshape_img_attn(self, img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group):
         cur_rank = dist.get_rank(seq_p_group)
+        global_world_size = dist.get_world_size()
+        global_rank = dist.get_global_rank(seq_p_group, cur_rank)
+        cfg_p_group_index = global_rank // world_size
 
         img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
 
@@ -269,14 +285,15 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         # 异步发起通信后同步
         for target_rank in range(world_size):
+            target_global_rank = cfg_p_group_index * world_size + target_rank
             if target_rank != cur_rank:
                 # 避免死锁: 按 rank 顺序决定发送/接收顺序
                 if cur_rank < target_rank:
-                    send_req = dist.isend(attn_shards[target_rank], dst=target_rank, group=seq_p_group)
-                    recv_req = dist.irecv(gathered_attn_shards[target_rank], src=target_rank, group=seq_p_group)
+                    send_req = dist.isend(attn_shards[target_rank], dst=target_global_rank, group=seq_p_group)
+                    recv_req = dist.irecv(gathered_attn_shards[target_rank], src=target_global_rank, group=seq_p_group)
                 else:
-                    recv_req = dist.irecv(gathered_attn_shards[target_rank], src=target_rank, group=seq_p_group)
-                    send_req = dist.isend(attn_shards[target_rank], dst=target_rank, group=seq_p_group)
+                    recv_req = dist.irecv(gathered_attn_shards[target_rank], src=target_global_rank, group=seq_p_group)
+                    send_req = dist.isend(attn_shards[target_rank], dst=target_global_rank, group=seq_p_group)
                 send_req.wait()
                 recv_req.wait()
 
