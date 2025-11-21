@@ -30,16 +30,21 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 ## 🤖 Supported Model Ecosystem
 
 ### Official Open-Source Models
+- ✅ [HunyuanVideo-1.5](tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)
 
 ### Quantized and Distilled Models/LoRAs (**🚀 Recommended: 4-step inference**)
+- ✅ [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
 - ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
 - ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
 - ✅ [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
+
+### Lightweight Autoencoder Models (**🚀 Recommended: fast inference & low memory usage**)
+- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 
 🔔 Follow our [HuggingFace page](https://huggingface.co/lightx2v) for the latest model releases from our team.
 
