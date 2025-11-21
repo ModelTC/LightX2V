@@ -14,6 +14,7 @@ A powerful model weight conversion tool that supports format conversion, quantiz
 
 ## Supported Model Types
 
+- `hunyuan_dit`: hunyuan DiT 1.5 models
 - `wan_dit`: Wan DiT series models (default)
 - `wan_animate_dit`: Wan Animate DiT models
 - `qwen_image_dit`: Qwen Image DiT models
@@ -240,6 +241,38 @@ python converter.py \
     --non_linear_dtype torch.float16 \
     --model_type wan_clip \
     --quantized
+```
+
+
+
+#### 1.5 Qwen25_vl llm Quantization
+
+**INT8 Quantization**
+```bash
+python converter.py \
+    --source /path/to/hunyuanvideo-1.5/text_encoder/llm \
+    --output /path/to/output \
+    --output_ext .safetensors \
+    --output_name qwen25vl-llm-int8 \
+    --linear_dtype torch.int8 \
+    --non_linear_dtype torch.float16 \
+    --model_type qwen25vl_llm \
+    --quantized \
+    --single_file
+```
+
+**FP8 Quantization**
+```bash
+python converter.py \
+    --source /path/to/hunyuanvideo-1.5/text_encoder/llm \
+    --output /path/to/output \
+    --output_ext .safetensors \
+    --output_name qwen25vl-llm-fp8 \
+    --linear_dtype torch.float8_e4m3fn \
+    --non_linear_dtype torch.float16 \
+    --model_type qwen25vl_llm \
+    --quantized \
+    --single_file
 ```
 
 ### 2. LoRA Merging

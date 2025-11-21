@@ -46,6 +46,9 @@ class FlashAttn2Weight(AttnWeightTemplate):
             bs = 1
         elif len(q.shape) == 4:
             bs = q.shape[0]
+            q = q.reshape(-1, q.shape[-2], q.shape[-1])
+            k = k.reshape(-1, k.shape[-2], k.shape[-1])
+            v = v.reshape(-1, v.shape[-2], v.shape[-1])
         x = flash_attn_varlen_func(
             q,
             k,
@@ -78,6 +81,9 @@ class FlashAttn3Weight(AttnWeightTemplate):
             bs = 1
         elif len(q.shape) == 4:
             bs = q.shape[0]
+            q = q.reshape(-1, q.shape[-2], q.shape[-1])
+            k = k.reshape(-1, k.shape[-2], k.shape[-1])
+            v = v.reshape(-1, v.shape[-2], v.shape[-1])
         x = flash_attn_varlen_func_v3(
             q,
             k,

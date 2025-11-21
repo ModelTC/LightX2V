@@ -292,7 +292,7 @@ class VisionTransformer(nn.Module):
         b = x.size(0)
 
         # embeddings
-        x = self.patch_embedding(x.type(self.patch_embedding.weight.type())).flatten(2).permute(0, 2, 1)
+        x = self.patch_embedding(x).flatten(2).permute(0, 2, 1)
         if self.pool_type in ("token", "token_fc"):
             x = torch.cat([self.cls_embedding.expand(b, -1, -1), x], dim=1)
         if interpolation:
@@ -426,9 +426,10 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 
 
 class CLIPModel:
-    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False):
+    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False, run_device=torch.device("cuda")):
         self.dtype = dtype
         self.device = device
+        self.run_device = run_device
         self.quantized = clip_quantized
         self.cpu_offload = cpu_offload
         self.use_31_block = use_31_block
@@ -462,7 +463,7 @@ class CLIPModel:
         return out
 
     def to_cuda(self):
-        self.model = self.model.cuda()
+        self.model = self.model.to(self.run_device)
 
     def to_cpu(self):
         self.model = self.model.cpu()

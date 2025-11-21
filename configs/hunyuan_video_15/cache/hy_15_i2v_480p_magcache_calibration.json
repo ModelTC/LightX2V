@@ -1,0 +1,13 @@
+{
+    "infer_steps": 50,
+    "transformer_model_name": "480p_i2v",
+    "fps": 24,
+    "target_video_length": 121,
+    "vae_stride": [4, 16, 16],
+    "sample_shift": 5.0,
+    "sample_guide_scale": 6.0,
+    "enable_cfg": true,
+    "attn_type": "sage_attn2",
+    "feature_caching": "Mag",
+    "magcache_calibration": true
+}
