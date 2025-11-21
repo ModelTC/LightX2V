@@ -30,7 +30,7 @@ For comprehensive usage instructions, please refer to our documentation: **[Engl
 ## 🤖 Supported Model Ecosystem
 
 ### Official Open-Source Models
-- ✅ [HunyuanVideo-1.5](tencent/HunyuanVideo-1.5)
+- ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
