@@ -30,6 +30,7 @@
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
+- ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
@@ -47,6 +48,9 @@
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
+
+### 轻量级自编码器模型(**🚀 推荐：推理快速 + 内存占用低**)
+- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 
 💡 参考[模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/model_structure.html)快速上手 LightX2V
 
@@ -164,3 +168,4 @@
 <div align="center">
 由 LightX2V 团队用 ❤️ 构建
 </div>
+
