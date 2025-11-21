@@ -42,15 +42,14 @@
 - ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
 - ✅ [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
 
+### 轻量级自编码器模型(**🚀 推荐：推理快速 + 内存占用低**)
+- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 🔔 可以关注我们的[HuggingFace主页](https://huggingface.co/lightx2v)，及时获取我们团队的模型。
 
 ### 自回归模型
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
-
-### 轻量级自编码器模型(**🚀 推荐：推理快速 + 内存占用低**)
-- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 
 💡 参考[模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/model_structure.html)快速上手 LightX2V
 
@@ -168,4 +167,5 @@
 <div align="center">
 由 LightX2V 团队用 ❤️ 构建
 </div>
+
 
