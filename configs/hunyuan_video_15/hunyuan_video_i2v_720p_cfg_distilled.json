@@ -7,5 +7,5 @@
     "sample_shift": 9.0,
     "sample_guide_scale": 6.0,
     "enable_cfg": false,
-    "attn_type": "flash_attn3"
+    "attn_type": "sage_attn2"
 }
