@@ -65,7 +65,7 @@ class WanRunner(DefaultRunner):
             if clip_offload:
                 clip_device = torch.device("cpu")
             else:
-                clip_device = torch.device(self.init_device)
+                clip_device = torch.device(self.run_device)
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -84,6 +84,7 @@ class WanRunner(DefaultRunner):
             image_encoder = CLIPModel(
                 dtype=torch.float16,
                 device=clip_device,
+                run_device=self.run_device,
                 checkpoint_path=clip_original_ckpt,
                 clip_quantized=clip_quantized,
                 clip_quantized_ckpt=clip_quantized_ckpt,
@@ -101,7 +102,7 @@ class WanRunner(DefaultRunner):
         if t5_offload:
             t5_device = torch.device("cpu")
         else:
-            t5_device = torch.device(self.init_device)
+            t5_device = torch.device(self.run_device)
 
         # quant_config
         t5_quantized = self.config.get("t5_quantized", False)
@@ -123,6 +124,7 @@ class WanRunner(DefaultRunner):
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
+            run_device=self.run_device,
             device=t5_device,
             checkpoint_path=t5_original_ckpt,
             tokenizer_path=tokenizer_path,
@@ -142,11 +144,12 @@ class WanRunner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.init_device)
+            vae_device = torch.device(self.run_device)
 
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
+            "run_device": self.run_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
@@ -170,6 +173,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
+            "run_device": self.run_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,

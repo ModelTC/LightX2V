@@ -8,5 +8,9 @@
     "sample_shift": 7.0,
     "sample_guide_scale": 6.0,
     "enable_cfg": true,
-    "attn_type": "flash_attn3"
+    "attn_type": "sage_attn2",
+    "parallel": {
+        "seq_p_attn_type": "ulysses-4090",
+        "seq_p_size": 8
+    }
 }

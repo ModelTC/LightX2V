@@ -59,10 +59,11 @@ class DefaultRunner(BaseRunner):
             self.model.compile(self.config.get("compile_shapes", []))
 
     def set_init_device(self):
+        self.run_device = self.config.get("run_device", "cuda")
         if self.config["cpu_offload"]:
             self.init_device = torch.device("cpu")
         else:
-            self.init_device = torch.device(self.config.get("run_device", "cuda"))
+            self.init_device = torch.device(self.run_device)
 
     def load_vfi_model(self):
         if self.config["video_frame_interpolation"].get("algo", None) == "rife":
@@ -168,7 +169,7 @@ class DefaultRunner(BaseRunner):
 
     def run_step(self):
         self.inputs = self.run_input_encoder()
-        if self.sr_version is not None:
+        if hasattr(self, "sr_version") and self.sr_version is not None is not None:
             self.config_sr["is_sr_running"] = True
             self.inputs_sr = self.run_input_encoder()
             self.config_sr["is_sr_running"] = False
@@ -281,7 +282,7 @@ class DefaultRunner(BaseRunner):
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
-        if self.sr_version is not None:
+        if hasattr(self, "sr_version") and self.sr_version is not None is not None:
             self.lq_latents_shape = self.model.scheduler.latents.shape
             self.model_sr.set_scheduler(self.scheduler_sr)
 

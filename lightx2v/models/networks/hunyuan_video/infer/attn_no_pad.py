@@ -2,12 +2,13 @@ import torch
 from einops import rearrange
 from flash_attn import flash_attn_varlen_qkvpacked_func
 from flash_attn.bert_padding import pad_input, unpad_input
+from loguru import logger
 
 try:
     from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v3
 except ImportError:
     flash_attn_varlen_func_v3 = None
-    print("flash_attn_varlen_func_v3 not available")
+    logger.info("flash_attn_varlen_func_v3 not available")
 
 if torch.cuda.get_device_capability(0) in [(8, 9), (12, 0)]:
     try:
