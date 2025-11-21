@@ -1,6 +1,6 @@
 {
     "infer_steps": 50,
-    "transformer_model_name": "480p_i2v",
+    "transformer_model_name": "480p_t2v",
     "fps": 24,
     "target_video_length": 121,
     "vae_stride": [4, 16, 16],
@@ -9,7 +9,7 @@
     "enable_cfg": true,
     "attn_type": "flash_attn3",
     "feature_caching": "Tea",
-    "coefficients": [1.88388606e+04, -5.69783846e+03,  5.74389864e+02, -2.10913158e+01, 2.61716524e-01],
+    "coefficients": [-2.97190924e+04, 2.22834983e+04, -4.37418360e+03, 3.39340251e+02, -1.01365855e+01, 1.29101768e-01],
     "teacache_thresh": 0.15,
     "cpu_offload": false,
     "offload_granularity": "block",
