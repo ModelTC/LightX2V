@@ -20,7 +20,7 @@
 
 ## :fire: Latest News
 
-- **November 21, 2025:** 🚀 We support the HunyuanVideo1.5 video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update our models on our [HuggingFace page](https://huggingface.co/lightx2v), including quantization, step distillation, VAE distillation, and other related models. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials.
+- **November 21, 2025:** 🚀 We support the [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update our models on our [HuggingFace page](https://huggingface.co/lightx2v), including quantization, step distillation, VAE distillation, and other related models. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials.
 
 ## 💡 Quick Start
 
