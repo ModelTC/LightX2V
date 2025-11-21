@@ -18,6 +18,11 @@
 
 **LightX2V** 是一个先进的轻量级视频生成推理框架，专为提供高效、高性能的视频合成解决方案而设计。该统一平台集成了多种前沿的视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视频输出(V)**。
 
+## :fire: 最新动态
+
+- **2025年11月21日:** 🚀 我们Day0支持了HunyuanVideo1.5的视频生成模型，同样GPU数量，LightX2V可带来约2倍以上的速度提升，并支持更低显存GPU部署(如24G RTX4090)。支持CFG并行/Ulysses并行，高效Offload，TeaCache/MagCache等技术。同时支持沐曦，寒武纪等国产芯片部署。我们很快将在我们的[HuggingFace主页](https://huggingface.co/lightx2v)更新量化，步数蒸馏，VAE蒸馏等相关模型。
+
+
 ## 💡 快速开始
 
 详细使用说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**

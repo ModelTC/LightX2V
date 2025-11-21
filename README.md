@@ -18,6 +18,10 @@
 
 **LightX2V** is an advanced lightweight video generation inference framework engineered to deliver efficient, high-performance video synthesis solutions. This unified platform integrates multiple state-of-the-art video generation techniques, supporting diverse generation tasks including text-to-video (T2V) and image-to-video (I2V). **X2V represents the transformation of different input modalities (X, such as text or images) into video output (V)**.
 
+## :fire: Latest News
+
+- **November 21, 2025:** 🚀 We support the HunyuanVideo1.5 video generation model since Day 0. With the same number of GPUs, LightX2V can deliver a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update our models on our [HuggingFace homepage](https://huggingface.co/lightx2v), including quantization, step distillation, VAE distillation, and other related models.
+
 ## 💡 Quick Start
 
 For comprehensive usage instructions, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
