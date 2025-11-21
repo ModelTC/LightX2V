@@ -30,6 +30,7 @@
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
+- ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
@@ -41,6 +42,8 @@
 - ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
 - ✅ [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
 
+### 轻量级自编码器模型(**🚀 推荐：推理快速 + 内存占用低**)
+- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 🔔 可以关注我们的[HuggingFace主页](https://huggingface.co/lightx2v)，及时获取我们团队的模型。
 
 ### 自回归模型
