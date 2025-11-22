@@ -48,6 +48,7 @@ class WanModel(CompiledMethodsMixin):
         super().__init__()
         self.model_path = model_path
         self.config = config
+        self.run_device = self.config.get("run_device", "cuda")
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.model_type = model_type
@@ -74,6 +75,7 @@ class WanModel(CompiledMethodsMixin):
                 "mxfp4",
                 "mxfp6-mxfp8",
                 "mxfp8",
+                "int8-tmo",
             ]
         self.device = device
         self._init_infer_class()
@@ -137,8 +139,8 @@ class WanModel(CompiledMethodsMixin):
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if self.device.type == "cuda" and dist.is_initialized():
-            device = torch.device("cuda:{}".format(dist.get_rank()))
+        if (self.device.type == "cuda" or self.device.type == "mlu") and dist.is_initialized():
+            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
         else:
             device = self.device
 
@@ -365,6 +367,8 @@ class WanModel(CompiledMethodsMixin):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

@@ -22,12 +22,12 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
     def infer_vace_blocks(self, vace_blocks, pre_infer_out):
         pre_infer_out.adapter_args["hints"] = []
         self.infer_state = "vace"
-        if hasattr(self, "weights_stream_mgr"):
-            self.weights_stream_mgr.init(self.vace_blocks_num, self.phases_num, self.offload_ratio)
+        if hasattr(self, "offload_manager"):
+            self.offload_manager.init_cuda_buffer(self.vace_offload_block_buffers, self.vace_offload_phase_buffers)
         self.infer_func(vace_blocks, pre_infer_out.c, pre_infer_out)
         self.infer_state = "base"
-        if hasattr(self, "weights_stream_mgr"):
-            self.weights_stream_mgr.init(self.blocks_num, self.phases_num, self.offload_ratio)
+        if hasattr(self, "offload_manager"):
+            self.offload_manager.init_cuda_buffer(self.offload_block_buffers, self.offload_phase_buffers)
 
     def post_process(self, x, y, c_gate_msa, pre_infer_out):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)

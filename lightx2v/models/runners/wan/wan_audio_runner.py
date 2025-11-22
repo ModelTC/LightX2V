@@ -450,7 +450,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             ref_img = img_path
         else:
             ref_img = load_image(img_path)
-        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).to(self.run_device)
 
         ref_img, h, w = resize_image(
             ref_img,
@@ -538,7 +538,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
-        device = torch.device("cuda")
+        device = self.run_device
         dtype = GET_DTYPE()
 
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
@@ -753,14 +753,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 target_rank=1,
             )
 
-    def run_main(self, total_steps=None):
+    def run_main(self):
         try:
             self.init_va_recorder()
             self.init_va_reader()
             logger.info(f"init va_recorder: {self.va_recorder} and va_reader: {self.va_reader}")
 
             if self.va_reader is None:
-                return super().run_main(total_steps)
+                return super().run_main()
 
             self.va_reader.start()
             rank, world_size = self.get_rank_and_world_size()
@@ -794,7 +794,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
                     fail_count = 0
                     self.init_run_segment(segment_idx, audio_array)
-                    latents = self.run_segment(total_steps=None)
+                    latents = self.run_segment(segment_idx)
                     self.gen_video = self.run_vae_decoder(latents)
                     self.end_run_segment(segment_idx)
                     segment_idx += 1
@@ -835,7 +835,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def load_audio_encoder(self):
         audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))
         audio_encoder_offload = self.config.get("audio_encoder_cpu_offload", self.config.get("cpu_offload", False))
-        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload)
+        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload, run_device=self.config.get("run_device", "cuda"))
         return model
 
     def load_audio_adapter(self):
@@ -843,7 +843,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if audio_adapter_offload:
             device = torch.device("cpu")
         else:
-            device = torch.device("cuda")
+            device = torch.device(self.run_device)
+
         audio_adapter = AudioAdapter(
             attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
@@ -856,6 +857,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quantized=self.config.get("adapter_quantized", False),
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
+            run_device=self.run_device,
         )
 
         audio_adapter.to(device)
@@ -895,6 +897,7 @@ class Wan22AudioRunner(WanAudioRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,
+            "run_device": self.run_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
@@ -911,6 +914,7 @@ class Wan22AudioRunner(WanAudioRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,
+            "run_device": self.run_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }

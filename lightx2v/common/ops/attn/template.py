@@ -27,3 +27,6 @@ class AttnWeightTemplate(metaclass=ABCMeta):
         if destination is None:
             destination = {}
         return destination
+
+    def load_state_dict(self, destination, block_index, adapter_block_inde=None):
+        return {}

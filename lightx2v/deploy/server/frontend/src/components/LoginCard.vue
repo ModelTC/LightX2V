@@ -32,7 +32,7 @@ const router = useRouter();
                     <!-- Logo和标题 - Apple 风格 -->
                     <div class="text-center mb-12">
                         <div class="flex items-center justify-center gap-3 mb-5">
-                            <i class="fas fa-film text-4xl text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                            <img src="../../public/logo.svg" alt="LightX2V" class="w-14 h-12" loading="lazy" />
                             <h1 class="text-4xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">LightX2V</h1>
                         </div>
                         <p class="text-base text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('loginSubtitle') }}</p>

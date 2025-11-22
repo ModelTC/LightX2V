@@ -33,7 +33,7 @@ class AutoencoderKLQwenImageVAE:
         if self.cpu_offload:
             self.device = torch.device("cpu")
         else:
-            self.device = torch.device("cuda")
+            self.device = torch.device(self.config.get("run_device", "cuda"))
         self.dtype = torch.bfloat16
         self.latent_channels = config["vae_z_dim"]
         self.load()

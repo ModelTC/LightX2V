@@ -331,19 +331,16 @@ watch(audioTemplates, (newTemplates) => {
                                                 <div v-for="(history, index) in audioHistory" :key="index"
                                                     @click="selectAudioHistory(history)"
                                                     class="flex items-center gap-4 p-4 rounded-2xl border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all cursor-pointer bg-white/80 dark:bg-[#2c2c2e]/80 hover:bg-white dark:hover:bg-[#3a3a3c] hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.2)] group">
-                                                        <div
-                                                            class="w-12 h-12 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-xl flex items-center justify-center flex-shrink-0">
-                                                        <i class="fas fa-music text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] text-xl"></i>
+                                                    <div class="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 flex items-center justify-center">
+                                                        <img v-if="history.imageUrl" :src="history.imageUrl" :alt="history.filename" class="w-full h-full object-cover" @error="history.imageUrl = null" />
+                                                        <i v-else class="fas fa-music text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] text-xl"></i>
                                                     </div>
                                                     <div class="flex-1 min-w-0">
-                                                            <div
-                                                                class="text-[#1d1d1f] dark:text-[#f5f5f7] font-medium group-hover:text-[color:var(--brand-primary)] dark:group-hover:text-[color:var(--brand-primary-light)] transition-colors truncate tracking-tight">
-                                                                {{ history.filename }}</div>
-                                                            <div class="text-[#86868b] dark:text-[#98989d] text-sm flex items-center gap-2 tracking-tight">
-                                                                <span>{{ t('audioFile') }}</span>
-                                                                <span class="text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]">•</span>
-                                                                <span>{{ getDurationDisplay(history, false) }}</span>
-                                                            </div>
+                                                        <div class="text-[#86868b] dark:text-[#98989d] text-sm flex items-center gap-2 tracking-tight">
+                                                            <span>{{ t('historyAudio') }}</span>
+                                                            <span class="text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]">•</span>
+                                                            <span>{{ getDurationDisplay(history, false) }}</span>
+                                                        </div>
                                                     </div>
                                                     <button @click.stop="handleAudioPreview(history, false)"
                                                             class="px-4 py-2 rounded-lg transition-all cursor-pointer relative z-10 flex items-center gap-2 flex-shrink-0 tracking-tight"
@@ -416,21 +413,20 @@ watch(audioTemplates, (newTemplates) => {
                                                     </div>
                                                 </div>
                                                 <div v-if="audioTemplates.length > 0" class="space-y-3 px-1">
-                                                    <div v-for="template in audioTemplates" :key="template.filename"
+                                                    <div v-for="(template, index) in audioTemplates" :key="template.filename"
                                                         @click="selectAudioTemplate(template)"
                                                         class="flex items-center gap-4 p-4 rounded-2xl border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all cursor-pointer bg-white/80 dark:bg-[#2c2c2e]/80 hover:bg-white dark:hover:bg-[#3a3a3c] hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.2)] group">
                                                             <div
-                                                                class="w-12 h-12 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 rounded-xl flex items-center justify-center flex-shrink-0">
-                                                            <i class="fas fa-music text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] text-xl"></i>
+                                                        class="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 flex items-center justify-center">
+                                                        <img v-if="imageTemplates[index]?.url" :src="imageTemplates[index].url" :alt="t('audioTemplates')" class="w-full h-full object-cover" @error="imageTemplates[index].url = null" />
+                                                        <i v-else class="fas fa-music text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] text-xl"></i>
                                                         </div>
                                                         <div class="flex-1 min-w-0">
-                                                                <div class="text-[#1d1d1f] dark:text-[#f5f5f7] font-medium group-hover:text-[color:var(--brand-primary)] dark:group-hover:text-[color:var(--brand-primary-light)] transition-colors truncate tracking-tight">{{ template.filename }}
-                                                                </div>
-                                                                <div class="text-[#86868b] dark:text-[#98989d] text-sm flex items-center gap-2 tracking-tight">
-                                                                    <span>{{ t('audioTemplates') }}</span>
-                                                                    <span class="text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]">•</span>
-                                                                    <span>{{ getDurationDisplay(template, true) }}</span>
-                                                                </div>
+                                                        <div class="text-[#86868b] dark:text-[#98989d] text-sm flex items-center gap-2 tracking-tight">
+                                                            <span>{{ t('audioTemplates') }}</span>
+                                                            <span class="text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]">•</span>
+                                                            <span>{{ getDurationDisplay(template, true) }}</span>
+                                                        </div>
                                                         </div>
                                                         <button @click.stop="handleAudioPreview(template, true)"
                                                                 class="px-4 py-2 rounded-lg transition-all cursor-pointer relative z-10 flex items-center gap-2 flex-shrink-0 tracking-tight"

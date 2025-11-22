@@ -1,3 +1,4 @@
+import re
 from abc import ABCMeta, abstractmethod
 
 import torch
@@ -64,13 +65,20 @@ try:
 except ImportError:
     marlin_cuda_quant = None
 
+try:
+    import torch_mlu_ops as tmo
+except ImportError:
+    tmo = None
+
 
 class MMWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
         self.weight_name = weight_name
         self.bias_name = bias_name
+        self.create_cuda_buffer = create_cuda_buffer
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
+        self.is_post_adapter = is_post_adapter
         self.config = {}
 
     @abstractmethod
@@ -78,7 +86,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def apply(self, input_tensor):
+    def apply(self):
         pass
 
     def set_config(self, config={}):
@@ -108,39 +116,46 @@ class MMWeightTemplate(metaclass=ABCMeta):
 
 @MM_WEIGHT_REGISTER("Default")
 class MMWeight(MMWeightTemplate):
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
 
     def load(self, weight_dict):
-        device = weight_dict[self.weight_name].device
-        if device.type == "cuda":
-            self.weight = weight_dict[self.weight_name].t()
+        if self.create_cuda_buffer:
+            self.weight_cuda_buffer = weight_dict[self.weight_name].t().cuda()
             if self.bias_name is not None:
-                self.bias = weight_dict[self.bias_name]
-            else:
-                self.bias = None
-        elif device.type == "cpu":
-            weight_shape = weight_dict[self.weight_name].t().shape
-            weight_dtype = weight_dict[self.weight_name].dtype
-            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-            self.pin_weight.copy_(weight_dict[self.weight_name].t())
-
-            if self.bias_name is not None:
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                self.bias = None
-                self.pin_bias = None
-            del weight_dict[self.weight_name]
+                self.bias_cuda_buffer = weight_dict[self.bias_name].cuda()
         else:
-            raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+            device = weight_dict[self.weight_name].device
+            if device.type in ["cuda", "mlu", "npu"]:
+                self.weight = weight_dict[self.weight_name].t()
+                if self.bias_name is not None:
+                    self.bias = weight_dict[self.bias_name]
+                else:
+                    self.bias = None
+
+            elif device.type == "cpu":
+                weight_shape = weight_dict[self.weight_name].shape
+                weight_dtype = weight_dict[self.weight_name].dtype
+
+                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+                self.pin_weight = self.pin_weight.copy_(weight_dict[self.weight_name]).t()
+
+                if self.bias_name is not None:
+                    bias_shape = weight_dict[self.bias_name].shape
+                    bias_dtype = weight_dict[self.bias_name].dtype
+                    self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                    self.pin_bias.copy_(weight_dict[self.bias_name])
+                else:
+                    self.bias = None
+                    self.pin_bias = None
+                del weight_dict[self.weight_name]
+
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 
     def _calculate_size(self):
         if self.bias is not None:
             return self.weight.numel() * self.weight.element_size() + self.bias.numel() * self.bias.element_size()
-
         return self.weight.numel() * self.weight.element_size()
 
     def apply(self, input_tensor):
@@ -155,16 +170,39 @@ class MMWeight(MMWeightTemplate):
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
-        destination[self.weight_name] = self.weight.cpu().detach().clone().t().contiguous()
-        if hasattr(self, "bias") and self.bias is not None:
-            destination[self.bias_name] = self.bias.cpu().detach().clone()
+        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
+        if self.bias_name is not None:
+            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
         return destination
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        if self.is_post_adapter:
+            assert adapter_block_index is not None
+            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
+        else:
+            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
+
+        if weight_name not in destination:
+            self.weight = None
+            return
+
+        self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
+
+        if self.bias_name is not None:
+            if self.is_post_adapter:
+                assert adapter_block_index is not None
+                bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
+            else:
+                bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
+            self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
+        else:
+            self.bias = None
 
 
 @MM_WEIGHT_REGISTER("Default-Force-FP32")
 class MMWeightForceFP32(MMWeight):
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
 
     def load(self, weight_dict):
         super().load(weight_dict)
@@ -174,8 +212,8 @@ class MMWeightForceFP32(MMWeight):
 
 
 class MMWeightQuantTemplate(MMWeightTemplate):
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.weight_scale_name = self.weight_name.removesuffix(".weight") + ".weight_scale"
         self.load_func = None
         self.weight_need_transpose = True
@@ -209,8 +247,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             if self.weight_need_transpose:
                 if hasattr(self, "weight"):
                     self.weight = self.weight.t()
-                elif hasattr(self, "pin_weight"):
+                if hasattr(self, "pin_weight"):
                     self.pin_weight = self.pin_weight.t()
+                if hasattr(self, "weight_cuda_buffer"):
+                    self.weight_cuda_buffer = self.weight_cuda_buffer.t()
 
     def clear(self):
         attrs = ["weight", "weight_scale", "bias", "pin_weight", "pin_weight_scale", "pin_bias"]
@@ -225,23 +265,47 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return self.weight.numel() * self.weight.element_size() + self.weight_scale.numel() * self.weight_scale.element_size()
 
     def load_quantized(self, weight_dict):
-        device = weight_dict[self.weight_name].device
-        if device.type == "cuda":
-            self.weight = weight_dict[self.weight_name]
-            self.weight_scale = weight_dict[self.weight_scale_name].float()
-        elif device.type == "cpu":
-            weight_shape = weight_dict[self.weight_name].shape
-            weight_dtype = weight_dict[self.weight_name].dtype
-            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-            self.pin_weight.copy_(weight_dict[self.weight_name])
-
-            weight_scale_shape = weight_dict[self.weight_scale_name].shape
-            weight_scale_dtype = torch.float
-            self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
-            self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
-            del weight_dict[self.weight_name]
+        if self.create_cuda_buffer:
+            # move to cuda buffer
+            self.weight_cuda_buffer = weight_dict[self.weight_name].cuda()
+            self.weight_scale_cuda_buffer = weight_dict[self.weight_scale_name].float().cuda()
         else:
-            raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+            device = weight_dict[self.weight_name].device
+            if device.type in ["cuda", "mlu", "npu"]:
+                self.weight = weight_dict[self.weight_name]
+                self.weight_scale = weight_dict[self.weight_scale_name].float()
+            elif device.type == "cpu":
+                weight_shape = weight_dict[self.weight_name].shape
+                weight_dtype = weight_dict[self.weight_name].dtype
+                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+                self.pin_weight.copy_(weight_dict[self.weight_name])
+
+                weight_scale_shape = weight_dict[self.weight_scale_name].shape
+                weight_scale_dtype = torch.float
+                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
+                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                del weight_dict[self.weight_name]
+            else:
+                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+
+        if self.bias_name is not None:
+            if self.create_cuda_buffer:
+                # move to cuda buffer
+                self.bias_cuda_buffer = weight_dict[self.bias_name].cuda()
+            else:
+                device = weight_dict[self.bias_name].device
+                if device.type == "cuda":
+                    self.bias = weight_dict[self.bias_name]
+                elif device.type == "cpu":
+                    bias_shape = weight_dict[self.bias_name].shape
+                    bias_dtype = weight_dict[self.bias_name].dtype
+                    self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                    self.pin_bias.copy_(weight_dict[self.bias_name])
+                else:
+                    raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
 
     def load_fp8_perchannel_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
@@ -253,21 +317,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             self.load_quantized(weight_dict)
 
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
-
     def load_int8_perchannel_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name].to(torch.float32)
@@ -278,21 +327,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             self.load_quantized(weight_dict)
 
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
-
     def load_mxfp4(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             device = weight_dict[self.weight_name].device
@@ -301,7 +335,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name]
                 self.weight_scale = weight_dict[self.weight_scale_name]
             elif device.type == "cpu":
@@ -317,21 +351,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 del weight_dict[self.weight_name]
             else:
                 raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
 
     def load_mxfp6(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
@@ -358,21 +377,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             else:
                 raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
-
     def load_mxfp8(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             device = weight_dict[self.weight_name].device
@@ -397,21 +401,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 del weight_dict[self.weight_name]
             else:
                 raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
 
     def load_nvfp4(self, weight_dict):
         device = weight_dict[self.weight_name].device
@@ -451,42 +440,12 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
-
     def load_fp8_perblock128_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name]
             self.weight, self.weight_scale = self.per_block_cast_to_fp8(self.weight)
         else:
             self.load_quantized(weight_dict)
-
-        if self.bias_name is not None:
-            device = weight_dict[self.bias_name].device
-            if device.type == "cuda":
-                self.bias = weight_dict[self.bias_name]
-            elif device.type == "cpu":
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
-        else:
-            self.bias = None
-            self.pin_bias = None
 
     def per_block_cast_to_fp8(self, x):
         assert x.dim() == 2
@@ -561,15 +520,32 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
-        if self.weight_need_transpose:
-            destination[self.weight_name] = self.weight.cpu().detach().clone().t().contiguous()
-        else:
-            destination[self.weight_name] = self.weight.cpu().detach().clone().contiguous()
-        if hasattr(self, "bias") and self.bias is not None:
-            destination[self.bias_name] = self.bias.cpu().detach().clone()
-        if hasattr(self, "weight_scale"):
-            destination[self.weight_name.removesuffix(".weight") + ".weight_scale"] = self.weight_scale.cpu().detach().clone()
+        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
+        if self.bias_name is not None:
+            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
+        destination[self.weight_scale_name] = self.pin_weight_scale if hasattr(self, "pin_weight_scale") else self.weight_scale
         return destination
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        if self.is_post_adapter:
+            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
+            weight_scale_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_scale_name, count=1)
+        else:
+            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
+            weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
+
+        if weight_name not in destination:
+            self.weight = None
+            return
+
+        self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
+        self.weight_scale = self.weight_scale_cuda_buffer.copy_(destination[weight_scale_name], non_blocking=True)
+
+        if self.bias_name is not None:
+            bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
+            self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
+        else:
+            self.bias = None
 
 
 @MM_WEIGHT_REGISTER("fp8-vllm")
@@ -583,8 +559,8 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         Kernel: vllm
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
@@ -618,8 +594,8 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         Kernel: vllm
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
@@ -652,8 +628,8 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
         Act: mxfp4
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_mxfp4
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_mxfp4
@@ -679,8 +655,8 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
         Act: mxfp8
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_mxfp6
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_mxfp8
@@ -706,8 +682,8 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
         Act: mxfp8
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_mxfp8
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_mxfp8
@@ -733,8 +709,8 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         Act: nvfp4
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_nvfp4
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_nvfp4
@@ -781,8 +757,8 @@ class MMCalibNvfp4(MMWeight):
         absmax: torch.max(torch.abs(input_tensor))
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.running_absmax = None
         self.count = 0
         self.decay = 0.9
@@ -817,8 +793,8 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         Kernel: Q8F
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
@@ -833,7 +809,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
             self.weight_scale,
             out_dtype=self.infer_dtype,
         )
-        return output_tensor.squeeze(0)
+        return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
 @MM_WEIGHT_REGISTER("int8-q8f")
@@ -847,8 +823,8 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         Kernel: Q8F
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
@@ -864,7 +840,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
             fuse_gelu=False,
             out_dtype=self.infer_dtype,
         )
-        return output_tensor.squeeze(0)
+        return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
 @MM_WEIGHT_REGISTER("fp8-b128-deepgemm")
@@ -878,8 +854,8 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
         Kernel: quant-mm using Deepgemm, act dynamic quant using Sgl-kernel
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_fp8_perblock128_sym
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_fp8_perchannelgroup128_sym_sgl
@@ -912,8 +888,8 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
         Kernel: Sgl-kernel
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_sgl
@@ -942,8 +918,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         Kernel: quant-mm using Sgl-kernel, act dynamic quant using vllm
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
@@ -977,8 +953,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         Kernel: Torchao
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
@@ -996,8 +972,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
 class MMWeightGGUFTemplate(MMWeightQuantTemplate):
     TORCH_COMPATIBLE_QTYPES = (None, gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16)
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
 
     def dequantize_func(self):
         # TODO: implement dequantize_func
@@ -1006,8 +982,8 @@ class MMWeightGGUFTemplate(MMWeightQuantTemplate):
 
 @MM_WEIGHT_REGISTER("W-gguf-Q4_K")
 class MMWeightGGUFQ4K(MMWeightGGUFTemplate):
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
 
 
 @MM_WEIGHT_REGISTER("int4-g128-marlin")
@@ -1020,8 +996,8 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         Kernel: Marlin
     """
 
-    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
-        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_quantized
 
     def load(self, weight_dict):
@@ -1042,4 +1018,32 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         marlin_cuda_quant.mul(input_tensor, self.weight, output_tensor, self.weight_scale.half(), self.workspace, -1, -1, -1, -1)
         if hasattr(self, "bias") and self.bias is not None:
             output_tensor.add_(self.bias)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("int8-tmo")
+class MMWeightWint8channelAint8channeldynamicMlu(MMWeightQuantTemplate):
+    """
+    Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Mlu
+
+    Quant MM:
+        Weight: int8 perchannel sym
+        Act: int8 perchannel dynamic sym
+        Kernel: mlu
+    """
+
+    def __init__(self, weight_name, bias_name, lazy_load=False, lazy_load_file=None):
+        super().__init__(weight_name, bias_name, lazy_load, lazy_load_file)
+        self.load_func = self.load_int8_perchannel_sym
+        self.weight_need_transpose = False
+        self.act_quant_func = self.act_quant_int8_perchannel_sym_tmo
+
+    def act_quant_int8_perchannel_sym_tmo(self, x):
+        input_tensor_quant, input_tensor_scale = tmo.scaled_quantize(x)
+        return input_tensor_quant, input_tensor_scale
+
+    def apply(self, input_tensor):
+        dtype = input_tensor.dtype
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        output_tensor = tmo.scaled_matmul(input_tensor_quant, self.weight.contiguous(), input_tensor_scale, self.weight_scale.squeeze(-1), output_dtype=dtype, use_hp_active=True)
         return output_tensor

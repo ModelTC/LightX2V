@@ -9,6 +9,7 @@ from ..utils import rope_params, sinusoidal_embedding_1d
 
 class WanAudioPreInfer(WanPreInfer):
     def __init__(self, config):
+        super().__init__(config)
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
         d = config["dim"] // config["num_heads"]
         self.config = config
@@ -20,7 +21,7 @@ class WanAudioPreInfer(WanPreInfer):
                 rope_params(1024, 2 * (d // 6)),
             ],
             dim=1,
-        ).cuda()
+        ).to(torch.device(self.run_device))
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
         self.rope_t_dim = d // 2 - 2 * (d // 6)

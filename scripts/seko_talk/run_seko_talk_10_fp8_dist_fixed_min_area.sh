@@ -8,7 +8,6 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 export SENSITIVE_LAYER_DTYPE=None
 

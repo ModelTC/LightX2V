@@ -14,6 +14,7 @@
 
 ## 支持的模型类型
 
+- `hunyuan_dit`: hunyuan DiT 1.5模型
 - `wan_dit`: Wan DiT 系列模型（默认）
 - `wan_animate_dit`: Wan Animate DiT 模型
 - `qwen_image_dit`: Qwen Image DiT 模型
@@ -240,6 +241,36 @@ python converter.py \
     --non_linear_dtype torch.float16 \
     --model_type wan_clip \
     --quantized
+```
+
+#### 1.5 Qwen25_vl 語言部分量化
+
+**INT8 量化**
+```bash
+python converter.py \
+    --source /path/to/hunyuanvideo-1.5/text_encoder/llm \
+    --output /path/to/output \
+    --output_ext .safetensors \
+    --output_name qwen25vl-llm-int8 \
+    --linear_dtype torch.int8 \
+    --non_linear_dtype torch.float16 \
+    --model_type qwen25vl_llm \
+    --quantized \
+    --single_file
+```
+
+**FP8 量化**
+```bash
+python converter.py \
+    --source /path/to/hunyuanvideo-1.5/text_encoder/llm \
+    --output /path/to/output \
+    --output_ext .safetensors \
+    --output_name qwen25vl-llm-fp8 \
+    --linear_dtype torch.float8_e4m3fn \
+    --non_linear_dtype torch.float16 \
+    --model_type qwen25vl_llm \
+    --quantized \
+    --single_file
 ```
 
 ### 2. LoRA 融合

@@ -5,6 +5,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
+from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -49,6 +50,7 @@ def main():
             "wan2.2_moe_distill",
             "qwen_image",
             "wan2.2_animate",
+            "hunyuan_video_1.5",
         ],
         default="wan2.1",
     )
@@ -96,8 +98,13 @@ def main():
     config = set_config(args)
 
     if config["parallel"]:
-        dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(dist.get_rank())
+        run_device = config.get("run_device", "cuda")
+        if "cuda" in run_device:
+            dist.init_process_group(backend="nccl")
+            torch.cuda.set_device(dist.get_rank())
+        elif "mlu" in run_device:
+            dist.init_process_group(backend="cncl")
+            torch.mlu.set_device(dist.get_rank())
         set_parallel_config(config)
 
     print_config(config)

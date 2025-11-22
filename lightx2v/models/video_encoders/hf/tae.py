@@ -27,11 +27,11 @@ class Clamp(nn.Module):
 
 
 class MemBlock(nn.Module):
-    def __init__(self, n_in, n_out):
+    def __init__(self, n_in, n_out, act_func):
         super().__init__()
-        self.conv = nn.Sequential(conv(n_in * 2, n_out), nn.ReLU(inplace=True), conv(n_out, n_out), nn.ReLU(inplace=True), conv(n_out, n_out))
+        self.conv = nn.Sequential(conv(n_in * 2, n_out), act_func, conv(n_out, n_out), act_func, conv(n_out, n_out))
         self.skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
-        self.act = nn.ReLU(inplace=True)
+        self.act = act_func
 
     def forward(self, x, past):
         return self.act(self.conv(torch.cat([x, past], 1)) + self.skip(x))
@@ -177,27 +177,32 @@ class TAEHV(nn.Module):
         self.is_cogvideox = checkpoint_path is not None and "taecvx" in checkpoint_path
         # if checkpoint_path is not None and "taew2_2" in checkpoint_path:
         #     self.patch_size, self.latent_channels = 2, 48
-
+        self.model_type = model_type
         if model_type == "wan22":
             self.patch_size, self.latent_channels = 2, 48
+        if model_type == "hy15":
+            act_func = nn.LeakyReLU(0.2, inplace=True)
+        else:
+            act_func = nn.ReLU(inplace=True)
+
         self.encoder = nn.Sequential(
             conv(self.image_channels * self.patch_size**2, 64),
-            nn.ReLU(inplace=True),
+            act_func,
             TPool(64, 2),
             conv(64, 64, stride=2, bias=False),
-            MemBlock(64, 64),
-            MemBlock(64, 64),
-            MemBlock(64, 64),
+            MemBlock(64, 64, act_func),
+            MemBlock(64, 64, act_func),
+            MemBlock(64, 64, act_func),
             TPool(64, 2),
             conv(64, 64, stride=2, bias=False),
-            MemBlock(64, 64),
-            MemBlock(64, 64),
-            MemBlock(64, 64),
+            MemBlock(64, 64, act_func),
+            MemBlock(64, 64, act_func),
+            MemBlock(64, 64, act_func),
             TPool(64, 1),
             conv(64, 64, stride=2, bias=False),
-            MemBlock(64, 64),
-            MemBlock(64, 64),
-            MemBlock(64, 64),
+            MemBlock(64, 64, act_func),
+            MemBlock(64, 64, act_func),
+            MemBlock(64, 64, act_func),
             conv(64, self.latent_channels),
         )
         n_f = [256, 128, 64, 64]
@@ -205,26 +210,26 @@ class TAEHV(nn.Module):
         self.decoder = nn.Sequential(
             Clamp(),
             conv(self.latent_channels, n_f[0]),
-            nn.ReLU(inplace=True),
-            MemBlock(n_f[0], n_f[0]),
-            MemBlock(n_f[0], n_f[0]),
-            MemBlock(n_f[0], n_f[0]),
+            act_func,
+            MemBlock(n_f[0], n_f[0], act_func),
+            MemBlock(n_f[0], n_f[0], act_func),
+            MemBlock(n_f[0], n_f[0], act_func),
             nn.Upsample(scale_factor=2 if decoder_space_upscale[0] else 1),
             TGrow(n_f[0], 1),
             conv(n_f[0], n_f[1], bias=False),
-            MemBlock(n_f[1], n_f[1]),
-            MemBlock(n_f[1], n_f[1]),
-            MemBlock(n_f[1], n_f[1]),
+            MemBlock(n_f[1], n_f[1], act_func),
+            MemBlock(n_f[1], n_f[1], act_func),
+            MemBlock(n_f[1], n_f[1], act_func),
             nn.Upsample(scale_factor=2 if decoder_space_upscale[1] else 1),
             TGrow(n_f[1], 2 if decoder_time_upscale[0] else 1),
             conv(n_f[1], n_f[2], bias=False),
-            MemBlock(n_f[2], n_f[2]),
-            MemBlock(n_f[2], n_f[2]),
-            MemBlock(n_f[2], n_f[2]),
+            MemBlock(n_f[2], n_f[2], act_func),
+            MemBlock(n_f[2], n_f[2], act_func),
+            MemBlock(n_f[2], n_f[2], act_func),
             nn.Upsample(scale_factor=2 if decoder_space_upscale[2] else 1),
             TGrow(n_f[2], 2 if decoder_time_upscale[1] else 1),
             conv(n_f[2], n_f[3], bias=False),
-            nn.ReLU(inplace=True),
+            act_func,
             conv(n_f[3], self.image_channels * self.patch_size**2),
         )
         if checkpoint_path is not None:
@@ -285,7 +290,10 @@ class TAEHV(nn.Module):
         """
         skip_trim = self.is_cogvideox and x.shape[1] % 2 == 0
         x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar)
-        x = x.clamp_(0, 1)
+        if self.model_type == "hy15":
+            x = x.clamp_(-1, 1)
+        else:
+            x = x.clamp_(0, 1)
         if self.patch_size > 1:
             x = F.pixel_shuffle(x, self.patch_size)
         if skip_trim:
