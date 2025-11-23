@@ -47,7 +47,6 @@ dependencies = [
     "imageio-ffmpeg",
     "einops",
     "loguru",
-    "sgl-kernel",
     "qtorch",
     "ftfy",
     "gradio",

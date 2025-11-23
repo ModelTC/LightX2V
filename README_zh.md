@@ -20,12 +20,65 @@
 
 ## :fire: 最新动态
 
-- **2025年11月21日:** 🚀 我们Day0支持了[HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)的视频生成模型，同样GPU数量，LightX2V可带来约2倍以上的速度提升，并支持更低显存GPU部署(如24G RTX4090)。支持CFG并行/Ulysses并行，高效Offload，TeaCache/MagCache等技术。同时支持沐曦，寒武纪等国产芯片部署。我们很快将在我们的[HuggingFace主页](https://huggingface.co/lightx2v)更新量化，步数蒸馏，VAE蒸馏等相关模型。使用教程参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15)。
+- **2025年11月21日:** 🚀 我们Day0支持了[HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)的视频生成模型，同样GPU数量，LightX2V可带来约2倍以上的速度提升，并支持更低显存GPU部署(如24G RTX4090)。支持CFG并行/Ulysses并行，高效Offload，TeaCache/MagCache等技术。同时支持沐曦，寒武纪等国产芯片部署。量化模型和轻量VAE模型现已可用：[Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)用于量化推理，[HunyuanVideo-1.5轻量TAE](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors)用于快速VAE解码。我们很快将在我们的[HuggingFace主页](https://huggingface.co/lightx2v)更新更多模型，包括步数蒸馏，VAE蒸馏等相关模型。使用教程参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15)，或查看[示例目录](https://github.com/ModelTC/LightX2V/tree/main/examples)获取代码示例。
 
 
 ## 💡 快速开始
 
 详细使用说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
+
+### 从 Git 安装
+```bash
+pip install -v git+https://github.com/ModelTC/LightX2V.git
+```
+
+### 从源码构建
+```bash
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
+uv pip install -v . # pip install -v .
+```
+
+### （可选）安装注意力/量化算子
+注意力算子安装说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
+
+### 快速开始
+```python
+# examples/hunyuan_video/hunyuan_t2v.py
+from lightx2v import LightX2VPipeline
+
+pipe = LightX2VPipeline(
+    model_path="/path/to/ckpts/hunyuanvideo-1.5/",
+    model_cls="hunyuan_video_1.5",
+    transformer_model_name="720p_t2v",
+    task="t2v",
+)
+
+pipe.create_generator(
+    attn_mode="sage_attn2",
+    infer_steps=50,
+    num_frames=121,
+    guidance_scale=6.0,
+    sample_shift=9.0,
+    aspect_ratio="16:9",
+    fps=24,
+)
+
+seed = 123
+prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+negative_prompt = ""
+save_result_path="/path/to/save_results/output.mp4"
+
+pipe.generate(
+    seed=seed,
+    prompt=prompt,
+    negative_prompt=negative_prompt,
+    save_result_path=save_result_path,
+)
+
+```
+
+> 💡 **更多示例**: 更多使用案例，包括量化、卸载、缓存等进阶配置，请参考 [examples 目录](https://github.com/ModelTC/LightX2V/tree/main/examples)。
 
 ## 🤖 支持的模型生态
 

@@ -1,3 +1,60 @@
+Metadata-Version: 2.4
+Name: lightx2v
+Version: 0.1.0
+Summary: LightX2V: Light Video Generation Inference Framework
+Author: LightX2V Contributors
+License-Expression: Apache-2.0
+Project-URL: Homepage, https://github.com/ModelTC/LightX2V
+Project-URL: Documentation, https://lightx2v-en.readthedocs.io/en/latest/
+Project-URL: Repository, https://github.com/ModelTC/LightX2V
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Multimedia :: Video
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: torch<=2.8.0
+Requires-Dist: torchvision<=0.23.0
+Requires-Dist: torchaudio<=2.8.0
+Requires-Dist: diffusers
+Requires-Dist: transformers
+Requires-Dist: tokenizers
+Requires-Dist: tqdm
+Requires-Dist: accelerate
+Requires-Dist: safetensors
+Requires-Dist: opencv-python
+Requires-Dist: imageio
+Requires-Dist: imageio-ffmpeg
+Requires-Dist: einops
+Requires-Dist: loguru
+Requires-Dist: qtorch
+Requires-Dist: ftfy
+Requires-Dist: gradio
+Requires-Dist: aiohttp
+Requires-Dist: pydantic
+Requires-Dist: prometheus-client
+Requires-Dist: gguf
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: PyJWT
+Requires-Dist: requests
+Requires-Dist: aio-pika
+Requires-Dist: asyncpg>=0.27.0
+Requires-Dist: aioboto3>=12.0.0
+Requires-Dist: alibabacloud_dypnsapi20170525==1.2.2
+Requires-Dist: redis==6.4.0
+Requires-Dist: tos
+Requires-Dist: decord
+Requires-Dist: av
+
 <div align="center" style="font-family: charter;">
   <h1>⚡️ LightX2V:<br> Light Video Generation Inference Framework</h1>
 
@@ -20,7 +77,7 @@
 
 ## :fire: Latest News
 
-- **November 21, 2025:** 🚀 We support the [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. It also supports deployment on domestic chips such as Muxi and Cambricon. Quantized models and lightweight VAE models are now available: [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) for quantized inference, and [LightTAE for HunyuanVideo-1.5](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors) for fast VAE decoding. We will soon update more models on our [HuggingFace page](https://huggingface.co/lightx2v), including step distillation, VAE distillation, and other related models. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials, or check out the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples) for code examples.
+- **November 21, 2025:** 🚀 We support the [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update our models on our [HuggingFace page](https://huggingface.co/lightx2v), including quantization, step distillation, VAE distillation, and other related models. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials.
 
 ## 💡 Quick Start
 
@@ -38,7 +95,7 @@ cd LightX2V
 uv pip install -v . # pip install -v .
 ```
 
-### (Optional) Install Attention/Quantize Operators
+### (Optional) Install Attention Operators
 For attention operators installation, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
 ### Quick Start
@@ -64,7 +121,7 @@ pipe.create_generator(
 )
 
 seed = 123
-prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+prompt = "A close-up shot captures a scene on a polished, light-colored granite kitchen counter, illuminated by soft natural light from an unseen window."
 negative_prompt = ""
 save_result_path="/path/to/save_results/output.mp4"
 
@@ -76,8 +133,6 @@ pipe.generate(
 )
 
 ```
-
-> 💡 **More Examples**: For more usage examples including quantization, offloading, caching, and other advanced configurations, please refer to the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples).
 
 
 
@@ -91,6 +146,7 @@ pipe.generate(
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)
 
 ### Quantized and Distilled Models/LoRAs (**🚀 Recommended: 4-step inference**)
+- ✅ [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
 - ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
 - ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
@@ -98,12 +154,13 @@ pipe.generate(
 
 ### Lightweight Autoencoder Models (**🚀 Recommended: fast inference & low memory usage**)
 - ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
-🔔 Follow our [HuggingFace page](https://huggingface.co/lightx2v) for the latest model releases from our team.
 
 ### Autoregressive Models
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
+
+🔔 Follow our [HuggingFace page](https://huggingface.co/lightx2v) for the latest model releases from our team.
 
 💡 Refer to the [Model Structure Documentation](https://lightx2v-en.readthedocs.io/en/latest/getting_started/model_structure.html) to quickly get started with LightX2V
 

@@ -3,7 +3,7 @@ __author__ = "LightX2V Contributors"
 __license__ = "Apache 2.0"
 
 from lightx2v import common, deploy, models, utils
-from lightx2v.light_generator import LightGenerator
+from lightx2v.pipeline import LightX2VPipeline
 
 __all__ = [
     "__version__",
@@ -13,5 +13,5 @@ __all__ = [
     "common",
     "deploy",
     "utils",
-    "LightGenerator",
+    "LightX2VPipeline",
 ]

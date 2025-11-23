@@ -54,7 +54,7 @@ class MultiDistillModelStruct(MultiModelStruct):
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
+            #  self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
@@ -64,7 +64,7 @@ class MultiDistillModelStruct(MultiModelStruct):
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
+            # self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)

@@ -103,7 +103,7 @@ class WanRunner(DefaultRunner):
             t5_device = torch.device("cpu")
         else:
             t5_device = torch.device(self.run_device)
-
+        tokenizer_path = os.path.join(self.config["model_path"], "google/umt5-xxl")
         # quant_config
         t5_quantized = self.config.get("t5_quantized", False)
         if t5_quantized:
@@ -113,13 +113,11 @@ class WanRunner(DefaultRunner):
             t5_model_name = f"models_t5_umt5-xxl-enc-{tmp_t5_quant_scheme}.pth"
             t5_quantized_ckpt = find_torch_model_path(self.config, "t5_quantized_ckpt", t5_model_name)
             t5_original_ckpt = None
-            tokenizer_path = os.path.join(os.path.dirname(t5_quantized_ckpt), "google/umt5-xxl")
         else:
             t5_quant_scheme = None
             t5_quantized_ckpt = None
             t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
             t5_original_ckpt = find_torch_model_path(self.config, "t5_original_ckpt", t5_model_name)
-            tokenizer_path = os.path.join(os.path.dirname(t5_original_ckpt), "google/umt5-xxl")
 
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
