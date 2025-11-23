@@ -102,12 +102,45 @@ git clone https://github.com/thu-ml/SageAttention.git
 cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .
 ```
 
-**Option D: Q8 Kernels**
+#### Step 4: Install Quantization Operators (Optional)
+
+Quantization operators are used to support model quantization, which can significantly reduce memory usage and accelerate inference. Choose the appropriate quantization operator based on your needs:
+
+**Option A: VLLM Kernels (Recommended)**
+Suitable for various quantization schemes, supports FP8 and other quantization formats.
+
+```bash
+pip install vllm
+```
+
+Or install from source for the latest features:
+
+```bash
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+uv pip install -e .
+```
+
+**Option B: SGL Kernels**
+Suitable for SGL quantization scheme, requires torch == 2.8.0.
+
+```bash
+pip install sgl-kernel --upgrade
+```
+
+**Option C: Q8 Kernels**
+Suitable for Ada architecture GPUs (such as RTX 4090, L40S, etc.).
+
 ```bash
 git clone https://github.com/KONAKONA666/q8_kernels.git
 cd q8_kernels && git submodule init && git submodule update
 python setup.py install
 ```
+
+> 💡 **Note**:
+> - You can skip this step if you don't need quantization functionality
+> - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
+> - For more quantization information, please refer to the [Quantization Documentation](method_tutorials/quantization.html)
 
 #### Step 5: Verify Installation
 
@@ -215,7 +248,26 @@ cd LightX2V
 
 # Install Windows-specific dependencies
 pip install -r requirements_win.txt
+pip install -v -e .
 ```
+
+#### Step 7: Install Quantization Operators (Optional)
+
+Quantization operators are used to support model quantization, which can significantly reduce memory usage and accelerate inference.
+
+**Install VLLM (Recommended):**
+
+Download the corresponding wheel package from [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases) and install it.
+
+```cmd
+# Install vLLM (please adjust according to actual filename)
+pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
+```
+
+> 💡 **Note**:
+> - You can skip this step if you don't need quantization functionality
+> - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
+> - For more quantization information, please refer to the [Quantization Documentation](method_tutorials/quantization.html)
 
 ## 🎯 Inference Usage
 
@@ -248,6 +300,42 @@ bash scripts/wan/run_wan_t2v.sh
 # Use Windows batch script
 scripts\win\run_wan_t2v.bat
 ```
+
+#### Python Script Launch
+
+```python
+from lightx2v import LightX2VPipeline
+
+pipe = LightX2VPipeline(
+    model_path="/path/to/Wan2.1-T2V-14B",
+    model_cls="wan2.1",
+    task="t2v",
+)
+
+pipe.create_generator(
+    attn_mode="sage_attn2",
+    infer_steps=50,
+    height=480,  # 720
+    width=832,   # 1280
+    num_frames=81,
+    guidance_scale=5.0,
+    sample_shift=5.0,
+)
+
+seed = 42
+prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+save_result_path="/path/to/save_results/output.mp4"
+
+pipe.generate(
+    seed=seed,
+    prompt=prompt,
+    negative_prompt=negative_prompt,
+    save_result_path=save_result_path,
+)
+```
+
+> 💡 **More Examples**: For more usage examples including quantization, offloading, caching, and other advanced configurations, please refer to the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples).
 
 ## 📞 Get Help
 

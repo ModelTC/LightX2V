@@ -54,7 +54,7 @@ class DefaultRunner(BaseRunner):
         elif self.config["task"] == "s2v":
             self.run_input_encoder = self._run_input_encoder_local_s2v
         self.config.lock()  # lock config to avoid modification
-        if self.config.get("compile", False):
+        if self.config.get("compile", False) and hasattr(self.model, "comple"):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
 
@@ -295,7 +295,7 @@ class DefaultRunner(BaseRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
-        if self.config.get("compile", False):
+        if self.config.get("compile", False) and hasattr(self.model, "comple"):
             self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
