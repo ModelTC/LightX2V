@@ -29,7 +29,7 @@ pipe.enable_offload(
 # Use lighttae
 pipe.enable_lightvae(
     use_tae=True,
-    tae_path="/data/nvme0/gushiqiao/models/hy_tae_models/model8.pth",
+    tae_path="/path/to/lighttaehy1_5.safetensors",
     use_lightvae=False,
     vae_path=None,
 )

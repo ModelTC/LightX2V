@@ -250,7 +250,8 @@ pipe.enable_cache(
 pipe.enable_lightvae(
     use_lightvae=False,    # 是否使用 LightVAE
     use_tae=False,         # 是否使用 LightTAE
-    vae_path=None,         # LightVAE 或 LightTAE 的路径
+    vae_path=None,         # LightVAE 的路径
+    tae_path=None,         # LightTAE 的路径
 )
 ```
 
