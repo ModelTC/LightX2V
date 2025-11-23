@@ -250,7 +250,8 @@ Using lightweight VAE can accelerate decoding and reduce memory usage.
 pipe.enable_lightvae(
     use_lightvae=False,    # Whether to use LightVAE
     use_tae=False,         # Whether to use LightTAE
-    vae_path=None,         # Path to LightVAE or LightTAE
+    vae_path=None,         # Path to LightVAE
+    tae_path=None,         # Path to LightTAE
 )
 ```
 
