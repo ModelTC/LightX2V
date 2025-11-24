@@ -94,7 +94,7 @@ class LightX2VPipeline:
         elif self.model_cls in ["wan2.2"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 48
-        elif self.model_cls in ["hunyuan_video_1.5"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
 
@@ -174,7 +174,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.attn_type = attn_mode
 
     def set_infer_config_json(self, config_json):
@@ -222,7 +222,7 @@ class LightX2VPipeline:
             self.clip_quant_scheme = quant_scheme
             self.clip_quantized = image_encoder_quantized
             self.clip_quantized_ckpt = image_encoder_quantized_ckpt
-        elif self.model_cls in ["hunyuan_video_1.5"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = quant_scheme
@@ -255,7 +255,7 @@ class LightX2VPipeline:
             self.t5_cpu_offload = text_encoder_offload
             self.clip_encoder_offload = image_encoder_offload
 
-        elif self.model_cls in ["hunyuan_video_1.5"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload
