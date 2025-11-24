@@ -20,6 +20,8 @@
 
 ## :fire: 最新动态
 
+- **2025年11月24日:** 🚀 我们发布了HunyuanVideo-1.5的4步蒸馏模型！这些模型支持**超快速4步推理**，无需CFG配置，相比标准50步推理可实现约**25倍加速**。现已提供基础版本和FP8量化版本：[Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models)。
+
 - **2025年11月21日:** 🚀 我们Day0支持了[HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)的视频生成模型，同样GPU数量，LightX2V可带来约2倍以上的速度提升，并支持更低显存GPU部署(如24G RTX4090)。支持CFG并行/Ulysses并行，高效Offload，TeaCache/MagCache等技术。同时支持沐曦，寒武纪等国产芯片部署。我们很快将在我们的[HuggingFace主页](https://huggingface.co/lightx2v)更新更多模型，包括步数蒸馏，VAE蒸馏等相关模型。量化模型和轻量VAE模型现已可用：[Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)用于量化推理，[HunyuanVideo-1.5轻量TAE](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors)用于快速VAE解码。使用教程参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15)，或查看[示例目录](https://github.com/ModelTC/LightX2V/tree/main/examples)获取代码示例。
 
 
