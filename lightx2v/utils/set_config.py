@@ -43,7 +43,7 @@ def set_config(args):
             config_json = json.load(f)
         config.update(config_json)
 
-    if config["model_cls"] == "hunyuan_video_1.5":  # Special config for hunyuan video 1.5 model folder structure
+    if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
@@ -79,7 +79,7 @@ def set_config(args):
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
-    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] != "hunyuan_video_1.5":
+    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
         config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
         if config["model_cls"] == "seko_talk":
             config["attnmap_frame_num"] += 1
