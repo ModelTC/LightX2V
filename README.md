@@ -24,6 +24,8 @@
 
 ## 💡 Quick Start
 
+> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
+
 For comprehensive usage instructions, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
 
 ### Installation from Git
@@ -41,7 +43,7 @@ uv pip install -v . # pip install -v .
 ### (Optional) Install Attention/Quantize Operators
 For attention operators installation, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
-### Quick Start
+### Usage Example
 
 ```python
 # examples/wan/wan_i2v.py

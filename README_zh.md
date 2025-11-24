@@ -25,6 +25,8 @@
 
 ## 💡 快速开始
 
+> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
+
 详细使用说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
 
 ### 从 Git 安装
@@ -42,7 +44,7 @@ uv pip install -v . # pip install -v .
 ### （可选）安装注意力/量化算子
 注意力算子安装说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
-### 快速开始
+### 使用示例
 ```python
 # examples/wan/wan_i2v.py
 """
