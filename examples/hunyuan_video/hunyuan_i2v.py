@@ -8,7 +8,6 @@ from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for HunyuanVideo-1.5 I2V task
 pipe = LightX2VPipeline(
-    image_path="/path/to/assets/inputs/imgs/img_0.jpg",
     model_path="/path/to/ckpts/hunyuanvideo-1.5/",
     model_cls="hunyuan_video_1.5",
     transformer_model_name="720p_i2v",

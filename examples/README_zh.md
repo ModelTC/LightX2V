@@ -63,7 +63,6 @@ pipe.generate(
 
 ```python
 pipe = LightX2VPipeline(
-    image_path="/path/to/img_0.jpg",  # I2V 任务需要
     model_path="/path/to/Wan2.2-I2V-A14B",
     model_cls="wan2.2_moe",  # 对于 wan2.1，使用 "wan2.1"
     task="i2v",

@@ -63,7 +63,6 @@ Pass the model path to `LightX2VPipeline`:
 
 ```python
 pipe = LightX2VPipeline(
-    image_path="/path/to/img_0.jpg",  # Required for I2V tasks
     model_path="/path/to/Wan2.2-I2V-A14B",
     model_cls="wan2.2_moe",  # For wan2.1, use "wan2.1"
     task="i2v",
