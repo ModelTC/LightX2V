@@ -12,7 +12,7 @@ pipe = LightX2VPipeline(
     transformer_model_name="480p_t2v",
     task="t2v",
     # 4-step distilled model ckpt
-    dit_original_ckpt="/path/to/hy1.5_t2v_480p_lightx2v_4step.safetensors"
+    dit_original_ckpt="/path/to/hy1.5_t2v_480p_lightx2v_4step.safetensors",
 )
 
 # Alternative: create generator from config JSON file
@@ -37,21 +37,7 @@ pipe.enable_lightvae(
 )
 
 # Create generator with specified parameters
-pipe.create_generator(
-    attn_mode="sage_attn2",
-    infer_steps=4,
-    num_frames=81,
-    guidance_scale=1,
-    sample_shift=9.0,
-    aspect_ratio="16:9",
-    fps=16,
-    denoising_step_list=[
-        1000,
-        750,
-        500,
-        250
-    ]
-)
+pipe.create_generator(attn_mode="sage_attn2", infer_steps=4, num_frames=81, guidance_scale=1, sample_shift=9.0, aspect_ratio="16:9", fps=16, denoising_step_list=[1000, 750, 500, 250])
 
 
 # Generation parameters
