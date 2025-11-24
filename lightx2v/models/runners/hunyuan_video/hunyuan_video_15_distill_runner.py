@@ -1,7 +1,6 @@
-import os
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
-from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler
+from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
