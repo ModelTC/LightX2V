@@ -12,6 +12,13 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.utils.input_info import set_input_info
@@ -53,13 +60,7 @@ class LightX2VPipeline:
         task,
         model_path,
         model_cls,
-        image_path=None,
-        last_frame_path=None,
-        audio_path=None,
         sf_model_path=None,
-        src_ref_images=None,
-        src_video=None,
-        src_mask=None,
         dit_original_ckpt=None,
         low_noise_original_ckpt=None,
         high_noise_original_ckpt=None,
@@ -69,13 +70,6 @@ class LightX2VPipeline:
         self.model_path = model_path
         self.model_cls = model_cls
         self.sf_model_path = sf_model_path
-        self.image_path = image_path
-        self.last_frame_path = last_frame_path
-        self.audio_path = audio_path
-        self.src_ref_images = src_ref_images
-        self.src_video = src_video
-        self.src_mask = src_mask
-
         self.dit_original_ckpt = dit_original_ckpt
         self.low_noise_original_ckpt = low_noise_original_ckpt
         self.high_noise_original_ckpt = high_noise_original_ckpt
@@ -326,10 +320,23 @@ class LightX2VPipeline:
         prompt,
         negative_prompt,
         save_result_path,
+        image_path=None,
+        last_frame_path=None,
+        audio_path=None,
+        src_ref_images=None,
+        src_video=None,
+        src_mask=None,
         return_result_tensor=False,
     ):
         # Run inference (following LightX2V pattern)
         self.seed = seed
+
+        self.image_path = image_path
+        self.last_frame_path = last_frame_path
+        self.audio_path = audio_path
+        self.src_ref_images = src_ref_images
+        self.src_video = src_video
+        self.src_mask = src_mask
         self.prompt = prompt
         self.negative_prompt = negative_prompt
         self.save_result_path = save_result_path

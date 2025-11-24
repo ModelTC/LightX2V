@@ -44,33 +44,59 @@ uv pip install -v . # pip install -v .
 
 ### 快速开始
 ```python
-# examples/hunyuan_video/hunyuan_t2v.py
+# examples/wan/wan_i2v.py
+"""
+Wan2.2 image-to-video generation example.
+This example demonstrates how to use LightX2V with Wan2.2 model for I2V generation.
+"""
+
 from lightx2v import LightX2VPipeline
 
+# Initialize pipeline for Wan2.2 I2V task
+# For wan2.1, use model_cls="wan2.1"
 pipe = LightX2VPipeline(
-    model_path="/path/to/ckpts/hunyuanvideo-1.5/",
-    model_cls="hunyuan_video_1.5",
-    transformer_model_name="720p_t2v",
-    task="t2v",
+    model_path="/path/to/Wan2.2-I2V-A14B",
+    model_cls="wan2.2_moe",
+    task="i2v",
 )
 
+# Alternative: create generator from config JSON file
+# pipe.create_generator(
+#     config_json="configs/wan22/wan_moe_i2v.json"
+# )
+
+# Enable offloading to significantly reduce VRAM usage with minimal speed impact
+# Suitable for RTX 30/40/50 consumer GPUs
+pipe.enable_offload(
+    cpu_offload=True,
+    offload_granularity="block",  # For Wan models, supports both "block" and "phase"
+    text_encoder_offload=True,
+    image_encoder_offload=False,
+    vae_offload=False,
+)
+
+# Create generator manually with specified parameters
 pipe.create_generator(
     attn_mode="sage_attn2",
-    infer_steps=50,
-    num_frames=121,
-    guidance_scale=6.0,
-    sample_shift=9.0,
-    aspect_ratio="16:9",
-    fps=24,
+    infer_steps=40,
+    height=480,  # Can be set to 720 for higher resolution
+    width=832,  # Can be set to 1280 for higher resolution
+    num_frames=81,
+    guidance_scale=[3.5, 3.5],  # For wan2.1, guidance_scale is a scalar (e.g., 5.0)
+    sample_shift=5.0,
 )
 
-seed = 123
-prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
-negative_prompt = ""
-save_result_path="/path/to/save_results/output.mp4"
+# Generation parameters
+seed = 42
+prompt = "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
+negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+image_path="/path/to/img_0.jpg"
+save_result_path = "/path/to/save_results/output.mp4"
 
+# Generate video
 pipe.generate(
     seed=seed,
+    image_path=image_path,
     prompt=prompt,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
@@ -97,12 +123,13 @@ pipe.generate(
 
 ### 轻量级自编码器模型(**🚀 推荐：推理快速 + 内存占用低**)
 - ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
-🔔 可以关注我们的[HuggingFace主页](https://huggingface.co/lightx2v)，及时获取我们团队的模型。
 
 ### 自回归模型
 - ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
+
+🔔 可以关注我们的[HuggingFace主页](https://huggingface.co/lightx2v)，及时获取我们团队的模型。
 
 💡 参考[模型结构文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/model_structure.html)快速上手 LightX2V
 
