@@ -92,7 +92,8 @@ def set_parallel_config(config):
         cfg_p_size = config["parallel"].get("cfg_p_size", 1)
         seq_p_size = config["parallel"].get("seq_p_size", 1)
         assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size * seq_p_size must be equal to world_size"
-        config["device_mesh"] = init_device_mesh("cuda", (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+        device_str = config.get("run_device", "cuda")
+        config["device_mesh"] = init_device_mesh(device_str, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
 
         if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
             config["seq_parallel"] = True
@@ -100,7 +101,7 @@ def set_parallel_config(config):
         if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
             config["cfg_parallel"] = True
         # warmup dist
-        _a = torch.zeros([1]).to(f"cuda:{dist.get_rank()}")
+        _a = torch.zeros([1]).to(f"{device_str}:{dist.get_rank()}")
         dist.all_reduce(_a)
 
 

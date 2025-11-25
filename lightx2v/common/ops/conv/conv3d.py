@@ -35,7 +35,7 @@ class Conv3dWeight(Conv3dWeightTemplate):
 
     def load(self, weight_dict):
         device = weight_dict[self.weight_name].device
-        if device.type == "cuda":
+        if device.type in ["cuda", "mlu", "npu"]:
             self.weight = weight_dict[self.weight_name]
             if self.bias_name is not None:
                 self.bias = weight_dict[self.bias_name]

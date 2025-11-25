@@ -29,7 +29,7 @@ class DefaultTensor:
                 self.tensor_cuda_buffer = weight_dict[self.tensor_name].cuda()
             else:
                 device = weight_dict[self.tensor_name].device
-                if device.type == "cuda":
+                if device.type in ["cuda", "mlu", "npu"]:
                     self.tensor = weight_dict[self.tensor_name]
                 elif device.type == "cpu":
                     tensor_shape = weight_dict[self.tensor_name].shape
