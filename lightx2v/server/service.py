@@ -399,11 +399,21 @@ class VideoGenerationService:
         self.file_service = file_service
         self.inference_service = inference_service
 
+    def _is_image_task(self) -> bool:
+        if self.inference_service.worker and self.inference_service.worker.runner:
+            task_type = self.inference_service.worker.runner.config.get("task", "t2v")
+            return task_type in ["t2i", "i2i"]
+        return False
+
     async def generate_video_with_stop_event(self, message: TaskRequest, stop_event) -> Optional[TaskResponse]:
-        """Generate video using torchrun-based inference"""
+        """Generate video/image using torchrun-based inference"""
         try:
             task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
             task_data["task_id"] = message.task_id
+
+            is_image_task = self._is_image_task()
+            if is_image_task:
+                task_data["aspect_ratio"] = message.aspect_ratio
 
             if stop_event.is_set():
                 logger.info(f"Task {message.task_id} cancelled before processing")
@@ -465,8 +475,15 @@ class VideoGenerationService:
                     json.dump({"talk_objects": task_data["talk_objects"]}, f)
 
             actual_save_path = self.file_service.get_output_path(message.save_result_path)
+            if not actual_save_path.suffix:
+                if is_image_task:
+                    actual_save_path = actual_save_path.with_suffix(".png")
+                else:
+                    actual_save_path = actual_save_path.with_suffix(".mp4")
             task_data["save_result_path"] = str(actual_save_path)
-            task_data["video_path"] = message.save_result_path
+            task_data["video_path"] = actual_save_path.name
+
+            task_data["seed"] = message.seed
 
             result = await self.inference_service.submit_task_async(task_data)
 
@@ -480,10 +497,11 @@ class VideoGenerationService:
                 return TaskResponse(
                     task_id=message.task_id,
                     task_status="completed",
-                    save_result_path=message.save_result_path,  # Return original path
+                    save_result_path=actual_save_path.name,
                 )
             else:
                 error_msg = result.get("error", "Inference failed")
+
                 raise RuntimeError(error_msg)
 
         except Exception as e:
