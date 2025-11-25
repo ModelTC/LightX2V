@@ -744,7 +744,7 @@ class T5EncoderModel:
         self,
         text_len,
         dtype=torch.bfloat16,
-        device=torch.device("cuda"),
+        device=torch.device("cpu"),
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -757,7 +757,6 @@ class T5EncoderModel:
         self.text_len = text_len
         self.dtype = dtype
         self.device = device
-        self.run_device = device
         if t5_quantized_ckpt is not None and t5_quantized:
             self.checkpoint_path = t5_quantized_ckpt
         else:

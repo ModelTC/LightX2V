@@ -337,6 +337,8 @@ def maybe_contiguous(x):
 
 
 def triton_autotune_configs():
+    if not torch.cuda.is_available():
+        return []
     # Return configs with a valid warp count for the current device
     configs = []
     # Maximum threads per block is architecture-dependent in theory, but in reality all are 1024

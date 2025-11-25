@@ -175,7 +175,7 @@ class VisionEncoder(nn.Module):
 
         if isinstance(images, np.ndarray):
             # Preprocess images if they're numpy arrays
-            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device="cuda", dtype=self.model.dtype)
+            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device=self.device, dtype=self.model.dtype)
         else:
             # Assume already preprocessed
             preprocessed = images
@@ -229,7 +229,7 @@ class SiglipVisionEncoder:
     def __init__(
         self,
         config,
-        device=torch.cuda.current_device(),
+        device=torch.device("cpu"),
         checkpoint_path=None,
         cpu_offload=False,
     ):

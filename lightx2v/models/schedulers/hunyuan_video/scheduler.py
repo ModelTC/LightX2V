@@ -11,7 +11,7 @@ from .posemb_layers import get_nd_rotary_pos_embed
 class HunyuanVideo15Scheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.device = torch.device("cuda")
+        self.device = torch.device(self.config.get("run_device", "cuda"))
         self.reverse = True
         self.num_train_timesteps = 1000
         self.sample_shift = self.config["sample_shift"]
@@ -133,6 +133,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
             theta=self.config["rope_theta"],
             use_real=True,
             theta_rescale_factor=1,
+            device=self.device
         )
         cos_half = freqs_cos[:, ::2].contiguous()
         sin_half = freqs_sin[:, ::2].contiguous()

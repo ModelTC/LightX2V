@@ -158,7 +158,7 @@ class ByT5TextEncoder:
     def __init__(
         self,
         config,
-        device=torch.cuda.current_device(),
+        device=torch.device("cpu"),
         checkpoint_path=None,
         byt5_max_length=256,
         cpu_offload=False,
@@ -277,8 +277,8 @@ class ByT5TextEncoder:
             formatted_text = self.prompt_format.format_prompt(glyph_texts, text_styles)
 
             text_ids, text_mask = self.get_byt5_text_tokens(self.byt5_tokenizer, self.byt5_max_length, formatted_text)
-            text_ids = text_ids.to("cuda")
-            text_mask = text_mask.to("cuda")
+            text_ids = text_ids.to(device)
+            text_mask = text_mask.to(device)
 
             byt5_outputs = self.byt5_model(text_ids, attention_mask=text_mask.float())
             byt5_embeddings = byt5_outputs[0]
@@ -300,12 +300,12 @@ class ByT5TextEncoder:
         negative_masks = []
 
         for prompt in prompt_list:
-            pos_emb, pos_mask = self._process_single_byt5_prompt(prompt, "cuda")
+            pos_emb, pos_mask = self._process_single_byt5_prompt(prompt, self.device)
             positive_embeddings.append(pos_emb)
             positive_masks.append(pos_mask)
 
             if self.enable_cfg:  # TODO: 把cfg拆出去，更适合并行
-                neg_emb, neg_mask = self._process_single_byt5_prompt("", "cuda")
+                neg_emb, neg_mask = self._process_single_byt5_prompt("", self.device)
                 negative_embeddings.append(neg_emb)
                 negative_masks.append(neg_mask)
 
@@ -327,8 +327,8 @@ class ByT5TextEncoder:
     @torch.no_grad()
     def infer(self, prompts):
         if self.cpu_offload:
-            self.byt5_model = self.byt5_model.to("cuda")
-            self.byt5_mapper = self.byt5_mapper.to("cuda")
+            self.byt5_model = self.byt5_model.to(self.device)
+            self.byt5_mapper = self.byt5_mapper.to(self.device)
         byt5_embeddings, byt5_masks = self._prepare_byt5_embeddings(prompts)
         byt5_features = self.byt5_mapper(byt5_embeddings.to(torch.bfloat16))
         if self.cpu_offload:

@@ -122,7 +122,6 @@ class WanRunner(DefaultRunner):
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
-            run_device=self.run_device,
             device=t5_device,
             checkpoint_path=t5_original_ckpt,
             tokenizer_path=tokenizer_path,
