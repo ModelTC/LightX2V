@@ -1,0 +1,16 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": 5,
+    "sample_shift": 5,
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_granularity": "model",
+    "dit_quantized": true,
+    "dit_quant_scheme": "gguf-Q4_K_S"
+}
