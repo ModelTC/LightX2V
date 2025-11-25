@@ -294,7 +294,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.bias_cuda_buffer = weight_dict[self.bias_name].cuda()
             else:
                 device = weight_dict[self.bias_name].device
-                if device.type == "cuda":
+                if device.type in ["cuda", "mlu", "npu"]:
                     self.bias = weight_dict[self.bias_name]
                 elif device.type == "cpu":
                     bias_shape = weight_dict[self.bias_name].shape
@@ -360,7 +360,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name]
                 self.weight_scale = weight_dict[self.weight_scale_name]
             elif device.type == "cpu":
@@ -385,7 +385,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale = self.weight.to(device), self.weight_scale.to(device)
         else:
             device = weight_dict[self.weight_name].device
-            if device.type == "cuda":
+            if device.type in ["cuda", "mlu", "npu"]:
                 self.weight = weight_dict[self.weight_name]
                 self.weight_scale = weight_dict[self.weight_scale_name]
             elif device.type == "cpu":
@@ -410,7 +410,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         weight_global_scale = weight_dict[f"{self.weight_name}_global_scale"]
         alpha = 1.0 / (input_global_scale * weight_global_scale)
 
-        if device.type == "cuda":
+        if device.type in ["cuda", "mlu", "npu"]:
             self.weight = weight_dict[self.weight_name]
             self.weight_scale = weight_dict[self.weight_scale_name]
             self.input_global_scale = input_global_scale
