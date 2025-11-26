@@ -230,7 +230,7 @@ class TorchrunInferenceWorker:
             return True
 
         except Exception as e:
-            logger.error(f"Rank {self.rank} initialization failed: {str(e)}")
+            logger.exception(f"Rank {self.rank} initialization failed: {str(e)}")
             return False
 
     async def process_request(self, task_data: Dict[str, Any]) -> Dict[str, Any]:

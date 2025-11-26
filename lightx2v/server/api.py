@@ -351,7 +351,6 @@ class ApiServer:
         task_id = task_info.task_id
         message = task_info.message
 
-
         lock_acquired = task_manager.acquire_processing_lock(task_id, timeout=1)
         if not lock_acquired:
             logger.error(f"Task {task_id} failed to acquire processing lock")
