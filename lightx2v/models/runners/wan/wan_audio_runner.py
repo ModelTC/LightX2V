@@ -892,7 +892,7 @@ class Wan22AudioRunner(WanAudioRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(self.config.get("run_device", "cuda"))
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,
@@ -909,7 +909,7 @@ class Wan22AudioRunner(WanAudioRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(self.config.get("run_device", "cuda"))
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,

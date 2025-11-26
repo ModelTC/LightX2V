@@ -252,7 +252,7 @@ class AudioAdapter(nn.Module):
         quantized: bool = False,
         quant_scheme: str = None,
         cpu_offload: bool = False,
-        device=torch.device("cuda"),
+        device=torch.device("cpu"),
     ):
         super().__init__()
         self.cpu_offload = cpu_offload
