@@ -4,27 +4,17 @@ from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
 
 from ..module_io import GridOutput, WanPreInferModuleOutput
-from ..utils import rope_params, sinusoidal_embedding_1d
+from ..utils import sinusoidal_embedding_1d
 
 
 class WanAudioPreInfer(WanPreInfer):
     def __init__(self, config):
         super().__init__(config)
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
-        d = config["dim"] // config["num_heads"]
         self.config = config
         self.task = config["task"]
-        self.freqs = torch.cat(
-            [
-                rope_params(1024, d - 4 * (d // 6)),
-                rope_params(1024, 2 * (d // 6)),
-                rope_params(1024, 2 * (d // 6)),
-            ],
-            dim=1,
-        ).to(torch.device(self.run_device))
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
-        self.rope_t_dim = d // 2 - 2 * (d // 6)
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
@@ -65,14 +55,14 @@ class WanAudioPreInfer(WanPreInfer):
         x = weights.patch_embedding.apply(x.unsqueeze(0))
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
-        seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
+        # seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
 
         y = weights.patch_embedding.apply(y.unsqueeze(0))
         y = y.flatten(2).transpose(1, 2).contiguous()
         x = torch.cat([x, y], dim=1).squeeze(0)
 
         ####for r2v # zero temporl component corresponding to ref embeddings
-        self.freqs[grid_sizes_t:, : self.rope_t_dim] = 0
+        # self.freqs[grid_sizes_t:, : self.rope_t_dim] = 0
         grid_sizes_t += 1
 
         person_mask_latens = inputs["person_mask_latens"]
@@ -126,8 +116,6 @@ class WanAudioPreInfer(WanPreInfer):
             grid_sizes=grid_sizes,
             x=x,
             embed0=embed0.squeeze(0),
-            seq_lens=seq_lens,
-            freqs=self.freqs,
             context=context,
             adapter_args={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
         )
