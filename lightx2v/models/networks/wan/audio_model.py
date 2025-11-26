@@ -22,8 +22,9 @@ class WanAudioModel(WanModel):
 
     def __init__(self, model_path, config, device):
         self.config = config
+        self.run_device = self.config.get("run_device", "cuda")
+        self._load_adapter_ckpt()
         super().__init__(model_path, config, device)
-        self._load_adapter_ckpt()  # depend on run_device
 
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
