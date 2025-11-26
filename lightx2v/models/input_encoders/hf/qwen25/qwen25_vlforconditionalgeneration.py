@@ -180,12 +180,9 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         if self.cpu_offload:
             self.text_encoder.to(torch.device("cpu"))
-            if "mlu" in str(self.device):
-                torch.mlu.empty_cache()
-            elif "cuda" in str(self.device):
-                torch.cuda.empty_cache()
-            elif "npu" in str(self.device):
-                torch.npu.empty_cache()
+            if hasattr(torch, self.config.get("run_device", "cuda")):
+                torch_module = getattr(torch, self.config.get("run_device", "cuda"))
+                torch_module.empty_cache()
             gc.collect()
 
         return prompt_embeds, prompt_embeds_mask, image_info
