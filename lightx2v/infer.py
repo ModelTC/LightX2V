@@ -2,6 +2,7 @@ import argparse
 
 import torch
 import torch.distributed as dist
+from torch.distributed import ProcessGroupNCCL
 from loguru import logger
 
 from lightx2v.common.ops import *
@@ -100,7 +101,9 @@ def main():
     if config["parallel"]:
         run_device = config.get("run_device", "cuda")
         if "cuda" in run_device:
-            dist.init_process_group(backend="nccl")
+            pg_options = ProcessGroupNCCL.Options()
+            pg_options.is_high_priority_stream = True
+            dist.init_process_group(backend="nccl", pg_options=pg_options)
             torch.cuda.set_device(dist.get_rank())
         elif "mlu" in run_device:
             dist.init_process_group(backend="cncl")

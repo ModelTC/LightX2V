@@ -12,8 +12,8 @@ class WeightAsyncStreamManager(object):
     def __init__(self, offload_granularity):
         self.offload_granularity = offload_granularity
         self.init_stream = torch.cuda.Stream(priority=0)
-        self.cuda_load_stream = torch.cuda.Stream(priority=0)
-        self.compute_stream = torch.cuda.Stream(priority=-1)
+        self.cuda_load_stream = torch.cuda.Stream(priority=1)
+        self.compute_stream = torch.cuda.Stream(priority=1)
 
     def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
         if self.offload_granularity == "block":

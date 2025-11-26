@@ -31,8 +31,10 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
         else:
             self.seq_p_group = None
+            elf.seq_p_fp8_comm = False
         self.infer_func = self.infer_without_offload
 
     def _calculate_q_k_len(self, q, k_lens):
@@ -174,6 +176,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
                 model_cls=self.config["model_cls"],
             )
         else:

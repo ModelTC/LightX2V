@@ -170,6 +170,25 @@ class FloatQuantizer(BaseQuantizer):
         return tensor
 
 
+# 导入 VLLM 的量化函数
+
+try:
+    from vllm import _custom_ops as ops
+except ImportError:
+    ops = None
+
+def quant_fp8_vllm(input_tensor):
+    input_tensor_fp8, input_tensor_scale = ops.scaled_fp8_quant(
+        input_tensor,
+        scale=None,
+        scale_ub=None,
+        use_per_token_if_dynamic=True
+    )
+    return input_tensor_fp8, input_tensor_scale
+
+def dequant_fp8_vllm(input_tensor_fp8, input_tensor_scale, dtype):
+    return input_tensor_fp8.to(dtype) * input_tensor_scale.to(dtype)
+
 if __name__ == "__main__":
     weight = torch.randn(4096, 4096, dtype=torch.bfloat16).cuda()
     quantizer = IntegerQuantizer(4, False, "per_group", group_size=128)
@@ -194,3 +213,13 @@ if __name__ == "__main__":
     logger.info(f"realq_weight = {realq_weight}, {realq_weight.shape}")
     logger.info(f"scales = {scales}, {scales.shape}")
     logger.info(f"zeros = {zeros}")
+
+    input_tensor = torch.randn(4096, 4096, dtype=torch.bfloat16).cuda()
+    input_tensor_fp8, input_tensor_scale = quant_fp8_vllm(input_tensor)
+    dequant_tensor = dequant_fp8_vllm(input_tensor_fp8, input_tensor_scale, input_tensor.dtype)
+    logger.info(input_tensor)
+    logger.info(dequant_tensor)
+    logger.info(f"cosine vllm fp8 quant/dequant = {torch.cosine_similarity(input_tensor.view(1, -1).to(torch.float64), dequant_tensor.view(1, -1).to(torch.float64))}")
+
+
+
