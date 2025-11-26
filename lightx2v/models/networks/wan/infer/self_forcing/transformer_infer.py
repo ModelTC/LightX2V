@@ -50,6 +50,9 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         self.infer_func = self.infer_with_kvcache
 
+    def get_scheduler_values(self):
+        pass
+
     def _initialize_kv_cache(self, dtype, device):
         """
         Initialize a Per-GPU KV cache for the Wan model.
