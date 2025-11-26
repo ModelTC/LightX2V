@@ -7,14 +7,12 @@ from loguru import logger
 
 from .api import ApiServer
 from .config import server_config
-from .service import DistributedInferenceService
+from .services import DistributedInferenceService
 
 
 def run_server(args):
-    """Run server with torchrun support"""
     inference_service = None
     try:
-        # Get rank from environment (set by torchrun)
         rank = int(os.environ.get("LOCAL_RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", 1))
 
@@ -28,14 +26,12 @@ def run_server(args):
         if not server_config.validate():
             raise RuntimeError("Invalid server configuration")
 
-        # Initialize inference service
         inference_service = DistributedInferenceService()
         if not inference_service.start_distributed_inference(args):
             raise RuntimeError("Failed to start distributed inference service")
         logger.info(f"Rank {rank}: Inference service started successfully")
 
         if rank == 0:
-            # Only rank 0 runs the FastAPI server
             cache_dir = Path(server_config.cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -47,7 +43,6 @@ def run_server(args):
             logger.info(f"Starting FastAPI server on {server_config.host}:{server_config.port}")
             uvicorn.run(app, host=server_config.host, port=server_config.port, log_level="info")
         else:
-            # Non-rank-0 processes run the worker loop
             logger.info(f"Rank {rank}: Starting worker loop")
             import asyncio
 

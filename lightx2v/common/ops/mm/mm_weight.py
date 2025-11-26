@@ -4,6 +4,8 @@ from abc import ABCMeta, abstractmethod
 import torch
 
 from lightx2v.utils.envs import *
+from lightx2v.utils.ggml_tensor import GGMLTensor
+from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tensor
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
@@ -969,21 +971,159 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         return output_tensor
 
 
-class MMWeightGGUFTemplate(MMWeightQuantTemplate):
-    TORCH_COMPATIBLE_QTYPES = (None, gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16)
-
+class MMWeightGGUFTemplate(MMWeightTemplate):
     def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
         super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
 
-    def dequantize_func(self):
-        # TODO: implement dequantize_func
-        pass
+    def load(self, weight_dict):
+        assert not self.create_cuda_buffer, "GGUF Unsupported offload block"
+        self.weight = weight_dict[self.weight_name]
+
+        weight_shape = self.weight.shape
+        weight_dtype = self.weight.dtype
+
+        if isinstance(self.weight, GGMLTensor):
+            self.pin_weight = GGMLTensor.empty_pinned(weight_shape, orig_shape=self.weight.orig_shape, dtype=weight_dtype, gguf_type=self.weight.gguf_type)
+            self.pin_weight.copy_from(self.weight)
+        else:
+            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
+            self.pin_weight.copy_(weight_dict[self.weight_name])
+
+        if self.bias_name is not None:
+            self.bias = weight_dict[self.bias_name]
+            if isinstance(self.bias, GGMLTensor):
+                self.pin_bias = GGMLTensor.empty_pinned(self.bias.shape, orig_shape=self.bias.orig_shape, dtype=self.bias.dtype, gguf_type=self.bias.gguf_type)
+                self.pin_bias.copy_from(self.bias)
+            else:
+                self.pin_bias = torch.empty(self.bias.shape, pin_memory=True, dtype=self.bias.dtype)
+                self.pin_bias.copy_(weight_dict[self.bias_name])
+        else:
+            self.bias = None
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        if self.is_post_adapter:
+            assert adapter_block_index is not None
+            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
+        else:
+            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
+
+        if weight_name not in destination:
+            self.weight = None
+            return
+
+        self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
+
+        if self.bias_name is not None:
+            if self.is_post_adapter:
+                assert adapter_block_index is not None
+                bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
+            else:
+                bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
+            self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
+        else:
+            self.bias = None
+
+    def state_dict(self, destination=None):
+        if destination is None:
+            destination = {}
+        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
+        if self.bias_name is not None:
+            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
+
+        return destination
+
+    def get_weight(self, tensor, dtype):
+        if tensor is None:
+            return
+
+        device = tensor.device
+        weight = gguf_dequantize_tensor(tensor, dtype)
+        # prevent propagating custom tensor class
+        if isinstance(weight, GGMLTensor):
+            weight = torch.Tensor(weight)
+
+        return weight
+
+    def cast_bias_weight(self, input_tensor=None, dtype=None, device=None, bias_dtype=None):
+        if input_tensor is not None:
+            if dtype is None:
+                dtype = getattr(input_tensor, "dtype", torch.float32)
+
+        bias = None
+        if self.bias is not None:
+            bias = self.get_weight(self.bias, dtype)
+
+        weight = self.get_weight(self.weight, dtype)
+        return weight, bias
+
+    def apply(self, input_tensor):
+        weight, bias = self.cast_bias_weight(input_tensor)
+        return torch.nn.functional.linear(input_tensor, weight, bias)
 
 
-@MM_WEIGHT_REGISTER("W-gguf-Q4_K")
-class MMWeightGGUFQ4K(MMWeightGGUFTemplate):
-    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
-        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
+@MM_WEIGHT_REGISTER("gguf-BF16")
+class MMWeightGGUFBF16(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.BF16
+
+
+@MM_WEIGHT_REGISTER("gguf-Q8_0")
+class MMWeightGGUFQ80(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q8_0
+
+
+@MM_WEIGHT_REGISTER("gguf-Q6_K")
+class MMWeightGGUFQ6K(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q6_K
+
+
+@MM_WEIGHT_REGISTER("gguf-Q5_K_S")
+class MMWeightGGUFQ5KS(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q6_K
+
+
+@MM_WEIGHT_REGISTER("gguf-Q5_K_M")
+class MMWeightGGUFQ5KM(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q6_K
+
+
+@MM_WEIGHT_REGISTER("gguf-Q5_1")
+class MMWeightGGUFQ51(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q5_1
+
+
+@MM_WEIGHT_REGISTER("gguf-Q5_0")
+class MMWeightGGUFQ50(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q5_0
+
+
+@MM_WEIGHT_REGISTER("gguf-Q4_K_M")
+class MMWeightGGUFQ4KM(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q5_0
+
+
+@MM_WEIGHT_REGISTER("gguf-Q4_K_S")
+class MMWeightGGUFQ4KS(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q4_K
+
+
+@MM_WEIGHT_REGISTER("gguf-Q4_1")
+class MMWeightGGUFQ41(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q4_1
+
+
+@MM_WEIGHT_REGISTER("gguf-Q4_0")
+class MMWeightGGUFQ40(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q4_0
+
+
+@MM_WEIGHT_REGISTER("gguf-Q3_K_M")
+class MMWeightGGUFQ3KM(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q3_K
+
+
+@MM_WEIGHT_REGISTER("gguf-Q3_K_S")
+class MMWeightGGUFQ3KS(MMWeightGGUFTemplate):
+    qtype = gguf.GGMLQuantizationType.Q2_K
 
 
 @MM_WEIGHT_REGISTER("int4-g128-marlin")
