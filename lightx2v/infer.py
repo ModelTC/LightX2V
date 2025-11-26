@@ -71,9 +71,13 @@ def main():
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
-    parser.add_argument("--prev_section_info_path", type=str, default="", help="The path to input torch tensor file for audio-to-video (s2v) task containing previous generated video")
+    parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
 
     # [Warning] For vace task, need refactor.
+    parser.add_argument("--prev_section_info_path", type=str, default="", help="The path to input torch tensor file for audio-to-video (s2v) task containing previous generated video")
+    parser.add_argument("--frist_image_path", type=str, default="", help="The path to input image file for audio-to-video (s2v) task")
+
     parser.add_argument(
         "--src_ref_images",
         type=str,
@@ -118,6 +122,8 @@ def main():
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
+    # ==[Warning]
+
     args = parser.parse_args()
 
     seed_all(args.seed)

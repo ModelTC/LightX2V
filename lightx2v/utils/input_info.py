@@ -74,6 +74,7 @@ class S2VInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    frist_image_path: str = field(default_factory=str)
     audio_path: str = field(default_factory=str)
     prev_section_info_path: str = field(default_factory=str)
     audio_num: int = field(default_factory=int)
@@ -177,6 +178,7 @@ def set_input_info(args):
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
+            frist_image_path=getattr(args, "frist_image_path", ""),
             audio_path=args.audio_path,
             prev_section_info_path=args.prev_section_info_path,
             save_result_path=args.save_result_path,

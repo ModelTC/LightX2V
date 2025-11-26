@@ -537,7 +537,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
         if self.config.get("f2v_process", False):
             self.ref_img = img
+
         prev_video, prev_latent = self.load_tensor_file(self.input_info.prev_section_info_path)
+        frist_img = None
+        if self.input_info.frist_image_path:
+            frist_img, _, _ = self.read_image_input(self.input_info.frist_image_path)
+
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
@@ -547,8 +552,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.input_info.audio_num = audio_num
         self.input_info.with_mask = person_mask_latens is not None
         text_encoder_output = self.run_text_encoder(self.input_info)
+
+        prev_video, prev_latent = self.load_tensor_file(self.input_info.prev_section_info_path)
+
         torch.cuda.empty_cache()
         gc.collect()
+
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": {
@@ -560,24 +569,32 @@ class WanAudioRunner(WanRunner):  # type:ignore
             "person_mask_latens": person_mask_latens,
             "prev_video": prev_video,
             "prev_latent": prev_latent,
+            "frist_img": frist_img,
         }
 
-    def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
+    def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int, frist_img: Optional[torch.Tensor] = None) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
 
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
         prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=AI_DEVICE)
-
-        if prev_video is not None:
-            # Extract and process last frames
-            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(AI_DEVICE)
-            if self.config["model_cls"] != "wan2.2_audio" and not self.config.get("f2v_process", False):
-                last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
-            prev_frames[:, :, :prev_frame_length] = last_frames
+        last_frames = None
+        if prev_video is not None:  # prioritize prev_video
+            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
+            frame_slice = slice(0, prev_frame_length)
             prev_len = (prev_frame_length - 1) // 4 + 1
+        elif frist_img is not None:
+            frist_frame = frist_img.to(device)
+            last_frames = rearrange(frist_frame, "1 C H W -> 1 C 1 H W")
+            frame_slice = slice(0, 1)
+            prev_len = 1
         else:
             prev_len = 0
+
+        if last_frames is not None:
+            if self.config["model_cls"] != "wan2.2_audio" and not self.config.get("f2v_process", False):
+                last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
+            prev_frames[:, :, frame_slice] = last_frames
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_encoder = self.load_vae_encoder()
@@ -590,7 +607,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             metrics_labels=["WanAudioRunner"],
         ):
             if self.config["model_cls"] == "wan2.2_audio":
-                if prev_video is not None:
+                if prev_len > 0:
                     prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
                 else:
                     prev_latents = None
@@ -639,7 +656,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             self.prev_video = self.inputs.get("prev_video", None)
             self.prev_latent = self.inputs.get("prev_latent", None)
-            
+        
+        self.frist_img = self.inputs.get("frist_img", None)
         if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
@@ -685,7 +703,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 "prev_len": 0,
             }
         else:
-            self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=self.prev_frame_length)
+            self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.prev_video, prev_frame_length=self.prev_frame_length, frist_img=self.frist_img)
 
         # Reset scheduler for non-first segments
         if self.prev_video is not None or self.prev_latent is not None:
