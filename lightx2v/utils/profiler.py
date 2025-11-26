@@ -85,6 +85,8 @@ class _ProfilingContext:
             torch.cuda.synchronize()
         elif hasattr(torch, "mlu") and torch.mlu.is_available():
             torch.mlu.synchronize()
+        elif hasattr(torch, "npu") and torch.npu.is_available():
+            torch.npu.synchronize()
         return
 
 

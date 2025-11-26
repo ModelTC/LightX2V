@@ -144,7 +144,13 @@ def load_text_encoder(
                 continue
             new_w_dict[key.replace("model.", "")] = weight_dict[key]
         del weight_dict
-        torch.cuda.empty_cache()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif "mlu" in str(device):
+            torch.mlu.empty_cache()
+        elif "npu" in str(device):
+            torch.npu.empty_cache()
         gc.collect()
         text_encoder.load_state_dict(new_w_dict, assign=True)
 
@@ -545,7 +551,7 @@ class Qwen25VL_TextEncoder:
         self,
         text_len=1000,
         dtype=torch.float16,
-        device=torch.cuda.current_device(),
+        device=torch.device("cpu"),
         checkpoint_path=None,
         cpu_offload=False,
         qwen25vl_quantized=False,
@@ -583,20 +589,20 @@ class Qwen25VL_TextEncoder:
 
     def infer(self, texts):
         if self.cpu_offload:
-            self.text_encoder = self.text_encoder.to("cuda")
+            self.text_encoder = self.text_encoder.to(self.device)
         text_inputs = self.text_encoder.text2tokens(texts, data_type="video", max_length=self.text_len)
-        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device="cuda")
+        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=self.device)
         if self.cpu_offload:
             self.text_encoder = self.text_encoder.to("cpu")
         prompt_embeds = prompt_outputs.hidden_state
         attention_mask = prompt_outputs.attention_mask
 
         if attention_mask is not None:
-            attention_mask = attention_mask.cuda()
+            attention_mask = attention_mask.to(self.device)
             _, seq_len = attention_mask.shape
             attention_mask = attention_mask.repeat(1, self.num_videos_per_prompt)
             attention_mask = attention_mask.view(self.num_videos_per_prompt, seq_len)
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device="cuda")
+        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.device)
 
         seq_len = prompt_embeds.shape[1]
         # duplicate text embeddings for each generation per prompt, using mps friendly method

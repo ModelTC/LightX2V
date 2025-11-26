@@ -117,6 +117,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         elif hasattr(torch, "mlu") and torch.mlu.is_available():
             torch.mlu.synchronize()
             self.config["run_device"] = "mlu"
+        elif hasattr(torch, "npu") and torch.npu.is_available():
+            torch.npu.synchronize()
+            self.config["run_device"] = "npu"
 
 
 @ATTN_WEIGHT_REGISTER("ulysses-4090")

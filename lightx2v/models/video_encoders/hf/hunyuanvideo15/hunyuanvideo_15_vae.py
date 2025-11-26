@@ -184,7 +184,7 @@ def prepare_causal_attention_mask(n_frame: int, n_hw: int, dtype, device, batch_
         torch.Tensor: Causal attention mask.
     """
     seq_len = n_frame * n_hw
-    mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device="cuda")
+    mask = torch.full((seq_len, seq_len), float("-inf"), dtype=dtype, device=device)
     for i in range(seq_len):
         i_frame = i // n_hw
         mask[i, : (i_frame + 1) * n_hw] = 0

@@ -85,7 +85,9 @@ class QwenImageRunner(DefaultRunner):
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-        torch.cuda.empty_cache()
+        if hasattr(torch, self.config.get("run_device", "cuda")):
+            torch_module = getattr(torch, self.config.get("run_device", "cuda"))
+            torch_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -100,7 +102,7 @@ class QwenImageRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
-        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
         self.input_info.original_size.append(img_ori.size)
         return img, img_ori
 
@@ -119,8 +121,9 @@ class QwenImageRunner(DefaultRunner):
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
             image_encoder_output = self.run_vae_encoder(image=vae_image)
             image_encoder_output_list.append(image_encoder_output)
-
-        torch.cuda.empty_cache()
+        if hasattr(torch, self.config.get("run_device", "cuda")):
+            torch_module = getattr(torch, self.config.get("run_device", "cuda"))
+            torch_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -235,7 +238,9 @@ class QwenImageRunner(DefaultRunner):
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch.cuda.empty_cache()
+            if hasattr(torch, self.config.get("run_device", "cuda")):
+                torch_module = getattr(torch, self.config.get("run_device", "cuda"))
+                torch_module.empty_cache()
             gc.collect()
         return images
 
@@ -254,7 +259,9 @@ class QwenImageRunner(DefaultRunner):
         image.save(f"{input_info.save_result_path}")
 
         del latents, generator
-        torch.cuda.empty_cache()
+        if hasattr(torch, self.config.get("run_device", "cuda")):
+            torch_module = getattr(torch, self.config.get("run_device", "cuda"))
+            torch_module.empty_cache()
         gc.collect()
 
         # Return (images, audio) - audio is None for default runner

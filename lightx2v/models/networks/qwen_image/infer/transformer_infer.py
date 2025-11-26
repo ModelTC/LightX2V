@@ -111,7 +111,7 @@ def apply_attn(block_weight, hidden_states, encoder_hidden_states, image_rotary_
     if attn_type == "torch_sdpa":
         joint_hidden_states = block_weight.attn.calculate.apply(q=joint_query, k=joint_key, v=joint_value)
 
-    elif attn_type in ["flash_attn3", "sage_attn2", "mlu_flash_attn"]:
+    elif attn_type in ["flash_attn3", "sage_attn2", "mlu_flash_attn", "flash_attn2", "mlu_sage_attn"]:
         joint_query = joint_query.squeeze(0)
         joint_key = joint_key.squeeze(0)
         joint_value = joint_value.squeeze(0)

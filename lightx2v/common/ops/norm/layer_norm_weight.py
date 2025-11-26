@@ -32,7 +32,7 @@ class LNWeightTemplate(metaclass=ABCMeta):
             else:
                 if self.weight_name is not None:
                     device = weight_dict[self.weight_name].device
-                    if device.type == "cuda":
+                    if device.type in ["cuda", "mlu", "npu"]:
                         self.weight = weight_dict[self.weight_name]
                         if self.bias_name is not None:
                             self.bias = weight_dict[self.bias_name]

@@ -1330,7 +1330,9 @@ class WanVAE:
     def device_synchronize(
         self,
     ):
-        if "cuda" in str(self.run_device):
+        if "cuda" in str(self.device):
             torch.cuda.synchronize()
-        elif "mlu" in str(self.run_device):
+        elif "mlu" in str(self.device):
             torch.mlu.synchronize()
+        elif "npu" in str(self.device):
+            torch.npu.synchronize()
