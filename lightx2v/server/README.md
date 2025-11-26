@@ -2,7 +2,50 @@
 
 ## Overview
 
-The LightX2V server is a distributed video generation service built with FastAPI that processes image-to-video tasks using a multi-process architecture with GPU support. It implements a sophisticated task queue system with distributed inference capabilities for high-throughput video generation workloads.
+The LightX2V server is a distributed video/image generation service built with FastAPI that processes image-to-video and text-to-image tasks using a multi-process architecture with GPU support. It implements a sophisticated task queue system with distributed inference capabilities for high-throughput generation workloads.
+
+## Directory Structure
+
+```
+server/
+├── __init__.py
+├── __main__.py              # Entry point
+├── main.py                  # Server startup
+├── config.py                # Configuration
+├── task_manager.py          # Task management
+├── schema.py                # Data models (VideoTaskRequest, ImageTaskRequest)
+├── api/
+│   ├── __init__.py
+│   ├── router.py            # Main router aggregation
+│   ├── deps.py              # Dependency injection container
+│   ├── server.py            # ApiServer class
+│   ├── files.py             # /v1/files/*
+│   ├── service_routes.py    # /v1/service/*
+│   └── tasks/
+│       ├── __init__.py
+│       ├── common.py        # Common task operations
+│       ├── video.py         # POST /v1/tasks/video
+│       └── image.py         # POST /v1/tasks/image
+├── services/
+│   ├── __init__.py
+│   ├── file_service.py      # File service (unified download)
+│   ├── distributed_utils.py # Distributed manager
+│   ├── inference/
+│   │   ├── __init__.py
+│   │   ├── worker.py        # TorchrunInferenceWorker
+│   │   └── service.py       # DistributedInferenceService
+│   └── generation/
+│       ├── __init__.py
+│       ├── base.py          # Base generation service
+│       ├── video.py         # VideoGenerationService
+│       └── image.py         # ImageGenerationService
+├── media/
+│   ├── __init__.py
+│   ├── base.py              # MediaHandler base class
+│   ├── image.py             # ImageHandler
+│   └── audio.py             # AudioHandler
+└── metrics/                 # Prometheus metrics
+```
 
 ## Architecture
 
@@ -17,14 +60,16 @@ flowchart TB
         Router --> FileRoutes[File APIs]
         Router --> ServiceRoutes[Service Status APIs]
 
-        TaskRoutes --> CreateTask["POST /v1/tasks/ - Create Task"]
-        TaskRoutes --> CreateTaskForm["POST /v1/tasks/form - Form Create"]
+        TaskRoutes --> CreateVideoTask["POST /v1/tasks/video - Create Video Task"]
+        TaskRoutes --> CreateImageTask["POST /v1/tasks/image - Create Image Task"]
+        TaskRoutes --> CreateVideoTaskForm["POST /v1/tasks/video/form - Form Create Video"]
+        TaskRoutes --> CreateImageTaskForm["POST /v1/tasks/image/form - Form Create Image"]
         TaskRoutes --> ListTasks["GET /v1/tasks/ - List Tasks"]
-        TaskRoutes --> GetTaskStatus["GET /v1/tasks/id/status - Get Status"]
-        TaskRoutes --> GetTaskResult["GET /v1/tasks/id/result - Get Result"]
-        TaskRoutes --> StopTask["DELETE /v1/tasks/id - Stop Task"]
+        TaskRoutes --> GetTaskStatus["GET /v1/tasks/{id}/status - Get Status"]
+        TaskRoutes --> GetTaskResult["GET /v1/tasks/{id}/result - Get Result"]
+        TaskRoutes --> StopTask["DELETE /v1/tasks/{id} - Stop Task"]
 
-        FileRoutes --> DownloadFile["GET /v1/files/download/path - Download File"]
+        FileRoutes --> DownloadFile["GET /v1/files/download/{path} - Download File"]
 
         ServiceRoutes --> GetServiceStatus["GET /v1/service/status - Service Status"]
         ServiceRoutes --> GetServiceMetadata["GET /v1/service/metadata - Metadata"]
@@ -36,8 +81,8 @@ flowchart TB
         TaskStatus[Task Status]
         TaskResult[Task Result]
 
-        CreateTask --> TaskManager
-        CreateTaskForm --> TaskManager
+        CreateVideoTask --> TaskManager
+        CreateImageTask --> TaskManager
         TaskManager --> TaskQueue
         TaskManager --> TaskStatus
         TaskManager --> TaskResult
@@ -45,15 +90,22 @@ flowchart TB
 
     subgraph File Service
         FileService[File Service]
-        DownloadImage[Download Image]
-        DownloadAudio[Download Audio]
+        DownloadMedia[Download Media]
         SaveFile[Save File]
         GetOutputPath[Get Output Path]
 
-        FileService --> DownloadImage
-        FileService --> DownloadAudio
+        FileService --> DownloadMedia
         FileService --> SaveFile
         FileService --> GetOutputPath
+    end
+
+    subgraph Media Handlers
+        MediaHandler[MediaHandler Base]
+        ImageHandler[ImageHandler]
+        AudioHandler[AudioHandler]
+
+        MediaHandler --> ImageHandler
+        MediaHandler --> AudioHandler
     end
 
     subgraph Processing Thread
@@ -65,17 +117,19 @@ flowchart TB
         ProcessingThread --> ProcessTask
     end
 
-    subgraph Video Generation Service
-        VideoService[Video Service]
-        GenerateVideo[Generate Video]
+    subgraph Generation Services
+        VideoService[VideoGenerationService]
+        ImageService[ImageGenerationService]
+        BaseService[BaseGenerationService]
 
-        VideoService --> GenerateVideo
+        BaseService --> VideoService
+        BaseService --> ImageService
     end
 
     subgraph Distributed Inference Service
-        InferenceService[Distributed Inference Service]
+        InferenceService[DistributedInferenceService]
         SubmitTask[Submit Task]
-        Worker[Inference Worker Node]
+        Worker[TorchrunInferenceWorker]
         ProcessRequest[Process Request]
         RunPipeline[Run Inference Pipeline]
 
@@ -85,15 +139,16 @@ flowchart TB
         ProcessRequest --> RunPipeline
     end
 
-    %% ====== Connect Modules ======
     TaskQueue --> ProcessingThread
     ProcessTask --> VideoService
-    GenerateVideo --> InferenceService
+    ProcessTask --> ImageService
+    VideoService --> InferenceService
+    ImageService --> InferenceService
     GetTaskResult --> FileService
     DownloadFile --> FileService
     VideoService --> FileService
-    InferenceService --> TaskManager
-    TaskManager --> TaskStatus
+    ImageService --> FileService
+    FileService --> MediaHandler
 ```
 
 ## Task Processing Flow
@@ -104,13 +159,13 @@ sequenceDiagram
     participant API as API Server
     participant TM as TaskManager
     participant PT as Processing Thread
-    participant VS as VideoService
+    participant GS as GenerationService<br/>(Video/Image)
     participant FS as FileService
     participant DIS as DistributedInferenceService
     participant TIW0 as TorchrunInferenceWorker<br/>(Rank 0)
     participant TIW1 as TorchrunInferenceWorker<br/>(Rank 1..N)
 
-    C->>API: POST /v1/tasks<br/>(Create Task)
+    C->>API: POST /v1/tasks/video<br/>or /v1/tasks/image
     API->>TM: create_task()
     TM->>TM: Generate task_id
     TM->>TM: Add to queue<br/>(status: PENDING)
@@ -124,31 +179,30 @@ sequenceDiagram
     PT->>TM: acquire_processing_lock()
     PT->>TM: start_task()<br/>(status: PROCESSING)
 
-    PT->>VS: generate_video_with_stop_event()
+    PT->>PT: Select service by task type
+    PT->>GS: generate_with_stop_event()
 
     alt Image is URL
-        VS->>FS: download_image()
+        GS->>FS: download_media(url, "image")
         FS->>FS: HTTP download<br/>with retry
-        FS-->>VS: image_path
+        FS-->>GS: image_path
     else Image is Base64
-        VS->>FS: save_base64_image()
-        FS-->>VS: image_path
+        GS->>GS: save_base64_image()
+        GS-->>GS: image_path
     else Image is local path
-        VS->>VS: use existing path
+        GS->>GS: use existing path
     end
 
-    alt Audio is URL
-        VS->>FS: download_audio()
+    alt Audio is URL (Video only)
+        GS->>FS: download_media(url, "audio")
         FS->>FS: HTTP download<br/>with retry
-        FS-->>VS: audio_path
+        FS-->>GS: audio_path
     else Audio is Base64
-        VS->>FS: save_base64_audio()
-        FS-->>VS: audio_path
-    else Audio is local path
-        VS->>VS: use existing path
+        GS->>GS: save_base64_audio()
+        GS-->>GS: audio_path
     end
 
-    VS->>DIS: submit_task_async(task_data)
+    GS->>DIS: submit_task_async(task_data)
     DIS->>TIW0: process_request(task_data)
 
     Note over TIW0,TIW1: Torchrun-based Distributed Processing
@@ -180,8 +234,8 @@ sequenceDiagram
     TIW0->>DIS: Return result (only rank 0)
     TIW1->>TIW1: Return None (non-rank 0)
 
-    DIS-->>VS: TaskResponse
-    VS-->>PT: TaskResponse
+    DIS-->>GS: TaskResponse
+    GS-->>PT: TaskResponse
 
     PT->>TM: complete_task()<br/>(status: COMPLETED)
     PT->>TM: release_processing_lock()
@@ -195,8 +249,8 @@ sequenceDiagram
     C->>API: GET /v1/tasks/{task_id}/result
     API->>TM: get_task_status()
     API->>FS: stream_file_response()
-    FS-->>API: Video Stream
-    API-->>C: Video File
+    FS-->>API: Video/Image Stream
+    API-->>C: Output File
 ```
 
 ## Task States
@@ -214,6 +268,70 @@ stateDiagram-v2
     CANCELLED --> [*]
 ```
 
+## API Endpoints
+
+### Task APIs
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/tasks/video` | POST | Create video generation task |
+| `/v1/tasks/video/form` | POST | Create video task with form data |
+| `/v1/tasks/image` | POST | Create image generation task |
+| `/v1/tasks/image/form` | POST | Create image task with form data |
+| `/v1/tasks` | GET | List all tasks |
+| `/v1/tasks/queue/status` | GET | Get queue status |
+| `/v1/tasks/{task_id}/status` | GET | Get task status |
+| `/v1/tasks/{task_id}/result` | GET | Get task result (stream) |
+| `/v1/tasks/{task_id}` | DELETE | Cancel task |
+| `/v1/tasks/all/running` | DELETE | Cancel all running tasks |
+
+### File APIs
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/files/download/{path}` | GET | Download output file |
+
+### Service APIs
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/service/status` | GET | Get service status |
+| `/v1/service/metadata` | GET | Get service metadata |
+
+## Request Models
+
+### VideoTaskRequest
+
+```python
+class VideoTaskRequest(BaseTaskRequest):
+    num_fragments: int = 1
+    target_video_length: int = 81
+    audio_path: str = ""
+    video_duration: int = 5
+    talk_objects: Optional[list[TalkObject]] = None
+```
+
+### ImageTaskRequest
+
+```python
+class ImageTaskRequest(BaseTaskRequest):
+    aspect_ratio: str = "16:9"
+```
+
+### BaseTaskRequest (Common Fields)
+
+```python
+class BaseTaskRequest(BaseModel):
+    task_id: str  # auto-generated
+    prompt: str = ""
+    use_prompt_enhancer: bool = False
+    negative_prompt: str = ""
+    image_path: str = ""  # URL, base64, or local path
+    save_result_path: str = ""
+    infer_steps: int = 5
+    seed: int  # auto-generated
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -223,7 +341,8 @@ see `lightx2v/server/config.py`
 ### Command Line Arguments
 
 ```bash
-python -m lightx2v.server.main \
+# Single GPU
+python -m lightx2v.server \
     --model_path /path/to/model \
     --model_cls wan2.1_distill \
     --task i2v \
@@ -233,14 +352,14 @@ python -m lightx2v.server.main \
 ```
 
 ```bash
-python -m lightx2v.server.main \
+# Multi-GPU with torchrun
+torchrun --nproc_per_node=2 -m lightx2v.server \
     --model_path /path/to/model \
     --model_cls wan2.1_distill \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \
-    --config_json /path/to/xxx_dist_config.json \
-    --nproc_per_node 2
+    --config_json /path/to/xxx_dist_config.json
 ```
 
 ## Key Features
@@ -269,6 +388,14 @@ python -m lightx2v.server.main \
 - **Streaming responses** for large video files
 - **Cache management** with automatic cleanup
 - **File validation** and format detection
+- **Unified media handling** via MediaHandler pattern
+
+### 4. Separate Video/Image Endpoints
+
+- **Dedicated endpoints** for video and image generation
+- **Type-specific request models** (VideoTaskRequest, ImageTaskRequest)
+- **Automatic service routing** based on task type
+- **Backward compatible** with legacy `/v1/tasks` endpoint
 
 ## Performance Considerations
 

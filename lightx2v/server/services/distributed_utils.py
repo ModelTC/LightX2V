@@ -17,20 +17,15 @@ class DistributedManager:
     CHUNK_SIZE = 1024 * 1024
 
     def init_process_group(self) -> bool:
-        """Initialize process group using torchrun environment variables"""
         try:
-            # torchrun sets these environment variables automatically
             self.rank = int(os.environ.get("LOCAL_RANK", 0))
             self.world_size = int(os.environ.get("WORLD_SIZE", 1))
 
             if self.world_size > 1:
-                # torchrun handles backend, init_method, rank, and world_size
-                # We just need to call init_process_group without parameters
                 backend = "nccl" if torch.cuda.is_available() else "gloo"
                 dist.init_process_group(backend=backend, init_method="env://")
                 logger.info(f"Setup backend: {backend}")
 
-                # Set CUDA device for this rank
                 if torch.cuda.is_available():
                     torch.cuda.set_device(self.rank)
                     self.device = f"cuda:{self.rank}"
