@@ -10,8 +10,6 @@ class WanAudioPostInfer(WanPostInfer):
 
     @torch.no_grad()
     def infer(self, x, pre_infer_out):
-        x = x[: pre_infer_out.seq_lens[0]]
-
         t, h, w = pre_infer_out.grid_sizes.tuple
         grid_sizes = (t - 1, h, w)
 
