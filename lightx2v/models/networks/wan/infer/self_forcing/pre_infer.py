@@ -1,6 +1,8 @@
+from dataclasses import dataclass
+
 import torch
 
-from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
 
@@ -22,6 +24,17 @@ def rope_params(max_seq_len, dim, theta=10000):
     freqs = torch.outer(torch.arange(max_seq_len), 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float64).div(dim)))
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
+
+
+@dataclass
+class WanSFPreInferModuleOutput:
+    embed: torch.Tensor
+    grid_sizes: GridOutput
+    x: torch.Tensor
+    embed0: torch.Tensor
+    seq_lens: torch.Tensor
+    freqs: torch.Tensor
+    context: torch.Tensor
 
 
 class WanSFPreInfer(WanPreInfer):
@@ -87,7 +100,7 @@ class WanSFPreInfer(WanPreInfer):
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
-        return WanPreInferModuleOutput(
+        return WanSFPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
             x=x.squeeze(0),

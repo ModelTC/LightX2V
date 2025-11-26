@@ -16,8 +16,6 @@ class WanPreInferModuleOutput:
     grid_sizes: GridOutput
     x: torch.Tensor
     embed0: torch.Tensor
-    seq_lens: torch.Tensor
-    freqs: torch.Tensor
     context: torch.Tensor
     adapter_args: Dict[str, Any] = field(default_factory=dict)
     conditional_dict: Dict[str, Any] = field(default_factory=dict)
