@@ -2,8 +2,8 @@ import argparse
 
 import torch
 import torch.distributed as dist
-from torch.distributed import ProcessGroupNCCL
 from loguru import logger
+from torch.distributed import ProcessGroupNCCL
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
