@@ -44,7 +44,7 @@ class WanModel(CompiledMethodsMixin):
         super().__init__()
         self.model_path = model_path
         self.config = config
-        self.run_device = self.config.get("run_device", "cuda")
+        self.device = self.config.get("run_device", "cuda")
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.model_type = model_type

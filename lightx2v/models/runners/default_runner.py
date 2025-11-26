@@ -205,7 +205,7 @@ class DefaultRunner(BaseRunner):
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
-        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
         self.input_info.original_size = img_ori.size
         return img, img_ori
 
