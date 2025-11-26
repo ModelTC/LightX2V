@@ -1,7 +1,7 @@
 import torch
 
-from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
-from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import WanSFPreInfer, sinusoidal_embedding_1d
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
+from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import WanSFPreInfer, WanSFPreInferModuleOutput, sinusoidal_embedding_1d
 from lightx2v.utils.envs import *
 
 
@@ -86,7 +86,7 @@ class WanMtxg2PreInfer(WanSFPreInfer):
         context_lens = None
         context = self.img_emb(weights, visual_context)
 
-        return WanPreInferModuleOutput(
+        return WanSFPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
             x=x.squeeze(0),
