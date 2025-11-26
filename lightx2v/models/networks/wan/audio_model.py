@@ -50,7 +50,6 @@ class WanAudioModel(WanModel):
         if not adapter_offload:
             if not dist.is_initialized() or not load_from_rank0:
                 for key in self.adapter_weights_dict:
-                    print("-------------> key: ", key, self.adapter_weights_dict[key].device)
                     self.adapter_weights_dict[key] = self.adapter_weights_dict[key].to(torch.device(self.run_device))
 
     def _init_infer_class(self):
