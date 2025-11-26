@@ -14,6 +14,8 @@ class WanScheduler(BaseScheduler):
         self.infer_steps = self.config["infer_steps"]
         self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
+        self.run_device = self.config.get("run_device", "cuda")
+        self.patch_size = (1, 2, 2)
         self.shift = 1
         self.num_train_timesteps = 1000
         self.disable_corrector = []
@@ -21,6 +23,24 @@ class WanScheduler(BaseScheduler):
         self.noise_pred = None
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
+        self.head_size = self.config["dim"] // self.config["num_heads"]
+        self.freqs = torch.cat(
+            [
+                self.rope_params(1024, self.head_size - 4 * (self.head_size // 6)),
+                self.rope_params(1024, 2 * (self.head_size // 6)),
+                self.rope_params(1024, 2 * (self.head_size // 6)),
+            ],
+            dim=1,
+        ).to(torch.device(self.run_device))
+
+    def rope_params(self, max_seq_len, dim, theta=10000):
+        assert dim % 2 == 0
+        freqs = torch.outer(
+            torch.arange(max_seq_len),
+            1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)),
+        )
+        freqs = torch.polar(torch.ones_like(freqs), freqs)
+        return freqs
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
@@ -46,6 +66,31 @@ class WanScheduler(BaseScheduler):
         self.sigma_max = self.sigmas[0].item()
 
         self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
+
+        self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
+
+    def prepare_cos_sin(self, grid_sizes):
+        c = self.head_size // 2
+        freqs = self.freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+        f, h, w = grid_sizes
+        seq_len = f * h * w
+        cos_sin = torch.cat(
+            [
+                freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+            ],
+            dim=-1,
+        )
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            cos_sin = cos_sin.reshape(seq_len, -1)
+            # Extract cos and sin parts separately and concatenate
+            cos_half = cos_sin.real.contiguous()
+            sin_half = cos_sin.imag.contiguous()
+            cos_sin = torch.cat([cos_half, sin_half], dim=-1)
+        else:
+            cos_sin = cos_sin.reshape(seq_len, 1, -1)
+        return cos_sin
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
         self.generator = torch.Generator(device=self.device).manual_seed(seed)

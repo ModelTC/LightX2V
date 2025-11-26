@@ -1,7 +1,53 @@
 import torch
 import torch.distributed as dist
+from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
 
 from lightx2v.utils.envs import *
+
+
+def apply_wan_rope_with_torch(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+):
+    n = xq.size(1)
+    seq_len = cos_sin_cache.size(0)
+
+    xq = torch.view_as_complex(xq[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
+    xk = torch.view_as_complex(xk[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
+    # Apply rotary embedding
+    xq = torch.view_as_real(xq * cos_sin_cache).flatten(2)
+    xk = torch.view_as_real(xk * cos_sin_cache).flatten(2)
+    xq = torch.cat([xq, xq[seq_len:]])
+    xk = torch.cat([xk, xk[seq_len:]])
+
+    return xq.to(GET_DTYPE()), xk.to(GET_DTYPE())
+
+
+def apply_wan_rope_with_flashinfer(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+):
+    L, H, D = xq.shape
+
+    query = xq.reshape(L, H * D).contiguous()
+    key = xk.reshape(L, H * D).contiguous()
+
+    positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
+
+    apply_rope_with_cos_sin_cache_inplace(
+        positions=positions,
+        query=query,
+        key=key,
+        head_size=D,
+        cos_sin_cache=cos_sin_cache,
+        is_neox=False,
+    )
+
+    xq_out = query.view(L, H, D)
+    xk_out = key.view(L, H, D)
+    return xq_out, xk_out
 
 
 def compute_freqs(c, grid_sizes, freqs):

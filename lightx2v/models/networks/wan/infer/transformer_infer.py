@@ -1,11 +1,9 @@
-from functools import partial
-
 import torch
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 
-from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_dist
+from .utils import apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
 
 
 class WanTransformerInfer(BaseTransformerInfer):
@@ -20,11 +18,15 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["dim"] // config["num_heads"]
         self.window_size = config.get("window_size", (-1, -1))
         self.parallel_attention = None
-        if config.get("rotary_chunk", False):
-            chunk_size = config.get("rotary_chunk_size", 100)
-            self.apply_rotary_emb_func = partial(apply_rotary_emb_chunk, chunk_size=chunk_size)
+        # if config.get("rotary_chunk", False):
+        #     chunk_size = config.get("rotary_chunk_size", 100)
+        #     self.apply_rotary_emb_func = partial(apply_rotary_emb_chunk, chunk_size=chunk_size)
+        # else:
+        #     self.apply_rotary_emb_func = apply_rotary_emb
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            self.apply_rope_func = apply_wan_rope_with_flashinfer
         else:
-            self.apply_rotary_emb_func = apply_rotary_emb
+            self.apply_rope_func = apply_wan_rope_with_torch
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
@@ -35,21 +37,20 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
         self.infer_func = self.infer_without_offload
 
+        self.cos_sin = None
+
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
         cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
         cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
         return cu_seqlens_q, cu_seqlens_k
 
-    def compute_freqs(self, q, grid_sizes, freqs):
-        if self.config["seq_parallel"]:
-            freqs_i = compute_freqs_dist(q.size(0), q.size(2) // 2, grid_sizes, freqs, self.seq_p_group)
-        else:
-            freqs_i = compute_freqs(q.size(2) // 2, grid_sizes, freqs)
-        return freqs_i
+    def get_scheduler_values(self):
+        self.cos_sin = self.scheduler.cos_sin
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
+        self.get_scheduler_values()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
@@ -97,10 +98,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         )
         y_out = self.infer_self_attn(
             block.compute_phases[0],
-            pre_infer_out.grid_sizes.tuple,
             x,
-            pre_infer_out.seq_lens,
-            pre_infer_out.freqs,
             shift_msa,
             scale_msa,
         )
@@ -129,7 +127,8 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
-    def infer_self_attn(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
+    def infer_self_attn(self, phase, x, shift_msa, scale_msa):
+        cos_sin = self.cos_sin
         if hasattr(phase, "smooth_norm1_weight"):
             norm1_weight = (1 + scale_msa.squeeze()) * phase.smooth_norm1_weight.tensor
             norm1_bias = shift_msa.squeeze() * phase.smooth_norm1_bias.tensor
@@ -153,16 +152,13 @@ class WanTransformerInfer(BaseTransformerInfer):
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
 
-        freqs_i = self.compute_freqs(q, grid_sizes, freqs)
+        q, k = self.apply_rope_func(q, k, cos_sin)
 
-        q = self.apply_rotary_emb_func(q, freqs_i)
-        k = self.apply_rotary_emb_func(k, freqs_i)
-
-        k_lens = torch.empty_like(seq_lens).fill_(freqs_i.size(0))
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
+        img_qkv_len = q.shape[0]
+        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
 
         if self.clean_cuda_cache:
-            del freqs_i, norm1_out, norm1_weight, norm1_bias
+            del norm1_out, norm1_weight, norm1_bias
             torch.cuda.empty_cache()
 
         if self.config["seq_parallel"]:
@@ -170,8 +166,8 @@ class WanTransformerInfer(BaseTransformerInfer):
                 q=q,
                 k=k,
                 v=v,
-                img_qkv_len=q.shape[0],
-                cu_seqlens_qkv=cu_seqlens_q,
+                img_qkv_len=img_qkv_len,
+                cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
                 model_cls=self.config["model_cls"],
@@ -181,10 +177,10 @@ class WanTransformerInfer(BaseTransformerInfer):
                 q=q,
                 k=k,
                 v=v,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
-                max_seqlen_q=q.size(0),
-                max_seqlen_kv=k.size(0),
+                cu_seqlens_q=cu_seqlens_qkv,
+                cu_seqlens_kv=cu_seqlens_qkv,
+                max_seqlen_q=img_qkv_len,
+                max_seqlen_kv=img_qkv_len,
                 model_cls=self.config["model_cls"],
             )
 
