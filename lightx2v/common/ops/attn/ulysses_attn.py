@@ -1,8 +1,8 @@
 import torch
 import torch.distributed as dist
 
+from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from lightx2v.utils.quant_utils import quant_fp8_vllm, dequant_fp8_vllm
 
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq, all2all_seq2head
@@ -141,7 +141,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     ):
         if torch.cuda.is_available():
             # no need to sync between comm and comp
-            #torch.cuda.synchronize()
+            # torch.cuda.synchronize()
             self.config["run_device"] = "cuda"
         elif hasattr(torch, "mlu") and torch.mlu.is_available():
             torch.mlu.synchronize()

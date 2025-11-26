@@ -56,7 +56,7 @@ class RingAttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
-        assert use_fp8_comm == False, "RingAttn can't support fp8 comm now."
+        assert not use_fp8_comm, "RingAttn can't support fp8 comm now."
 
         # 获取当前进程的排名和全局进程数
         cur_rank = dist.get_rank(seq_p_group)
