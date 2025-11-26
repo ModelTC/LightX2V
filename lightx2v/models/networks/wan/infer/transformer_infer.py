@@ -1,9 +1,11 @@
+from functools import partial
+
 import torch
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 
-from .utils import apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
+from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
 
 
 class WanTransformerInfer(BaseTransformerInfer):
@@ -18,15 +20,16 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["dim"] // config["num_heads"]
         self.window_size = config.get("window_size", (-1, -1))
         self.parallel_attention = None
-        # if config.get("rotary_chunk", False):
-        #     chunk_size = config.get("rotary_chunk_size", 100)
-        #     self.apply_rotary_emb_func = partial(apply_rotary_emb_chunk, chunk_size=chunk_size)
-        # else:
-        #     self.apply_rotary_emb_func = apply_rotary_emb
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            self.apply_rope_func = apply_wan_rope_with_flashinfer
+            if self.config.get("rope_chunk", False):
+                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_flashinfer)
+            else:
+                self.apply_rope_func = apply_wan_rope_with_flashinfer
         else:
-            self.apply_rope_func = apply_wan_rope_with_torch
+            if self.config.get("rope_chunk", False):
+                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_torch)
+            else:
+                self.apply_rope_func = apply_wan_rope_with_torch
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
