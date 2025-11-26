@@ -6,7 +6,7 @@ from einops import rearrange
 
 try:
     from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
-except:
+except Exception as e:
     apply_rope_with_cos_sin_cache_inplace = None
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer

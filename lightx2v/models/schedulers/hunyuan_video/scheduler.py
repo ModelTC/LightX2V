@@ -127,14 +127,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         if rope_dim_list is None:
             rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
         assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal to head_dim of attention layer"
-        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(
-            rope_dim_list,
-            rope_sizes,
-            theta=self.config["rope_theta"],
-            use_real=True,
-            theta_rescale_factor=1,
-            device=self.device
-        )
+        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(rope_dim_list, rope_sizes, theta=self.config["rope_theta"], use_real=True, theta_rescale_factor=1, device=self.device)
         cos_half = freqs_cos[:, ::2].contiguous()
         sin_half = freqs_sin[:, ::2].contiguous()
         cos_sin = torch.cat([cos_half, sin_half], dim=-1)
