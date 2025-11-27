@@ -252,7 +252,7 @@ class AudioAdapter(nn.Module):
         quantized: bool = False,
         quant_scheme: str = None,
         cpu_offload: bool = False,
-        device=torch.device("cpu"),
+        run_device=torch.device("cuda"),
     ):
         super().__init__()
         self.cpu_offload = cpu_offload
@@ -263,7 +263,7 @@ class AudioAdapter(nn.Module):
             mlp_dims=mlp_dims,
             transformer_layers=projection_transformer_layers,
         )
-        self.device = torch.device(device)
+        self.run_device = run_device
         # self.num_tokens = num_tokens * 4
         self.num_tokens_x4 = num_tokens * 4
         self.audio_pe = nn.Parameter(torch.randn(self.num_tokens_x4, mlp_dims[-1] // num_tokens) * 0.02)
@@ -302,10 +302,10 @@ class AudioAdapter(nn.Module):
     @torch.no_grad()
     def forward_audio_proj(self, audio_feat, latent_frame):
         if self.cpu_offload:
-            self.audio_proj.to(self.device)
+            self.audio_proj.to(self.run_device)
         x = self.audio_proj(audio_feat, latent_frame)
         x = self.rearange_audio_features(x)
-        x = x + self.audio_pe.to(self.device)
+        x = x + self.audio_pe.to(self.run_device)
         if self.cpu_offload:
             self.audio_proj.to("cpu")
         return x

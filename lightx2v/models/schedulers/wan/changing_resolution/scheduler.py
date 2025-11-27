@@ -20,7 +20,7 @@ class WanScheduler4ChangingResolution:
         assert len(config["resolution_rate"]) == len(config["changing_resolution_steps"])
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(seed)
+        self.generator = torch.Generator(device=self.run_device).manual_seed(seed)
         self.latents_list = []
         for i in range(len(self.config["resolution_rate"])):
             self.latents_list.append(
@@ -30,7 +30,7 @@ class WanScheduler4ChangingResolution:
                     int(latent_shape[2] * self.config["resolution_rate"][i]) // 2 * 2,
                     int(latent_shape[3] * self.config["resolution_rate"][i]) // 2 * 2,
                     dtype=dtype,
-                    device=self.device,
+                    device=self.run_device,
                     generator=self.generator,
                 )
             )
@@ -43,7 +43,7 @@ class WanScheduler4ChangingResolution:
                 latent_shape[2],
                 latent_shape[3],
                 dtype=dtype,
-                device=self.device,
+                device=self.run_device,
                 generator=self.generator,
             )
         )
@@ -83,7 +83,7 @@ class WanScheduler4ChangingResolution:
         # self.disable_corrector = [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37] # maybe not needed
 
         # 5. update timesteps using shift + self.changing_resolution_index + 1 更激进的去噪
-        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift + self.changing_resolution_index + 1)
+        self.set_timesteps(self.infer_steps, device=self.run_device, shift=self.sample_shift + self.changing_resolution_index + 1)
 
     def add_noise(self, original_samples, noise, timesteps):
         sigma = self.sigmas[self.step_index]

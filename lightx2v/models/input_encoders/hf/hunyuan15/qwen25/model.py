@@ -552,6 +552,7 @@ class Qwen25VL_TextEncoder:
         text_len=1000,
         dtype=torch.float16,
         device=torch.device("cpu"),
+        run_device=torch.device("cuda"),
         checkpoint_path=None,
         cpu_offload=False,
         qwen25vl_quantized=False,
@@ -560,7 +561,7 @@ class Qwen25VL_TextEncoder:
     ):
         self.text_len = text_len
         self.dtype = dtype
-        self.device = device
+        self.run_device = run_device
         self.cpu_offload = cpu_offload
         self.qwen25vl_quantized = qwen25vl_quantized
         self.qwen25vl_quant_scheme = qwen25vl_quant_scheme
@@ -589,20 +590,20 @@ class Qwen25VL_TextEncoder:
 
     def infer(self, texts):
         if self.cpu_offload:
-            self.text_encoder = self.text_encoder.to(self.device)
+            self.text_encoder = self.text_encoder.to(self.run_device)
         text_inputs = self.text_encoder.text2tokens(texts, data_type="video", max_length=self.text_len)
-        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=self.device)
+        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=self.run_device)
         if self.cpu_offload:
             self.text_encoder = self.text_encoder.to("cpu")
         prompt_embeds = prompt_outputs.hidden_state
         attention_mask = prompt_outputs.attention_mask
 
         if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device)
+            attention_mask = attention_mask.to(self.run_device)
             _, seq_len = attention_mask.shape
             attention_mask = attention_mask.repeat(1, self.num_videos_per_prompt)
             attention_mask = attention_mask.view(self.num_videos_per_prompt, seq_len)
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.device)
+        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.run_device)
 
         seq_len = prompt_embeds.shape[1]
         # duplicate text embeddings for each generation per prompt, using mps friendly method

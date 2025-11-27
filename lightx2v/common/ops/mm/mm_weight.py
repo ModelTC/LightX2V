@@ -442,6 +442,25 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
 
+        if self.bias_name is not None:
+            if self.create_cuda_buffer:
+                # move to cuda buffer
+                self.bias_cuda_buffer = weight_dict[self.bias_name].cuda()
+            else:
+                device = weight_dict[self.bias_name].device
+                if device.type == "cuda":
+                    self.bias = weight_dict[self.bias_name]
+                elif device.type == "cpu":
+                    bias_shape = weight_dict[self.bias_name].shape
+                    bias_dtype = weight_dict[self.bias_name].dtype
+                    self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
+                    self.pin_bias.copy_(weight_dict[self.bias_name])
+                else:
+                    raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        else:
+            self.bias = None
+            self.pin_bias = None
+
     def load_fp8_perblock128_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
             self.weight = weight_dict[self.weight_name]
