@@ -284,10 +284,9 @@ class DefaultRunner(BaseRunner):
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
-        if hasattr(self, "sr_version") and self.sr_version is not None is not None:
+        if hasattr(self, "sr_version") and self.sr_version is not None:
             self.lq_latents_shape = self.model.scheduler.latents.shape
             self.model_sr.set_scheduler(self.scheduler_sr)
-
             self.config_sr["is_sr_running"] = True
             self.inputs_sr = self.run_input_encoder()
             self.config_sr["is_sr_running"] = False

@@ -106,7 +106,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
         else:
             self.seq_p_group = None
-            elf.seq_p_fp8_comm = False
+            self.seq_p_fp8_comm = False
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
