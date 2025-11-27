@@ -296,7 +296,7 @@ async def shutdown(loop):
 # align args like infer.py
 def align_args(args):
     args.seed = 42
-    args.sf_model_path = ""
+    args.sf_model_path = args.sf_model_path if args.sf_model_path else ""
     args.use_prompt_enhancer = False
     args.prompt = ""
     args.negative_prompt = ""
@@ -308,6 +308,7 @@ def align_args(args):
     args.src_mask = None
     args.save_result_path = ""
     args.return_result_tensor = False
+    args.is_live = True
 
 
 # =========================
@@ -335,6 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--metric_port", type=int, default=8001)
 
     parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--sf_model_path", type=str, default="")
     parser.add_argument("--config_json", type=str, required=True)
 
     parser.add_argument("--server", type=str, default="http://127.0.0.1:8080")

@@ -7,7 +7,7 @@ from lightx2v.utils.envs import *
 class WanSFScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.run_device = torch.device(config.get("run_device"), "cuda")
+        self.run_device = torch.device(config.get("run_device", "cuda"))
         self.dtype = torch.bfloat16
         self.num_frame_per_block = self.config["sf_config"]["num_frame_per_block"]
         self.num_output_frames = self.config["sf_config"]["num_output_frames"]

@@ -23,6 +23,14 @@
                         "outputs": ["output_video"]
                     }
                 }
+            },
+            "self-forcing-dmd": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": [],
+                        "outputs": ["output_video"]
+                    }
+                }
             }
         },
         "i2v": {
@@ -56,6 +64,30 @@
                     },
                     "vae_decoder": {
                         "inputs": ["latents"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            },
+            "matrix-game2-gta-drive": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            },
+            "matrix-game2-universal": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            },
+            "matrix-game2-templerun": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image"],
                         "outputs": ["output_video"]
                     }
                 }
@@ -112,6 +144,7 @@
             "subtask_running_timeouts": {
                 "t2v-wan2.1-1.3B-multi_stage-dit": 300,
                 "t2v-wan2.1-1.3B-single_stage-pipeline": 300,
+                "t2v-self-forcing-dmd-single_stage-pipeline": 300,
                 "i2v-wan2.1-14B-480P-multi_stage-dit": 600,
                 "i2v-wan2.1-14B-480P-single_stage-pipeline": 600,
                 "i2v-SekoTalk-Distill-single_stage-pipeline": 3600,
