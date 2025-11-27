@@ -748,7 +748,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
 
         # Update prev_video for next iteration
-        self.prev_video = self.gen_video[:, :, :useful_length].cpu()
+        self.prev_video = self.gen_video
         self.prev_latent = None
 
         del video_seg, audio_seg
@@ -870,7 +870,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def _build_section_info(self) -> Optional[Dict[str, torch.Tensor]]:
         if self.prev_video is None:
             return None
-        prev_video = self.prev_video
+        # self.segment is last segment, so we need to get the last useful_length frames
+        useful_length = self.segment.end_frame - self.segment.start_frame
+        prev_video = self.prev_video[:, :, :useful_length]
         last_frames = prev_video[:, :, -self.prev_frame_length :].detach().cpu().clone()
         return {"prev_video": last_frames, "prev_latent": self.prev_latent}
 
