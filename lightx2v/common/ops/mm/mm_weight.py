@@ -1204,5 +1204,7 @@ class MMWeightWint8channelAint8channeldynamicMlu(MMWeightQuantTemplate):
     def apply(self, input_tensor):
         dtype = input_tensor.dtype
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = tmo.scaled_matmul(input_tensor_quant, self.weight.contiguous(), input_tensor_scale, self.weight_scale.squeeze(-1), output_dtype=dtype, use_hp_active=True)
+        output_tensor = tmo.scaled_matmul(
+            input_tensor_quant, self.weight.contiguous(), input_tensor_scale, self.weight_scale.squeeze(-1), bias=self.bias if self.bias is not None else None, output_dtype=dtype, use_hp_active=True
+        )
         return output_tensor
