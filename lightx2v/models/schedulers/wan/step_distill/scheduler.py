@@ -20,6 +20,7 @@ class WanStepDistillScheduler(WanScheduler):
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         self.set_denoising_timesteps(device=self.run_device)
+        self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
         sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min)
