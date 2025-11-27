@@ -52,6 +52,7 @@ async def create_video_task_form(
     seed: int = Form(default=42),
     audio_file: UploadFile = File(None),
     video_duration: int = Form(default=5),
+    target_fps: int = Form(default=16),
 ):
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
@@ -89,6 +90,7 @@ async def create_video_task_form(
         seed=seed,
         audio_path=audio_path,
         video_duration=video_duration,
+        target_fps=target_fps,
     )
 
     try:

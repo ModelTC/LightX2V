@@ -55,6 +55,11 @@ class TorchrunInferenceWorker:
             task_data["return_result_tensor"] = False
             task_data["negative_prompt"] = task_data.get("negative_prompt", "")
 
+            if task_data.get("target_fps") is not None and "video_frame_interpolation" in self.runner.config:
+                task_data["video_frame_interpolation"] = dict(self.runner.config["video_frame_interpolation"])
+                task_data["video_frame_interpolation"]["target_fps"] = task_data["target_fps"]
+                del task_data["target_fps"]
+
             task_data = EasyDict(task_data)
             input_info = set_input_info(task_data)
 
