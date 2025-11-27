@@ -40,6 +40,7 @@ class VideoTaskRequest(BaseTaskRequest):
     audio_path: str = Field("", description="Input audio path (Wan-Audio)")
     video_duration: int = Field(5, description="Video duration (Wan-Audio)")
     talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")
+    target_fps: Optional[int] = Field(16, description="Target FPS for video frame interpolation (overrides config)")
 
 
 class ImageTaskRequest(BaseTaskRequest):
@@ -53,6 +54,7 @@ class TaskRequest(BaseTaskRequest):
     video_duration: int = Field(5, description="Video duration (Wan-Audio)")
     talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")
     aspect_ratio: str = Field("16:9", description="Output aspect ratio (T2I only)")
+    target_fps: Optional[int] = Field(16, description="Target FPS for video frame interpolation (overrides config)")
 
 
 class TaskStatusMessage(BaseModel):
