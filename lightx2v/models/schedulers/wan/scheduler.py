@@ -10,11 +10,10 @@ from lightx2v.utils.utils import masks_like
 class WanScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.device = torch.device(self.config.get("run_device", "cuda"))
+        self.run_device = torch.device(self.config.get("run_device", "cuda"))
         self.infer_steps = self.config["infer_steps"]
         self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
-        self.run_device = self.config.get("run_device", "cuda")
         self.patch_size = (1, 2, 2)
         self.shift = 1
         self.num_train_timesteps = 1000
@@ -65,7 +64,7 @@ class WanScheduler(BaseScheduler):
         self.sigma_min = self.sigmas[-1].item()
         self.sigma_max = self.sigmas[0].item()
 
-        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
+        self.set_timesteps(self.infer_steps, device=self.run_device, shift=self.sample_shift)
 
         self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
@@ -93,14 +92,14 @@ class WanScheduler(BaseScheduler):
         return cos_sin
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(seed)
+        self.generator = torch.Generator(device=self.run_device).manual_seed(seed)
         self.latents = torch.randn(
             latent_shape[0],
             latent_shape[1],
             latent_shape[2],
             latent_shape[3],
             dtype=dtype,
-            device=self.device,
+            device=self.run_device,
             generator=self.generator,
         )
         if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:

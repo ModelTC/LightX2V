@@ -9,6 +9,10 @@ from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
 
 
+def modulate(x, scale, shift):
+    return x * (1 + scale.squeeze()) + shift.squeeze()
+
+
 class WanTransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
@@ -21,6 +25,10 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["dim"] // config["num_heads"]
         self.window_size = config.get("window_size", (-1, -1))
         self.parallel_attention = None
+        if self.config.get("modulate_type", "triton") == "triton":
+            self.modulate_func = fuse_scale_shift_kernel
+        else:
+            self.modulate_func = modulate
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
             if self.config.get("rope_chunk", False):
                 self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_flashinfer)
@@ -146,7 +154,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             norm1_out = phase.norm1.apply(x)
             if self.sensitive_layer_dtype != self.infer_dtype:
                 norm1_out = norm1_out.to(self.sensitive_layer_dtype)
-            norm1_out = fuse_scale_shift_kernel(norm1_out, scale=scale_msa, shift=shift_msa).squeeze(0)
+            norm1_out = self.modulate_func(norm1_out, scale=scale_msa, shift=shift_msa).squeeze()
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.infer_dtype)
@@ -285,7 +293,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             norm2_out = phase.norm2.apply(x)
             if self.sensitive_layer_dtype != self.infer_dtype:
                 norm2_out = norm2_out.to(self.sensitive_layer_dtype)
-            norm2_out = fuse_scale_shift_kernel(norm2_out, scale=c_scale_msa, shift=c_shift_msa).squeeze(0)
+            norm2_out = self.modulate_func(norm2_out, scale=c_scale_msa, shift=c_shift_msa).squeeze()
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm2_out = norm2_out.to(self.infer_dtype)

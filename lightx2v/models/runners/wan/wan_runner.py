@@ -65,7 +65,7 @@ class WanRunner(DefaultRunner):
             if clip_offload:
                 clip_device = torch.device("cpu")
             else:
-                clip_device = torch.device(self.init_device)
+                clip_device = torch.device(self.run_device)
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -123,6 +123,7 @@ class WanRunner(DefaultRunner):
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
             device=t5_device,
+            run_device=self.run_device,
             checkpoint_path=t5_original_ckpt,
             tokenizer_path=tokenizer_path,
             shard_fn=None,
@@ -141,7 +142,7 @@ class WanRunner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.init_device)
+            vae_device = torch.device(self.run_device)
 
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
@@ -320,7 +321,7 @@ class WanRunner(DefaultRunner):
             self.config["target_video_length"],
             lat_h,
             lat_w,
-            device=torch.device(self.config.get("run_device", "cuda")),
+            device=torch.device(self.run_device),
         )
         if last_frame is not None:
             msk[:, 1:-1] = 0
@@ -342,7 +343,7 @@ class WanRunner(DefaultRunner):
                     torch.nn.functional.interpolate(last_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
                 ],
                 dim=1,
-            ).to(self.init_device)
+            ).to(self.run_device)
         else:
             vae_input = torch.concat(
                 [
@@ -350,7 +351,7 @@ class WanRunner(DefaultRunner):
                     torch.zeros(3, self.config["target_video_length"] - 1, h, w),
                 ],
                 dim=1,
-            ).to(self.init_device)
+            ).to(self.run_device)
 
         vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0).to(GET_DTYPE()))
 
@@ -533,7 +534,7 @@ class Wan22DenseRunner(WanRunner):
         assert img.width == ow and img.height == oh
 
         # to tensor
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).to(self.init_device).unsqueeze(1)
+        img = TF.to_tensor(img).sub_(0.5).div_(0.5).to(self.run_device).unsqueeze(1)
         vae_encoder_out = self.get_vae_encoder_output(img)
         latent_w, latent_h = ow // self.config["vae_stride"][2], oh // self.config["vae_stride"][1]
         latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)

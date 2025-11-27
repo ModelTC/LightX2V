@@ -159,13 +159,14 @@ class ByT5TextEncoder:
         self,
         config,
         device=torch.device("cpu"),
+        run_device=torch.device("cuda"),
         checkpoint_path=None,
         byt5_max_length=256,
         cpu_offload=False,
     ):
         self.cpu_offload = cpu_offload
         self.config = config
-        self.device = device
+        self.run_device = run_device
         self.byt5_max_length = byt5_max_length
         self.enable_cfg = config.get("enable_cfg", False)
         byT5_google_path = os.path.join(checkpoint_path, "text_encoder", "byt5-small")
@@ -300,12 +301,12 @@ class ByT5TextEncoder:
         negative_masks = []
 
         for prompt in prompt_list:
-            pos_emb, pos_mask = self._process_single_byt5_prompt(prompt, self.device)
+            pos_emb, pos_mask = self._process_single_byt5_prompt(prompt, self.run_device)
             positive_embeddings.append(pos_emb)
             positive_masks.append(pos_mask)
 
             if self.enable_cfg:  # TODO: 把cfg拆出去，更适合并行
-                neg_emb, neg_mask = self._process_single_byt5_prompt("", self.device)
+                neg_emb, neg_mask = self._process_single_byt5_prompt("", self.run_device)
                 negative_embeddings.append(neg_emb)
                 negative_masks.append(neg_mask)
 
@@ -327,8 +328,8 @@ class ByT5TextEncoder:
     @torch.no_grad()
     def infer(self, prompts):
         if self.cpu_offload:
-            self.byt5_model = self.byt5_model.to(self.device)
-            self.byt5_mapper = self.byt5_mapper.to(self.device)
+            self.byt5_model = self.byt5_model.to(self.run_device)
+            self.byt5_mapper = self.byt5_mapper.to(self.run_device)
         byt5_embeddings, byt5_masks = self._prepare_byt5_embeddings(prompts)
         byt5_features = self.byt5_mapper(byt5_embeddings.to(torch.bfloat16))
         if self.cpu_offload:

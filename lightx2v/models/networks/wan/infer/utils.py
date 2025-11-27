@@ -1,6 +1,10 @@
 import torch
 import torch.distributed as dist
-from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+
+try:
+    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+except ImportError:
+    apply_rope_with_cos_sin_cache_inplace = None
 
 from lightx2v.utils.envs import *
 
