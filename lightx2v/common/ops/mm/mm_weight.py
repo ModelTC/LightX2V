@@ -625,7 +625,7 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
         device = input_tensor.device
-        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        output_tensor = torch.zeros(shape, dtype=dtype, device=device, requires_grad=False)
 
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         torch.ops._C.cutlass_scaled_mm(
