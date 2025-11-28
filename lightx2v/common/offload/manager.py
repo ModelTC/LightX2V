@@ -14,7 +14,7 @@ class WeightAsyncStreamManager(object):
         self.offload_granularity = offload_granularity
         self.init_stream = torch.cuda.Stream(priority=0)
         torch_version = parse(torch.__version__.split("+")[0])
-        if version >= parse("2.7"):
+        if torch_version >= parse("2.7"):
             self.cuda_load_stream = torch.cuda.Stream(priority=1)
             self.compute_stream = torch.cuda.Stream(priority=1)
         else:
