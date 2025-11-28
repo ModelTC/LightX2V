@@ -1117,7 +1117,7 @@ class WanVAE:
 
         return encoded.squeeze(0)
 
-    def encode(self, video):
+    def encode(self, video, world_size_h=1, world_size_w=1):
         """
         video: one video  with shape [1, C, T, H, W].
         """
@@ -1130,7 +1130,7 @@ class WanVAE:
             height, width = video.shape[3], video.shape[4]
 
             if self.use_2d_split:
-                world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
+                # world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
                 cur_rank_h = cur_rank // world_size_w
                 cur_rank_w = cur_rank % world_size_w
                 out = self.encode_dist_2d(video, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
@@ -1336,3 +1336,15 @@ class WanVAE:
             torch.mlu.synchronize()
         elif "npu" in str(self.run_device):
             torch.npu.synchronize()
+
+
+if __name__ == "__main__":
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(dist.get_rank())
+
+    vae = WanVAE(dtype=torch.bfloat16, parallel=True)
+    x = torch.randn(1, 3, 81, 688, 1344, dtype=torch.bfloat16, device="cuda")
+    z = vae.encode(x)
+    print(z.shape)
+    video_frames = vae.decode(z)
+    print(video_frames.shape)
