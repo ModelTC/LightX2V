@@ -6,14 +6,20 @@ from collections import OrderedDict
 
 import torch
 from loguru import logger
+from packaging.version import parse
 
 
 class WeightAsyncStreamManager(object):
     def __init__(self, offload_granularity):
         self.offload_granularity = offload_granularity
         self.init_stream = torch.cuda.Stream(priority=0)
-        self.cuda_load_stream = torch.cuda.Stream(priority=1)
-        self.compute_stream = torch.cuda.Stream(priority=1)
+        torch_version = parse(torch.__version__.split("+")[0])
+        if version >= parse("2.7"):
+            self.cuda_load_stream = torch.cuda.Stream(priority=1)
+            self.compute_stream = torch.cuda.Stream(priority=1)
+        else:
+            self.cuda_load_stream = torch.cuda.Stream(priority=0)
+            self.compute_stream = torch.cuda.Stream(priority=-1)
 
     def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
         if self.offload_granularity == "block":
