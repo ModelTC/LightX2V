@@ -306,7 +306,7 @@ class WanRunner(DefaultRunner):
 
         # If no perfect fit, find minimal padding solution
         best_grid = (1, world_size)  # fallback
-        min_total_padding = float('inf')
+        min_total_padding = float("inf")
 
         for world_size_h, world_size_w in priority_grids:
             # Calculate required padding
@@ -349,7 +349,7 @@ class WanRunner(DefaultRunner):
         # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
         if dist.is_initialized() and dist.get_world_size() > 1:
             latent_h, latent_w, world_size_h, world_size_w = self._adjust_latent_for_grid_splitting(ori_latent_h, ori_latent_w, dist.get_world_size())
-            logger.info(f'ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}')
+            logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
         else:
             latent_h, latent_w = ori_latent_h, ori_latent_w
             world_size_h, world_size_w = 1, 1
