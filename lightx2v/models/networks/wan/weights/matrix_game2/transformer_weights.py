@@ -33,7 +33,7 @@ class WanActionTransformerWeights(WeightModule):
             if i in action_blocks:
                 block_list.append(WanTransformerActionBlock(i, self.task, self.mm_type, self.config, "blocks"))
             else:
-                block_list.append(WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config, "blocks"))
+                block_list.append(WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config, False, "blocks"))
         self.blocks = WeightModuleList(block_list)
         self.add_module("blocks", self.blocks)
 
@@ -82,6 +82,7 @@ class WanTransformerActionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
+                    False,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -109,6 +110,7 @@ class WanTransformerActionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
+                    False,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),

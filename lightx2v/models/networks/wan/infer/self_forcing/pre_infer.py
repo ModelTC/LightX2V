@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Dict
 
 import torch
 
@@ -35,6 +36,7 @@ class WanSFPreInferModuleOutput:
     seq_lens: torch.Tensor
     freqs: torch.Tensor
     context: torch.Tensor
+    conditional_dict: Dict[str, Any] = field(default_factory=dict)
 
 
 class WanSFPreInfer(WanPreInfer):
