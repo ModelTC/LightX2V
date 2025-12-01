@@ -186,7 +186,7 @@ def step3_convert_merged_to_fp8(merged_path: Path, output_dir: Path, device: str
         "-o_n",
         "merged_fp8",
         "--linear_dtype",
-        "torch.float8_e4m3fn",
+        "fp8",
         "--quantized",
         "--device",
         device,
