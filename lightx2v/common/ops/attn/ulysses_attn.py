@@ -76,7 +76,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             img_q = all2all_seq2head(img_q, group=seq_p_group)
             img_k = all2all_seq2head(img_k, group=seq_p_group)
             img_v = all2all_seq2head(img_v, group=seq_p_group)
-        self.device_synchronize()  # 确保CUDA操作完成
 
         # 处理文本的查询、键和值，选择当前进程的头
         txt_q = txt_q[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]

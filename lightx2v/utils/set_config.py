@@ -101,7 +101,7 @@ def set_parallel_config(config):
         if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
             config["cfg_parallel"] = True
         # warmup dist
-        _a = torch.zeros([1]).to(f"{device_str}:{dist.get_rank()}")
+        _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
         dist.all_reduce(_a)
 
 
