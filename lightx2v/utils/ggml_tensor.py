@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+import ctypes
+import os
+from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import gguf
@@ -5,6 +10,7 @@ import numpy as np
 import torch
 from loguru import logger
 
+c_float_p = ctypes.POINTER(ctypes.c_float)
 TORCH_COMPATIBLE_QTYPES = (None, gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.BF16)
 
 
@@ -279,31 +285,75 @@ def get_model_architecture(reader) -> str:
     return arch_str
 
 
-def dequantize_tensor(tensor, dtype=None):
-    qtype = getattr(tensor, "gguf_type", None)
-    oshape = getattr(tensor, "orig_shape", tensor.data.shape)
-
-    if qtype in TORCH_COMPATIBLE_QTYPES:
-        return tensor.to(dtype)
-    elif qtype in dequantize_functions:
-        return dequantize(tensor.to_torch().data, qtype, oshape, dtype=dtype).to(dtype)
-    else:
-        # this is incredibly slow
-        tqdm.write(f"Falling back to numpy dequant for qtype: {qtype}")
-        new = gguf.quants.dequantize(tensor.cpu().numpy(), qtype)
-        return torch.from_numpy(new).to(tensor.device, dtype=dtype)
+class ggml_init_params(ctypes.Structure):
+    _fields_ = [
+        ("mem_size", ctypes.c_size_t),
+        ("mem_buffer", ctypes.c_void_p),
+        ("no_alloc", ctypes.c_bool),
+    ]
 
 
-def dequantize(data, qtype, oshape, dtype=None):
-    block_size, type_size = gguf.GGML_QUANT_SIZES[qtype]
-    dequantize_blocks = dequantize_functions[qtype]
+class GGMLQuants:
+    libggml: ctypes.CDLL
 
-    rows = data.reshape((-1, data.shape[-1])).view(torch.uint8)
+    def __init__(self, libggml: Path):
+        self.libggml = ctypes.CDLL(str(libggml))
+        self.libggml.ggml_quantize_chunk.restype = ctypes.c_size_t
 
-    n_blocks = rows.numel() // type_size
-    blocks = rows.reshape((n_blocks, type_size))
-    blocks = dequantize_blocks(blocks, block_size, type_size, dtype)
-    return blocks.reshape(oshape)
+        self.libggml.ggml_quantize_chunk.argtypes = (
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.c_void_p,
+            ctypes.c_int64,
+            ctypes.c_int64,
+            ctypes.c_int64,
+            ctypes.POINTER(ctypes.c_float),
+        )
+
+        self.libggml.ggml_quantize_requires_imatrix.restype = ctypes.c_bool
+        self.libggml.ggml_quantize_requires_imatrix.argtypes = (ctypes.c_int,)
+
+        for t in (
+            "q4_0",
+            "q4_1",
+            "q5_0",
+            "q5_1",
+            "q8_0",
+            "q2_K",
+            "q3_K",
+            "q4_K",
+            "q5_K",
+            "q6_K",
+        ):
+            dequant_func: ctypes._NamedFuncPointer = getattr(self.libggml, "dequantize_row_" + t)
+            dequant_func.restype = None
+            dequant_func.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_int64)
+
+        self.libggml.ggml_fp16_to_fp32_row.restype = None
+        self.libggml.ggml_fp16_to_fp32_row.argtypes = (ctypes.POINTER(ctypes.c_uint16), ctypes.POINTER(ctypes.c_float), ctypes.c_int64)
+        self.libggml.ggml_bf16_to_fp32_row.restype = None
+        self.libggml.ggml_bf16_to_fp32_row.argtypes = (ctypes.POINTER(ctypes.c_uint16), ctypes.POINTER(ctypes.c_float), ctypes.c_int64)
+
+        self.libggml.ggml_init.argtypes = (ggml_init_params,)
+
+        self.libggml.ggml_init(ggml_init_params(1 * 1024 * 1024, 0, False))
+
+    def dequantize(self, tensor: np.ndarray, qtype: gguf.GGMLQuantizationType) -> np.ndarray:
+        result = np.zeros(gguf.quant_shape_from_byte_shape(tensor.shape, qtype), dtype=np.float32, order="C")
+        if qtype == gguf.GGMLQuantizationType.F32:
+            # no-op
+            result = tensor.view(np.float32)
+        elif qtype == gguf.GGMLQuantizationType.F16:
+            self.libggml.ggml_fp16_to_fp32_row(tensor.ctypes.data_as(ctypes.POINTER(ctypes.c_uint16)), result.ctypes.data_as(c_float_p), result.size)
+        elif qtype == gguf.GGMLQuantizationType.BF16:
+            self.libggml.ggml_bf16_to_fp32_row(tensor.ctypes.data_as(ctypes.POINTER(ctypes.c_uint16)), result.ctypes.data_as(c_float_p), result.size)
+        else:
+            lw_qname = qtype.name.lower()
+            if lw_qname[-1] == "k":
+                lw_qname = lw_qname[:-1] + "K"
+            dequant_func: ctypes._NamedFuncPointer = getattr(self.libggml, "dequantize_row_" + lw_qname)
+            dequant_func(tensor.ctypes.data_as(ctypes.c_void_p), result.ctypes.data_as(c_float_p), result.size)
+        return result
 
 
 def to_uint32(x):
@@ -528,10 +578,51 @@ dequantize_functions = {
 }
 
 
-if __name__ == "__main__":
-    sd = load_gguf_sd_ckpt("/home/SENSETIME/yihuiwen/yihuiwen/workspace/models/city96/Wan2.1-I2V-14B-720P-gguf/wan2.1-i2v-14b-720p-Q4_K_S.gguf", return_arch=False)
+try:
+    import platform
 
-    for k, s in sd.items():
-        print(k)
-        if isinstance(s, GGMLTensor):
-            dequantize_tensor(s, torch.float32)
+    import llama_cpp
+
+    lib_name = "libggml.so"
+    if platform.system() == "Darwin":
+        lib_name = "libggml.dylib"
+    elif platform.system() == "Windows":
+        lib_name = "ggml.dll"  # Or libggml.dll
+
+    llama_lib_path = os.path.join(os.path.dirname(os.path.abspath(llama_cpp.__file__)), "lib", lib_name)
+    ggml_quants = GGMLQuants(llama_lib_path)
+
+    def dequantize_c(tensor):
+        return torch.from_numpy(ggml_quants.dequantize(s.data.numpy(), s.gguf_type))
+except ImportError:
+    dequantize_c = None
+
+
+def dequantize_tensor(tensor, dtype=None):
+    qtype = getattr(tensor, "gguf_type", None)
+    oshape = getattr(tensor, "orig_shape", tensor.data.shape)
+
+    if qtype in TORCH_COMPATIBLE_QTYPES:
+        return tensor.to(dtype)
+    else:
+        if dequantize_c is not None:
+            return dequantize_c(tensor).to(dtype)
+        elif qtype in dequantize_functions:
+            return dequantize(tensor.to_torch().data, qtype, oshape, dtype=dtype).to(dtype)
+        else:
+            # this is incredibly slow
+            logger.warning(f"Falling back to numpy dequant for qtype: {qtype}")
+            new = gguf.quants.dequantize(tensor.cpu().numpy(), qtype)
+            return torch.from_numpy(new).to(tensor.device, dtype=dtype)
+
+
+def dequantize(data, qtype, oshape, dtype=None):
+    block_size, type_size = gguf.GGML_QUANT_SIZES[qtype]
+    dequantize_blocks = dequantize_functions[qtype]
+
+    rows = data.reshape((-1, data.shape[-1])).view(torch.uint8)
+
+    n_blocks = rows.numel() // type_size
+    blocks = rows.reshape((n_blocks, type_size))
+    blocks = dequantize_blocks(blocks, block_size, type_size, dtype)
+    return blocks.reshape(oshape)
