@@ -22,16 +22,14 @@ class EmbeddingWeightTemplate(metaclass=ABCMeta):
                 self.weight_cuda_buffer = weight_dict[self.weight_name].cuda()
             else:
                 device = weight_dict[self.weight_name].device
-                if device.type in ["cuda", "mlu", "npu"]:
-                    self.weight = weight_dict[self.weight_name]
-                elif device.type == "cpu":
+                if device.type == "cpu":
                     weight_shape = weight_dict[self.weight_name].shape
                     weight_dtype = weight_dict[self.weight_name].dtype
                     self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
                     self.pin_weight.copy_(weight_dict[self.weight_name])
                     del weight_dict[self.weight_name]
                 else:
-                    raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+                    self.weight = weight_dict[self.weight_name]
 
     def to_cuda(self, non_blocking=False):
         self.weight = self.pin_weight.cuda(non_blocking=non_blocking)

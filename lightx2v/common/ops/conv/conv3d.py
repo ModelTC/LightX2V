@@ -35,13 +35,7 @@ class Conv3dWeight(Conv3dWeightTemplate):
 
     def load(self, weight_dict):
         device = weight_dict[self.weight_name].device
-        if device.type in ["cuda", "mlu", "npu"]:
-            self.weight = weight_dict[self.weight_name]
-            if self.bias_name is not None:
-                self.bias = weight_dict[self.bias_name]
-            else:
-                self.bias = None
-        elif device.type == "cpu":
+        if device.type == "cpu":
             weight_shape = weight_dict[self.weight_name].shape
             weight_dtype = weight_dict[self.weight_name].dtype
             self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
@@ -57,7 +51,11 @@ class Conv3dWeight(Conv3dWeightTemplate):
                 self.pin_bias = None
             del weight_dict[self.weight_name]
         else:
-            raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+            self.weight = weight_dict[self.weight_name]
+            if self.bias_name is not None:
+                self.bias = weight_dict[self.bias_name]
+            else:
+                self.bias = None
 
     def apply(self, input_tensor):
         input_tensor = torch.nn.functional.conv3d(

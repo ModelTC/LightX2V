@@ -55,3 +55,4 @@ class Register(dict):
 
 PLATFORM_DEVICE_REGISTER = Register()
 PLATFORM_ATTN_WEIGHT_REGISTER = Register()
+PLATFORM_MM_WEIGHT_REGISTER = Register()
