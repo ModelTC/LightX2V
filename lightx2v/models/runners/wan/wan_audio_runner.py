@@ -169,8 +169,13 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             if ori_height * ori_weight >= resolution[0] * resolution[1]:
                 target_h, target_w = resolution
     elif resize_mode == "keep_ratio_fixed_area":
-        assert fixed_area in ["480p", "720p"], f"fixed_area must be in ['480p', '720p'], but got {fixed_area}, please set fixed_area in config."
-        fixed_area = 480 * 832 if fixed_area == "480p" else 720 * 1280
+        fixed_area = 480 * 832
+        if fixed_area == "480p":
+            fixed_area = 480 * 832
+        elif fixed_area == "720p":
+            fixed_area = 720 * 1280
+        else:
+            fixed_area = 480 * 832
         target_h = round(np.sqrt(fixed_area * ori_ratio))
         target_w = round(np.sqrt(fixed_area / ori_ratio))
     elif resize_mode == "fixed_min_area":
@@ -179,9 +184,14 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         closet_ratio = aspect_ratios[closet_aspect_idx]
         target_h, target_w = bucket_config[closet_ratio][0]
     elif resize_mode == "fixed_min_side":
-        assert fixed_area in ["480p", "720p"], f"fixed_min_side mode requires fixed_area to be '480p' or '720p', got {fixed_area}"
-
-        min_side = 720 if fixed_area == "720p" else 480
+        min_side = 720
+        if fixed_area == "720p":
+            min_side = 720
+        elif fixed_area == "480p":
+            min_side = 480
+        else:
+            logger.warning(f"[wan_audio] fixed_area is not '480p' or '720p', using default 480p: {fixed_area}")
+            min_side = 480
         if ori_ratio < 1.0:
             target_h = min_side
             target_w = round(target_h / ori_ratio)
@@ -195,6 +205,7 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         target_h, target_w = bucket_config[closet_ratio][-1]
 
     cropped_img = isotropic_crop_resize(img, (target_h, target_w))
+    logger.info(f"[wan_audio] resize_image: {img.shape} -> {cropped_img.shape}, resize_mode: {resize_mode}, target_h: {target_h}, target_w: {target_w}")
     return cropped_img, target_h, target_w
 
 

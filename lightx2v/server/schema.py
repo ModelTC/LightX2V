@@ -41,6 +41,7 @@ class VideoTaskRequest(BaseTaskRequest):
     video_duration: int = Field(5, description="Video duration (Wan-Audio)")
     talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")
     target_fps: Optional[int] = Field(16, description="Target FPS for video frame interpolation (overrides config)")
+    resize_mode: Optional[str] = Field("adaptive", description="Resize mode (adaptive, keep_ratio_fixed_area, fixed_min_area, fixed_max_area, fixed_shape, fixed_min_side)")
 
 
 class ImageTaskRequest(BaseTaskRequest):
