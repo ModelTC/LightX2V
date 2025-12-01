@@ -47,13 +47,5 @@ class Register(dict):
         return self._dict.get(key, default)
 
 
-MM_WEIGHT_REGISTER = Register()
-ATTN_WEIGHT_REGISTER = Register()
-RMS_WEIGHT_REGISTER = Register()
-LN_WEIGHT_REGISTER = Register()
-CONV3D_WEIGHT_REGISTER = Register()
-CONV2D_WEIGHT_REGISTER = Register()
-TENSOR_REGISTER = Register()
-CONVERT_WEIGHT_REGISTER = Register()
-EMBEDDING_WEIGHT_REGISTER = Register()
-RUNNER_REGISTER = Register()
+PLATFORM_DEVICE_REGISTER = Register()
+PLATFORM_ATTN_WEIGHT_REGISTER = Register()

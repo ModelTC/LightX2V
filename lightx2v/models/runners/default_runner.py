@@ -15,6 +15,7 @@ from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .base_runner import BaseRunner
 
@@ -59,11 +60,10 @@ class DefaultRunner(BaseRunner):
             self.model.compile(self.config.get("compile_shapes", []))
 
     def set_init_device(self):
-        self.run_device = self.config.get("run_device", "cuda")
         if self.config["cpu_offload"]:
             self.init_device = torch.device("cpu")
         else:
-            self.init_device = torch.device(self.config.get("run_device", "cuda"))
+            self.init_device = torch.device(AI_DEVICE)
 
     def load_vfi_model(self):
         if self.config["video_frame_interpolation"].get("algo", None) == "rife":

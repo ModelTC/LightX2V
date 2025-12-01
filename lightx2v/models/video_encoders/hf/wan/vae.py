@@ -8,6 +8,7 @@ from einops import rearrange
 from loguru import logger
 
 from lightx2v.utils.utils import load_weights
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 __all__ = [
     "WanVAE",
@@ -821,11 +822,9 @@ class WanVAE:
         use_2d_split=True,
         load_from_rank0=False,
         use_lightvae=False,
-        run_device=torch.device("cuda"),
     ):
         self.dtype = dtype
         self.device = device
-        self.run_device = run_device
         self.parallel = parallel
         self.use_tiling = use_tiling
         self.cpu_offload = cpu_offload
@@ -955,11 +954,11 @@ class WanVAE:
         self.scale = [self.mean, self.inv_std]
 
     def to_cuda(self):
-        self.model.encoder = self.model.encoder.to(self.run_device)
-        self.model.decoder = self.model.decoder.to(self.run_device)
-        self.model = self.model.to(self.run_device)
-        self.mean = self.mean.cuda()
-        self.inv_std = self.inv_std.cuda()
+        self.model.encoder = self.model.encoder.to(AI_DEVICE)
+        self.model.decoder = self.model.decoder.to(AI_DEVICE)
+        self.model = self.model.to(AI_DEVICE)
+        self.mean = self.mean.to(AI_DEVICE)
+        self.inv_std = self.inv_std.to(AI_DEVICE)
         self.scale = [self.mean, self.inv_std]
 
     def encode_dist(self, video, world_size, cur_rank, split_dim):
@@ -1330,9 +1329,9 @@ class WanVAE:
     def device_synchronize(
         self,
     ):
-        if "cuda" in str(self.run_device):
+        if "cuda" in str(AI_DEVICE):
             torch.cuda.synchronize()
-        elif "mlu" in str(self.run_device):
+        elif "mlu" in str(AI_DEVICE):
             torch.mlu.synchronize()
-        elif "npu" in str(self.run_device):
+        elif "npu" in str(AI_DEVICE):
             torch.npu.synchronize()

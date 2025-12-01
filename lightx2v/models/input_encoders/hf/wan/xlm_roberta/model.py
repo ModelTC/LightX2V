@@ -12,6 +12,7 @@ from loguru import logger
 from lightx2v.common.ops.attn import TorchSDPAWeight
 from lightx2v.models.input_encoders.hf.q_linear import MluQuantLinearInt8, Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8
 from lightx2v.utils.utils import load_weights
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 __all__ = [
     "XLMRobertaCLIP",
@@ -426,9 +427,8 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 
 
 class CLIPModel:
-    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False, run_device=torch.device("cuda")):
+    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False):
         self.dtype = dtype
-        self.run_device = run_device
         self.quantized = clip_quantized
         self.cpu_offload = cpu_offload
         self.use_31_block = use_31_block
@@ -462,7 +462,7 @@ class CLIPModel:
         return out
 
     def to_cuda(self):
-        self.model = self.model.to(self.run_device)
+        self.model = self.model.to(AI_DEVICE)
 
     def to_cpu(self):
         self.model = self.model.cpu()

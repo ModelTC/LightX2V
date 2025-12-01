@@ -7,6 +7,7 @@ from loguru import logger
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import masks_like
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class EulerScheduler(WanScheduler):
@@ -58,14 +59,14 @@ class EulerScheduler(WanScheduler):
             )
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.run_device).manual_seed(seed)
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(
             latent_shape[0],
             latent_shape[1],
             latent_shape[2],
             latent_shape[3],
             dtype=dtype,
-            device=self.run_device,
+            device=AI_DEVICE,
             generator=self.generator,
         )
         if self.config["model_cls"] == "wan2.2_audio":
@@ -77,7 +78,7 @@ class EulerScheduler(WanScheduler):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         timesteps = np.linspace(self.num_train_timesteps, 0, self.infer_steps + 1, dtype=np.float32)
 
-        self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=self.run_device)
+        self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=AI_DEVICE)
         self.timesteps_ori = self.timesteps.clone()
 
         self.sigmas = self.timesteps_ori / self.num_train_timesteps

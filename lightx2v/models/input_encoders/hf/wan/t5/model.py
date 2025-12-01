@@ -19,12 +19,12 @@ from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.offload.manager import WeightAsyncStreamManager  # noqa E402
 from lightx2v.common.ops import *  # noqa E402
 from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
+    MluQuantLinearInt8,
     Q8FQuantLinearFp8,  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
     SglQuantLinearFp8,  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402,
-    MluQuantLinearInt8,
 )
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
 from lightx2v.utils.envs import *  # noqa E402
@@ -34,6 +34,7 @@ from lightx2v.utils.registry_factory import (  # noqa E402
     RMS_WEIGHT_REGISTER,  # noqa E402
 )
 from lightx2v.utils.utils import load_weights  # noqa E402
+from lightx2v_platform.base.global_var import AI_DEVICE  # noqa E402
 
 __all__ = [
     "T5Model",
@@ -745,7 +746,6 @@ class T5EncoderModel:
         text_len,
         dtype=torch.bfloat16,
         device=torch.device("cuda"),
-        run_device=torch.device("cuda"),
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -758,7 +758,6 @@ class T5EncoderModel:
         self.text_len = text_len
         self.dtype = dtype
         self.device = device
-        self.run_device = run_device
         if t5_quantized_ckpt is not None and t5_quantized:
             self.checkpoint_path = t5_quantized_ckpt
         else:
@@ -807,8 +806,8 @@ class T5EncoderModel:
 
     def infer(self, texts):
         ids, mask = self.tokenizer(texts, return_mask=True, add_special_tokens=True)
-        ids = ids.to(self.run_device)
-        mask = mask.to(self.run_device)
+        ids = ids.to(AI_DEVICE)
+        mask = mask.to(AI_DEVICE)
         seq_lens = mask.gt(0).sum(dim=1).long()
 
         with torch.no_grad():

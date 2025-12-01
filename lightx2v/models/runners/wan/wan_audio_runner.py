@@ -33,6 +33,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
@@ -450,7 +451,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             ref_img = img_path
         else:
             ref_img = load_image(img_path)
-        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).to(self.run_device)
+        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
 
         ref_img, h, w = resize_image(
             ref_img,
@@ -538,15 +539,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
-        device = self.run_device
         dtype = GET_DTYPE()
 
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=device)
+        prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=AI_DEVICE)
 
         if prev_video is not None:
             # Extract and process last frames
-            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
+            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(AI_DEVICE)
             if self.config["model_cls"] != "wan2.2_audio":
                 last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
             prev_frames[:, :, :prev_frame_length] = last_frames
@@ -574,7 +574,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
 
             frames_n = (nframe - 1) * 4 + 1
-            prev_mask = torch.ones((1, frames_n, height, width), device=device, dtype=dtype)
+            prev_mask = torch.ones((1, frames_n, height, width), device=AI_DEVICE, dtype=dtype)
             prev_frame_len = max((prev_len - 1) * 4 + 1, 0)
             prev_mask[:, prev_frame_len:] = 0
             prev_mask = self._wan_mask_rearrange(prev_mask)
@@ -835,7 +835,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def load_audio_encoder(self):
         audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))
         audio_encoder_offload = self.config.get("audio_encoder_cpu_offload", self.config.get("cpu_offload", False))
-        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload, run_device=self.config.get("run_device", "cuda"))
+        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload)
         return model
 
     def load_audio_adapter(self):
@@ -843,7 +843,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if audio_adapter_offload:
             device = torch.device("cpu")
         else:
-            device = torch.device(self.run_device)
+            device = torch.device(AI_DEVICE)
         audio_adapter = AudioAdapter(
             attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
@@ -856,7 +856,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
             quantized=self.config.get("adapter_quantized", False),
             quant_scheme=self.config.get("adapter_quant_scheme", None),
             cpu_offload=audio_adapter_offload,
-            run_device=self.run_device,
         )
 
         audio_adapter.to(device)
@@ -892,11 +891,10 @@ class Wan22AudioRunner(WanAudioRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.run_device)
+            vae_device = torch.device(AI_DEVICE)
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,
-            "run_device": self.run_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
@@ -909,11 +907,10 @@ class Wan22AudioRunner(WanAudioRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.run_device)
+            vae_device = torch.device(AI_DEVICE)
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,
-            "run_device": self.run_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
