@@ -12,3 +12,4 @@ def set_ai_device():
 
 
 set_ai_device()
+from lightx2v_platform.ops import *  # noqa: E402

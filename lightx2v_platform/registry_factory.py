@@ -46,6 +46,12 @@ class Register(dict):
     def get(self, key, default=None):
         return self._dict.get(key, default)
 
+    def merge(self, other_register):
+        for key, value in other_register.items():
+            if key in self._dict:
+                raise Exception(f"{key} already exists in target register.")
+            self[key] = value
+
 
 PLATFORM_DEVICE_REGISTER = Register()
 PLATFORM_ATTN_WEIGHT_REGISTER = Register()

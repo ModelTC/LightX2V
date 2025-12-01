@@ -1,3 +1,6 @@
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
+
+
 class Register(dict):
     def __init__(self, *args, **kwargs):
         super(Register, self).__init__(*args, **kwargs)
@@ -46,6 +49,12 @@ class Register(dict):
     def get(self, key, default=None):
         return self._dict.get(key, default)
 
+    def merge(self, other_register):
+        for key, value in other_register.items():
+            if key in self._dict:
+                raise Exception(f"{key} already exists in target register.")
+            self[key] = value
+
 
 MM_WEIGHT_REGISTER = Register()
 ATTN_WEIGHT_REGISTER = Register()
@@ -57,3 +66,5 @@ TENSOR_REGISTER = Register()
 CONVERT_WEIGHT_REGISTER = Register()
 EMBEDDING_WEIGHT_REGISTER = Register()
 RUNNER_REGISTER = Register()
+
+ATTN_WEIGHT_REGISTER.merge(PLATFORM_ATTN_WEIGHT_REGISTER)
