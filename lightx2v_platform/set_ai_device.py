@@ -4,7 +4,7 @@ from lightx2v_platform import *
 
 
 def set_ai_device():
-    platform = os.getenv("AI_DEVICE", "cuda")
+    platform = os.getenv("PLATFORM", "cuda")
     init_ai_device(platform)
     from lightx2v_platform.base.global_var import AI_DEVICE
 
