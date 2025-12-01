@@ -34,6 +34,8 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
 )
 from lightx2v_platform.base.global_var import AI_DEVICE  # noqa E402
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 def use_default(value, default):
     """Utility: return value if not None, else default."""
@@ -146,12 +148,7 @@ def load_text_encoder(
             new_w_dict[key.replace("model.", "")] = weight_dict[key]
         del weight_dict
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        elif "mlu" in str(device):
-            torch.mlu.empty_cache()
-        elif "npu" in str(device):
-            torch.npu.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         text_encoder.load_state_dict(new_w_dict, assign=True)
 

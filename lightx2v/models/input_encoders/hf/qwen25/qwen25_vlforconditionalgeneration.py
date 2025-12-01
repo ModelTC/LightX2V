@@ -7,6 +7,8 @@ from transformers import Qwen2Tokenizer, Qwen2_5_VLForConditionalGeneration
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 try:
     from diffusers.image_processor import VaeImageProcessor
     from transformers import Qwen2VLProcessor
@@ -181,9 +183,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         if self.cpu_offload:
             self.text_encoder.to(torch.device("cpu"))
-            if hasattr(torch, AI_DEVICE):
-                torch_module = getattr(torch, AI_DEVICE)
-                torch_module.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
 
         return prompt_embeds, prompt_embeds_mask, image_info

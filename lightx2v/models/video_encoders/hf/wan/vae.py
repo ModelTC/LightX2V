@@ -10,6 +10,9 @@ from loguru import logger
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
+
 __all__ = [
     "WanVAE",
 ]
@@ -1329,9 +1332,4 @@ class WanVAE:
     def device_synchronize(
         self,
     ):
-        if "cuda" in str(AI_DEVICE):
-            torch.cuda.synchronize()
-        elif "mlu" in str(AI_DEVICE):
-            torch.mlu.synchronize()
-        elif "npu" in str(AI_DEVICE):
-            torch.npu.synchronize()
+        torch_device_module.synchronize()

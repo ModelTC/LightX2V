@@ -17,6 +17,8 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
@@ -86,9 +88,7 @@ class QwenImageRunner(DefaultRunner):
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-        if hasattr(torch, AI_DEVICE):
-            torch_module = getattr(torch, AI_DEVICE)
-            torch_module.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -122,9 +122,7 @@ class QwenImageRunner(DefaultRunner):
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
             image_encoder_output = self.run_vae_encoder(image=vae_image)
             image_encoder_output_list.append(image_encoder_output)
-        if hasattr(torch, AI_DEVICE):
-            torch_module = getattr(torch, AI_DEVICE)
-            torch_module.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -239,9 +237,7 @@ class QwenImageRunner(DefaultRunner):
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            if hasattr(torch, AI_DEVICE):
-                torch_module = getattr(torch, AI_DEVICE)
-                torch_module.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         return images
 
@@ -260,9 +256,7 @@ class QwenImageRunner(DefaultRunner):
         image.save(f"{input_info.save_result_path}")
 
         del latents, generator
-        if hasattr(torch, AI_DEVICE):
-            torch_module = getattr(torch, AI_DEVICE)
-            torch_module.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
 
         # Return (images, audio) - audio is None for default runner
