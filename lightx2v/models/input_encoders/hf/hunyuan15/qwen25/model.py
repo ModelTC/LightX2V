@@ -32,6 +32,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402
 )
+from lightx2v_platform.base.global_var import AI_DEVICE  # noqa E402
 
 
 def use_default(value, default):
@@ -552,7 +553,6 @@ class Qwen25VL_TextEncoder:
         text_len=1000,
         dtype=torch.float16,
         device=torch.device("cpu"),
-        run_device=torch.device("cuda"),
         checkpoint_path=None,
         cpu_offload=False,
         qwen25vl_quantized=False,
@@ -561,7 +561,6 @@ class Qwen25VL_TextEncoder:
     ):
         self.text_len = text_len
         self.dtype = dtype
-        self.run_device = run_device
         self.cpu_offload = cpu_offload
         self.qwen25vl_quantized = qwen25vl_quantized
         self.qwen25vl_quant_scheme = qwen25vl_quant_scheme
@@ -590,20 +589,20 @@ class Qwen25VL_TextEncoder:
 
     def infer(self, texts):
         if self.cpu_offload:
-            self.text_encoder = self.text_encoder.to(self.run_device)
+            self.text_encoder = self.text_encoder.to(AI_DEVICE)
         text_inputs = self.text_encoder.text2tokens(texts, data_type="video", max_length=self.text_len)
-        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=self.run_device)
+        prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=AI_DEVICE)
         if self.cpu_offload:
             self.text_encoder = self.text_encoder.to("cpu")
         prompt_embeds = prompt_outputs.hidden_state
         attention_mask = prompt_outputs.attention_mask
 
         if attention_mask is not None:
-            attention_mask = attention_mask.to(self.run_device)
+            attention_mask = attention_mask.to(AI_DEVICE)
             _, seq_len = attention_mask.shape
             attention_mask = attention_mask.repeat(1, self.num_videos_per_prompt)
             attention_mask = attention_mask.view(self.num_videos_per_prompt, seq_len)
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.run_device)
+        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
         seq_len = prompt_embeds.shape[1]
         # duplicate text embeddings for each generation per prompt, using mps friendly method

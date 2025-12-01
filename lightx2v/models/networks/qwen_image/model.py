@@ -8,6 +8,7 @@ from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
 from .infer.post_infer import QwenImagePostInfer
@@ -28,7 +29,7 @@ class QwenImageTransformerModel:
         self.model_path = os.path.join(config["model_path"], "transformer")
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
-        self.device = torch.device("cpu") if self.cpu_offload else torch.device(self.config.get("run_device", "cuda"))
+        self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
 
         with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
             transformer_config = json.load(f)

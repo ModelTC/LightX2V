@@ -26,6 +26,7 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def init_runner(config):
@@ -105,13 +106,12 @@ def main():
     config = set_config(args)
 
     if config["parallel"]:
-        run_device = config.get("run_device", "cuda")
-        if "cuda" in run_device:
+        if "cuda" in AI_DEVICE:
             pg_options = ProcessGroupNCCL.Options()
             pg_options.is_high_priority_stream = True
             dist.init_process_group(backend="nccl", pg_options=pg_options)
             torch.cuda.set_device(dist.get_rank())
-        elif "mlu" in run_device:
+        elif "mlu" in AI_DEVICE:
             dist.init_process_group(backend="cncl")
             torch.mlu.set_device(dist.get_rank())
         set_parallel_config(config)

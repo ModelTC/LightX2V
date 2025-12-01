@@ -21,6 +21,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("hunyuan_video_1.5")
@@ -71,7 +72,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         if qwen25vl_offload:
             qwen25vl_device = torch.device("cpu")
         else:
-            qwen25vl_device = torch.device(self.run_device)
+            qwen25vl_device = torch.device(AI_DEVICE)
 
         qwen25vl_quantized = self.config.get("qwen25vl_quantized", False)
         qwen25vl_quant_scheme = self.config.get("qwen25vl_quant_scheme", None)
@@ -82,7 +83,6 @@ class HunyuanVideo15Runner(DefaultRunner):
         text_encoder = Qwen25VL_TextEncoder(
             dtype=torch.float16,
             device=qwen25vl_device,
-            run_device=self.run_device,
             checkpoint_path=text_encoder_path,
             cpu_offload=qwen25vl_offload,
             qwen25vl_quantized=qwen25vl_quantized,
@@ -94,9 +94,9 @@ class HunyuanVideo15Runner(DefaultRunner):
         if byt5_offload:
             byt5_device = torch.device("cpu")
         else:
-            byt5_device = torch.device(self.run_device)
+            byt5_device = torch.device(AI_DEVICE)
 
-        byt5 = ByT5TextEncoder(config=self.config, device=byt5_device, run_device=self.run_device, checkpoint_path=self.config["model_path"], cpu_offload=byt5_offload)
+        byt5 = ByT5TextEncoder(config=self.config, device=byt5_device, checkpoint_path=self.config["model_path"], cpu_offload=byt5_offload)
         text_encoders = [text_encoder, byt5]
         return text_encoders
 
@@ -230,11 +230,10 @@ class HunyuanVideo15Runner(DefaultRunner):
         if siglip_offload:
             siglip_device = torch.device("cpu")
         else:
-            siglip_device = torch.device(self.run_device)
+            siglip_device = torch.device(AI_DEVICE)
         image_encoder = SiglipVisionEncoder(
             config=self.config,
             device=siglip_device,
-            run_device=self.run_device,
             checkpoint_path=self.config["model_path"],
             cpu_offload=siglip_offload,
         )
@@ -246,7 +245,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.run_device)
+            vae_device = torch.device(AI_DEVICE)
 
         vae_config = {
             "checkpoint_path": self.config["model_path"],
@@ -265,7 +264,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device(self.run_device)
+            vae_device = torch.device(AI_DEVICE)
 
         vae_config = {
             "checkpoint_path": self.config["model_path"],
@@ -275,7 +274,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         }
         if self.config.get("use_tae", False):
             tae_path = self.config["tae_path"]
-            vae_decoder = self.tae_cls(vae_path=tae_path, dtype=GET_DTYPE()).to(self.run_device)
+            vae_decoder = self.tae_cls(vae_path=tae_path, dtype=GET_DTYPE()).to(AI_DEVICE)
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
@@ -350,7 +349,7 @@ class HunyuanVideo15Runner(DefaultRunner):
                     self.model_sr.scheduler.step_post()
 
         del self.inputs_sr
-        torch_ext_module = getattr(torch, self.run_device)
+        torch_ext_module = getattr(torch, AI_DEVICE)
         torch_ext_module.empty_cache()
 
         self.config_sr["is_sr_running"] = False
@@ -369,10 +368,10 @@ class HunyuanVideo15Runner(DefaultRunner):
         text_encoder_output = self.run_text_encoder(self.input_info)
 
         # vision_states is all zero, because we don't have any image input
-        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.config["hidden_size"], dtype=torch.bfloat16).to(self.run_device)
-        siglip_mask = torch.zeros(1, self.vision_num_semantic_tokens, dtype=torch.bfloat16, device=torch.device(self.run_device))
+        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.config["hidden_size"], dtype=torch.bfloat16).to(AI_DEVICE)
+        siglip_mask = torch.zeros(1, self.vision_num_semantic_tokens, dtype=torch.bfloat16, device=torch.device(AI_DEVICE))
 
-        torch_ext_module = getattr(torch, self.run_device)
+        torch_ext_module = getattr(torch, AI_DEVICE)
         torch_ext_module.empty_cache()
         gc.collect()
         return {
@@ -400,7 +399,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         siglip_output, siglip_mask = self.run_image_encoder(img_ori) if self.config.get("use_image_encoder", True) else None
         cond_latents = self.run_vae_encoder(img_ori)
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_ext_module = getattr(torch, self.run_device)
+        torch_ext_module = getattr(torch, AI_DEVICE)
         torch_ext_module.empty_cache()
         gc.collect()
         return {
@@ -427,9 +426,9 @@ class HunyuanVideo15Runner(DefaultRunner):
             target_height = self.target_height
 
         input_image_np = self.resize_and_center_crop(first_frame, target_width=target_width, target_height=target_height)
-        vision_states = self.image_encoder.encode_images(input_image_np).last_hidden_state.to(device=torch.device(self.run_device), dtype=torch.bfloat16)
+        vision_states = self.image_encoder.encode_images(input_image_np).last_hidden_state.to(device=torch.device(AI_DEVICE), dtype=torch.bfloat16)
         image_encoder_output = self.image_encoder.infer(vision_states)
-        image_encoder_mask = torch.ones((1, image_encoder_output.shape[1]), dtype=torch.bfloat16, device=torch.device(self.run_device))
+        image_encoder_mask = torch.ones((1, image_encoder_output.shape[1]), dtype=torch.bfloat16, device=torch.device(AI_DEVICE))
         return image_encoder_output, image_encoder_mask
 
     def resize_and_center_crop(self, image, target_width, target_height):
@@ -480,6 +479,6 @@ class HunyuanVideo15Runner(DefaultRunner):
             ]
         )
 
-        ref_images_pixel_values = ref_image_transform(first_frame).unsqueeze(0).unsqueeze(2).to(self.run_device)
+        ref_images_pixel_values = ref_image_transform(first_frame).unsqueeze(0).unsqueeze(2).to(AI_DEVICE)
         cond_latents = self.vae_encoder.encode(ref_images_pixel_values.to(GET_DTYPE()))
         return cond_latents

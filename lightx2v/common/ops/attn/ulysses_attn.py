@@ -3,6 +3,7 @@ import torch.distributed as dist
 
 from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq, all2all_seq2head
@@ -88,7 +89,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         v = torch.cat((img_v, txt_v), dim=0)
 
         # 初始化累积序列长度张量
-        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device=self.config.get("run_device", "cuda"))
+        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device=AI_DEVICE)
         s = txt_qkv_len + img_q.shape[0]  # 计算文本和图像的总长度
         s1 = s  # 当前样本的结束位置
         cu_seqlens_qkv[1] = s1  # 设置累积序列长度
@@ -133,22 +134,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             img_attn = all2all_head2seq(img_attn, group=seq_p_group)
 
         img_attn = img_attn.reshape(shard_seqlen, -1)  # 重塑为 [shard_seqlen, -1] 形状
-        self.device_synchronize()  # 确保CUDA操作完成
         return img_attn
-
-    def device_synchronize(
-        self,
-    ):
-        if torch.cuda.is_available():
-            # no need to sync between comm and comp
-            # torch.cuda.synchronize()
-            self.config["run_device"] = "cuda"
-        elif hasattr(torch, "mlu") and torch.mlu.is_available():
-            torch.mlu.synchronize()
-            self.config["run_device"] = "mlu"
-        elif hasattr(torch, "npu") and torch.npu.is_available():
-            torch.npu.synchronize()
-            self.config["run_device"] = "npu"
 
 
 @ATTN_WEIGHT_REGISTER("ulysses-4090")

@@ -4,6 +4,7 @@ from typing import Union
 import torch
 
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanStepDistillScheduler(WanScheduler):
@@ -19,7 +20,7 @@ class WanStepDistillScheduler(WanScheduler):
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
-        self.set_denoising_timesteps(device=self.run_device)
+        self.set_denoising_timesteps(device=AI_DEVICE)
         self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
