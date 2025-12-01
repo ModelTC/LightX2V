@@ -8,6 +8,7 @@ from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def get_default_config():
@@ -92,8 +93,7 @@ def set_parallel_config(config):
         cfg_p_size = config["parallel"].get("cfg_p_size", 1)
         seq_p_size = config["parallel"].get("seq_p_size", 1)
         assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size * seq_p_size must be equal to world_size"
-        device_str = config.get("run_device", "cuda")
-        config["device_mesh"] = init_device_mesh(device_str, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+        config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
 
         if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
             config["seq_parallel"] = True

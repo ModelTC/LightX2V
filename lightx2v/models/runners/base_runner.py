@@ -3,6 +3,8 @@ from abc import ABC
 import torch
 import torch.distributed as dist
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 class BaseRunner(ABC):
     """Abstract base class for all Runners
@@ -145,9 +147,9 @@ class BaseRunner(ABC):
 
         if world_size > 1:
             if rank == signal_rank:
-                t = torch.tensor([stopped], dtype=torch.int32).to(device=self.config.get("run_device", "cuda"))
+                t = torch.tensor([stopped], dtype=torch.int32).to(device=AI_DEVICE)
             else:
-                t = torch.zeros(1, dtype=torch.int32, device=self.config.get("run_device", "cuda"))
+                t = torch.zeros(1, dtype=torch.int32, device=AI_DEVICE)
             dist.broadcast(t, src=signal_rank)
             stopped = t.item()
 

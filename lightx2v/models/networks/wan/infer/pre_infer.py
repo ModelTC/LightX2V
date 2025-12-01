@@ -10,10 +10,8 @@ class WanPreInfer:
     def __init__(self, config):
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
         self.config = config
-        self.run_device = self.config.get("run_device", "cuda")
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.task = config["task"]
-        self.device = torch.device(self.config.get("run_device", "cuda"))
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
         self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)

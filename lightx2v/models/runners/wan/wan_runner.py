@@ -169,7 +169,6 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
-            "run_device": self.run_device,
             "parallel": self.config["parallel"],
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
