@@ -185,7 +185,7 @@ def step3_convert_merged_to_fp8(merged_path: Path, output_dir: Path, device: str
         str(output_dir),
         "-o_n",
         "merged_fp8",
-        "--linear_dtype",
+        "--linear_type",
         "fp8",
         "--quantized",
         "--device",
