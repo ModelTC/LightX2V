@@ -868,12 +868,17 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return {"video": None, "audio": None, "for_next_section": section_info}
 
     def _build_section_info(self) -> Optional[Dict[str, torch.Tensor]]:
+        """
+        prev_video(81):   overlap: prev_frame_length
+            ┌─────81──────┬──┬─────────────┬────┐
+            >>>>>>>>>>>>>>>>>>─────────────┼────┘
+            │             >>>>>>>>>>>>>>>>>>
+                                    81
+        """
         if self.prev_video is None:
             return None
-        # self.segment is last segment, so we need to get the last useful_length frames
-        useful_length = self.segment.end_frame - self.segment.start_frame
-        prev_video = self.prev_video[:, :, :useful_length]
-        last_frames = prev_video[:, :, -self.prev_frame_length :].detach().cpu().clone()
+
+        last_frames = self.prev_video[:, :, -self.prev_frame_length :].detach().cpu().clone()
         return {"prev_video": last_frames, "prev_latent": self.prev_latent}
 
     def _resolve_section_info_path(self) -> Path:
