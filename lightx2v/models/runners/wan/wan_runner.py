@@ -319,17 +319,12 @@ class WanRunner(DefaultRunner):
                 min_total_padding = total_padding
                 best_grid = (world_size_h, world_size_w)
 
-        # Apply padding if needed and reasonable (< 10% of max dimension)
+        # Apply padding
         world_size_h, world_size_w = best_grid
         pad_h = (world_size_h - (latent_h % world_size_h)) % world_size_h
         pad_w = (world_size_w - (latent_w % world_size_w)) % world_size_w
 
-        if pad_h > 0 or pad_w > 0:
-            max_dim = max(latent_h, latent_w)
-            if (pad_h + pad_w) <= max_dim * 0.1:  # Allow up to 10% padding
-                return latent_h + pad_h, latent_w + pad_w, world_size_h, world_size_w
-
-        return latent_h, latent_w, world_size_h, world_size_w
+        return latent_h + pad_h, latent_w + pad_w, world_size_h, world_size_w
 
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
@@ -364,8 +359,8 @@ class WanRunner(DefaultRunner):
                     int(latent_h * self.config["resolution_rate"][i]) // 2 * 2,
                     int(latent_w * self.config["resolution_rate"][i]) // 2 * 2,
                 )
-                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp))
-            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w))
+                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp, world_size_h=world_size_h, world_size_w=world_size_w))
+            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w, world_size_h=world_size_h, world_size_w=world_size_w))
             return vae_encode_out_list, latent_shape
         else:
             if last_frame is not None:
