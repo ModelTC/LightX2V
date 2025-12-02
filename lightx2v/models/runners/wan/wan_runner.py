@@ -347,7 +347,7 @@ class WanRunner(DefaultRunner):
             logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
         else:
             latent_h, latent_w = ori_latent_h, ori_latent_w
-            world_size_h, world_size_w = 1, 1
+            world_size_h, world_size_w = None, None
 
         latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)  # Important: latent_shape is used to set the input_info
 
@@ -376,7 +376,7 @@ class WanRunner(DefaultRunner):
             vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame, world_size_h=world_size_h, world_size_w=world_size_w)
             return vae_encoder_out, latent_shape
 
-    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None, world_size_h=1, world_size_w=1):
+    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None, world_size_h=None, world_size_w=None):
         h = lat_h * self.config["vae_stride"][1]
         w = lat_w * self.config["vae_stride"][2]
         msk = torch.ones(
