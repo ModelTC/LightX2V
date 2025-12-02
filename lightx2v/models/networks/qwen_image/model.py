@@ -125,7 +125,12 @@ class QwenImageTransformerModel:
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        with safe_open(file_path, framework="pt", device=str(self.device)) as f:
+        if self.config["parallel"]:
+            device = dist.get_rank()
+        else:
+            device = self.device
+
+        with safe_open(file_path, framework="pt", device=device) as f:
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()
