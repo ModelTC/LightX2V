@@ -149,7 +149,7 @@ class WanModel(CompiledMethodsMixin):
         if self.config["parallel"]:
             device = dist.get_rank()
         else:
-            device = self.device
+            device = str(self.device)
 
         with safe_open(file_path, framework="pt", device=device) as f:
             return {
