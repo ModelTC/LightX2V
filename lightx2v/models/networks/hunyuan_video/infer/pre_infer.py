@@ -5,6 +5,7 @@ import torch
 from einops import rearrange
 
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
@@ -68,7 +69,6 @@ class HunyuanVideo15PreInfer:
         self.heads_num = config["heads_num"]
         self.frequency_embedding_size = 256
         self.max_period = 10000
-        self.run_device = torch.device(self.config.get("run_device", "cuda"))
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -155,7 +155,7 @@ class HunyuanVideo15PreInfer:
         byt5_txt = byt5_txt + weights.cond_type_embedding.apply(torch.ones_like(byt5_txt[:, :, 0], device=byt5_txt.device, dtype=torch.long))
         txt, text_mask = self.reorder_txt_token(byt5_txt, txt, byt5_text_mask, text_mask, zero_feat=True)
 
-        siglip_output = siglip_output + weights.cond_type_embedding.apply(2 * torch.ones_like(siglip_output[:, :, 0], dtype=torch.long, device=self.run_device))
+        siglip_output = siglip_output + weights.cond_type_embedding.apply(2 * torch.ones_like(siglip_output[:, :, 0], dtype=torch.long, device=AI_DEVICE))
         txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
         txt = txt[:, : text_mask.sum(), :]
 

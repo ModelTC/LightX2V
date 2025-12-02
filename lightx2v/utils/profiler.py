@@ -7,6 +7,9 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class _ProfilingContext:
@@ -27,12 +30,12 @@ class _ProfilingContext:
         self.metrics_labels = metrics_labels
 
     def __enter__(self):
-        self.device_synchronize()
+        torch_device_module.synchronize()
         self.start_time = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.device_synchronize()
+        torch_device_module.synchronize()
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
@@ -44,12 +47,12 @@ class _ProfilingContext:
         return False
 
     async def __aenter__(self):
-        self.device_synchronize()
+        torch_device_module.synchronize()
         self.start_time = time.perf_counter()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.device_synchronize()
+        torch_device_module.synchronize()
         elapsed = time.perf_counter() - self.start_time
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
@@ -77,17 +80,6 @@ class _ProfilingContext:
                     return func(*args, **kwargs)
 
             return sync_wrapper
-
-    def device_synchronize(
-        self,
-    ):
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        elif hasattr(torch, "mlu") and torch.mlu.is_available():
-            torch.mlu.synchronize()
-        elif hasattr(torch, "npu") and torch.npu.is_available():
-            torch.npu.synchronize()
-        return
 
 
 class _NullContext:

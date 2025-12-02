@@ -4,7 +4,6 @@
     "video_duration": 5,
     "audio_sr": 16000,
     "target_video_length": 81,
-    "resize_mode": "adaptive",
     "self_attn_1_type": "sage_attn3",
     "cross_attn_1_type": "sage_attn3",
     "cross_attn_2_type": "sage_attn3",

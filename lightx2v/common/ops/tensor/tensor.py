@@ -29,16 +29,14 @@ class DefaultTensor:
                 self.tensor_cuda_buffer = weight_dict[self.tensor_name].cuda()
             else:
                 device = weight_dict[self.tensor_name].device
-                if device.type in ["cuda", "mlu", "npu"]:
-                    self.tensor = weight_dict[self.tensor_name]
-                elif device.type == "cpu":
+                if device.type == "cpu":
                     tensor_shape = weight_dict[self.tensor_name].shape
                     tensor_dtype = weight_dict[self.tensor_name].dtype
                     self.pin_tensor = torch.empty(tensor_shape, pin_memory=True, dtype=tensor_dtype)
                     self.pin_tensor.copy_(weight_dict[self.tensor_name])
                     del weight_dict[self.tensor_name]
                 else:
-                    raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+                    self.tensor = weight_dict[self.tensor_name]
 
     def clear(self):
         attrs = ["tensor", "pinned_tensor"]

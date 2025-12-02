@@ -2,12 +2,12 @@ import torch
 
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanSFScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.run_device = torch.device(config.get("run_device", "cuda"))
         self.dtype = torch.bfloat16
         self.num_frame_per_block = self.config["sf_config"]["num_frame_per_block"]
         self.num_output_frames = self.config["sf_config"]["num_output_frames"]
@@ -27,20 +27,20 @@ class WanSFScheduler(WanScheduler):
         self.context_noise = 0
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
-        self.latents = torch.randn(latent_shape, device=self.run_device, dtype=self.dtype)
+        self.latents = torch.randn(latent_shape, device=AI_DEVICE, dtype=self.dtype)
 
         timesteps = []
         for frame_block_idx, current_num_frames in enumerate(self.all_num_frames):
             frame_steps = []
 
             for step_index, current_timestep in enumerate(self.denoising_step_list):
-                timestep = torch.ones([self.num_frame_per_block], device=self.run_device, dtype=torch.int64) * current_timestep
+                timestep = torch.ones([self.num_frame_per_block], device=AI_DEVICE, dtype=torch.int64) * current_timestep
                 frame_steps.append(timestep)
 
             timesteps.append(frame_steps)
         self.timesteps = timesteps
 
-        self.noise_pred = torch.zeros(latent_shape, device=self.run_device, dtype=self.dtype)
+        self.noise_pred = torch.zeros(latent_shape, device=AI_DEVICE, dtype=self.dtype)
 
         sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min) * self.denoising_strength
         if self.extra_one_step:
@@ -52,10 +52,10 @@ class WanSFScheduler(WanScheduler):
         self.sigmas_sf = self.sf_shift * self.sigmas_sf / (1 + (self.sf_shift - 1) * self.sigmas_sf)
         if self.reverse_sigmas:
             self.sigmas_sf = 1 - self.sigmas_sf
-        self.sigmas_sf = self.sigmas_sf.to(self.run_device)
+        self.sigmas_sf = self.sigmas_sf.to(AI_DEVICE)
 
         self.timesteps_sf = self.sigmas_sf * self.num_train_timesteps
-        self.timesteps_sf = self.timesteps_sf.to(self.run_device)
+        self.timesteps_sf = self.timesteps_sf.to(AI_DEVICE)
 
         self.stream_output = None
 
@@ -93,7 +93,7 @@ class WanSFScheduler(WanScheduler):
 
         # add noise
         if self.step_index < self.infer_steps - 1:
-            timestep_next = self.timesteps[self.seg_index][self.step_index + 1] * torch.ones(self.num_frame_per_block, device=self.run_device, dtype=torch.long)
+            timestep_next = self.timesteps[self.seg_index][self.step_index + 1] * torch.ones(self.num_frame_per_block, device=AI_DEVICE, dtype=torch.long)
             timestep_id_next = torch.argmin((self.timesteps_sf.unsqueeze(0) - timestep_next.unsqueeze(1)).abs(), dim=1)
             sigma_next = self.sigmas_sf[timestep_id_next].reshape(-1, 1, 1, 1)
             noise_next = torch.randn_like(x0_pred)

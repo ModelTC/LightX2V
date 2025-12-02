@@ -10,6 +10,7 @@ except Exception as e:
     apply_rope_with_cos_sin_cache_inplace = None
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
 from .triton_ops import fuse_scale_shift_kernel
@@ -100,7 +101,6 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.heads_num = config["heads_num"]
-        self.run_device = torch.device(self.config.get("run_device", "cuda"))
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
@@ -222,7 +222,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         key = torch.cat([img_k, txt_k], dim=1)
         value = torch.cat([img_v, txt_v], dim=1)
         seqlen = query.shape[1]
-        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to(self.run_device, non_blocking=True)
+        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
 
         if self.config["seq_parallel"]:
             attn_out = weights.self_attention_parallel.apply(

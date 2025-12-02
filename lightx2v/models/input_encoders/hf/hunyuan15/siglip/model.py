@@ -10,6 +10,8 @@ from safetensors.torch import safe_open
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from transformers.utils import ModelOutput
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 PRECISION_TO_TYPE = {
     "fp32": torch.float32,
     "fp16": torch.float16,
@@ -95,7 +97,6 @@ class VisionEncoder(nn.Module):
         output_key: Optional[str] = None,
         logger=None,
         device=None,
-        run_device=None,
         cpu_offload=False,
     ):
         super().__init__()
@@ -121,7 +122,6 @@ class VisionEncoder(nn.Module):
         )
         self.dtype = self.model.dtype
         self.device = self.model.device
-        self.run_device = run_device
 
         self.processor, self.processor_path = load_image_processor(
             processor_type=self.processor_type,
@@ -172,12 +172,12 @@ class VisionEncoder(nn.Module):
             VisionEncoderModelOutput with encoded features
         """
         if self.cpu_offload:
-            self.model = self.model.to("cuda")
-            self.processor = self.processor.to("cuda")
+            self.model = self.model.to(AI_DEVICE)
+            self.processor = self.processor.to(AI_DEVICE)
 
         if isinstance(images, np.ndarray):
             # Preprocess images if they're numpy arrays
-            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device=self.run_device, dtype=self.model.dtype)
+            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device=AI_DEVICE, dtype=self.model.dtype)
         else:
             # Assume already preprocessed
             preprocessed = images
@@ -232,13 +232,11 @@ class SiglipVisionEncoder:
         self,
         config,
         device=torch.device("cpu"),
-        run_device=torch.device("cuda"),
         checkpoint_path=None,
         cpu_offload=False,
     ):
         self.config = config
         self.device = device
-        self.run_device = run_device
         self.cpu_offload = cpu_offload
         self.vision_states_dim = 1152
         vision_encoder_path = os.path.join(checkpoint_path, "vision_encoder", "siglip")
@@ -252,7 +250,6 @@ class SiglipVisionEncoder:
             output_key=None,
             logger=None,
             device=self.device,
-            run_device=self.run_device,
             cpu_offload=self.cpu_offload,
         )
 
@@ -270,7 +267,7 @@ class SiglipVisionEncoder:
     @torch.no_grad()
     def infer(self, vision_states):
         if self.cpu_offload:
-            self.vision_in = self.vision_in.to(self.run_device)
+            self.vision_in = self.vision_in.to(AI_DEVICE)
         vision_states = self.vision_in(vision_states)
         if self.cpu_offload:
             self.vision_in = self.vision_in.to("cpu")

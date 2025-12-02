@@ -8,6 +8,7 @@ import torch
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def calculate_shift(
@@ -133,7 +134,6 @@ class QwenImageScheduler(BaseScheduler):
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config["model_path"], "scheduler"))
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
-        self.run_device = torch.device(self.config.get("run_device", "cuda"))
         self.dtype = torch.bfloat16
         self.guidance_scale = 1.0
 
@@ -176,9 +176,9 @@ class QwenImageScheduler(BaseScheduler):
         shape = input_info.target_shape
         width, height = shape[-1], shape[-2]
 
-        latents = randn_tensor(shape, generator=self.generator, device=self.run_device, dtype=self.dtype)
+        latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
         latents = self._pack_latents(latents, self.config["batchsize"], self.config["num_channels_latents"], height, width)
-        latent_image_ids = self._prepare_latent_image_ids(self.config["batchsize"], height // 2, width // 2, self.run_device, self.dtype)
+        latent_image_ids = self._prepare_latent_image_ids(self.config["batchsize"], height // 2, width // 2, AI_DEVICE, self.dtype)
 
         self.latents = latents
         self.latent_image_ids = latent_image_ids
@@ -198,7 +198,7 @@ class QwenImageScheduler(BaseScheduler):
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
-            self.run_device,
+            AI_DEVICE,
             sigmas=sigmas,
             mu=mu,
         )
@@ -213,7 +213,7 @@ class QwenImageScheduler(BaseScheduler):
     def prepare_guidance(self):
         # handle guidance
         if self.config["guidance_embeds"]:
-            guidance = torch.full([1], self.guidance_scale, device=self.run_device, dtype=torch.float32)
+            guidance = torch.full([1], self.guidance_scale, device=AI_DEVICE, dtype=torch.float32)
             guidance = guidance.expand(self.latents.shape[0])
         else:
             guidance = None
@@ -223,7 +223,7 @@ class QwenImageScheduler(BaseScheduler):
         if self.config["task"] == "i2i":
             self.generator = torch.Generator().manual_seed(input_info.seed)
         elif self.config["task"] == "t2i":
-            self.generator = torch.Generator(device=self.run_device).manual_seed(input_info.seed)
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         self.prepare_latents(input_info)
         self.prepare_guidance()
         self.set_timesteps()

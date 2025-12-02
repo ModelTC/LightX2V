@@ -5,6 +5,10 @@ import os
 import torch
 from transformers import Qwen2Tokenizer, Qwen2_5_VLForConditionalGeneration
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
+
 try:
     from diffusers.image_processor import VaeImageProcessor
     from transformers import Qwen2VLProcessor
@@ -58,11 +62,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         self.VAE_IMAGE_SIZE = 1024 * 1024
 
         self.cpu_offload = config.get("cpu_offload", False)
-        self.run_device = self.config.get("run_device", "cuda")
         if self.cpu_offload:
             self.device = torch.device("cpu")
         else:
-            self.device = torch.device(self.config.get("run_device", "cuda"))
+            self.device = torch.device(AI_DEVICE)
         self.dtype = torch.bfloat16
         self.load()
 
@@ -180,9 +183,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         if self.cpu_offload:
             self.text_encoder.to(torch.device("cpu"))
-            if hasattr(torch, self.config.get("run_device", "cuda")):
-                torch_module = getattr(torch, self.config.get("run_device", "cuda"))
-                torch_module.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
 
         return prompt_embeds, prompt_embeds_mask, image_info

@@ -7,12 +7,12 @@ from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.utils import masks_like
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.run_device = torch.device(self.config.get("run_device", "cuda"))
         self.infer_steps = self.config["infer_steps"]
         self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
@@ -36,7 +36,7 @@ class WanScheduler(BaseScheduler):
                 self.rope_params(1024, 2 * (self.head_size // 6)),
             ],
             dim=1,
-        ).to(torch.device(self.run_device))
+        ).to(torch.device(AI_DEVICE))
 
     def rope_params(self, max_seq_len, dim, theta=10000):
         assert dim % 2 == 0
@@ -70,7 +70,7 @@ class WanScheduler(BaseScheduler):
         self.sigma_min = self.sigmas[-1].item()
         self.sigma_max = self.sigmas[0].item()
 
-        self.set_timesteps(self.infer_steps, device=self.run_device, shift=self.sample_shift)
+        self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
 
         self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
@@ -114,14 +114,14 @@ class WanScheduler(BaseScheduler):
         return cos_sin
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.run_device).manual_seed(seed)
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(
             latent_shape[0],
             latent_shape[1],
             latent_shape[2],
             latent_shape[3],
             dtype=dtype,
-            device=self.run_device,
+            device=AI_DEVICE,
             generator=self.generator,
         )
         if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:

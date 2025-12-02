@@ -5,15 +5,14 @@
     "audio_sr": 16000,
     "target_video_length": 81,
     "resize_mode": "adaptive",
-    "self_attn_1_type": "flash_attn2",
-    "cross_attn_1_type": "flash_attn2",
-    "cross_attn_2_type": "flash_attn2",
+    "self_attn_1_type": "mlu_sage_attn",
+    "cross_attn_1_type": "mlu_sage_attn",
+    "cross_attn_2_type": "mlu_sage_attn",
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,
     "cpu_offload": false,
     "use_31_block": false,
-    "run_device": "mlu",
     "rope_type": "torch",
     "modulate_type": "torch"
 }
