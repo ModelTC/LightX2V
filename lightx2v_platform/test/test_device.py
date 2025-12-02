@@ -1,11 +1,11 @@
-import os
+"""
+PYTHONPATH=/path-to-LightX2V PLATFORM=cuda python test_device.py
+PYTHONPATH=/path-to-LightX2V PLATFORM=mlu python test_device.py
+PYTHONPATH=/path-to-LightX2V PLATFORM=metax python test_device.py
+"""
 
-from lightx2v_platform import *
+# This import will initialize the AI device
+import lightx2v_platform.set_ai_device  # noqa: F401
+from lightx2v_platform.base.global_var import AI_DEVICE
 
-init_ai_device(os.getenv("AI_DEVICE", "cuda"))
-from lightx2v_platform.base.global_var import AI_DEVICE  # noqa E402
-
-if __name__ == "__main__":
-    print(f"AI_DEVICE : {AI_DEVICE}")
-    is_available = check_ai_device(AI_DEVICE)
-    print(f"Device available: {is_available}")
+print(f"AI_DEVICE: {AI_DEVICE}")
