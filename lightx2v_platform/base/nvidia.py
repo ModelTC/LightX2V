@@ -1,3 +1,4 @@
+import torch
 import torch.distributed as dist
 
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
