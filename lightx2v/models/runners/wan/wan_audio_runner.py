@@ -169,15 +169,15 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             if ori_height * ori_weight >= resolution[0] * resolution[1]:
                 target_h, target_w = resolution
     elif resize_mode == "keep_ratio_fixed_area":
-        fixed_area = 480 * 832
+        area_in_pixels = 480 * 832
         if fixed_area == "480p":
-            fixed_area = 480 * 832
+            area_in_pixels = 480 * 832
         elif fixed_area == "720p":
-            fixed_area = 720 * 1280
+            area_in_pixels = 720 * 1280
         else:
-            fixed_area = 480 * 832
-        target_h = round(np.sqrt(fixed_area * ori_ratio))
-        target_w = round(np.sqrt(fixed_area / ori_ratio))
+            area_in_pixels = 480 * 832
+        target_h = round(np.sqrt(area_in_pixels * ori_ratio))
+        target_w = round(np.sqrt(area_in_pixels / ori_ratio))
     elif resize_mode == "fixed_min_area":
         aspect_ratios = np.array(np.array(list(bucket_config.keys())))
         closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
