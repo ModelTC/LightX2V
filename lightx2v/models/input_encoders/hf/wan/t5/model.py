@@ -19,13 +19,13 @@ from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.offload.manager import WeightAsyncStreamManager  # noqa E402
 from lightx2v.common.ops import *  # noqa E402
 from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
-    MluQuantLinearInt8,
     Q8FQuantLinearFp8,  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
     SglQuantLinearFp8,  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402,
 )
+from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  # noqa E402
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
 from lightx2v.utils.envs import *  # noqa E402
 from lightx2v.utils.registry_factory import (  # noqa E402

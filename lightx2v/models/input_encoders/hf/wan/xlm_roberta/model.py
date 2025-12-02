@@ -10,9 +10,10 @@ from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from lightx2v.models.input_encoders.hf.q_linear import MluQuantLinearInt8, Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
 
 __all__ = [
     "XLMRobertaCLIP",
