@@ -1,4 +1,4 @@
-from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER, PLATFORM_MM_WEIGHT_REGISTER
 
 
 class Register(dict):
@@ -68,3 +68,4 @@ EMBEDDING_WEIGHT_REGISTER = Register()
 RUNNER_REGISTER = Register()
 
 ATTN_WEIGHT_REGISTER.merge(PLATFORM_ATTN_WEIGHT_REGISTER)
+MM_WEIGHT_REGISTER.merge(PLATFORM_MM_WEIGHT_REGISTER)
