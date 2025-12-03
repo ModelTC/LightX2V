@@ -18,8 +18,11 @@ class PostgresSQLTaskManager(BaseTaskManager):
         self.table_users = "users"
         self.table_versions = "versions"
         self.table_shares = "shares"
+        self.table_podcasts = "podcasts"
         self.pool = None
         self.metrics_monitor = metrics_monitor
+        self.time_keys = ["create_t", "update_t", "ping_t", "valid_t"]
+        self.json_keys = ["params", "extra_info", "inputs", "outputs", "previous", "rounds", "subtitles"]
 
     async def init(self):
         await self.upgrade_db()
@@ -30,19 +33,19 @@ class PostgresSQLTaskManager(BaseTaskManager):
 
     def fmt_dict(self, data):
         super().fmt_dict(data)
-        for k in ["create_t", "update_t", "ping_t", "valid_t"]:
+        for k in self.time_keys:
             if k in data and isinstance(data[k], float):
                 data[k] = datetime.fromtimestamp(data[k])
-        for k in ["params", "extra_info", "inputs", "outputs", "previous"]:
+        for k in self.json_keys:
             if k in data:
                 data[k] = json.dumps(data[k], ensure_ascii=False)
 
     def parse_dict(self, data):
         super().parse_dict(data)
-        for k in ["params", "extra_info", "inputs", "outputs", "previous"]:
+        for k in self.json_keys:
             if k in data:
                 data[k] = json.loads(data[k])
-        for k in ["create_t", "update_t", "ping_t", "valid_t"]:
+        for k in self.time_keys:
             if k in data:
                 data[k] = data[k].timestamp()
 
@@ -71,6 +74,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
         versions = [
             (1, "Init tables", self.upgrade_v1),
             (2, "Add shares table", self.upgrade_v2),
+            (3, "Add podcasts table", self.upgrade_v3),
         ]
         logger.info(f"upgrade_db: {self.db_url}")
         cur_ver = await self.query_version()
@@ -199,7 +203,39 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 await conn.execute(f"INSERT INTO {self.table_versions} (version, description, create_t) VALUES ($1, $2, $3)", version, description, datetime.now())
                 return True
         except:  # noqa
-            logger.error(f"upgrade_v1 error: {traceback.format_exc()}")
+            logger.error(f"upgrade_v2 error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    async def upgrade_v3(self, version, description):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                # create shares table
+                await conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.table_podcasts} (
+                        session_id VARCHAR(128) PRIMARY KEY,
+                        user_id VARCHAR(256) NOT NULL,
+                        user_input TEXT,
+                        create_t TIMESTAMPTZ NOT NULL,
+                        update_t TIMESTAMPTZ NOT NULL,
+                        has_audio BOOLEAN DEFAULT FALSE,
+                        audio_path TEXT,
+                        metadata_path TEXT,
+                        rounds JSONB,
+                        subtitles JSONB,
+                        extra_info JSONB,
+                        tag VARCHAR(64),
+                        FOREIGN KEY (user_id) REFERENCES {self.table_users}(user_id) ON DELETE CASCADE
+                    )
+                """)
+
+                # update version
+                await conn.execute(f"INSERT INTO {self.table_versions} (version, description, create_t) VALUES ($1, $2, $3)", version, description, datetime.now())
+                return True
+        except:  # noqa
+            logger.error(f"upgrade_v3 error: {traceback.format_exc()}")
             return False
         finally:
             await self.release_conn(conn)
@@ -533,6 +569,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
                                 extra_info=sub["extra_info"],
                                 src_status=sub["status"],
                             )
+                            self.align_extra_inputs(task, sub)
                             nexts.append(sub)
                 if len(nexts) > 0:
                     await self.update_task(conn, task_id, status=TaskStatus.PENDING)
@@ -890,6 +927,122 @@ class PostgresSQLTaskManager(BaseTaskManager):
         except:  # noqa
             logger.error(f"query_user error: {traceback.format_exc()}")
             return None
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def insert_podcast(self, podcast):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                self.fmt_dict(podcast)
+                await conn.execute(
+                    f"""INSERT INTO {self.table_podcasts}
+                    (session_id, user_id, user_input, create_t, update_t, has_audio,
+                    audio_path, metadata_path, rounds, subtitles, extra_info, tag)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    """,
+                    podcast["session_id"],
+                    podcast["user_id"],
+                    podcast["user_input"],
+                    podcast["create_t"],
+                    podcast["update_t"],
+                    podcast["has_audio"],
+                    podcast["audio_path"],
+                    podcast["metadata_path"],
+                    podcast["rounds"],
+                    podcast["subtitles"],
+                    podcast["extra_info"],
+                    podcast["tag"],
+                )
+                return True
+        except:  # noqa
+            logger.error(f"insert_podcast error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def query_podcast(self, session_id, user_id=None):
+        conn = await self.get_conn()
+        try:
+            query = f"SELECT * FROM {self.table_podcasts} WHERE session_id = $1 AND tag != 'delete'"
+            params = [session_id]
+            if user_id is not None:
+                query += " AND user_id = $2"
+                params.append(user_id)
+            row = await conn.fetchrow(query, *params)
+            if row is None:
+                return None
+            podcast = dict(row)
+            self.parse_dict(podcast)
+            return podcast
+        except:  # noqa
+            logger.error(f"query_podcast error: {traceback.format_exc()}")
+            return None
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def list_podcasts(self, **kwargs):
+        conn = await self.get_conn()
+        try:
+            count = kwargs.get("count", False)
+            query = f"SELECT * FROM "
+            if count:
+                query = f"SELECT COUNT(*) FROM "
+                assert "limit" not in kwargs, "limit is not allowed when count is True"
+                assert "offset" not in kwargs, "offset is not allowed when count is True"
+            params = []
+            conds = []
+            param_idx = 0
+            query += self.table_podcasts
+
+            if not kwargs.get("include_delete", False):
+                param_idx += 1
+                conds.append(f"tag != ${param_idx}")
+                params.append("delete")
+
+            if "has_audio" in kwargs:
+                param_idx += 1
+                conds.append(f"has_audio = ${param_idx}")
+                params.append(kwargs["has_audio"])
+
+            if "user_id" in kwargs:
+                param_idx += 1
+                conds.append(f"user_id = ${param_idx}")
+                params.append(kwargs["user_id"])
+
+            if conds:
+                query += " WHERE " + " AND ".join(conds)
+
+            if not count:
+                sort_key = "update_t" if kwargs.get("sort_by_update_t", False) else "create_t"
+                query += f" ORDER BY {sort_key} DESC"
+
+            if "limit" in kwargs:
+                param_idx += 1
+                query += f" LIMIT ${param_idx}"
+                params.append(kwargs["limit"])
+
+            if "offset" in kwargs:
+                param_idx += 1
+                query += f" OFFSET ${param_idx}"
+                params.append(kwargs["offset"])
+
+            rows = await conn.fetch(query, *params)
+            if count:
+                return rows[0]["count"]
+
+            podcasts = []
+            for row in rows:
+                podcast = dict(row)
+                self.parse_dict(podcast)
+                podcasts.append(podcast)
+            return podcasts
+        except:  # noqa
+            logger.error(f"list_podcasts error: {traceback.format_exc()}")
+            return []
         finally:
             await self.release_conn(conn)
 

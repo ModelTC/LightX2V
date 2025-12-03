@@ -27,13 +27,17 @@ const showDetails = ref(false)
 // 获取图片素材
 const getImageMaterials = () => {
     if (!selectedTemplate.value?.inputs?.input_image) return []
-    return [['input_image', getTemplateFileUrl(selectedTemplate.value.inputs.input_image, 'images')]]
+    const imageUrl = getTemplateFileUrl(selectedTemplate.value.inputs.input_image, 'images')
+    if (!imageUrl) return []
+    return [['input_image', imageUrl]]
 }
 
 // 获取音频素材
 const getAudioMaterials = () => {
     if (!selectedTemplate.value?.inputs?.input_audio) return []
-    return [['input_audio', getTemplateFileUrl(selectedTemplate.value.inputs.input_audio, 'audios')]]
+    const audioUrl = getTemplateFileUrl(selectedTemplate.value.inputs.input_audio, 'audios')
+    if (!audioUrl) return []
+    return [['input_audio', audioUrl]]
 }
 
 // 路由关闭功能
@@ -127,7 +131,7 @@ onUnmounted(() => {
                                         <video
                                             v-if="selectedTemplate?.outputs?.output_video"
                                             :src="getTemplateFileUrl(selectedTemplate.outputs.output_video,'videos')"
-                                            :poster="getTemplateFileUrl(selectedTemplate.inputs.input_image,'images')"
+                                            :poster="selectedTemplate?.inputs?.input_image ? getTemplateFileUrl(selectedTemplate.inputs.input_image,'images') : undefined"
                                             class="w-full h-full object-contain"
                                             controls
                                             loop

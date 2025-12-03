@@ -41,7 +41,8 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        self.model.set_scheduler(self.scheduler)  # set scheduler to model
+        if hasattr(self, "model"):
+            self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif self.config["task"] == "flf2v":
@@ -184,11 +185,6 @@ class DefaultRunner(BaseRunner):
             del self.inputs
         self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
-                self.model.transformer_infer.weights_stream_mgr.clear()
-            if hasattr(self.model.transformer_weights, "clear"):
-                self.model.transformer_weights.clear()
-            self.model.pre_weight.clear()
             del self.model
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
@@ -279,6 +275,7 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
 
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:

@@ -57,12 +57,15 @@ export const locale = i18n.global.locale
         const isCreationAreaExpanded = ref(false);
         const hasUploadedContent = ref(false);
         const isContracting = ref(false);
+        const faceDetecting = ref(false);  // Face detection loading state
+        const audioSeparating = ref(false);  // Audio separation loading state
 
         const showTaskDetailModal = ref(false);
         const modalTask = ref(null);
 
         // TTS 模态框状态
         const showVoiceTTSModal = ref(false);
+        const showPodcastModal = ref(false);
 
         // TaskCarousel当前任务状态
         const currentTask = ref(null);
@@ -109,6 +112,10 @@ export const locale = i18n.global.locale
         const templateFileCache = ref(new Map());
         const templateFileCacheLoaded = ref(false);
 
+        // Podcast 音频 URL 缓存系统（模仿任务文件缓存）
+        const podcastAudioCache = ref(new Map());
+        const podcastAudioCacheLoaded = ref(false);
+
         // 防重复获取的状态管理
         const templateUrlFetching = ref(new Set()); // 正在获取的URL集合
         const taskUrlFetching = ref(new Map()); // 正在获取的任务URL集合
@@ -116,7 +123,9 @@ export const locale = i18n.global.locale
         // localStorage缓存相关常量
         const TASK_FILE_CACHE_KEY = 'lightx2v_task_files';
         const TEMPLATE_FILE_CACHE_KEY = 'lightx2v_template_files';
+        const PODCAST_AUDIO_CACHE_KEY = 'lightx2v_podcast_audio';
         const TASK_FILE_CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24小时过期
+        const PODCAST_AUDIO_CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24小时过期
         const MODELS_CACHE_KEY = 'lightx2v_models';
         const MODELS_CACHE_EXPIRY = 60 * 60 * 1000; // 1小时过期
         const TEMPLATES_CACHE_KEY = 'lightx2v_templates';
@@ -126,6 +135,7 @@ export const locale = i18n.global.locale
 
         const imageTemplates = ref([]);
         const audioTemplates = ref([]);
+        const mergedTemplates = ref([]);  // 合并后的模板列表
         const showImageTemplates = ref(false);
         const showAudioTemplates = ref(false);
         const mediaModalTab = ref('history');
@@ -161,7 +171,8 @@ export const locale = i18n.global.locale
         const nameMap = computed(() => ({
             't2v': t('textToVideo'),
             'i2v': t('imageToVideo'),
-            's2v': t('speechToVideo')
+            's2v': t('speechToVideo'),
+            'animate': t('animate')
         }));
 
         // 任务类型提示信息
@@ -183,7 +194,11 @@ export const locale = i18n.global.locale
                 t('s2vHint2'),
                 t('s2vHint3'),
                 t('s2vHint4')
-            ]
+            ],
+            'animate': [
+                t('animateHint1') || '上传目标角色图片和参考视频',
+                t('animateHint2') || '将视频中的角色替换为目标角色',
+                ]
         }));
 
         // 当前任务类型的提示信息
@@ -217,7 +232,7 @@ export const locale = i18n.global.locale
         const t2vForm = ref({
             task: 't2v',
             model_cls: '',
-            stage: 'single_stage',
+            stage: '',
             prompt: '',
             seed: 42
         });
@@ -225,20 +240,34 @@ export const locale = i18n.global.locale
         const i2vForm = ref({
             task: 'i2v',
             model_cls: '',
-            stage: 'multi_stage',
+            stage: '',
             imageFile: null,
             prompt: '',
-            seed: 42
+            seed: 42,
+            detectedFaces: []  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
         });
 
         const s2vForm = ref({
             task: 's2v',
             model_cls: '',
-            stage: 'single_stage',
+            stage: '',
             imageFile: null,
             audioFile: null,
             prompt: '',
-            seed: 42
+            seed: 42,
+            detectedFaces: [],  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
+            separatedAudios: []  // List of separated audio tracks: [{ speaker_id, audio (base64), roleName, ... }]
+        });
+
+        const animateForm = ref({
+            task: 'animate',
+            model_cls: '',
+            stage: '',
+            imageFile: null,
+            videoFile: null,
+            prompt: '视频中的人在做动作',
+            seed: 42,
+            detectedFaces: []  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
         });
 
         // 根据当前选择的任务类型获取对应的表单
@@ -250,6 +279,8 @@ export const locale = i18n.global.locale
                     return i2vForm.value;
                 case 's2v':
                     return s2vForm.value;
+                case 'animate':
+                    return animateForm.value;
                 default:
                     return t2vForm.value;
             }
@@ -298,14 +329,16 @@ export const locale = i18n.global.locale
         const i2vImagePreview = ref(null);
         const s2vImagePreview = ref(null);
         const s2vAudioPreview = ref(null);
+        const animateImagePreview = ref(null);
+        const animateVideoPreview = ref(null);
 
         // 监听上传内容变化
         const updateUploadedContentStatus = () => {
-            hasUploadedContent.value = !!(getCurrentImagePreview() || getCurrentAudioPreview() || getCurrentForm().prompt?.trim());
+            hasUploadedContent.value = !!(getCurrentImagePreview() || getCurrentAudioPreview() || getCurrentVideoPreview() || getCurrentForm().prompt?.trim());
         };
 
         // 监听表单变化
-        watch([i2vImagePreview, s2vImagePreview, s2vAudioPreview, () => getCurrentForm().prompt], () => {
+        watch([i2vImagePreview, s2vImagePreview, s2vAudioPreview, animateImagePreview, animateVideoPreview, () => getCurrentForm().prompt], () => {
             updateUploadedContentStatus();
         }, { deep: true });
 
@@ -325,6 +358,8 @@ export const locale = i18n.global.locale
                     return i2vImagePreview.value;
                 case 's2v':
                     return s2vImagePreview.value;
+                case 'animate':
+                    return animateImagePreview.value;
                 default:
                     return null;
             }
@@ -353,6 +388,9 @@ export const locale = i18n.global.locale
                 case 's2v':
                     s2vImagePreview.value = value;
                     break;
+                case 'animate':
+                    animateImagePreview.value = value;
+                    break;
             }
             // 清除图片预览缓存，确保新图片能正确显示
             urlCache.value.delete('current_image_preview');
@@ -364,12 +402,35 @@ export const locale = i18n.global.locale
                     break;
                 case 'i2v':
                     break;
+                case 'animate':
+                    break;
                 case 's2v':
                     s2vAudioPreview.value = value;
                     break;
             }
             // 清除音频预览缓存，确保新音频能正确显示
             urlCache.value.delete('current_audio_preview');
+        };
+
+        // 获取当前任务类型的视频预览
+        const getCurrentVideoPreview = () => {
+            switch (selectedTaskId.value) {
+                case 'animate':
+                    return animateVideoPreview.value;
+                default:
+                    return null;
+            }
+        };
+
+        // 设置当前任务类型的视频预览
+        const setCurrentVideoPreview = (value) => {
+            switch (selectedTaskId.value) {
+                case 'animate':
+                    animateVideoPreview.value = value;
+                    break;
+            }
+            // 清除视频预览缓存，确保新视频能正确显示
+            urlCache.value.delete('current_video_preview');
         };
 
         // 提示词模板相关
@@ -534,6 +595,12 @@ export const locale = i18n.global.locale
             return getCachedUrl(`current_audio_preview`, () => preview);
         };
 
+        const getCurrentVideoPreviewUrl = () => {
+            const preview = getCurrentVideoPreview();
+            if (!preview) return '';
+            return getCachedUrl(`current_video_preview`, () => preview);
+        };
+
         // Alert定时器，用于清除之前的定时器
         let alertTimeout = null;
 
@@ -639,11 +706,11 @@ export const locale = i18n.global.locale
 
             if (response.status === 401) {
                 logout(false);
-                showAlert('认证失败，请重新登录', 'warning', {
+                showAlert(t('authFailedPleaseRelogin'), 'warning', {
                     label: t('login'),
                     onClick: login
                 });
-                throw new Error('认证失败，请重新登录');
+                throw new Error(t('authFailedPleaseRelogin'));
             }
             if (response.status === 400) {
                 const error = await response.json();
@@ -669,7 +736,7 @@ export const locale = i18n.global.locale
                 window.location.href = data.auth_url;
             } catch (error) {
                 console.log('GitHub login error:', error);
-                showAlert('获取GitHub认证URL失败', 'danger');
+                showAlert(t('getGitHubAuthUrlFailed'), 'danger');
             }
         };
 
@@ -685,21 +752,21 @@ export const locale = i18n.global.locale
                 window.location.href = data.auth_url;
             } catch (error) {
                 console.error('Google login error:', error);
-                showAlert('获取Google认证URL失败', 'danger');
+                showAlert(t('getGoogleAuthUrlFailed'), 'danger');
             }
         };
 
         // 发送短信验证码
         const sendSmsCode = async () => {
             if (!phoneNumber.value) {
-                showAlert('手机号', 'warning');
+                showAlert(t('pleaseEnterPhoneNumber'), 'warning');
                 return;
             }
 
             // 简单的手机号格式验证
             const phoneRegex = /^1[3-9]\d{9}$/;
             if (!phoneRegex.test(phoneNumber.value)) {
-                showAlert('请输入正确的手机号格式', 'warning');
+                showAlert(t('pleaseEnterValidPhoneNumber'), 'warning');
                 return;
             }
 
@@ -708,21 +775,21 @@ export const locale = i18n.global.locale
                 const data = await response.json();
 
                 if (response.ok) {
-                    showAlert('验证码已发送，请查收短信', 'success');
+                    showAlert(t('verificationCodeSent'), 'success');
                     // 开始倒计时
                     startSmsCountdown();
                 } else {
-                    showAlert(data.message || '发送验证码失败', 'danger');
+                    showAlert(data.message || t('sendVerificationCodeFailed'), 'danger');
                 }
             } catch (error) {
-                showAlert('发送验证码失败，请重试', 'danger');
+                showAlert(t('sendVerificationCodeFailedRetry'), 'danger');
             }
         };
 
         // 短信验证码登录
         const loginWithSms = async () => {
             if (!phoneNumber.value || !verifyCode.value) {
-                showAlert('请输入手机号和验证码', 'warning');
+                showAlert(t('pleaseEnterPhoneAndCode'), 'warning');
                 return;
             }
 
@@ -745,12 +812,12 @@ export const locale = i18n.global.locale
                     console.log('login with sms success');
                     isLoggedIn.value = true;
 
-                    showAlert('登录成功', 'success');
+                    showAlert(t('loginSuccess'), 'success');
                 } else {
-                    showAlert(data.message || '验证码错误或已过期', 'danger');
+                    showAlert(data.message || t('verificationCodeErrorOrExpired'), 'danger');
                 }
             } catch (error) {
-                showAlert('登录失败，请重试', 'danger');
+                showAlert(t('loginFailedRetry'), 'danger');
             }
         };
 
@@ -866,10 +933,10 @@ export const locale = i18n.global.locale
                     window.history.replaceState({}, document.title, window.location.pathname);
                 } else {
                     const error = await response.json();
-                    showAlert(`登录失败: ${error.detail}`, 'danger');
+                    showAlert(`${t('loginFailedRetry')}: ${error.detail}`, 'danger');
                 }
             } catch (error) {
-                showAlert('登录过程中发生错误', 'danger');
+                showAlert(t('loginError'), 'danger');
                 console.error(error);
             }
         };
@@ -889,7 +956,7 @@ export const locale = i18n.global.locale
             models.value = [];
             tasks.value = [];
             if (showMessage) {
-                showAlert('已退出登录', 'info');
+                showAlert(t('loggedOut'), 'info');
             }
         };
 
@@ -923,12 +990,12 @@ export const locale = i18n.global.locale
                     console.log('模型列表已缓存');
                 } else if (response) {
                     console.error('模型列表API响应失败:', response);
-                    showAlert('加载模型列表失败', 'danger');
+                    showAlert(t('loadModelListFailed'), 'danger');
                 }
                 // 如果response为null，说明是认证错误，apiRequest已经处理了
             } catch (error) {
                 console.error('加载模型失败:', error);
-                showAlert(`加载模型失败: ${error.message}`, 'danger');
+                showAlert(`${t('loadModelFailed')}: ${error.message}`, 'danger');
             }
         };
 
@@ -951,14 +1018,33 @@ export const locale = i18n.global.locale
         const loadImageAudioTemplates = async (forceRefresh = false) => {
             try {
                 // 如果不是强制刷新，先尝试从缓存加载
-                const cacheKey = `${TEMPLATES_CACHE_KEY}_IMAGE_AUDIO_${templateCurrentPage.value}_${templatePageSize.value}`;
+                const cacheKey = `${TEMPLATES_CACHE_KEY}_IMAGE_AUDIO_MERGED_${templateCurrentPage.value}_${templatePageSize.value}`;
                 if (!forceRefresh) {
                 // 构建缓存键，包含分页和过滤条件
                 const cachedTemplates = loadFromCache(cacheKey, TEMPLATES_CACHE_EXPIRY);
                     if (cachedTemplates && cachedTemplates.templates) {
                     console.log('成功从缓存加载模板列表');
-                        imageTemplates.value = cachedTemplates.templates.images || [];
-                        audioTemplates.value = cachedTemplates.templates.audios || [];
+                        // 优先使用合并后的模板列表
+                        if (cachedTemplates.templates.merged) {
+                            mergedTemplates.value = cachedTemplates.templates.merged || [];
+                            // 从合并列表中提取图片和音频
+                            const images = [];
+                            const audios = [];
+                            mergedTemplates.value.forEach(template => {
+                                if (template.image) {
+                                    images.push(template.image);
+                                }
+                                if (template.audio) {
+                                    audios.push(template.audio);
+                                }
+                            });
+                            imageTemplates.value = images;
+                            audioTemplates.value = audios;
+                        } else {
+                            // 向后兼容：如果没有合并列表，使用旧的格式
+                            imageTemplates.value = cachedTemplates.templates.images || [];
+                            audioTemplates.value = cachedTemplates.templates.audios || [];
+                        }
                         templatePagination.value = cachedTemplates.pagination || null;
                     return;
                     }
@@ -970,14 +1056,31 @@ export const locale = i18n.global.locale
                     const data = await response.json();
                     console.log('图片音乐素材库数据:', data);
 
-                    refreshTemplateFileUrl(data.templates);
+                    // 使用合并后的模板列表
+                    const merged = data.templates?.merged || [];
+                    mergedTemplates.value = merged;
+
+                    // 为了保持向后兼容，从合并列表中提取图片和音频
+                    const images = [];
+                    const audios = [];
+                    merged.forEach(template => {
+                        if (template.image) {
+                            images.push(template.image);
+                        }
+                        if (template.audio) {
+                            audios.push(template.audio);
+                        }
+                    });
+
+                    refreshTemplateFileUrl({ images, audios, videos: data.templates?.videos || [] });
                     const templatesData = {
-                        images: data.templates.images || [],
-                        audios: data.templates.audios || []
+                        images: images,
+                        audios: audios,
+                        merged: merged
                     };
 
-                    imageTemplates.value = templatesData.images;
-                    audioTemplates.value = templatesData.audios;
+                    imageTemplates.value = images;
+                    audioTemplates.value = audios;
                     templatePagination.value = data.pagination || null;
 
                     // 保存到缓存
@@ -1050,21 +1153,43 @@ export const locale = i18n.global.locale
 
                 if (selectedTaskId.value === 'i2v') {
                     i2vForm.value.imageFile = file;
+                    i2vForm.value.detectedFaces = [];  // Reset detected faces
                 } else if (selectedTaskId.value === 's2v') {
                     s2vForm.value.imageFile = file;
+                    s2vForm.value.detectedFaces = [];  // Reset detected faces
+                } else if (selectedTaskId.value === 'animate') {
+                    animateForm.value.imageFile = file;
+                    animateForm.value.detectedFaces = [];  // Reset detected faces
                 }
 
-                // 创建预览
+                // 获取图片的 http/https URL（用于人脸识别和预览）
+                let imageUrl = null;
+                // 优先使用 template.url（如果是 http/https URL）
+                if (template.url && (template.url.startsWith('http://') || template.url.startsWith('https://'))) {
+                    imageUrl = template.url;
+                } else if (template.inputs && template.inputs.input_image) {
+                    // 如果有 inputs.input_image，使用 getTemplateFileUrlAsync 获取 URL
+                    imageUrl = await getTemplateFileUrlAsync(template.inputs.input_image, 'images');
+                } else if (template.filename) {
+                    // 如果有 filename，尝试使用 getTemplateFileUrlAsync
+                    imageUrl = await getTemplateFileUrlAsync(template.filename, 'images');
+                }
+
+                // 创建预览（使用 data URL 作为预览）
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    setCurrentImagePreview(e.target.result);
+                reader.onload = async (e) => {
+                    const imageDataUrl = e.target.result;
+                    // 如果有 http/https URL，使用它作为预览；否则使用 data URL
+                    setCurrentImagePreview(imageUrl || imageDataUrl);
+                    updateUploadedContentStatus();
+                    showImageTemplates.value = false;
+                    showAlert(t('imageTemplateSelected'), 'success');
+                    // 不再自动检测人脸，等待用户手动打开多角色模式开关
                 };
                 reader.readAsDataURL(file);
 
-                showImageTemplates.value = false;
-                showAlert('图片素材已选择', 'success');
             } catch (error) {
-                showAlert(`加载图片素材失败: ${error.message}`, 'danger');
+                showAlert(`${t('loadImageTemplateFailed')}: ${error.message}`, 'danger');
             }
         };
 
@@ -1084,9 +1209,9 @@ export const locale = i18n.global.locale
                 reader.readAsDataURL(file);
 
                 showAudioTemplates.value = false;
-                showAlert('音频素材已选择', 'success');
+                showAlert(t('audioTemplateSelected'), 'success');
             } catch (error) {
-                showAlert(`加载音频素材失败: ${error.message}`, 'danger');
+                showAlert(`${t('loadAudioTemplateFailed')}: ${error.message}`, 'danger');
             }
         };
 
@@ -1096,7 +1221,7 @@ export const locale = i18n.global.locale
             const audioUrl = getTemplateFileUrl(template.filename, 'audios');
             console.log('音频URL:', audioUrl);
             if (!audioUrl) {
-                showAlert('音频文件URL获取失败', 'danger');
+                showAlert(t('audioFileUrlFailed'), 'danger');
                 return;
             }
 
@@ -1122,7 +1247,7 @@ export const locale = i18n.global.locale
 
             audio.addEventListener('error', () => {
                 console.error('音频播放失败:', audio.error);
-                showAlert('音频播放失败', 'danger');
+                showAlert(t('audioPlaybackFailed'), 'danger');
                 currentPlayingAudio = null;
                 // 调用停止回调
                 if (audioStopCallback) {
@@ -1133,23 +1258,31 @@ export const locale = i18n.global.locale
 
             audio.play().catch(error => {
                 console.error('音频播放失败:', error);
-                showAlert('音频播放失败', 'danger');
+                showAlert(t('audioPlaybackFailed'), 'danger');
                 currentPlayingAudio = null;
             });
         };
 
-        const handleImageUpload = (event) => {
+        const handleImageUpload = async (event) => {
             const file = event.target.files[0];
             if (file) {
                 if (selectedTaskId.value === 'i2v') {
                     i2vForm.value.imageFile = file;
+                    i2vForm.value.detectedFaces = [];  // Reset detected faces
                 } else if (selectedTaskId.value === 's2v') {
                     s2vForm.value.imageFile = file;
+                    s2vForm.value.detectedFaces = [];  // Reset detected faces
+                } else if (selectedTaskId.value === 'animate') {
+                    animateForm.value.imageFile = file;
+                    animateForm.value.detectedFaces = [];  // Reset detected faces
                 }
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    setCurrentImagePreview(e.target.result);
+                reader.onload = async (e) => {
+                    const imageDataUrl = e.target.result;
+                    setCurrentImagePreview(imageDataUrl);
                     updateUploadedContentStatus();
+
+                    // 不再自动检测人脸，等待用户手动打开多角色模式开关
                 };
                 reader.readAsDataURL(file);
             } else {
@@ -1158,13 +1291,273 @@ export const locale = i18n.global.locale
             }
         };
 
+        // Crop face image from original image based on bbox coordinates
+        const cropFaceImage = (imageUrl, bbox) => {
+            return new Promise((resolve, reject) => {
+                // Validate bbox
+                if (!bbox || bbox.length !== 4) {
+                    reject(new Error('Invalid bbox coordinates'))
+                    return
+                }
+
+                const [x1, y1, x2, y2] = bbox
+                const width = x2 - x1
+                const height = y2 - y1
+
+                if (width <= 0 || height <= 0) {
+                    reject(new Error(`Invalid bbox dimensions: ${width}x${height}`))
+                    return
+                }
+
+                const img = new Image()
+
+                // For data URLs, crossOrigin is not needed
+                if (imageUrl.startsWith('data:')) {
+                    img.onload = () => {
+                        try {
+                            // Create Canvas to crop image
+                            const canvas = document.createElement('canvas')
+                            canvas.width = width
+                            canvas.height = height
+                            const ctx = canvas.getContext('2d')
+
+                            // Draw the cropped region to Canvas
+                            ctx.drawImage(
+                                img,
+                                x1, y1, width, height,  // Source image crop region
+                                0, 0, width, height     // Canvas drawing position
+                            )
+
+                            // Convert to base64
+                            const base64 = canvas.toDataURL('image/png')
+                            resolve(base64)
+                        } catch (error) {
+                            reject(error)
+                        }
+                    }
+                    img.onerror = (e) => {
+                        reject(new Error('Failed to load image for cropping'))
+                    }
+                    img.src = imageUrl
+                } else {
+                    // For other URLs, set crossOrigin
+                    img.crossOrigin = 'anonymous'
+                    img.onload = () => {
+                        try {
+                            // Create Canvas to crop image
+                            const canvas = document.createElement('canvas')
+                            canvas.width = width
+                            canvas.height = height
+                            const ctx = canvas.getContext('2d')
+
+                            // Draw the cropped region to Canvas
+                            ctx.drawImage(
+                                img,
+                                x1, y1, width, height,  // Source image crop region
+                                0, 0, width, height     // Canvas drawing position
+                            )
+
+                            // Convert to base64
+                            const base64 = canvas.toDataURL('image/png')
+                            resolve(base64)
+                        } catch (error) {
+                            reject(error)
+                        }
+                    }
+                    img.onerror = (e) => {
+                        reject(new Error('Failed to load image for cropping (CORS or network error)'))
+                    }
+                    img.src = imageUrl
+                }
+            })
+        }
+
+        // Detect faces in uploaded image
+        const detectFacesInImage = async (imageDataUrl) => {
+            try {
+                // 验证输入
+                if (!imageDataUrl || imageDataUrl.trim() === '') {
+                    console.error('detectFacesInImage: imageDataUrl is empty');
+                    return;
+                }
+
+                faceDetecting.value = true;
+
+                // Convert blob URL to data URL (backend can't access blob URLs)
+                // For http/https URLs, send directly to backend
+                let imageInput = imageDataUrl;
+                if (imageDataUrl.startsWith('blob:')) {
+                    // Blob URL: convert to data URL since backend can't access blob URLs
+                    try {
+                        const response = await fetch(imageDataUrl);
+                        if (!response.ok) {
+                            throw new Error(`Failed to fetch image: ${response.statusText}`);
+                        }
+                        const blob = await response.blob();
+                        imageInput = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(blob);
+                        });
+                    } catch (error) {
+                        console.error('Failed to convert blob URL to data URL:', error);
+                        throw error;
+                    }
+                }
+                // For data URLs and http/https URLs, send directly to backend
+
+                // 再次验证 imageInput
+                if (!imageInput || imageInput.trim() === '') {
+                    console.error('detectFacesInImage: imageInput is empty after processing');
+                    return;
+                }
+
+                const response = await apiCall('/api/v1/face/detect', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        image: imageInput
+                    })
+                });
+
+                if (!response.ok) {
+                    console.error('Face detection failed:', response.status, response.statusText);
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('Face detection response:', data);
+
+                if (data && data.faces) {
+                    // Crop face images for each detected face
+                    // Use the original imageDataUrl for cropping (cropFaceImage can handle both data URLs and regular URLs)
+                    const facesWithImages = await Promise.all(
+                        data.faces.map(async (face, index) => {
+                            try {
+                                // Crop face image from original image based on bbox
+                                const croppedImage = await cropFaceImage(imageDataUrl, face.bbox)
+
+                                // Remove data URL prefix, keep only base64 part (consistent with backend format)
+                                // croppedImage is in format: "data:image/png;base64,xxxxx"
+                                let base64Data = croppedImage
+                                if (croppedImage.includes(',')) {
+                                    base64Data = croppedImage.split(',')[1]
+                                }
+
+                                if (!base64Data) {
+                                    console.error(`Failed to extract base64 from cropped image for face ${index}`)
+                                    base64Data = null
+                                }
+
+                                return {
+                                    ...face,
+                                    face_image: base64Data,  // Base64 encoded face region image (without data URL prefix)
+                                    roleName: `角色${index + 1}`,
+                                    isEditing: false  // Track editing state for each face
+                                }
+                            } catch (error) {
+                                console.error(`Failed to crop face ${index}:`, error, 'bbox:', face.bbox);
+                                // Return face without face_image if cropping fails
+                                return {
+                                    ...face,
+                                    face_image: null,
+                                    roleName: `角色${index + 1}`,
+                                    isEditing: false
+                                }
+                            }
+                        })
+                    );
+
+                    const currentForm = getCurrentForm();
+                    if (currentForm) {
+                        currentForm.detectedFaces = facesWithImages;
+                        console.log('Updated detectedFaces:', currentForm.detectedFaces.length, 'faces with images');
+                        // 音频分离由统一的 watch 监听器处理，不需要在这里手动调用
+                    }
+                }
+            } catch (error) {
+                console.error('Face detection error:', error);
+                // Silently fail, don't show error to user
+            } finally {
+                faceDetecting.value = false;
+            }
+        };
+
+        // Update role name for a detected face
+        const updateFaceRoleName = (faceIndex, roleName) => {
+            const currentForm = getCurrentForm();
+            if (currentForm && currentForm.detectedFaces && currentForm.detectedFaces[faceIndex]) {
+                // 使用展开运算符创建新对象，确保响应式更新
+                currentForm.detectedFaces[faceIndex] = {
+                    ...currentForm.detectedFaces[faceIndex],
+                    roleName: roleName
+                };
+                // 触发响应式更新
+                currentForm.detectedFaces = [...currentForm.detectedFaces];
+            }
+        };
+
+        // Toggle editing state for a face
+        const toggleFaceEditing = (faceIndex) => {
+            const currentForm = getCurrentForm();
+            if (currentForm && currentForm.detectedFaces && currentForm.detectedFaces[faceIndex]) {
+                // 使用展开运算符创建新对象，确保响应式更新
+                currentForm.detectedFaces[faceIndex] = {
+                    ...currentForm.detectedFaces[faceIndex],
+                    isEditing: !currentForm.detectedFaces[faceIndex].isEditing
+                };
+                // 触发响应式更新
+                currentForm.detectedFaces = [...currentForm.detectedFaces];
+            }
+        };
+
+        // Save face role name and exit editing
+        const saveFaceRoleName = (faceIndex, roleName) => {
+            const currentForm = getCurrentForm();
+            if (currentForm && currentForm.detectedFaces && currentForm.detectedFaces[faceIndex]) {
+                // 同时更新 roleName 和 isEditing，确保响应式更新
+                currentForm.detectedFaces[faceIndex] = {
+                    ...currentForm.detectedFaces[faceIndex],
+                    roleName: roleName || currentForm.detectedFaces[faceIndex].roleName,
+                    isEditing: false
+                };
+                // 触发响应式更新
+                currentForm.detectedFaces = [...currentForm.detectedFaces];
+            }
+            // 同步更新所有关联的音频播放器角色名
+            // 只有当任务类型是 s2v 且有分离的音频时才需要更新
+            if (selectedTaskId.value === 's2v' && s2vForm.value.separatedAudios) {
+                s2vForm.value.separatedAudios.forEach((audio, index) => {
+                    // 如果音频的 roleIndex 等于当前修改的 faceIndex，则更新其 roleName
+                    if (audio.roleIndex === faceIndex) {
+                        s2vForm.value.separatedAudios[index].roleName = roleName || `角色${faceIndex + 1}`;
+                    }
+                });
+                // 使用展开运算符确保响应式更新
+                s2vForm.value.separatedAudios = [...s2vForm.value.separatedAudios];
+            }
+        };
+
         const selectTask = (taskType) => {
+            console.log('[selectTask] 开始切换任务类型:', {
+                taskType,
+                currentSelectedTaskId: selectedTaskId.value,
+                currentSelectedModel: selectedModel.value,
+                currentFormModel: getCurrentForm().model_cls,
+                currentFormStage: getCurrentForm().stage
+            });
+
             for (const t of models.value.map(m => m.task)) {
                 if (getTaskTypeName(t) === taskType) {
                     taskType = t;
                 }
             }
             selectedTaskId.value = taskType;
+
+            console.log('[selectTask] 任务类型已更新:', {
+                newTaskType: selectedTaskId.value,
+                availableModels: models.value.filter(m => m.task === taskType)
+            });
 
             // 根据任务类型恢复对应的预览
             if (taskType === 'i2v' && i2vForm.value.imageFile) {
@@ -1190,23 +1583,96 @@ export const locale = i18n.global.locale
                     };
                     reader.readAsDataURL(s2vForm.value.audioFile);
                 }
+            } else if (taskType === 'animate') {
+                // 恢复角色替换任务的图片和视频预览
+                if (animateForm.value.imageFile) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        setCurrentImagePreview(e.target.result);
+                    };
+                    reader.readAsDataURL(animateForm.value.imageFile);
+                }
+                if (animateForm.value.videoFile) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        setCurrentVideoPreview(e.target.result);
+                    };
+                    reader.readAsDataURL(animateForm.value.videoFile);
+                }
+                // 确保 animate 任务类型有默认 prompt
+                if (!animateForm.value.prompt || animateForm.value.prompt.trim() === '') {
+                    animateForm.value.prompt = '视频中的人在做动作';
+                }
             }
 
-            // 如果当前表单没有选择模型，自动选择第一个可用的模型
+            // 自动选择该任务类型下的第一个模型（仅在当前模型无效且 URL 中没有 model 参数时）
             const currentForm = getCurrentForm();
-            if (!currentForm.model_cls) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const hasModelInUrl = urlParams.has('model');
+
+            // 获取新任务类型下的可用模型
             const availableModels = models.value.filter(m => m.task === taskType);
+
             if (availableModels.length > 0) {
-                const firstModel = availableModels[0];
-                    currentForm.model_cls = firstModel.model_cls;
-                    currentForm.stage = firstModel.stage;
+                // 检查当前选择的模型和stage是否属于新任务类型
+                const currentModel = currentForm.model_cls || selectedModel.value;
+                const currentStage = currentForm.stage;
+                const isCurrentModelValid = currentModel && availableModels.some(m =>
+                    m.model_cls === currentModel && m.stage === currentStage
+                );
+
+                // 如果当前模型无效且 URL 中没有 model 参数，自动选择第一个模型
+                if (!isCurrentModelValid || !hasModelInUrl) {
+                    const firstModel = availableModels[0];
+                    console.log('[selectTask] 自动选择第一个模型:', {
+                        firstModel: firstModel.model_cls,
+                        firstStage: firstModel.stage,
+                        reason: !isCurrentModelValid ? '当前模型或stage无效' : 'URL中没有model参数',
+                        currentModel,
+                        currentStage
+                    });
+                    // 直接调用 selectModel 来确保路由也会更新
+                    selectModel(firstModel.model_cls);
+                } else {
+                    console.log('[selectTask] 不自动选择模型:', {
+                        isCurrentModelValid,
+                        hasModelInUrl,
+                        currentModel,
+                        currentStage
+                    });
                 }
             }
         };
 
         const selectModel = (model) => {
+            console.log('[selectModel] 开始切换模型:', {
+                model,
+                currentSelectedModel: selectedModel.value,
+                currentTaskType: selectedTaskId.value,
+                currentFormModel: getCurrentForm().model_cls,
+                currentFormStage: getCurrentForm().stage
+            });
+
             selectedModel.value = model;
-            getCurrentForm().model_cls = model;
+            const currentForm = getCurrentForm();
+            currentForm.model_cls = model;
+            // 自动设置 stage 为模型对应的第一个 stage
+            const availableStages = models.value
+                .filter(m => m.task === selectedTaskId.value && m.model_cls === model)
+                .map(m => m.stage);
+            if (availableStages.length > 0) {
+                currentForm.stage = availableStages[0];
+                console.log('[selectModel] 自动设置 stage:', {
+                    stage: currentForm.stage,
+                    availableStages
+                });
+            }
+
+            console.log('[selectModel] 模型切换完成:', {
+                selectedModel: selectedModel.value,
+                formModel: currentForm.model_cls,
+                formStage: currentForm.stage
+            });
         };
 
         const triggerImageUpload = () => {
@@ -1226,8 +1692,13 @@ export const locale = i18n.global.locale
             setCurrentImagePreview(null);
             if (selectedTaskId.value === 'i2v') {
                 i2vForm.value.imageFile = null;
+                i2vForm.value.detectedFaces = [];
             } else if (selectedTaskId.value === 's2v') {
                 s2vForm.value.imageFile = null;
+                s2vForm.value.detectedFaces = [];
+            } else if (selectedTaskId.value === 'animate') {
+                animateForm.value.imageFile = null;
+                animateForm.value.detectedFaces = [];
             }
             updateUploadedContentStatus();
             // 重置文件输入框，确保可以重新选择相同文件
@@ -1240,6 +1711,7 @@ export const locale = i18n.global.locale
         const removeAudio = () => {
             setCurrentAudioPreview(null);
             s2vForm.value.audioFile = null;
+            s2vForm.value.separatedAudios = [];
             updateUploadedContentStatus();
             console.log('音频已移除');
             // 重置音频文件输入框，确保可以重新选择相同文件
@@ -1249,6 +1721,52 @@ export const locale = i18n.global.locale
             }
         };
 
+        // 删除视频（用于 animate 任务类型）
+        const removeVideo = () => {
+            setCurrentVideoPreview(null);
+            animateForm.value.videoFile = null;
+            updateUploadedContentStatus();
+            console.log('视频已移除');
+            // 重置视频文件输入框，确保可以重新选择相同文件
+            const videoInput = document.querySelector('input[type="file"][data-role="video-input"]');
+            if (videoInput) {
+                videoInput.value = '';
+            }
+        };
+
+        // Update role assignment for separated audio
+        const updateSeparatedAudioRole = (speakerIndex, roleIndex) => {
+            if (s2vForm.value.separatedAudios && s2vForm.value.separatedAudios[speakerIndex]) {
+                const currentForm = getCurrentForm();
+                const detectedFaces = currentForm?.detectedFaces || [];
+
+                if (roleIndex >= 0 && roleIndex < detectedFaces.length) {
+                    s2vForm.value.separatedAudios[speakerIndex].roleName = detectedFaces[roleIndex].roleName || `角色${roleIndex + 1}`;
+                    s2vForm.value.separatedAudios[speakerIndex].roleIndex = roleIndex;
+                }
+            }
+        };
+
+        // Update audio name for a separated audio
+        const updateSeparatedAudioName = (audioIndex, audioName) => {
+            if (s2vForm.value.separatedAudios && s2vForm.value.separatedAudios[audioIndex]) {
+                s2vForm.value.separatedAudios[audioIndex].audioName = audioName;
+            }
+        };
+
+        // Toggle editing state for a separated audio
+        const toggleSeparatedAudioEditing = (audioIndex) => {
+            if (s2vForm.value.separatedAudios && s2vForm.value.separatedAudios[audioIndex]) {
+                s2vForm.value.separatedAudios[audioIndex].isEditing = !s2vForm.value.separatedAudios[audioIndex].isEditing;
+            }
+        };
+
+        // Save separated audio name and exit editing
+        const saveSeparatedAudioName = (audioIndex, audioName) => {
+            updateSeparatedAudioName(audioIndex, audioName);
+            toggleSeparatedAudioEditing(audioIndex);
+        };
+
         const getAudioMimeType = () => {
             if (s2vForm.value.audioFile) {
                 return s2vForm.value.audioFile.type;
@@ -1256,7 +1774,113 @@ export const locale = i18n.global.locale
             return 'audio/mpeg'; // 默认类型
         };
 
-        const handleAudioUpload = (event) => {
+        // Separate audio tracks for multiple speakers
+        const separateAudioTracks = async (audioDataUrl, numSpeakers) => {
+            audioSeparating.value = true;  // 开始音频分割，显示加载状态
+            try {
+                // 优先使用 audioFile（如果存在），因为它包含完整的文件信息，避免 data URL 格式问题
+                const currentForm = getCurrentForm();
+                let audioData = audioDataUrl;
+
+                if (currentForm?.audioFile && currentForm.audioFile instanceof File) {
+                    // 使用 File 对象，读取为 base64，确保格式正确
+                    try {
+                        const fileDataUrl = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(currentForm.audioFile);
+                        });
+                        audioData = fileDataUrl;
+                        console.log('Using audioFile for separation, format:', currentForm.audioFile.type);
+                    } catch (error) {
+                        console.warn('Failed to read audioFile, falling back to audioDataUrl:', error);
+                        // 如果读取失败，继续使用 audioDataUrl
+                    }
+                }
+
+                // Clean and validate base64 string before sending
+                let cleanedAudioData = audioData;
+                if (audioData.includes(',')) {
+                    // If it's a data URL, extract the base64 part
+                    const parts = audioData.split(',');
+                    if (parts.length > 1) {
+                        cleanedAudioData = parts.slice(1).join(','); // Join in case there are multiple commas
+                    }
+                }
+
+                // Remove any whitespace and newlines
+                cleanedAudioData = cleanedAudioData.trim().replace(/\s/g, '');
+
+                // Check if it's a valid base64 string length (must be multiple of 4)
+                const missingPadding = cleanedAudioData.length % 4;
+                if (missingPadding !== 0) {
+                    console.warn(`[separateAudioTracks] Base64 string length (${cleanedAudioData.length}) is not a multiple of 4, adding padding`);
+                    cleanedAudioData += '='.repeat(4 - missingPadding);
+                }
+
+                // Reconstruct data URL if it was originally a data URL
+                if (audioData.startsWith('data:')) {
+                    const header = audioData.split(',')[0];
+                    cleanedAudioData = `${header},${cleanedAudioData}`;
+                }
+
+                console.log(`[separateAudioTracks] Sending audio for separation, length: ${cleanedAudioData.length}, num_speakers: ${numSpeakers}`);
+
+                const response = await apiCall('/api/v1/audio/separate', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        audio: cleanedAudioData,
+                        num_speakers: numSpeakers
+                    })
+                });
+
+                if (!response.ok) {
+                    console.error('Audio separation failed:', response.status, response.statusText);
+                    audioSeparating.value = false;
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('Audio separation response:', data);
+
+                if (data && data.speakers && data.speakers.length > 0) {
+                    const currentForm = getCurrentForm();
+                    const detectedFaces = currentForm?.detectedFaces || [];
+
+                    // Map separated speakers to detected faces
+                    // Initialize with first role if available
+                    const separatedAudios = data.speakers.map((speaker, index) => {
+                        const faceIndex = index < detectedFaces.length ? index : 0;
+                        return {
+                            speaker_id: speaker.speaker_id,
+                            audio: speaker.audio,  // Base64 encoded audio
+                            audioDataUrl: `data:audio/wav;base64,${speaker.audio}`,  // Data URL for preview
+                            audioName: `音色${index + 1}`,  // 音频名称，默认显示为"音色1"、"音色2"等
+                            roleName: detectedFaces[faceIndex]?.roleName || `角色${faceIndex + 1}`,  // 关联的角色名称
+                            roleIndex: faceIndex,
+                            isEditing: false,  // 编辑状态
+                            sample_rate: speaker.sample_rate,
+                            segments: speaker.segments
+                        };
+                    });
+
+                    // Update separatedAudios and trigger reactivity
+                    s2vForm.value.separatedAudios = [...separatedAudios];  // Use spread to ensure reactivity
+                    console.log('Updated separatedAudios:', s2vForm.value.separatedAudios.length, 'speakers', s2vForm.value.separatedAudios);
+                } else {
+                    console.warn('No speakers found in separation response:', data);
+                    s2vForm.value.separatedAudios = [];
+                }
+                audioSeparating.value = false;  // 音频分割完成，隐藏加载状态
+            } catch (error) {
+                console.error('Audio separation error:', error);
+                audioSeparating.value = false;  // 发生错误时也要隐藏加载状态
+                throw error;
+            }
+        };
+
+        const handleAudioUpload = async (event) => {
             const file = event.target.files[0];
 
             if (file && (file.type?.startsWith('audio/') || file.type?.startsWith('video/'))) {
@@ -1264,22 +1888,61 @@ export const locale = i18n.global.locale
                 if (file.type.startsWith('video/') && !allowedVideoTypes.includes(file.type)) {
                     showAlert(t('unsupportedVideoFormat'), 'warning');
                     setCurrentAudioPreview(null);
+                    s2vForm.value.separatedAudios = [];
                     updateUploadedContentStatus();
                     return;
                 }
                 s2vForm.value.audioFile = file;
+
+                // Read file as data URL for preview
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    setCurrentAudioPreview(e.target.result);
+                reader.onload = async (e) => {
+                    const audioDataUrl = e.target.result;
+                    setCurrentAudioPreview(audioDataUrl);
                     updateUploadedContentStatus();
-                    console.log('音频预览已设置:', e.target.result);
+                    // 音频分离由统一的 watch 监听器处理，不需要在这里手动调用
+                    console.log('[handleAudioUpload] 音频上传完成，音频分离将由统一的监听器自动处理');
                 };
                 reader.readAsDataURL(file);
             } else {
                 setCurrentAudioPreview(null);
+                s2vForm.value.separatedAudios = [];
                 updateUploadedContentStatus();
                 if (file) {
                     showAlert(t('unsupportedAudioOrVideo'), 'warning');
+                }
+            }
+        };
+
+        // 处理视频上传（用于 animate 任务类型）
+        const handleVideoUpload = async (event) => {
+            const file = event.target.files[0];
+
+            if (file && file.type?.startsWith('video/')) {
+                const allowedVideoTypes = ['video/mp4', 'video/x-m4v', 'video/mpeg', 'video/webm', 'video/quicktime'];
+                if (!allowedVideoTypes.includes(file.type)) {
+                    showAlert(t('unsupportedVideoFormat') || '不支持的视频格式', 'warning');
+                    setCurrentVideoPreview(null);
+                    animateForm.value.videoFile = null;
+                    updateUploadedContentStatus();
+                    return;
+                }
+                animateForm.value.videoFile = file;
+
+                // Read file as data URL for preview
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const videoDataUrl = e.target.result;
+                    setCurrentVideoPreview(videoDataUrl);
+                    updateUploadedContentStatus();
+                };
+                reader.readAsDataURL(file);
+            } else {
+                setCurrentVideoPreview(null);
+                animateForm.value.videoFile = null;
+                updateUploadedContentStatus();
+                if (file) {
+                    showAlert(t('unsupportedVideoFormat') || '不支持的视频格式', 'warning');
                 }
             }
         };
@@ -1382,17 +2045,17 @@ export const locale = i18n.global.locale
                 let errorMessage = t('recordingFailed');
 
                 if (error.name === 'NotAllowedError') {
-                    errorMessage = '麦克风权限被拒绝。请点击Chrome地址栏左侧的🔒或🎤图标，选择"允许"麦克风访问，然后刷新页面重试';
+                    errorMessage = t('microphonePermissionDenied');
                 } else if (error.name === 'NotFoundError') {
-                    errorMessage = '未找到麦克风设备，请检查设备连接或使用其他设备';
+                    errorMessage = t('microphoneNotFound');
                 } else if (error.name === 'NotSupportedError') {
-                    errorMessage = '移动端浏览器不支持录音功能，可以拍摄视频来代替录音';
+                    errorMessage = t('recordingNotSupportedOnMobile');
                 } else if (error.name === 'NotReadableError') {
-                    errorMessage = '麦克风被其他应用占用，请关闭其他使用麦克风的程序后重试';
+                    errorMessage = t('microphoneInUse');
                 } else if (error.name === 'OverconstrainedError') {
-                    errorMessage = '麦克风设备不支持所需的录音参数，请使用其他麦克风设备';
+                    errorMessage = t('microphoneNotCompatible');
                 } else if (error.name === 'SecurityError') {
-                    errorMessage = '安全限制：请确保使用HTTPS协议访问网站';
+                    errorMessage = t('securityErrorUseHttps');
                 } else if (error.message) {
                     errorMessage = error.message;
                 }
@@ -1449,7 +2112,7 @@ export const locale = i18n.global.locale
             try {
                 // 检查是否正在加载模板
                 if (templateLoading.value) {
-                    showAlert('模板正在加载中，请稍后再试', 'warning');
+                    showAlert(t('templateLoadingPleaseWait'), 'warning');
                     return;
                 }
 
@@ -1457,41 +2120,54 @@ export const locale = i18n.global.locale
 
                 // 表单验证
                 if (!selectedTaskId.value) {
-                    showAlert('请选择任务类型', 'warning');
+                    showAlert(t('pleaseSelectTaskType'), 'warning');
                     return;
                 }
 
                 if (!currentForm.model_cls) {
-                    showAlert('请选择模型', 'warning');
+                    showAlert(t('pleaseSelectModel'), 'warning');
                     return;
                 }
 
-                if (!currentForm.prompt || currentForm.prompt.trim().length === 0) {
-                    if (selectedTaskId.value === 's2v') {
-                        currentForm.prompt = 'Make the character speak in a natural way according to the audio.';
-                    } else {
-                        showAlert('请输入提示词', 'warning');
+                // animate 任务类型不需要 prompt，其他任务类型需要
+                if (selectedTaskId.value !== 'animate') {
+                    if (!currentForm.prompt || currentForm.prompt.trim().length === 0) {
+                        if (selectedTaskId.value === 's2v') {
+                            currentForm.prompt = '让角色根据音频内容自然说话';
+                        } else {
+                            showAlert(t('pleaseEnterPrompt'), 'warning');
+                            return;
+                        }
+                    }
+
+                    if (currentForm.prompt.length > 1000) {
+                        showAlert(t('promptTooLong'), 'warning');
                         return;
                     }
                 }
 
-                if (currentForm.prompt.length > 1000) {
-                    showAlert('提示词长度不能超过1000个字符', 'warning');
-                    return;
-                }
-
                 if (selectedTaskId.value === 'i2v' && !currentForm.imageFile) {
-                    showAlert('图生视频任务需要上传参考图片', 'warning');
+                    showAlert(t('i2vTaskRequiresImage'), 'warning');
                     return;
                 }
 
                 if (selectedTaskId.value === 's2v' && !currentForm.imageFile) {
-                    showAlert('数字人任务需要上传参考图片', 'warning');
+                    showAlert(t('s2vTaskRequiresImage'), 'warning');
                     return;
                 }
 
                 if (selectedTaskId.value === 's2v' && !currentForm.audioFile) {
-                    showAlert('数字人任务需要上传音频文件', 'warning');
+                    showAlert(t('s2vTaskRequiresAudio'), 'warning');
+                    return;
+                }
+
+                if (selectedTaskId.value === 'animate' && !currentForm.imageFile) {
+                    showAlert(t('animateTaskRequiresImage'), 'warning');
+                    return;
+                }
+
+                if (selectedTaskId.value === 'animate' && !currentForm.videoFile) {
+                    showAlert(t('animateTaskRequiresVideo'), 'warning');
                     return;
                 }
                 submitting.value = true;
@@ -1503,9 +2179,18 @@ export const locale = i18n.global.locale
                     task: actualTaskType,
                     model_cls: currentForm.model_cls,
                     stage: currentForm.stage,
-                    prompt: currentForm.prompt.trim(),
                     seed: currentForm.seed || Math.floor(Math.random() * 1000000)
                 };
+
+                // animate 任务类型使用默认 prompt，其他任务类型需要用户输入
+                if (selectedTaskId.value === 'animate') {
+                    // animate 任务类型使用默认 prompt
+                    formData.prompt = currentForm.prompt && currentForm.prompt.trim().length > 0
+                        ? currentForm.prompt.trim()
+                        : '视频中的人在做动作';
+                } else {
+                    formData.prompt = currentForm.prompt ? currentForm.prompt.trim() : '';
+                }
 
                 if (currentForm.model_cls.startsWith('wan2.1')) {
                     formData.negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
@@ -1519,6 +2204,22 @@ export const locale = i18n.global.locale
                     };
                 }
 
+                if (selectedTaskId.value === 'animate' && currentForm.imageFile) {
+                    const base64 = await fileToBase64(currentForm.imageFile);
+                    formData.input_image = {
+                        type: 'base64',
+                        data: base64
+                    };
+                }
+
+                if (selectedTaskId.value === 'animate' && currentForm.videoFile) {
+                    const base64 = await fileToBase64(currentForm.videoFile);
+                    formData.input_video = {
+                        type: 'base64',
+                        data: base64
+                    };
+                }
+
                 if (selectedTaskId.value === 's2v') {
                     if (currentForm.imageFile) {
                         const base64 = await fileToBase64(currentForm.imageFile);
@@ -1527,7 +2228,36 @@ export const locale = i18n.global.locale
                             data: base64
                         };
                     }
-                    if (currentForm.audioFile) {
+
+                    // 检测是否为多人模式：有多个分离的音频和多个角色
+                    const isMultiPersonMode = s2vForm.value.separatedAudios &&
+                                            s2vForm.value.separatedAudios.length > 1 &&
+                                            currentForm.detectedFaces &&
+                                            currentForm.detectedFaces.length > 1;
+
+                    if (isMultiPersonMode) {
+                        // 多人模式：生成mask图、保存音频文件、生成config.json
+                        try {
+                            const multiPersonData = await prepareMultiPersonAudio(
+                                currentForm.detectedFaces,
+                                s2vForm.value.separatedAudios,
+                                currentForm.imageFile,
+                                currentForm.audioFile  // 传递原始音频文件
+                            );
+
+                            formData.input_audio = {
+                                type: 'directory',
+                                data: multiPersonData
+                            };
+                            formData.negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+                        } catch (error) {
+                            console.error('Failed to prepare multi-person audio:', error);
+                            showAlert(t('prepareMultiPersonAudioFailed') + ': ' + error.message, 'danger');
+                            submitting.value = false;
+                            return;
+                        }
+                    } else if (currentForm.audioFile) {
+                        // 单人模式：使用原始音频文件
                         const base64 = await fileToBase64(currentForm.audioFile);
                         formData.input_audio = {
                             type: 'base64',
@@ -1543,23 +2273,69 @@ export const locale = i18n.global.locale
                 });
 
                 if (response && response.ok) {
-                    const result = await response.json();
+                    let result;
+                    try {
+                        result = await response.json();
+                    } catch (error) {
+                        console.error('Failed to parse response JSON:', error);
+                        showAlert(t('taskSubmittedButParseFailed'), 'warning');
+                        submitting.value = false;
+                        return null;
+                    }
+
                     showAlert(t('taskSubmitSuccessAlert'), 'success');
 
-                    // 开始轮询新提交的任务状态
-                    startPollingTask(result.task_id);
-                    // 保存完整的任务历史（包括提示词、图片和音频）
-                    await addTaskToHistory(selectedTaskId.value, currentForm);
-                    resetForm(selectedTaskId.value);
+                    // 开始轮询新提交的任务状态（不等待，异步执行）
+                    try {
+                        startPollingTask(result.task_id);
+                    } catch (error) {
+                        console.error('Failed to start polling task:', error);
+                        // 不阻止流程继续
+                    }
+
+                    // 保存完整的任务历史（包括提示词、图片和音频）- 异步执行，不阻塞
+                    // 注意：addTaskToHistory 是同步函数，但为了统一处理，使用 Promise.resolve 包装
+                    Promise.resolve().then(() => {
+                        try {
+                            addTaskToHistory(selectedTaskId.value, currentForm);
+                        } catch (error) {
+                            console.error('Failed to add task to history:', error);
+                        }
+                    }).catch(error => {
+                        console.error('Failed to add task to history:', error);
+                    });
+
+                    // 重置表单（异步执行，不阻塞）- 使用 Promise.race 添加超时保护
+                    try {
+                        await Promise.race([
+                            Promise.resolve(resetForm(selectedTaskId.value)),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('resetForm timeout')), 3000))
+                        ]);
+                    } catch (error) {
+                        console.error('Failed to reset form:', error);
+                        // 不阻止流程继续，只记录错误
+                    }
+
                     // 重置当前任务类型的表单（保留模型选择，清空图片、音频和提示词）
-                    selectedTaskId.value = selectedTaskId.value;
-                    selectModel(currentForm.model_cls);
+                    try {
+                        selectedTaskId.value = selectedTaskId.value;
+                        selectModel(currentForm.model_cls);
+                    } catch (error) {
+                        console.error('Failed to select model:', error);
+                        // 不阻止流程继续
+                    }
 
                     // 返回新创建的任务ID
                     return result.task_id;
                 } else {
-                    const error = await response.json();
-                    showAlert(`${t('taskSubmitFailedAlert')}: ${error.message},${error.detail}`, 'danger');
+                    let error;
+                    try {
+                        error = await response.json();
+                        showAlert(`${t('taskSubmitFailedAlert')}: ${error.message || 'Unknown error'},${error.detail || ''}`, 'danger');
+                    } catch (parseError) {
+                        console.error('Failed to parse error response:', parseError);
+                        showAlert(`${t('taskSubmitFailedAlert')}: ${response.statusText || 'Unknown error'}`, 'danger');
+                    }
                     return null;
                 }
             } catch (error) {
@@ -1580,6 +2356,107 @@ export const locale = i18n.global.locale
                 };
                 reader.onerror = error => reject(error);
             });
+        };
+
+        // 准备多人模式的音频数据：生成mask图、保存音频文件、生成config.json
+        const prepareMultiPersonAudio = async (detectedFaces, separatedAudios, imageFile, originalAudioFile) => {
+            // 1. 读取原始图片，获取尺寸
+            const imageBase64 = await fileToBase64(imageFile);
+            const imageDataUrl = `data:image/png;base64,${imageBase64}`;
+
+            // 创建图片对象以获取尺寸
+            const img = new Image();
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+                img.src = imageDataUrl;
+            });
+            const imageWidth = img.naturalWidth;
+            const imageHeight = img.naturalHeight;
+
+            // 2. 为每个角色生成mask图和音频文件
+            const directoryFiles = {};
+            const talkObjects = [];
+
+            for (let i = 0; i < detectedFaces.length; i++) {
+                const face = detectedFaces[i];
+                const audioIndex = i < separatedAudios.length ? i : 0;
+                const audio = separatedAudios[audioIndex];
+
+                // 生成mask图（box部分为白色，其余部分为黑色）
+                const maskBase64 = await generateMaskImage(
+                    face.bbox,
+                    imageWidth,
+                    imageHeight
+                );
+
+                // 保存mask图
+                const maskFilename = `p${i + 1}_mask.png`;
+                directoryFiles[maskFilename] = maskBase64;
+
+                // 保存音频文件
+                // 注意：separatedAudios中的audio已经是base64编码的wav格式
+                const audioFilename = `p${i + 1}.wav`;
+                directoryFiles[audioFilename] = audio.audio; // audio.audio是base64编码的wav数据
+
+                // 添加到talk_objects
+                talkObjects.push({
+                    audio: audioFilename,
+                    mask: maskFilename
+                });
+            }
+
+            // 3. 保存原始未分割的音频文件（用于后续复用）
+            if (originalAudioFile) {
+                try {
+                    // 将原始音频文件转换为base64
+                    const originalAudioBase64 = await fileToBase64(originalAudioFile);
+                    // 根据原始文件名确定扩展名，如果没有扩展名则使用.wav
+                    const originalFilename = originalAudioFile.name || 'original_audio.wav';
+                    const fileExtension = originalFilename.toLowerCase().split('.').pop();
+                    const validExtensions = ['wav', 'mp3', 'mp4', 'aac', 'ogg', 'm4a'];
+                    const extension = validExtensions.includes(fileExtension) ? fileExtension : 'wav';
+                    const originalAudioFilename = `original_audio.${extension}`;
+                    directoryFiles[originalAudioFilename] = originalAudioBase64;
+                    console.log('已保存原始音频文件:', originalAudioFilename);
+                } catch (error) {
+                    console.warn('保存原始音频文件失败:', error);
+                    // 不阻止任务提交，只记录警告
+                }
+            }
+
+            // 4. 生成config.json
+            const configJson = {
+                talk_objects: talkObjects
+            };
+            const configJsonString = JSON.stringify(configJson, null, 4);
+            const configBase64 = btoa(unescape(encodeURIComponent(configJsonString)));
+            directoryFiles['config.json'] = configBase64;
+
+            return directoryFiles;
+        };
+
+        // 生成mask图：根据bbox坐标生成白色区域，其余为黑色
+        const generateMaskImage = async (bbox, imageWidth, imageHeight) => {
+            // bbox格式: [x1, y1, x2, y2]
+            const [x1, y1, x2, y2] = bbox;
+
+            // 创建canvas
+            const canvas = document.createElement('canvas');
+            canvas.width = imageWidth;
+            canvas.height = imageHeight;
+            const ctx = canvas.getContext('2d');
+
+            // 填充黑色背景
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, imageWidth, imageHeight);
+
+            // 在bbox区域填充白色
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(Math.round(x1), Math.round(y1), Math.round(x2 - x1), Math.round(y2 - y1));
+
+            // 转换为base64
+            return canvas.toDataURL('image/png').split(',')[1];
         };
 
         const formatTime = (timestamp) => {
@@ -1744,9 +2621,8 @@ export const locale = i18n.global.locale
 
         // 获取模板文件URL（优先从缓存，缓存没有则生成URL）- 同步版本
         const getTemplateFileUrl = (fileKey, fileType) => {
-            // 检查参数有效性
+            // 检查参数有效性（静默处理，不打印警告，因为模板可能确实没有某些输入）
             if (!fileKey) {
-                console.warn('getTemplateFileUrl: fileKey为空', { fileKey, fileType });
                 return null;
             }
 
@@ -1768,9 +2644,8 @@ export const locale = i18n.global.locale
         const createTemplateFileUrlRef = (fileKey, fileType) => {
             const urlRef = ref(null);
 
-            // 检查参数有效性
+            // 检查参数有效性（静默处理，不打印警告）
             if (!fileKey) {
-                console.warn('createTemplateFileUrlRef: fileKey为空', { fileKey, fileType });
                 return urlRef;
             }
 
@@ -1841,9 +2716,8 @@ export const locale = i18n.global.locale
 
         // 获取模板文件URL（异步版本，用于预加载等场景）
         const getTemplateFileUrlAsync = async (fileKey, fileType) => {
-            // 检查参数有效性
+            // 检查参数有效性（静默处理，不打印警告，因为模板可能确实没有某些输入）
             if (!fileKey) {
-                console.warn('getTemplateFileUrlAsync: fileKey为空', { fileKey, fileType });
                 return null;
             }
 
@@ -1955,8 +2829,11 @@ export const locale = i18n.global.locale
             }, 100);
         };
 
-        const getTaskFileUrlFromApi = async (taskId, fileKey) => {
+        const getTaskFileUrlFromApi = async (taskId, fileKey, filename = null) => {
             let apiUrl = `/api/v1/task/input_url?task_id=${taskId}&name=${fileKey}`;
+            if (filename) {
+                apiUrl += `&filename=${encodeURIComponent(filename)}`;
+            }
             if (fileKey.includes('output')) {
                 apiUrl = `/api/v1/task/result_url?task_id=${taskId}&name=${fileKey}`;
             }
@@ -1970,11 +2847,106 @@ export const locale = i18n.global.locale
                         assertUrl = `${assertUrl}&token=${encodeURIComponent(token)}`;
                     }
                 }
-                setTaskFileToCache(taskId, fileKey, {
+                const cacheKey = filename ? `${fileKey}_${filename}` : fileKey;
+                setTaskFileToCache(taskId, cacheKey, {
                     url: assertUrl,
                     timestamp: Date.now()
                 });
                 return assertUrl;
+            } else if (response && response.status === 400) {
+                // Handle directory input error (multi-person mode)
+                try {
+                    const errorData = await response.json();
+                    if (errorData.error && errorData.error.includes('directory')) {
+                        console.warn(`Input ${fileKey} is a directory (multi-person mode), cannot get single file URL`);
+                        return null;
+                    }
+                } catch (e) {
+                    // Ignore JSON parse errors
+                }
+            }
+            return null;
+        };
+
+        // Podcast 音频 URL 缓存管理函数（模仿任务文件缓存）
+        const loadPodcastAudioFromCache = () => {
+            try {
+                const cached = localStorage.getItem(PODCAST_AUDIO_CACHE_KEY);
+                if (cached) {
+                    const data = JSON.parse(cached);
+                    // 检查是否过期
+                    if (Date.now() - data.timestamp < PODCAST_AUDIO_CACHE_EXPIRY) {
+                        // 将缓存数据加载到内存缓存中
+                        for (const [cacheKey, audioData] of Object.entries(data.audio_urls)) {
+                            podcastAudioCache.value.set(cacheKey, audioData);
+                        }
+                        podcastAudioCacheLoaded.value = true;
+                        return true;
+                    } else {
+                        // 缓存过期，清除
+                        localStorage.removeItem(PODCAST_AUDIO_CACHE_KEY);
+                    }
+                }
+            } catch (error) {
+                console.warn('加载播客音频缓存失败:', error);
+                localStorage.removeItem(PODCAST_AUDIO_CACHE_KEY);
+            }
+            podcastAudioCacheLoaded.value = true;
+            return false;
+        };
+
+        const savePodcastAudioToCache = () => {
+            try {
+                const audio_urls = {};
+                for (const [cacheKey, audioData] of podcastAudioCache.value.entries()) {
+                    audio_urls[cacheKey] = audioData;
+                }
+                const data = {
+                    audio_urls,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(PODCAST_AUDIO_CACHE_KEY, JSON.stringify(data));
+            } catch (error) {
+                console.warn('保存播客音频缓存失败:', error);
+            }
+        };
+
+        // 生成播客音频缓存键
+        const getPodcastAudioCacheKey = (sessionId) => {
+            return sessionId;
+        };
+
+        // 从缓存获取播客音频 URL
+        const getPodcastAudioFromCache = (sessionId) => {
+            const cacheKey = getPodcastAudioCacheKey(sessionId);
+            return podcastAudioCache.value.get(cacheKey) || null;
+        };
+
+        // 设置播客音频 URL 到缓存
+        const setPodcastAudioToCache = (sessionId, audioData) => {
+            const cacheKey = getPodcastAudioCacheKey(sessionId);
+            podcastAudioCache.value.set(cacheKey, audioData);
+            // 异步保存到localStorage
+            setTimeout(() => {
+                savePodcastAudioToCache();
+            }, 100);
+        };
+
+        // 从 API 获取播客音频 URL（CDN URL）
+        const getPodcastAudioUrlFromApi = async (sessionId) => {
+            try {
+                const response = await apiCall(`/api/v1/podcast/session/${sessionId}/audio_url`);
+                if (response && response.ok) {
+                    const data = await response.json();
+                    const audioUrl = data.audio_url;
+                    setPodcastAudioToCache(sessionId, {
+                        url: audioUrl,
+                        timestamp: Date.now()
+                    });
+                    return audioUrl;
+                }
+            } catch (error) {
+                console.warn(`Failed to get audio URL for session ${sessionId}:`, error);
             }
             return null;
         };
@@ -2153,7 +3125,7 @@ export const locale = i18n.global.locale
                     // 使用新的任务文件预加载逻辑
                     await preloadTaskFilesUrl(tasks.value);
                 } else if (response) {
-                    showAlert('刷新任务列表失败', 'danger');
+                    showAlert(t('refreshTaskListFailed'), 'danger');
                 }
                 // 如果response为null，说明是认证错误，apiRequest已经处理了
             } catch (error) {
@@ -2387,7 +3359,7 @@ export const locale = i18n.global.locale
                         const url = window.URL.createObjectURL(videoBlob);
                         window.open(url, '_blank');
                     } else {
-                        showAlert('获取结果失败', 'danger');
+                        showAlert(t('getResultFailed'), 'danger');
                     }
                 } else {
                     showAlert(t('getTaskResultFailedAlert'), 'danger');
@@ -2801,67 +3773,118 @@ export const locale = i18n.global.locale
                         const imageUrl = await getTaskInputImage(task);
                         const audioUrl = await getTaskInputAudio(task);
 
-                        // 加载图片文件
-                        if (imageUrl) {
-                            try {
-                                const imageResponse = await fetch(imageUrl);
-                                if (imageResponse && imageResponse.ok) {
-                                    const blob = await imageResponse.blob();
-                                    const filename = task.inputs[Object.keys(task.inputs).find(key =>
-                                        key.includes('image') ||
-                                        task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
-                                    )] || 'image.jpg';
-                                    const file = new File([blob], filename, { type: blob.type });
-                                    currentForm.imageFile = file;
-                                    setCurrentImagePreview(URL.createObjectURL(file));
-                                }
-                            } catch (error) {
-                                console.warn('Failed to load image file:', error);
-                            }
-                        }
 
                         // 加载音频文件
                         if (audioUrl) {
                             try {
-                                currentForm.audioUrl = audioUrl;
-                                setCurrentAudioPreview(audioUrl);
-
                                 const audioResponse = await fetch(audioUrl);
                                 if (audioResponse && audioResponse.ok) {
-                                    const blob = await audioResponse.blob();
-                                    const filename = task.inputs[Object.keys(task.inputs).find(key =>
-                                        key.includes('audio') ||
-                                        task.inputs[key].toString().toLowerCase().match(/\.(mp3|wav|mp4|aac|ogg|m4a)$/)
-                                    )] || 'audio.wav';
+                                    // Check if the response is an error (for directory inputs)
+                                    const contentType = audioResponse.headers.get('content-type');
+                                    if (contentType && contentType.includes('application/json')) {
+                                        const errorData = await audioResponse.json();
+                                            // Not a directory error, proceed with normal loading
+                                            currentForm.audioUrl = audioUrl;
+                                            setCurrentAudioPreview(audioUrl);
 
-                                    // 根据文件扩展名确定正确的MIME类型
-                                    let mimeType = blob.type;
-                                    if (!mimeType || mimeType === 'application/octet-stream') {
-                                        const ext = filename.toLowerCase().split('.').pop();
-                                        const mimeTypes = {
-                                            'mp3': 'audio/mpeg',
-                                            'wav': 'audio/wav',
-                                            'mp4': 'audio/mp4',
-                                            'aac': 'audio/aac',
-                                            'ogg': 'audio/ogg',
-                                            'm4a': 'audio/mp4'
-                                        };
-                                        mimeType = mimeTypes[ext] || 'audio/mpeg';
+                                            const blob = await audioResponse.blob();
+                                            const filename = task.inputs[Object.keys(task.inputs).find(key =>
+                                                key.includes('audio') ||
+                                                task.inputs[key].toString().toLowerCase().match(/\.(mp3|wav|mp4|aac|ogg|m4a)$/)
+                                            )] || 'audio.wav';
+
+                                            // 根据文件扩展名确定正确的MIME类型
+                                            let mimeType = blob.type;
+                                            if (!mimeType || mimeType === 'application/octet-stream') {
+                                                const ext = filename.toLowerCase().split('.').pop();
+                                                const mimeTypes = {
+                                                    'mp3': 'audio/mpeg',
+                                                    'wav': 'audio/wav',
+                                                    'mp4': 'audio/mp4',
+                                                    'aac': 'audio/aac',
+                                                    'ogg': 'audio/ogg',
+                                                    'm4a': 'audio/mp4'
+                                                };
+                                                mimeType = mimeTypes[ext] || 'audio/mpeg';
+                                            }
+
+                                            const file = new File([blob], filename, { type: mimeType });
+                                            currentForm.audioFile = file;
+                                            console.log('复用任务 - 从后端加载音频文件:', {
+                                                name: file.name,
+                                                type: file.type,
+                                                size: file.size,
+                                                originalBlobType: blob.type
+                                            });
+                                    } else {
+                                        // Normal audio file response
+                                        currentForm.audioUrl = audioUrl;
+                                        setCurrentAudioPreview(audioUrl);
+
+                                        const blob = await audioResponse.blob();
+                                        const filename = task.inputs[Object.keys(task.inputs).find(key =>
+                                            key.includes('audio') ||
+                                            task.inputs[key].toString().toLowerCase().match(/\.(mp3|wav|mp4|aac|ogg|m4a)$/)
+                                        )] || 'audio.wav';
+
+                                        // 根据文件扩展名确定正确的MIME类型
+                                        let mimeType = blob.type;
+                                        if (!mimeType || mimeType === 'application/octet-stream') {
+                                            const ext = filename.toLowerCase().split('.').pop();
+                                            const mimeTypes = {
+                                                'mp3': 'audio/mpeg',
+                                                'wav': 'audio/wav',
+                                                'mp4': 'audio/mp4',
+                                                'aac': 'audio/aac',
+                                                'ogg': 'audio/ogg',
+                                                'm4a': 'audio/mp4'
+                                            };
+                                            mimeType = mimeTypes[ext] || 'audio/mpeg';
+                                        }
+
+                                        const file = new File([blob], filename, { type: mimeType });
+                                        currentForm.audioFile = file;
+                                        console.log('复用任务 - 从后端加载音频文件:', {
+                                            name: file.name,
+                                            type: file.type,
+                                            size: file.size,
+                                            originalBlobType: blob.type
+                                        });
                                     }
-
-                                    const file = new File([blob], filename, { type: mimeType });
-                                    currentForm.audioFile = file;
-                                    console.log('复用任务 - 从后端加载音频文件:', {
-                                        name: file.name,
-                                        type: file.type,
-                                        size: file.size,
-                                        originalBlobType: blob.type
-                                    });
                                 }
                             } catch (error) {
                                 console.warn('Failed to load audio file:', error);
                             }
                         }
+
+                                                // 加载图片文件
+                                                if (imageUrl) {
+                                                    try {
+                                                        const imageResponse = await fetch(imageUrl);
+                                                        if (imageResponse && imageResponse.ok) {
+                                                            const blob = await imageResponse.blob();
+                                                            const filename = task.inputs[Object.keys(task.inputs).find(key =>
+                                                                key.includes('image') ||
+                                                                task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
+                                                            )] || 'image.jpg';
+                                                            const file = new File([blob], filename, { type: blob.type });
+                                                            currentForm.imageFile = file;
+                                                            const imagePreviewUrl = URL.createObjectURL(file);
+                                                            setCurrentImagePreview(imageUrl);
+
+                                                            // Reset detected faces
+                                                            if (selectedTaskId.value === 'i2v') {
+                                                                i2vForm.value.detectedFaces = [];
+                                                            } else if (selectedTaskId.value === 's2v') {
+                                                                s2vForm.value.detectedFaces = [];
+                                                            }
+
+                                                            // 不再自动检测人脸，等待用户手动打开多角色模式开关
+                                                        }
+                                                    } catch (error) {
+                                                        console.warn('Failed to load image file:', error);
+                                                    }
+                                                }
                     } catch (error) {
                         console.warn('Failed to load task data from backend:', error);
                 }
@@ -3067,7 +4090,8 @@ export const locale = i18n.global.locale
             const iconMap = {
                 't2v': 'fas fa-font',  // 文字A形图标
                 'i2v': 'fas fa-image',     // 图像图标
-                's2v': 'fas fa-user' // 人物图标
+                's2v': 'fas fa-user', // 人物图标
+                'animate': 'fi fi-br-running text-lg' // 角色替换图标
             };
             return iconMap[taskType] || 'fas fa-video';
         };
@@ -3099,6 +4123,8 @@ export const locale = i18n.global.locale
                 return t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentActionRequirementsBasedOnTheImage');
             } else if (selectedTaskId.value === 's2v') {
                 return t('optional') + ' '+ t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheDigitalHumanImageBackgroundStyleActionRequirements');
+            } else if (selectedTaskId.value === 'animate') {
+                return t('optional') + ' '+ t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentActionRequirementsBasedOnTheImage');
             }
             return t('pleaseEnterThePromptForVideoGeneration') + '...';
         };
@@ -3160,17 +4186,32 @@ export const locale = i18n.global.locale
 
         const getTaskInputAudio = async (task) => {
             if (!task || !task.inputs) return null;
-            const audioInputs = Object.keys(task.inputs).filter(key =>
-                key.includes('audio') ||
-                task.inputs[key].toString().toLowerCase().match(/\.(mp3|wav|mp4|aac|ogg|m4a)$/)
-            );
 
-            if (audioInputs.length > 0) {
-                const firstAudioKey = audioInputs[0];
-                return await getTaskInputUrl(task.task_id, firstAudioKey);
+            // Directly use 'input_audio' key
+            const audioKey = 'input_audio';
+            if (!task.inputs[audioKey]) return null;
+
+            // Always bypass cache and check API directly to detect directory type
+            // This ensures we get the correct URL even if cache has invalid data
+            let url = await getTaskFileUrlFromApi(task.task_id, audioKey);
+
+            // If it's a directory (multi-person mode) or URL is null, try to get original_audio file
+            if (!url) {
+                console.log(`Audio input ${audioKey} is a directory (multi-person mode), trying to get original_audio file`);
+                // Try to get original_audio file from directory
+                // Try common extensions
+                const extensions = ['wav', 'mp3', 'mp4', 'aac', 'ogg', 'm4a'];
+                for (const ext of extensions) {
+                    const originalAudioFilename = `original_audio.${ext}`;
+                    url = await getTaskFileUrlFromApi(task.task_id, audioKey, originalAudioFilename);
+                    if (url) {
+                        console.log(`Found original audio file: ${originalAudioFilename}`);
+                        break;
+                    }
+                }
             }
 
-            return null;
+            return url;
         };
 
         const handleThumbnailError = (event) => {
@@ -3288,29 +4329,50 @@ export const locale = i18n.global.locale
                 // 1. 加载模型和任务数据
                 await loadModels();
 
-                // 3. 选择任务类型（优先选择数字人任务）
-                let selectedTaskType = null;
-                if (availableTaskTypes.value.includes('s2v')) {
-                    selectedTaskType = 's2v';
-                } else if (availableTaskTypes.value.length > 0) {
-                    selectedTaskType = availableTaskTypes.value[0];
-                }
+                // 2. 从路由恢复或设置默认值
+                const routeQuery = router.currentRoute.value?.query || {};
+                const routeTaskType = routeQuery.taskType;
+                const routeModel = routeQuery.model;
+                const routeExpanded = routeQuery.expanded;
 
-                if (selectedTaskType) {
-                    selectTask(selectedTaskType);
+                if (routeTaskType && availableTaskTypes.value.includes(routeTaskType)) {
+                    // 路由中有 taskType，恢复它
+                    selectTask(routeTaskType);
 
-                    // 4. 为选中的任务类型选择第一个模型
-                    const currentForm = getCurrentForm();
-                    if (!currentForm.model_cls && availableModelClasses.value.length > 0) {
-                        selectModel(availableModelClasses.value[0]);
+                    if (routeModel && availableModelClasses.value.includes(routeModel)) {
+                        // 路由中有 model，恢复它（会自动设置 stage）
+                        selectModel(routeModel);
+                    } else {
+                        // 路由中没有 model 或 model 无效，选择第一个模型
+                        const firstModel = availableModelClasses.value[0];
+                        if (firstModel) {
+                            selectModel(firstModel);
+                        }
+                    }
+                } else {
+                    // 路由中没有 taskType，设置默认值：s2v
+                    const defaultTaskType = availableTaskTypes.value.includes('s2v') ? 's2v' : availableTaskTypes.value[0];
+                    if (defaultTaskType) {
+                        selectTask(defaultTaskType);
+
+                        // 选择该任务下的第一个模型
+                        const firstModel = availableModelClasses.value[0];
+                        if (firstModel) {
+                            selectModel(firstModel);
+                        }
                     }
                 }
 
-                // 2. 加载历史记录和素材库（异步，不阻塞首屏）
+                // 3. 恢复 expanded 状态（如果路由中有）
+                if (routeExpanded === 'true') {
+                    expandCreationArea();
+                }
+
+                // 4. 加载历史记录和素材库（异步，不阻塞首屏）
                 refreshTasks(true);
                 loadInspirationData(true);
 
-                // 3. 加载历史记录和素材库文件（异步，不阻塞首屏）
+                // 5. 加载历史记录和素材库文件（异步，不阻塞首屏）
                 getPromptHistory();
                 loadTaskFilesFromCache();
                 loadTemplateFilesFromCache();
@@ -3326,13 +4388,17 @@ export const locale = i18n.global.locale
                     availableModels: models.value,
                     tasks: tasks.value,
                     inspirationItems: inspirationItems.value,
-                    selectedTaskType: selectedTaskType,
-                    selectedModel: selectedModel.value
+                    selectedTaskId: selectedTaskId.value,
+                    selectedModel: selectedModel.value,
+                    currentForm: {
+                        model_cls: getCurrentForm().model_cls,
+                        stage: getCurrentForm().stage
+                    }
                 });
 
             } catch (error) {
                 console.error('初始化失败:', error);
-                showAlert('初始化失败，请刷新页面重试', 'danger');
+                showAlert(t('initFailedPleaseRefresh'), 'danger');
             }
         };
 
@@ -3347,8 +4413,8 @@ export const locale = i18n.global.locale
                 case 't2v':
                     t2vForm.value = {
                         task: 't2v',
-                        model_cls: currentModel || '',
-                        stage: currentStage || 'single_stage',
+                        model_cls: currentModel,
+                        stage: currentStage,
                         prompt: '',
                         seed: Math.floor(Math.random() * 1000000)
                     };
@@ -3356,8 +4422,8 @@ export const locale = i18n.global.locale
                 case 'i2v':
                     i2vForm.value = {
                         task: 'i2v',
-                        model_cls: currentModel || '',
-                        stage: currentStage || 'multi_stage',
+                        model_cls: currentModel,
+                        stage: currentStage,
                         imageFile: null,
                         prompt: '',
                         seed: Math.floor(Math.random() * 1000000)
@@ -3373,13 +4439,37 @@ export const locale = i18n.global.locale
                 case 's2v':
                     s2vForm.value = {
                         task: 's2v',
-                        model_cls: currentModel || '',
-                        stage: currentStage || 'single_stage',
+                        model_cls: currentModel,
+                        stage: currentStage,
                         imageFile: null,
                         audioFile: null,
                         prompt: 'Make the character speak in a natural way according to the audio.',
                         seed: Math.floor(Math.random() * 1000000)
                     };
+                    break;
+                case 'animate':
+                    animateForm.value = {
+                        task: 'animate',
+                        model_cls: currentModel,
+                        stage: currentStage,
+                        imageFile: null,
+                        videoFile: null,
+                        prompt: '视频中的人在做动作',
+                        seed: Math.floor(Math.random() * 1000000),
+                        detectedFaces: []
+                    };
+                    // 直接清空animate图片和视频预览
+                    animateImagePreview.value = null;
+                    animateVideoPreview.value = null;
+                    // 清理图片和视频文件输入框
+                    const animateImageInput = document.querySelector('input[type="file"][accept="image/*"]');
+                    if (animateImageInput) {
+                        animateImageInput.value = '';
+                    }
+                    const animateVideoInput = document.querySelector('input[type="file"][data-role="video-input"]');
+                    if (animateVideoInput) {
+                        animateVideoInput.value = '';
+                    }
                     break;
             }
 
@@ -4063,7 +5153,7 @@ export const locale = i18n.global.locale
                                 try {
                                     localStorage.setItem('taskHistory', JSON.stringify([historyItem]));
                                     console.log('任务历史已保存（完全清理后）');
-                                    showAlert('历史记录空间已清理', 'info');
+                                    showAlert(t('historyCleared'), 'info');
                                 } catch (thirdError) {
                                     console.error('即使完全清理后仍无法保存:', thirdError);
                                     // 不再显示警告，因为历史记录不是必需的功能
@@ -4177,7 +5267,13 @@ export const locale = i18n.global.locale
                 for (const task of tasks.value) {
                     if (task.inputs && task.inputs.input_audio && !seenAudios.has(task.inputs.input_audio)) {
                         // 获取音频URL
-                        const audioUrl = await getTaskFileUrl(task.task_id, 'input_audio');
+                        let audioUrl = await getTaskFileUrl(task.task_id, 'input_audio');
+
+                        // 如果返回null，可能是目录类型（多人模式），尝试获取original_audio.wav
+                        if (!audioUrl) {
+                            audioUrl = await getTaskFileUrlFromApi(task.task_id, 'input_audio', 'original_audio.wav');
+                        }
+
                         const imageUrl = task.inputs.input_image ? await getTaskFileUrl(task.task_id, 'input_image') : null;
                         if (audioUrl) {
                             uniqueAudios.push({
@@ -4209,8 +5305,20 @@ export const locale = i18n.global.locale
         // 选择图片历史记录 - 从URL获取
         const selectImageHistory = async (history) => {
             try {
+                // 确保 URL 有效，如果无效则重新获取
+                let imageUrl = history.url;
+                if (!imageUrl || imageUrl.trim() === '') {
+                    // 如果 URL 为空，尝试重新获取
+                    if (history.taskId) {
+                        imageUrl = await getTaskFileUrl(history.taskId, 'input_image');
+                    }
+                    if (!imageUrl || imageUrl.trim() === '') {
+                        throw new Error('图片 URL 无效');
+                    }
+                }
+
                 // 从URL获取图片文件
-                const response = await fetch(history.url);
+                const response = await fetch(imageUrl);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
@@ -4219,18 +5327,43 @@ export const locale = i18n.global.locale
                 const file = new File([blob], history.filename, { type: blob.type });
 
                 // 设置图片预览
-                setCurrentImagePreview(history.url);
+                setCurrentImagePreview(imageUrl);
                 updateUploadedContentStatus();
 
                 // 更新表单
                 const currentForm = getCurrentForm();
                 currentForm.imageFile = file;
 
+                // Reset detected faces
+                if (selectedTaskId.value === 'i2v') {
+                    i2vForm.value.detectedFaces = [];
+                } else if (selectedTaskId.value === 's2v') {
+                    s2vForm.value.detectedFaces = [];
+                }
+
                 showImageTemplates.value = false;
-                showAlert('已应用历史图片', 'success');
+                showAlert(t('historyImageApplied'), 'success');
+
+                // Auto detect faces after image is loaded
+                // 不再自动检测人脸，等待用户手动打开多角色模式开关
+                try {
+                    // 如果 URL 是 http/https，直接使用；否则转换为 data URL
+                    if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
+                        // 如果不是 http/https URL，转换为 data URL
+                        const reader = new FileReader();
+                        reader.onload = async (e) => {
+                            // 不再自动检测人脸
+                        };
+                        reader.readAsDataURL(file);
+                    }
+                } catch (error) {
+                    console.error('Face detection failed:', error);
+                    // Don't show error alert, just log it
+                }
+
             } catch (error) {
                 console.error('应用历史图片失败:', error);
-                showAlert('应用历史图片失败', 'danger');
+                showAlert(t('applyHistoryImageFailed') + ': ' + error.message, 'danger');
             }
         };
 
@@ -4255,10 +5388,10 @@ export const locale = i18n.global.locale
                 currentForm.audioFile = file;
 
                 showAudioTemplates.value = false;
-                showAlert('已应用历史音频', 'success');
+                showAlert(t('historyAudioApplied'), 'success');
             } catch (error) {
                 console.error('应用历史音频失败:', error);
-                showAlert('应用历史音频失败', 'danger');
+                showAlert(t('applyHistoryAudioFailed'), 'danger');
             }
         };
 
@@ -4292,7 +5425,7 @@ export const locale = i18n.global.locale
             const audioUrl = history.url;
             console.log('音频历史URL:', audioUrl);
             if (!audioUrl) {
-                showAlert('音频历史URL获取失败', 'danger');
+                showAlert(t('audioHistoryUrlFailed'), 'danger');
                 return;
             }
 
@@ -4318,7 +5451,7 @@ export const locale = i18n.global.locale
 
             audio.addEventListener('error', () => {
                 console.error('音频播放失败:', audio.error);
-                showAlert('音频播放失败', 'danger');
+                showAlert(t('audioPlaybackFailed'), 'danger');
                 currentPlayingAudio = null;
                 // 调用停止回调
                 if (audioStopCallback) {
@@ -4329,7 +5462,7 @@ export const locale = i18n.global.locale
 
             audio.play().catch(error => {
                 console.error('音频播放失败:', error);
-                showAlert('音频播放失败', 'danger');
+                showAlert(t('audioPlaybackFailed'), 'danger');
                 currentPlayingAudio = null;
             });
         };
@@ -4337,13 +5470,13 @@ export const locale = i18n.global.locale
         // 清空图片历史记录
         const clearImageHistory = () => {
             imageHistory.value = [];
-            showAlert('图片历史已清空', 'info');
+            showAlert(t('imageHistoryCleared'), 'info');
         };
 
         // 清空音频历史记录
         const clearAudioHistory = () => {
             audioHistory.value = [];
-            showAlert('音频历史已清空', 'info');
+            showAlert(t('audioHistoryCleared'), 'info');
         };
 
         // 清理localStorage存储空间
@@ -4371,11 +5504,11 @@ export const locale = i18n.global.locale
                 audioHistory.value = [];
                 promptHistory.value = [];
 
-                showAlert('存储空间已清理', 'success');
+                showAlert(t('storageCleared'), 'success');
                 console.log('localStorage已清理，释放了存储空间');
             } catch (error) {
                 console.error('清理localStorage失败:', error);
-                showAlert('清理存储空间失败', 'danger');
+                showAlert(t('clearStorageFailed'), 'danger');
             }
         };
 
@@ -4450,7 +5583,7 @@ export const locale = i18n.global.locale
                 } catch (error) {
                     console.error('Refresh token failed:', error);
                     logout(false);
-                    showAlert('登录已过期，请重新登录', 'warning', {
+                    showAlert(t('loginExpiredPleaseRelogin'), 'warning', {
                         label: t('login'),
                         onClick: login
                     });
@@ -4488,7 +5621,7 @@ export const locale = i18n.global.locale
                 return response;
             } catch (error) {
                 console.error('API request failed:', error);
-                showAlert('网络请求失败', 'danger');
+                showAlert(t('networkRequestFailed'), 'danger');
                 return null;
             }
         };
@@ -4990,7 +6123,7 @@ export const locale = i18n.global.locale
                             console.warn('视频加载超时（移动端）');
                             icon.className = 'fas fa-play text-sm';
                             currentLoadingVideo = null;
-                            showAlert('视频加载超时，请重试', 'warning');
+                            showAlert(t('videoLoadTimeout'), 'warning');
                         }
                     }, 10000);
 
@@ -5217,6 +6350,12 @@ export const locale = i18n.global.locale
                 const currentForm = getCurrentForm();
                 if (currentForm) {
                     currentForm.imageUrl = imageUrl;
+                    // Reset detected faces
+                    if (selectedTaskId.value === 'i2v') {
+                        i2vForm.value.detectedFaces = [];
+                    } else if (selectedTaskId.value === 's2v') {
+                        s2vForm.value.detectedFaces = [];
+                    }
                 }
 
                 // 设置预览
@@ -5240,6 +6379,8 @@ export const locale = i18n.global.locale
                             currentForm.imageFile = file;
                         }
                         console.log('模板图片文件已加载');
+
+                        // 不再自动检测人脸，等待用户手动打开多角色模式开关
                     } else {
                         console.warn('Failed to fetch image from URL:', imageUrl);
                         showAlert(t('applyImageFailed'), 'danger');
@@ -5694,7 +6835,7 @@ export const locale = i18n.global.locale
         // 使用模板
         const useTemplate = async (item) => {
             if (!item) {
-                showAlert('模板数据不完整', 'danger');
+                showAlert(t('templateDataIncomplete'), 'danger');
                 return;
             }
             console.log('使用模板:', item);
@@ -5715,7 +6856,7 @@ export const locale = i18n.global.locale
                 currentForm.negative_prompt = item.params?.negative_prompt || '';
                 currentForm.seed = item.params?.seed || 42;
                 currentForm.model_cls = item.model_cls || '';
-                currentForm.stage = item.stage || 'single_stage';
+                currentForm.stage = item.stage || '';
 
                 // 立即关闭模板详情并切换到创建视图，后续资源异步加载
                 showTemplateDetailModal.value = false;
@@ -5743,6 +6884,13 @@ export const locale = i18n.global.locale
                             setCurrentImagePreview(imageUrl); // 设置正确的URL作为预览
                             console.log('模板输入图片URL:', imageUrl);
 
+                            // Reset detected faces
+                            if (selectedTaskId.value === 'i2v') {
+                                i2vForm.value.detectedFaces = [];
+                            } else if (selectedTaskId.value === 's2v') {
+                                s2vForm.value.detectedFaces = [];
+                            }
+
                             // 加载图片文件
                             const imageResponse = await fetch(imageUrl);
                             if (imageResponse.ok) {
@@ -5751,6 +6899,8 @@ export const locale = i18n.global.locale
                                 const file = new File([blob], filename, { type: blob.type });
                                 currentForm.imageFile = file;
                                 console.log('模板图片文件已加载');
+
+                                // 不再自动检测人脸，等待用户手动打开多角色模式开关
                             } else {
                                 console.warn('Failed to fetch image from URL:', imageUrl);
                             }
@@ -5839,7 +6989,7 @@ export const locale = i18n.global.locale
 
         // 加载更多灵感
         const loadMoreInspiration = () => {
-            showAlert('加载更多灵感功能开发中...', 'info');
+            showAlert(t('loadMoreInspirationComingSoon'), 'info');
         };
 
         // 新增：任务详情弹窗方法
@@ -6083,7 +7233,7 @@ export const locale = i18n.global.locale
         const featuredTemplatesLoading = ref(false);
 
         // 主题管理
-        const theme = ref('dark'); // 'light', 'dark', 'auto' - 默认深色模式
+        const theme = ref('dark'); // 'light', 'dark' - 默认深色模式
 
         // 初始化主题
         const initTheme = () => {
@@ -6092,58 +7242,72 @@ export const locale = i18n.global.locale
             applyTheme(savedTheme);
         };
 
-        // 应用主题
+        // 应用主题（优化版本，减少延迟）
         const applyTheme = (newTheme) => {
             const html = document.documentElement;
 
-            if (newTheme === 'dark') {
-                html.classList.add('dark');
-                html.style.colorScheme = 'dark';
-                console.log('已切换到深色模式');
-            } else if (newTheme === 'light') {
-                html.classList.remove('dark');
-                html.style.colorScheme = 'light';
-                console.log('已切换到浅色模式');
-            } else {
-                // auto - 跟随系统
-                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                if (prefersDark) {
+            // 使用 requestAnimationFrame 优化 DOM 操作
+            requestAnimationFrame(() => {
+                // 临时禁用过渡动画以提高切换速度
+                html.classList.add('theme-transitioning');
+
+                if (newTheme === 'dark') {
                     html.classList.add('dark');
+                    html.style.colorScheme = 'dark';
                 } else {
                     html.classList.remove('dark');
+                    html.style.colorScheme = 'light';
                 }
-                html.style.colorScheme = 'auto';
-                console.log('已切换到自动模式（跟随系统）');
-            }
+
+                // 短暂延迟后移除过渡禁用类，恢复平滑过渡
+                setTimeout(() => {
+                    html.classList.remove('theme-transitioning');
+                }, 50);
+            });
         };
 
-        // 切换主题
+        // 切换主题（优化版本）
         const toggleTheme = () => {
-            const themes = ['auto', 'light', 'dark'];
+            const themes = ['light', 'dark'];
             const currentIndex = themes.indexOf(theme.value);
             const nextIndex = (currentIndex + 1) % themes.length;
             const nextTheme = themes[nextIndex];
 
+            // 立即更新状态
             theme.value = nextTheme;
-            localStorage.setItem('theme', nextTheme);
+
+            // 异步保存到 localStorage，不阻塞 UI
+            if (window.requestIdleCallback) {
+                requestIdleCallback(() => {
+                    localStorage.setItem('theme', nextTheme);
+                }, { timeout: 100 });
+            } else {
+                // 回退方案：使用 setTimeout
+                setTimeout(() => {
+                    localStorage.setItem('theme', nextTheme);
+                }, 0);
+            }
+
+            // 立即应用主题
             applyTheme(nextTheme);
 
+            // 延迟显示提示，避免阻塞主题切换
             const themeNames = {
-                'auto': '跟随系统',
                 'light': '浅色模式',
                 'dark': '深色模式'
             };
-            showAlert(`已切换到${themeNames[nextTheme]}`, 'info');
+            setTimeout(() => {
+                showAlert(`已切换到${themeNames[nextTheme]}`, 'info');
+            }, 100);
         };
 
         // 获取主题图标
         const getThemeIcon = () => {
             const iconMap = {
-                'auto': 'fas fa-adjust',
                 'light': 'fas fa-sun',
                 'dark': 'fas fa-moon'
             };
-            return iconMap[theme.value] || 'fas fa-adjust';
+            return iconMap[theme.value] || 'fas fa-moon';
         };
 
         // 不需要认证的API调用（用于获取模版数据）
@@ -6254,69 +7418,69 @@ export const locale = i18n.global.locale
             saveTtsHistory(currentHistory);
         };
 
-    const loadTtsHistory = () => {
-        try {
-            const stored = localStorage.getItem('ttsHistory');
-            if (!stored) return [];
-            const parsed = JSON.parse(stored);
-            ttsHistory.value = Array.isArray(parsed) ? parsed : [];
-            return ttsHistory.value;
-        } catch (error) {
-            console.error('加载TTS历史失败:', error);
+        const loadTtsHistory = () => {
+            try {
+                const stored = localStorage.getItem('ttsHistory');
+                if (!stored) return [];
+                const parsed = JSON.parse(stored);
+                ttsHistory.value = Array.isArray(parsed) ? parsed : [];
+                return ttsHistory.value;
+            } catch (error) {
+                console.error('加载TTS历史失败:', error);
+                ttsHistory.value = [];
+                return [];
+            }
+        };
+
+        const saveTtsHistory = (historyList) => {
+            try {
+                localStorage.setItem('ttsHistory', JSON.stringify(historyList));
+                ttsHistory.value = historyList;
+            } catch (error) {
+                console.error('保存TTS历史失败:', error);
+            }
+        };
+
+        const addTtsHistoryEntry = (text = '', instruction = '') => {
+            const trimmedText = (text || '').trim();
+            const trimmedInstruction = (instruction || '').trim();
+
+            if (!trimmedText && !trimmedInstruction) {
+                return;
+            }
+
+            const currentHistory = loadTtsHistory();
+
+            const existingIndex = currentHistory.findIndex(entry =>
+                entry.text === trimmedText && entry.instruction === trimmedInstruction
+            );
+
+            const timestamp = new Date().toISOString();
+
+            if (existingIndex !== -1) {
+                const existingEntry = currentHistory.splice(existingIndex, 1)[0];
+                existingEntry.timestamp = timestamp;
+                currentHistory.unshift(existingEntry);
+            } else {
+                currentHistory.unshift({
+                    id: Date.now(),
+                    text: trimmedText,
+                    instruction: trimmedInstruction,
+                    timestamp
+                });
+            }
+
+            if (currentHistory.length > 20) {
+                currentHistory.length = 20;
+            }
+
+            saveTtsHistory(currentHistory);
+        };
+
+        const clearTtsHistory = () => {
             ttsHistory.value = [];
-            return [];
-        }
-    };
-
-    const saveTtsHistory = (historyList) => {
-        try {
-            localStorage.setItem('ttsHistory', JSON.stringify(historyList));
-            ttsHistory.value = historyList;
-        } catch (error) {
-            console.error('保存TTS历史失败:', error);
-        }
-    };
-
-    const addTtsHistoryEntry = (text = '', instruction = '') => {
-        const trimmedText = (text || '').trim();
-        const trimmedInstruction = (instruction || '').trim();
-
-        if (!trimmedText && !trimmedInstruction) {
-            return;
-        }
-
-        const currentHistory = loadTtsHistory();
-
-        const existingIndex = currentHistory.findIndex(entry =>
-            entry.text === trimmedText && entry.instruction === trimmedInstruction
-        );
-
-        const timestamp = new Date().toISOString();
-
-        if (existingIndex !== -1) {
-            const existingEntry = currentHistory.splice(existingIndex, 1)[0];
-            existingEntry.timestamp = timestamp;
-            currentHistory.unshift(existingEntry);
-        } else {
-            currentHistory.unshift({
-                id: Date.now(),
-                text: trimmedText,
-                instruction: trimmedInstruction,
-                timestamp
-            });
-        }
-
-        if (currentHistory.length > 20) {
-            currentHistory.length = 20;
-        }
-
-        saveTtsHistory(currentHistory);
-    };
-
-    const clearTtsHistory = () => {
-        ttsHistory.value = [];
-        localStorage.removeItem('ttsHistory');
-    };
+            localStorage.removeItem('ttsHistory');
+        };
 
 export {
             // 任务类型下拉菜单
@@ -6365,6 +7529,7 @@ export {
             showTaskDetailModal,
             modalTask,
             showVoiceTTSModal,
+            showPodcastModal,
             currentTask,
             t2vForm,
             i2vForm,
@@ -6375,8 +7540,10 @@ export {
             s2vAudioPreview,
             getCurrentImagePreview,
             getCurrentAudioPreview,
+            getCurrentVideoPreview,
             setCurrentImagePreview,
             setCurrentAudioPreview,
+            setCurrentVideoPreview,
             updateUploadedContentStatus,
             availableTaskTypes,
             availableModelClasses,
@@ -6428,6 +7595,13 @@ export {
             handleDownloadFile,
             viewFile,
             handleImageUpload,
+            detectFacesInImage,
+            faceDetecting,
+            audioSeparating,
+            cropFaceImage,
+            updateFaceRoleName,
+            toggleFaceEditing,
+            saveFaceRoleName,
             selectTask,
             selectModel,
             resetForm,
@@ -6435,7 +7609,14 @@ export {
             triggerAudioUpload,
             removeImage,
             removeAudio,
+            removeVideo,
             handleAudioUpload,
+            handleVideoUpload,
+            separateAudioTracks,
+            updateSeparatedAudioRole,
+            updateSeparatedAudioName,
+            toggleSeparatedAudioEditing,
+            saveSeparatedAudioName,
             loadImageAudioTemplates,
             selectImageTemplate,
             selectAudioTemplate,
@@ -6445,6 +7626,7 @@ export {
             getTemplateFile,
             imageTemplates,
             audioTemplates,
+            mergedTemplates,
             showImageTemplates,
             showAudioTemplates,
             mediaModalTab,
@@ -6481,6 +7663,14 @@ export {
             setTaskFileToCache,
             getTaskFileUrlFromApi,
             getTaskFileUrlSync,
+            // Podcast 音频缓存
+            podcastAudioCache,
+            podcastAudioCacheLoaded,
+            loadPodcastAudioFromCache,
+            savePodcastAudioToCache,
+            getPodcastAudioFromCache,
+            setPodcastAudioToCache,
+            getPodcastAudioUrlFromApi,
             getTemplateFileUrlFromApi,
             getTemplateFileUrl,
             getTemplateFileUrlAsync,
@@ -6519,6 +7709,7 @@ export {
             getUserAvatarUrl,
             getCurrentImagePreviewUrl,
             getCurrentAudioPreviewUrl,
+            getCurrentVideoPreviewUrl,
             handleThumbnailError,
             handleImageError,
             handleImageLoad,

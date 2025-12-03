@@ -22,8 +22,8 @@ class VolcEngineTTSClient:
 
     def __init__(self, voices_list_file=None):
         self.url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-        self.appid = os.getenv("VOLCENGINE_APPID")
-        self.access_token = os.getenv("VOLCENGINE_ACCESS_TOKEN")
+        self.appid = os.getenv("VOLCENGINE_TTS_APPID")
+        self.access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN")
         self.proxy = os.getenv("HTTPS_PROXY", None)
         if self.proxy:
             logger.info(f"volcengine tts use proxy: {self.proxy}")

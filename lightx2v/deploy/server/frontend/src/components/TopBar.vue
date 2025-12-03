@@ -15,14 +15,9 @@ import {
             initTheme,
             toggleTheme,
             getThemeIcon,
+            switchToCreateView
 } from '../utils/other'
 
-// 导航到主页面
-const goToHome = () => {
-    showTemplateDetailModal.value = false
-    showTaskDetailModal.value = false
-    router.push({ name: 'Generate' })
-}
 
 // 初始化主题
 onMounted(() => {
@@ -37,7 +32,7 @@ onMounted(() => {
                 <div class="flex justify-between items-center max-w-full mx-auto px-6 py-3">
                     <!-- 左侧 Logo -->
                     <div class="flex items-center">
-                        <button @click="goToHome"
+                        <button @click="switchToCreateView"
                                 class="flex items-center gap-2.5 px-3 py-2 bg-transparent border-0 rounded-[10px] cursor-pointer transition-all duration-200 hover:bg-black/4 dark:hover:bg-white/6 hover:-translate-y-px active:scale-[0.97]"
                                 :title="t('goToHome')">
                             <img src="../../public/logo.svg" alt="LightX2V" class="w-6 h-6 sm:w-6 sm:h-6 md:w-8 md:h-8 lg:w-8 lg:h-8" loading="lazy" />

@@ -24,6 +24,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import load_weights, remove_substrings_from_keys
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("wan2.2_animate")
@@ -182,7 +183,7 @@ class WanAnimateRunner(WanRunner):
                         ],
                         dim=1,
                     )
-                    .cuda()
+                    .to(AI_DEVICE)
                     .unsqueeze(0)
                 )
                 mask_pixel_values = 1 - mask_pixel_values
@@ -210,7 +211,7 @@ class WanAnimateRunner(WanRunner):
                         ],
                         dim=1,
                     )
-                    .cuda()
+                    .to(AI_DEVICE)
                     .unsqueeze(0)
                 )
                 msk_reft = self.get_i2v_mask(self.latent_t, self.latent_h, self.latent_w, self.mask_reft_len)
@@ -238,9 +239,9 @@ class WanAnimateRunner(WanRunner):
         return y, pose_latents
 
     def prepare_input(self):
-        src_pose_path = self.config["src_pose_path"] if "src_pose_path" in self.config else None
-        src_face_path = self.config["src_face_path"] if "src_face_path" in self.config else None
-        src_ref_path = self.config["src_ref_images"] if "src_ref_images" in self.config else None
+        src_pose_path = self.input_info.src_pose_path
+        src_face_path = self.input_info.src_face_path
+        src_ref_path = self.input_info.src_ref_images
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(src_pose_path, src_face_path, src_ref_path)
         self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device="cuda").permute(2, 0, 1)  # chw
         self.latent_t = self.config["target_video_length"] // self.config["vae_stride"][0] + 1
@@ -258,8 +259,8 @@ class WanAnimateRunner(WanRunner):
         self.face_images = self.inputs_padding(self.face_images, target_len)
 
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
-            src_bg_path = self.config["src_bg_path"]
-            src_mask_path = self.config["src_mask_path"]
+            src_bg_path = self.input_info.src_bg_path
+            src_mask_path = self.input_info.src_mask_path
             self.bg_images, self.mask_images = self.prepare_source_for_replace(src_bg_path, src_mask_path)
             self.bg_images = self.inputs_padding(self.bg_images, target_len)
             self.mask_images = self.inputs_padding(self.mask_images, target_len)
@@ -330,7 +331,7 @@ class WanAnimateRunner(WanRunner):
                 dtype=GET_DTYPE(),
             )  # c t h w
         else:
-            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach().cuda()  # c t h w
+            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach().to(AI_DEVICE)  # c t h w
 
         bg_pixel_values, mask_pixel_values = None, None
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
@@ -408,8 +409,8 @@ class WanAnimateRunner(WanRunner):
         return model
 
     def load_encoders(self):
-        motion_encoder = Generator(size=512, style_dim=512, motion_dim=20).eval().requires_grad_(False).to(GET_DTYPE()).cuda()
-        face_encoder = FaceEncoder(in_dim=512, hidden_dim=5120, num_heads=4).eval().requires_grad_(False).to(GET_DTYPE()).cuda()
+        motion_encoder = Generator(size=512, style_dim=512, motion_dim=20).eval().requires_grad_(False).to(GET_DTYPE()).to(AI_DEVICE)
+        face_encoder = FaceEncoder(in_dim=512, hidden_dim=5120, num_heads=4).eval().requires_grad_(False).to(GET_DTYPE()).to(AI_DEVICE)
         motion_weight_dict = remove_substrings_from_keys(load_weights(self.config["model_path"], include_keys=["motion_encoder"]), "motion_encoder.")
         face_weight_dict = remove_substrings_from_keys(load_weights(self.config["model_path"], include_keys=["face_encoder"]), "face_encoder.")
         motion_encoder.load_state_dict(motion_weight_dict)

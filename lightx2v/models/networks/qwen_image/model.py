@@ -8,7 +8,6 @@ from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
 from .infer.post_infer import QwenImagePostInfer
@@ -125,7 +124,7 @@ class QwenImageTransformerModel:
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if self.config["parallel"]:
+        if self.device.type != "cpu" and dist.is_initialized():
             device = dist.get_rank()
         else:
             device = str(self.device)
@@ -284,7 +283,7 @@ class QwenImageTransformerModel:
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
-            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
 
     def to_cpu(self):
         self.pre_weight.to_cpu()
