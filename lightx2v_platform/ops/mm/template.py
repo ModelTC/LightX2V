@@ -1,5 +1,7 @@
 from abc import ABCMeta, abstractmethod
 
+from lightx2v.utils.envs import GET_DTYPE
+
 
 class MMWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
