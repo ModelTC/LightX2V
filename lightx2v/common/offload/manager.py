@@ -10,6 +10,7 @@ class WeightAsyncStreamManager(object):
     def __init__(self, offload_granularity):
         self.offload_granularity = offload_granularity
         self.init_stream = torch_device_module.Stream(priority=0)
+        self.need_init_first_buffer = True
         torch_version = parse(torch.__version__.split("+")[0])
         if torch_version >= parse("2.7"):
             self.cuda_load_stream = torch_device_module.Stream(priority=1)
@@ -19,6 +20,7 @@ class WeightAsyncStreamManager(object):
             self.compute_stream = torch_device_module.Stream(priority=-1)
 
     def init_cpu_buffer(self, blocks_cpu_buffer=None, phases_cpu_buffer=None):
+        self.need_init_first_buffer = True
         if self.offload_granularity == "block":
             assert blocks_cpu_buffer is not None
             self.cpu_buffers = [blocks_cpu_buffer[i] for i in range(len(blocks_cpu_buffer))]
@@ -29,6 +31,7 @@ class WeightAsyncStreamManager(object):
             raise NotImplementedError
 
     def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
+        self.need_init_first_buffer = True
         if self.offload_granularity == "block":
             assert blocks_cuda_buffer is not None
             self.cuda_buffers = [blocks_cuda_buffer[i] for i in range(len(blocks_cuda_buffer))]
@@ -48,6 +51,7 @@ class WeightAsyncStreamManager(object):
                 else:
                     self.cuda_buffers[0].load_state_dict(blocks[0].compute_phases[0].state_dict(), 0, adapter_block_idx)
         self.init_stream.synchronize()
+        self.need_init_first_buffer = False
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):

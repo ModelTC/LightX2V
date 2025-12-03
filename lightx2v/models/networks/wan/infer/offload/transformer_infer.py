@@ -36,7 +36,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-            if self.scheduler.step_index == 0 and self.scheduler.infer_condition and block_idx == 0:
+            if self.offload_manager.need_init_first_buffer:
                 self.offload_manager.init_first_buffer(blocks)
 
             self.offload_manager.prefetch_weights((block_idx + 1) % len(blocks), blocks)
@@ -73,7 +73,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
 
     def infer_phases(self, block_idx, blocks, x, pre_infer_out):
         for phase_idx in range(self.phases_num):
-            if self.scheduler.step_index == 0 and self.scheduler.infer_condition and block_idx == 0 and phase_idx == 0:
+            if self.offload_manager.need_init_first_buffer:
                 self.offload_manager.init_first_buffer(blocks)
             next_block_idx = (block_idx + 1) % len(blocks) if phase_idx == self.phases_num - 1 else block_idx
             next_phase_idx = (phase_idx + 1) % self.phases_num
