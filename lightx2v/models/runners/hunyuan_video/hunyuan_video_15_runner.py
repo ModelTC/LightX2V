@@ -140,7 +140,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
         self.vae_decoder.world_size_h = world_size_h
         self.vae_decoder.world_size_w = world_size_w
-        
+
         self.target_height = latent_shape[2] * self.config["vae_stride"][1]
         self.target_width = latent_shape[3] * self.config["vae_stride"][2]
         return latent_shape
