@@ -310,7 +310,14 @@ class DefaultRunner(BaseRunner):
                 # 2. main inference loop
                 latents = self.run_segment(segment_idx)
                 # 3. vae decoder
-                self.gen_video = self.run_vae_decoder(latents)
+                if self.config.get("use_stream_vae", False):
+                    frames = []
+                    for frame_segment in self.run_vae_decoder_stream(latents):
+                        frames.append(frame_segment)
+                        logger.info(f'ok!{len(frames)}')
+                    self.gen_video = torch.cat(frames, dim=2)
+                else:
+                    self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing
                 self.end_run_segment(segment_idx)
         gen_video_final = self.process_images_after_vae_decoder()
@@ -327,6 +334,20 @@ class DefaultRunner(BaseRunner):
             torch.cuda.empty_cache()
             gc.collect()
         return images
+
+
+    @ProfilingContext4DebugL1("Run VAE Decoder Stream", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_decode_duration, metrics_labels=["DefaultRunner"])
+    def run_vae_decoder_stream(self, latents):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_decoder = self.load_vae_decoder()
+
+        for frame_segment in self.vae_decoder.decode_stream(latents.to(GET_DTYPE())):
+            yield frame_segment
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_decoder
+            torch.cuda.empty_cache()
+            gc.collect()
 
     def post_prompt_enhancer(self):
         while True:
