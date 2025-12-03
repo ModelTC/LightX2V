@@ -1,5 +1,6 @@
-import torch
 from abc import ABCMeta, abstractmethod
+
+import torch
 
 
 class MMWeightTemplate(metaclass=ABCMeta):
