@@ -2,6 +2,7 @@ import torch
 
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
+from lightx2v.utils.quant_utils import IntegerQuantizer
 
 try:
     import torch_mlu_ops as tmo
@@ -66,7 +67,14 @@ class MMWeightWint8channelAint8channeldynamicMlu(MMWeightQuantTemplate):
             self.pin_bias = None
 
     def load_int8_perchannel_sym(self, weight_dict):
-        self.load_quantized(weight_dict)
+        if self.config.get("weight_auto_quant", False):
+            self.weight = weight_dict[self.weight_name].to(torch.float32)
+            w_quantizer = IntegerQuantizer(8, True, "per_channel")
+            self.weight, self.weight_scale, _ = w_quantizer.real_quant_tensor(self.weight)
+            self.weight = self.weight.to(torch.int8)
+            self.weight_scale = self.weight_scale.to(torch.float32)
+        else:
+            self.load_quantized(weight_dict)
 
     def act_quant_int8_perchannel_sym_tmo(self, x):
         input_tensor_quant, input_tensor_scale = tmo.scaled_quantize(x)
