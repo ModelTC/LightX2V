@@ -9,7 +9,7 @@ from loguru import logger
 
 from lightx2v.infer import init_runner
 from lightx2v.utils.input_info import set_input_info
-from lightx2v.utils.set_config import set_config
+from lightx2v.utils.set_config import set_config, set_parallel_config
 
 from ..distributed_utils import DistributedManager
 
@@ -34,8 +34,12 @@ class TorchrunInferenceWorker:
                 self.dist_manager.is_initialized = False
 
             config = set_config(args)
+
+            if config["parallel"]:
+                set_parallel_config(config)
+
             if self.rank == 0:
-                logger.info(f"Config:\n {json.dumps(config, ensure_ascii=False, indent=4)}")
+                logger.info(f"Config:\n {config}")
 
             self.runner = init_runner(config)
             logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed")
