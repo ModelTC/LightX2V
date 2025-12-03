@@ -8,6 +8,7 @@ from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 def sinusoidal_embedding_1d(dim, position):
     # preprocess
     assert dim % 2 == 0

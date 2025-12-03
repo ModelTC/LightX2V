@@ -1,6 +1,8 @@
 from typing import List, Tuple, Union
-from lightx2v_platform.base.global_var import AI_DEVICE
+
 import torch
+
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def _to_tuple(x, dim=2):

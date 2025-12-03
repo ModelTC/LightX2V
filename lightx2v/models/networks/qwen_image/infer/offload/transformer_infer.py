@@ -3,7 +3,9 @@ import torch
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
     def __init__(self, config):

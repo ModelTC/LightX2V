@@ -9,6 +9,7 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTaylorCachin
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 class WanTransformerInferCaching(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
@@ -56,7 +57,9 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
                 self.accumulated_rel_l1_distance_even = 0
             else:
                 rescale_func = np.poly1d(self.coefficients)
-                self.accumulated_rel_l1_distance_even += rescale_func(((modulated_inp - self.previous_e0_even.to(AI_DEVICE)).abs().mean() / self.previous_e0_even.to(AI_DEVICE).abs().mean()).cpu().item())
+                self.accumulated_rel_l1_distance_even += rescale_func(
+                    ((modulated_inp - self.previous_e0_even.to(AI_DEVICE)).abs().mean() / self.previous_e0_even.to(AI_DEVICE).abs().mean()).cpu().item()
+                )
                 if self.accumulated_rel_l1_distance_even < self.teacache_thresh:
                     should_calc = False
                 else:

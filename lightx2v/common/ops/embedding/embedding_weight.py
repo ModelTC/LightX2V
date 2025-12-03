@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from lightx2v.utils.registry_factory import EMBEDDING_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 class EmbeddingWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
         self.weight_name = weight_name

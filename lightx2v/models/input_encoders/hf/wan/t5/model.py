@@ -552,7 +552,6 @@ class T5Encoder(nn.Module):
         x = self.dropout(x)
         return x.to(GET_DTYPE())
 
-
     def forward(self, ids, mask=None):
         if self.cpu_offload:
             return self.forward_with_offload(ids, mask)

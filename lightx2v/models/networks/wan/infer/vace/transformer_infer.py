@@ -1,6 +1,6 @@
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import *
-from lightx2v.models.networks.wan.infer.utils import apply_wan_rope_with_torch
+
 
 class WanVaceTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):

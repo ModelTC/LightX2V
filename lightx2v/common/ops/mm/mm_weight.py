@@ -147,7 +147,7 @@ class MMWeight(MMWeightTemplate):
     def _load_cpu_pin_buffers(self):
         weight_tensor = self.lazy_load_file.get_tensor(self.weight_name)
         self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
-        
+
         if self.bias_name is not None:
             bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
             self.pin_bias = self._create_pin_tensor(bias_tensor)
@@ -161,7 +161,7 @@ class MMWeight(MMWeightTemplate):
             if device.type == "cpu":
                 weight_tensor = weight_dict[self.weight_name]
                 self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
-                
+
                 if self.bias_name is not None:
                     bias_tensor = weight_dict[self.bias_name]
                     self.pin_bias = self._create_pin_tensor(bias_tensor)
@@ -196,7 +196,7 @@ class MMWeight(MMWeightTemplate):
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
         else:
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-        
+
         weight_tensor = self.lazy_load_file.get_tensor(self.weight_name).t()
         self.pin_weight = self.pin_weight.copy_(weight_tensor)
         del weight_tensor
@@ -207,7 +207,7 @@ class MMWeight(MMWeightTemplate):
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-            
+
             bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
             self.pin_bias.copy_(bias_tensor)
             del bias_tensor
@@ -234,6 +234,7 @@ class MMWeight(MMWeightTemplate):
             self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
         else:
             self.bias = None
+
 
 @MM_WEIGHT_REGISTER("Default-Force-FP32")
 class MMWeightForceFP32(MMWeight):
@@ -283,9 +284,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
 
     def _load_cuda_buffers(self, weight_dict):
         source = self.lazy_load_file if self.lazy_load else weight_dict
-        self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(
-            source, self.lazy_load
-        )
+        self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
         self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
 
     def _get_cuda_tensor_pair(self, source, is_lazy):
@@ -313,9 +312,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return bias.to(AI_DEVICE)
 
     def _load_cpu_pin_buffers(self):
-        self.pin_weight, self.pin_weight_scale = self._get_cpu_pin_tensor_pair(
-            self.lazy_load_file, is_lazy=True
-        )
+        self.pin_weight, self.pin_weight_scale = self._get_cpu_pin_tensor_pair(self.lazy_load_file, is_lazy=True)
         self.pin_bias = self._get_cpu_pin_bias_tensor(self.lazy_load_file, is_lazy=True)
         self.bias = None
 
@@ -323,11 +320,11 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         if is_lazy:
             weight_tensor = source.get_tensor(self.weight_name)
             scale_tensor = source.get_tensor(self.weight_scale_name)
-            scale_dtype = torch.float 
+            scale_dtype = torch.float
         else:
             weight_tensor = source[self.weight_name]
             scale_tensor = source[self.weight_scale_name]
-            scale_dtype = torch.float 
+            scale_dtype = torch.float
 
         pin_weight = self._create_pin_tensor(weight_tensor)
         pin_scale = self._create_pin_tensor(scale_tensor, scale_dtype)
@@ -350,14 +347,12 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         dtype = dtype or tensor.dtype
         pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
         pin_tensor.copy_(tensor)
-        del tensor 
+        del tensor
         return pin_tensor
 
     def _load_default_tensors(self, weight_dict):
         if not self.lazy_load:
-            self.weight, self.weight_scale, self.pin_weight, self.pin_weight_scale = self._get_device_tensor_pair(
-                weight_dict
-            )
+            self.weight, self.weight_scale, self.pin_weight, self.pin_weight_scale = self._get_device_tensor_pair(weight_dict)
             self._load_default_bias(weight_dict)
         else:
             self.bias = None
@@ -377,7 +372,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.pin_bias = None
             self.bias_cuda_buffer = None
             return
-        
+
         if self.create_cuda_buffer:
             self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, is_lazy=False)
             self.bias = None
@@ -457,7 +452,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             else:
                 self.weight = weight_dict[self.weight_name]
                 self.weight_scale = weight_dict[self.weight_scale_name]
-
 
     def load_mxfp8(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
@@ -654,7 +648,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             weight_tensor = self.lazy_load_file.get_tensor(self.weight_name)
         self.pin_weight = self.pin_weight.copy_(weight_tensor)
-        
+
         weight_scale_tensor = self.lazy_load_file.get_tensor(self.weight_scale_name)
         self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
 
@@ -666,10 +660,11 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-            
+
             bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
             self.pin_bias.copy_(bias_tensor)
             del bias_tensor
+
 
 @MM_WEIGHT_REGISTER("fp8-vllm")
 class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):

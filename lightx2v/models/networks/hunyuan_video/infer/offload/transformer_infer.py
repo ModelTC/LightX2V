@@ -3,7 +3,9 @@ import torch
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import HunyuanVideo15TransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class HunyuanVideo15OffloadTransformerInfer(HunyuanVideo15TransformerInfer):
     def __init__(self, config):

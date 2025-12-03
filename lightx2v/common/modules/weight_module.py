@@ -52,7 +52,7 @@ class WeightModule:
         for _, module in self._modules.items():
             if module is not None:
                 module.load_state_dict_from_disk(block_index, adapter_block_index)
-    
+
     def named_parameters(self, prefix=""):
         for name, param in self._parameters.items():
             if param is not None:

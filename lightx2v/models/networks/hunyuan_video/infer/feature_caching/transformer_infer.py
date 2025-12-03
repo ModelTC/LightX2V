@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)

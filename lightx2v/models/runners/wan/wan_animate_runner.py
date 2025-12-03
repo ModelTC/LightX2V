@@ -26,6 +26,7 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import load_weights, remove_substrings_from_keys
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 @RUNNER_REGISTER("wan2.2_animate")
 class WanAnimateRunner(WanRunner):
     def __init__(self, config):

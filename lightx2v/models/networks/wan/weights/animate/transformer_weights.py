@@ -36,6 +36,7 @@ class WanAnimateTransformerWeights(WanTransformerWeights):
             if self.lazy_load:
                 self.offload_phase_cpu_buffers.append(WanAnimateFuserBlock(self.config, 0, "face_adapter.fuser_blocks", self.mm_type, create_cpu_buffer=True))
 
+
 class WanAnimateFuserBlock(WeightModule):
     def __init__(self, config, block_index, block_prefix, mm_type, create_cuda_buffer=False, create_cpu_buffer=False):
         super().__init__()

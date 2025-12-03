@@ -60,13 +60,7 @@ class WanTransformerActionBlock(WeightModule):
         assert not self.config.get("lazy_load", False)
         self.compute_phases = WeightModuleList(
             [
-                WanSelfAttention(
-                    block_index,
-                    block_prefix,
-                    task,
-                    mm_type,
-                    config
-                ),
+                WanSelfAttention(block_index, block_prefix, task, mm_type, config),
                 WanActionCrossAttention(
                     block_index,
                     block_prefix,

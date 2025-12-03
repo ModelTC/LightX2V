@@ -174,7 +174,7 @@ class WanModel(CompiledMethodsMixin):
             safetensors_files = [safetensors_path]
 
         if self.lazy_load:
-            assert len(safetensors_files) == 1, 'Only support single safetensors file in lazy load mode'
+            assert len(safetensors_files) == 1, "Only support single safetensors file in lazy load mode"
             self.lazy_load_path = safetensors_files[0]
 
         weight_dict = {}
@@ -214,7 +214,7 @@ class WanModel(CompiledMethodsMixin):
             safetensors_path = os.path.dirname(safetensors_path)
 
         if self.lazy_load:
-            assert len(safetensors_files) == 1, 'Only support single safetensors file in lazy load mode'
+            assert len(safetensors_files) == 1, "Only support single safetensors file in lazy load mode"
             self.lazy_load_path = safetensors_files[0]
 
         weight_dict = {}

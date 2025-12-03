@@ -6,6 +6,7 @@ import torch
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 from .triton_ops import norm_infer
 
 
@@ -47,7 +48,7 @@ class LNWeightTemplate(metaclass=ABCMeta):
         else:
             self.weight = None
             self.bias = None
-            
+
     def _get_tensor(self, name, weight_dict=None, use_infer_dtype=False):
         if name is None:
             return None
@@ -82,7 +83,7 @@ class LNWeightTemplate(metaclass=ABCMeta):
             self.pin_weight = self._create_cpu_pin_tensor(weight_tensor)
         else:
             self.weight = None
-        
+
         bias_tensor = self._get_tensor(self.bias_name, use_infer_dtype=True)
         if bias_tensor is not None:
             self.pin_bias = self._create_cpu_pin_tensor(bias_tensor)
@@ -165,7 +166,7 @@ class LNWeightTemplate(metaclass=ABCMeta):
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-            
+
             bias_tensor = self.lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
             self.pin_bias.copy_(bias_tensor)
             del bias_tensor

@@ -6,6 +6,7 @@ import torch
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 try:
     import sgl_kernel
 except ImportError:
@@ -65,7 +66,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
     def _load_cpu_pin_buffer(self):
         weight_tensor = self._get_weight_tensor(use_infer_dtype=True)
         self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
-            
+
     @abstractmethod
     def apply(self, input_tensor):
         pass

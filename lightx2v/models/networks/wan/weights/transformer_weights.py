@@ -1,5 +1,3 @@
-import os
-
 from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
@@ -27,9 +25,7 @@ class WanTransformerWeights(WeightModule):
         if not self.lazy_load:
             self.lazy_load_file = None
         else:
-            self.lazy_load_file = safe_open(
-                lazy_load_path, framework="pt", device="cpu"
-            )
+            self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
         self.blocks = WeightModuleList(
             [
                 WanTransformerAttentionBlock(
@@ -41,7 +37,7 @@ class WanTransformerWeights(WeightModule):
                     create_cpu_buffer=False,
                     block_prefix="blocks",
                     lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file
+                    lazy_load_file=self.lazy_load_file,
                 )
                 for i in range(self.blocks_num)
             ]
@@ -51,12 +47,8 @@ class WanTransformerWeights(WeightModule):
 
         # non blocks weights
         self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
-        self.add_module(
-            "head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias")
-        )
-        self.register_parameter(
-            "head_modulation", TENSOR_REGISTER["Default"]("head.modulation")
-        )
+        self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
+        self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
     def register_offload_buffers(self, config):
         if config["cpu_offload"]:
@@ -73,7 +65,7 @@ class WanTransformerWeights(WeightModule):
                             create_cpu_buffer=False,
                             block_prefix="blocks",
                             lazy_load=self.lazy_load,
-                            lazy_load_file=self.lazy_load_file
+                            lazy_load_file=self.lazy_load_file,
                         )
                         for i in range(self.offload_blocks_num)
                     ]
@@ -94,7 +86,7 @@ class WanTransformerWeights(WeightModule):
                                 create_cpu_buffer=True,
                                 block_prefix="blocks",
                                 lazy_load=self.lazy_load,
-                                lazy_load_file=self.lazy_load_file
+                                lazy_load_file=self.lazy_load_file,
                             )
                             for i in range(self.offload_blocks_num)
                         ]
@@ -112,7 +104,7 @@ class WanTransformerWeights(WeightModule):
                     create_cpu_buffer=False,
                     block_prefix="blocks",
                     lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file
+                    lazy_load_file=self.lazy_load_file,
                 ).compute_phases
                 self.add_module("offload_phase_cuda_buffers", self.offload_phase_cuda_buffers)
                 self.offload_block_cuda_buffers = None
@@ -126,7 +118,7 @@ class WanTransformerWeights(WeightModule):
                         create_cpu_buffer=True,
                         block_prefix="blocks",
                         lazy_load=self.lazy_load,
-                        lazy_load_file=self.lazy_load_file
+                        lazy_load_file=self.lazy_load_file,
                     ).compute_phases
                     self.add_module("offload_phase_cpu_buffers", self.offload_phase_cpu_buffers)
                     self.offload_block_cpu_buffers = None
@@ -140,6 +132,7 @@ class WanTransformerWeights(WeightModule):
         self.norm.to_cpu()
         self.head.to_cpu()
         self.head_modulation.to_cpu()
+
 
 class WanTransformerAttentionBlock(WeightModule):
     def __init__(
@@ -337,21 +330,15 @@ class WanSelfAttention(WeightModule):
         if self.config["self_attn_1_type"] in ["nbhd_attn", "nbhd_attn_flashinfer"]:
             if "nbhd_attn_setting" in self.config:
                 if "coefficient" in self.config["nbhd_attn_setting"]:
-                    attention_weights_cls.coefficient = self.config[
-                        "nbhd_attn_setting"
-                    ]["coefficient"]
+                    attention_weights_cls.coefficient = self.config["nbhd_attn_setting"]["coefficient"]
                 if "min_width" in self.config["nbhd_attn_setting"]:
-                    attention_weights_cls.min_width = self.config["nbhd_attn_setting"][
-                        "min_width"
-                    ]
+                    attention_weights_cls.min_width = self.config["nbhd_attn_setting"]["min_width"]
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
             self.add_module(
                 "self_attn_1_parallel",
-                ATTN_WEIGHT_REGISTER[
-                    self.config["parallel"].get("seq_p_attn_type", "ulysses")
-                ](),
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
             )
 
         if self.quant_method in ["advanced_ptq"]:
@@ -478,15 +465,9 @@ class WanCrossAttention(WeightModule):
                 self.lazy_load_file,
             ),
         )
-        self.add_module(
-            "cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]()
-        )
+        self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())
 
-        if (
-            self.config["task"] in ["i2v", "flf2v", "animate", "s2v"]
-            and self.config.get("use_image_encoder", True)
-            and self.config["model_cls"] != "wan2.1_sf_mtxg2"
-        ):
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True) and self.config["model_cls"] != "wan2.1_sf_mtxg2":
             self.add_module(
                 "cross_attn_k_img",
                 MM_WEIGHT_REGISTER[self.mm_type](
@@ -519,9 +500,7 @@ class WanCrossAttention(WeightModule):
                     self.lazy_load_file,
                 ),
             )
-            self.add_module(
-                "cross_attn_2", ATTN_WEIGHT_REGISTER[self.config["cross_attn_2_type"]]()
-            )
+            self.add_module("cross_attn_2", ATTN_WEIGHT_REGISTER[self.config["cross_attn_2_type"]]())
 
 
 class WanFFN(WeightModule):

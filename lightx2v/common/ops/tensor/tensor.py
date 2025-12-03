@@ -6,6 +6,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 @TENSOR_REGISTER("Default")
 class DefaultTensor:
     def __init__(self, tensor_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):

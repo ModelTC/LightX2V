@@ -3,7 +3,9 @@ import torch
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class WanOffloadTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
@@ -49,7 +51,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 pre_infer_out.context,
             )
             torch_device_module.empty_cache()
-        
+
         return x
 
     def infer_with_phases_offload(self, blocks, x, pre_infer_out):
@@ -68,7 +70,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             self.clear_offload_params(pre_infer_out)
 
         return x
-    
+
     def infer_phases(self, block_idx, blocks, x, pre_infer_out):
         for phase_idx in range(self.phases_num):
             if self.scheduler.step_index == 0 and self.scheduler.infer_condition and block_idx == 0 and phase_idx == 0:

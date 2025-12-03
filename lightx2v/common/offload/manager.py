@@ -1,7 +1,10 @@
 import torch
 from packaging.version import parse
+
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class WeightAsyncStreamManager(object):
     def __init__(self, offload_granularity):
@@ -73,4 +76,3 @@ class WeightAsyncStreamManager(object):
     def swap_phases(self):
         self.cuda_load_stream.synchronize()
         self.compute_stream.synchronize()
-                        

@@ -5,6 +5,7 @@ import torch
 from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+
 class Conv2dWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, bias_name, stride, padding, dilation, groups):
         self.weight_name = weight_name
