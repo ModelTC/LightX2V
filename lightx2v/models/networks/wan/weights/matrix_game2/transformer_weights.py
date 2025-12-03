@@ -1,7 +1,3 @@
-import os
-
-from safetensors import safe_open
-
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanFFN,
@@ -31,9 +27,9 @@ class WanActionTransformerWeights(WeightModule):
         block_list = []
         for i in range(self.blocks_num):
             if i in action_blocks:
-                block_list.append(WanTransformerActionBlock(i, self.task, self.mm_type, self.config, "blocks"))
+                block_list.append(WanTransformerActionBlock(i, self.task, self.mm_type, self.config))
             else:
-                block_list.append(WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config, False, "blocks"))
+                block_list.append(WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config))
         self.blocks = WeightModuleList(block_list)
         self.add_module("blocks", self.blocks)
 
@@ -41,11 +37,6 @@ class WanActionTransformerWeights(WeightModule):
         self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
-
-    def clear(self):
-        for block in self.blocks:
-            for phase in block.compute_phases:
-                phase.clear()
 
     def non_block_weights_to_cuda(self):
         self.norm.to_cuda()
@@ -66,14 +57,7 @@ class WanTransformerActionBlock(WeightModule):
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
-
-        self.lazy_load = self.config.get("lazy_load", False)
-        if self.lazy_load:
-            lazy_load_path = os.path.join(self.config["dit_quantized_ckpt"], f"block_{block_index}.safetensors")
-            self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
-        else:
-            self.lazy_load_file = None
-
+        assert not self.config.get("lazy_load", False)
         self.compute_phases = WeightModuleList(
             [
                 WanSelfAttention(
@@ -81,10 +65,7 @@ class WanTransformerActionBlock(WeightModule):
                     block_prefix,
                     task,
                     mm_type,
-                    config,
-                    False,
-                    self.lazy_load,
-                    self.lazy_load_file,
+                    config
                 ),
                 WanActionCrossAttention(
                     block_index,
@@ -92,8 +73,6 @@ class WanTransformerActionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
-                    self.lazy_load,
-                    self.lazy_load_file,
                 ),
                 WanActionModule(
                     block_index,
@@ -101,8 +80,6 @@ class WanTransformerActionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
-                    self.lazy_load,
-                    self.lazy_load_file,
                 ),
                 WanFFN(
                     block_index,
@@ -110,9 +87,6 @@ class WanTransformerActionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
-                    False,
-                    self.lazy_load,
-                    self.lazy_load_file,
                 ),
             ]
         )
@@ -121,16 +95,13 @@ class WanTransformerActionBlock(WeightModule):
 
 
 class WanActionModule(WeightModule):
-    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(self, block_index, block_prefix, task, mm_type, config):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
         self.task = task
         self.config = config
         self.quant_method = config.get("quant_method", None)
-
-        self.lazy_load = lazy_load
-        self.lazy_load_file = lazy_load_file
 
         self.attn_rms_type = "self_forcing"
 
@@ -139,8 +110,6 @@ class WanActionModule(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.action_model.keyboard_embed.0.weight",
                 f"{block_prefix}.{self.block_index}.action_model.keyboard_embed.0.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -148,8 +117,6 @@ class WanActionModule(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.action_model.keyboard_embed.2.weight",
                 f"{block_prefix}.{self.block_index}.action_model.keyboard_embed.2.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
 
@@ -158,8 +125,6 @@ class WanActionModule(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.action_model.proj_keyboard.weight",
                 bias_name=None,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
             ),
         )
 
@@ -168,8 +133,6 @@ class WanActionModule(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.action_model.keyboard_attn_kv.weight",
                 bias_name=None,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
             ),
         )
 
@@ -180,8 +143,6 @@ class WanActionModule(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.action_model.mouse_attn_q.weight",
                 bias_name=None,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
             ),
         )
 
@@ -191,8 +152,6 @@ class WanActionModule(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.action_model.t_qkv.weight",
                     bias_name=None,
-                    lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file,
                 ),
             )
 
@@ -201,8 +160,6 @@ class WanActionModule(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.action_model.proj_mouse.weight",
                     bias_name=None,
-                    lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file,
                 ),
             )
 
@@ -211,8 +168,6 @@ class WanActionModule(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.0.weight",
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.0.bias",
-                    self.lazy_load,
-                    self.lazy_load_file,
                 ),
             )
             self.add_module(
@@ -220,8 +175,6 @@ class WanActionModule(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.2.weight",
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.2.bias",
-                    self.lazy_load,
-                    self.lazy_load_file,
                 ),
             )
             self.add_module(
@@ -229,22 +182,18 @@ class WanActionModule(WeightModule):
                 LN_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.weight",
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.bias",
-                    self.lazy_load,
-                    self.lazy_load_file,
                     eps=1e-6,
                 ),
             )
 
 
 class WanActionCrossAttention(WeightModule):
-    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(self, block_index, block_prefix, task, mm_type, config):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
         self.task = task
         self.config = config
-        self.lazy_load = lazy_load
-        self.lazy_load_file = lazy_load_file
 
         if self.config.get("sf_config", False):
             self.attn_rms_type = "self_forcing"
@@ -256,8 +205,6 @@ class WanActionCrossAttention(WeightModule):
             LN_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -265,8 +212,6 @@ class WanActionCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.q.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -274,8 +219,6 @@ class WanActionCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.k.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -283,8 +226,6 @@ class WanActionCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.v.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -292,24 +233,18 @@ class WanActionCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.o.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
             "cross_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module(
             "cross_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
         self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())

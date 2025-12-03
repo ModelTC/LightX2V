@@ -32,7 +32,8 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
             self.seq_p_group = None
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
-        self.remove_keys = ["byt5_in", "vision_in"]
+        self.remove_keys = []
+        self.remove_keys.extend(["byt5_in", "vision_in"])
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
             assert self.config.get("dit_quant_scheme", "Default") in [
@@ -98,7 +99,7 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
-            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -176,12 +177,12 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if self.config["parallel"]:
-            device = dist.get_rank()
+        if self.device.type != "cpu" and dist.is_initialized():
+            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
         else:
-            device = str(self.device)
+            device = self.device
 
-        with safe_open(file_path, framework="pt", device=device) as f:
+        with safe_open(file_path, framework="pt", device=str(device)) as f:
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()

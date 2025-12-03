@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
-
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerInfer):
     def __init__(self, config):
@@ -101,8 +101,8 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
     def infer_using_cache(self, infer_module_out):
         residual_img = self.residual_cache[self.scheduler.infer_condition]
         residual_txt = self.residual_cache_txt[self.scheduler.infer_condition]
-        infer_module_out.img.add_(residual_img.cuda())
-        infer_module_out.txt.add_(residual_txt.cuda())
+        infer_module_out.img.add_(residual_img.to(AI_DEVICE))
+        infer_module_out.txt.add_(residual_txt.to(AI_DEVICE))
 
     def clear(self):
         self.accumulated_err = {True: 0.0, False: 0.0}

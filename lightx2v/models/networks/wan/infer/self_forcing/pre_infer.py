@@ -6,7 +6,7 @@ import torch
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
-
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 def sinusoidal_embedding_1d(dim, position):
     # preprocess
@@ -50,7 +50,7 @@ class WanSFPreInfer(WanPreInfer):
                 rope_params(1024, 2 * (d // 6)),
             ],
             dim=1,
-        ).cuda()
+        ).to(AI_DEVICE)
 
     def time_embedding(self, weights, embed):
         embed = weights.time_embedding_0.apply(embed)

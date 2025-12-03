@@ -3,7 +3,7 @@ from abc import ABCMeta, abstractmethod
 import torch
 
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
-
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 class Conv3dWeightTemplate(metaclass=ABCMeta):
     def __init__(self, weight_name, bias_name, stride=1, padding=0, dilation=1, groups=1):
@@ -70,9 +70,9 @@ class Conv3dWeight(Conv3dWeightTemplate):
         return input_tensor
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.cuda(non_blocking=non_blocking)
+        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
         if hasattr(self, "pin_bias") and self.pin_bias is not None:
-            self.bias = self.pin_bias.cuda(non_blocking=non_blocking)
+            self.bias = self.pin_bias.to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
@@ -91,10 +91,3 @@ class Conv3dWeight(Conv3dWeightTemplate):
         if self.bias_name is not None:
             destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias  # .cpu().detach().clone()
         return destination
-
-    def clear(self):
-        attrs = ["weight", "bias", "pinned_weight", "pinned_bias"]
-        for attr in attrs:
-            if hasattr(self, attr):
-                delattr(self, attr)
-                setattr(self, attr, None)

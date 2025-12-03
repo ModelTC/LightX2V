@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
 from .posemb_layers import get_nd_rotary_pos_embed
-
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 class HunyuanVideo15Scheduler(BaseScheduler):
     def __init__(self, config):

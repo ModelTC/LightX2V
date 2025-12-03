@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTaylorCachingTransformerInfer
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
-
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 class WanTransformerInferCaching(WanOffloadTransformerInfer):
     def __init__(self, config):
@@ -56,7 +56,7 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
                 self.accumulated_rel_l1_distance_even = 0
             else:
                 rescale_func = np.poly1d(self.coefficients)
-                self.accumulated_rel_l1_distance_even += rescale_func(((modulated_inp - self.previous_e0_even.cuda()).abs().mean() / self.previous_e0_even.cuda().abs().mean()).cpu().item())
+                self.accumulated_rel_l1_distance_even += rescale_func(((modulated_inp - self.previous_e0_even.to(AI_DEVICE)).abs().mean() / self.previous_e0_even.to(AI_DEVICE).abs().mean()).cpu().item())
                 if self.accumulated_rel_l1_distance_even < self.teacache_thresh:
                     should_calc = False
                 else:
@@ -72,7 +72,7 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
                 self.accumulated_rel_l1_distance_odd = 0
             else:
                 rescale_func = np.poly1d(self.coefficients)
-                self.accumulated_rel_l1_distance_odd += rescale_func(((modulated_inp - self.previous_e0_odd.cuda()).abs().mean() / self.previous_e0_odd.cuda().abs().mean()).cpu().item())
+                self.accumulated_rel_l1_distance_odd += rescale_func(((modulated_inp - self.previous_e0_odd.to(AI_DEVICE)).abs().mean() / self.previous_e0_odd.to(AI_DEVICE).abs().mean()).cpu().item())
                 if self.accumulated_rel_l1_distance_odd < self.teacache_thresh:
                     should_calc = False
                 else:
@@ -149,9 +149,9 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
 
     def infer_using_cache(self, x):
         if self.scheduler.infer_condition:
-            x.add_(self.previous_residual_even.cuda())
+            x.add_(self.previous_residual_even.to(AI_DEVICE))
         else:
-            x.add_(self.previous_residual_odd.cuda())
+            x.add_(self.previous_residual_odd.to(AI_DEVICE))
         return x
 
     def clear(self):
@@ -1075,7 +1075,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
 
     def infer_using_cache(self, x):
         residual_x = self.residual_cache[self.scheduler.infer_condition]
-        x.add_(residual_x.cuda())
+        x.add_(residual_x.to(AI_DEVICE))
         return x
 
     def clear(self):
