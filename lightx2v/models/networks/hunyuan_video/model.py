@@ -178,11 +178,11 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
         if self.device.type != "cpu" and dist.is_initialized():
-            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
+            device = dist.get_rank()
         else:
-            device = self.device
+            device = str(self.device)
 
-        with safe_open(file_path, framework="pt", device=str(device)) as f:
+        with safe_open(file_path, framework="pt", device=device) as f:
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()
