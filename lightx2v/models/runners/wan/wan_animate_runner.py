@@ -238,9 +238,9 @@ class WanAnimateRunner(WanRunner):
         return y, pose_latents
 
     def prepare_input(self):
-        src_pose_path = self.config["src_pose_path"] if "src_pose_path" in self.config else None
-        src_face_path = self.config["src_face_path"] if "src_face_path" in self.config else None
-        src_ref_path = self.config["src_ref_images"] if "src_ref_images" in self.config else None
+        src_pose_path = self.input_info.src_pose_path
+        src_face_path = self.input_info.src_face_path
+        src_ref_path = self.input_info.src_ref_images
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(src_pose_path, src_face_path, src_ref_path)
         self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device="cuda").permute(2, 0, 1)  # chw
         self.latent_t = self.config["target_video_length"] // self.config["vae_stride"][0] + 1
@@ -258,8 +258,8 @@ class WanAnimateRunner(WanRunner):
         self.face_images = self.inputs_padding(self.face_images, target_len)
 
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
-            src_bg_path = self.config["src_bg_path"]
-            src_mask_path = self.config["src_mask_path"]
+            src_bg_path = self.input_info.src_bg_path
+            src_mask_path = self.input_info.src_mask_path
             self.bg_images, self.mask_images = self.prepare_source_for_replace(src_bg_path, src_mask_path)
             self.bg_images = self.inputs_padding(self.bg_images, target_len)
             self.mask_images = self.inputs_padding(self.mask_images, target_len)

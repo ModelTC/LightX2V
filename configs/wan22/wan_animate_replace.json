@@ -12,11 +12,6 @@
     "sample_guide_scale": 5.0,
     "enable_cfg": false,
     "cpu_offload": false,
-    "src_pose_path": "../save_results/replace/process_results/src_pose.mp4",
-    "src_face_path": "../save_results/replace/process_results/src_face.mp4",
-    "src_ref_images": "../save_results/replace/process_results/src_ref.png",
-    "src_bg_path": "../save_results/replace/process_results/src_bg.mp4",
-    "src_mask_path": "../save_results/replace/process_results/src_mask.mp4",
     "refert_num": 1,
     "fps": 30,
     "replace_flag": true

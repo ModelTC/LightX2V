@@ -5,7 +5,7 @@ import os
 from process_pipepline import ProcessPipeline
 
 
-def _parse_args():
+def get_preprocess_parser():
     parser = argparse.ArgumentParser(description="The preprocessing pipeline for Wan-animate.")
 
     parser.add_argument("--ckpt_path", type=str, default=None, help="The path to the preprocessing model's checkpoint directory. ")
@@ -47,13 +47,10 @@ def _parse_args():
         default=1,
         help="The number of subdivisions for the grid along the 'h' dimension. A higher value results in a more detailed contour. A value of 1 means no subdivision is performed.",
     )
-    args = parser.parse_args()
-
-    return args
+    return parser
 
 
-if __name__ == "__main__":
-    args = _parse_args()
+def process_input_video(args):
     args_dict = vars(args)
     print(args_dict)
 
@@ -83,3 +80,9 @@ if __name__ == "__main__":
         use_flux=args.use_flux,
         replace_flag=args.replace_flag,
     )
+
+
+if __name__ == "__main__":
+    parser = get_preprocess_parser()
+    args = parser.parse_args()
+    process_input_video(args)
