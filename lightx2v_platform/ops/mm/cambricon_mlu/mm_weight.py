@@ -18,8 +18,8 @@ class MMWeightWint8channelAint8channeldynamicMlu(MMWeightQuantTemplate):
         Kernel: mlu
     """
 
-    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
-        super().__init__(weight_name, bias_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter)
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_int8_perchannel_sym_tmo
