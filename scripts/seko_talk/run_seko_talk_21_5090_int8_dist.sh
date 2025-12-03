@@ -9,8 +9,6 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source ${lightx2v_path}/scripts/base/base.sh
 
 
-export SENSITIVE_LAYER_DTYPE=None
-
 torchrun --nproc-per-node 8 -m lightx2v.infer \
 --model_cls seko_talk \
 --task s2v \
