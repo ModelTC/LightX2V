@@ -13,6 +13,10 @@ from diffusers.models.modeling_utils import ModelMixin
 from einops import rearrange
 from torch import Tensor, nn
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 @dataclass
 class DecoderOutput(BaseOutput):
@@ -725,7 +729,7 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
     @torch.no_grad()
     def encode(self, x: Tensor, return_dict: bool = True):
         if self.cpu_offload:
-            self.encoder = self.encoder.to("cuda")
+            self.encoder = self.encoder.to(AI_DEVICE)
 
         def _encode(x):
             if self.use_temporal_tiling and x.shape[-3] > self.tile_sample_min_tsize:
@@ -752,7 +756,7 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
     @torch.no_grad()
     def decode(self, z: Tensor, return_dict: bool = True, generator=None):
         if self.cpu_offload:
-            self.decoder = self.decoder.to("cuda")
+            self.decoder = self.decoder.to(AI_DEVICE)
 
         def _decode(z):
             if self.use_temporal_tiling and z.shape[-3] > self.tile_latent_min_tsize:

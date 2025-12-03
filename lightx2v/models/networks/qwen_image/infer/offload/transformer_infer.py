@@ -2,6 +2,9 @@ import torch
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
@@ -37,7 +40,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
             if block_idx < self.num_blocks - 1:
                 self.offload_manager.prefetch_weights(block_idx + 1, block_weights.blocks)
 
-            with torch.cuda.stream(self.offload_manager.compute_stream):
+            with torch_device_module.stream(self.offload_manager.compute_stream):
                 encoder_hidden_states, hidden_states = self.infer_block(
                     block_weight=self.offload_manager.cuda_buffers[0], hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb
                 )

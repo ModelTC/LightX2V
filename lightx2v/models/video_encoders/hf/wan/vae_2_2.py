@@ -7,6 +7,9 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from lightx2v.utils.utils import load_weights
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 __all__ = [
     "Wan2_2_VAE",
@@ -933,7 +936,7 @@ class Wan2_2_VAE:
                 -0.0667,
             ],
             dtype=dtype,
-            device=device,
+            device=AI_DEVICE,
         )
         self.std = torch.tensor(
             [
@@ -987,7 +990,7 @@ class Wan2_2_VAE:
                 0.7744,
             ],
             dtype=dtype,
-            device=device,
+            device=AI_DEVICE,
         )
         self.inv_std = 1.0 / self.std
         self.scale = [self.mean, self.inv_std]
@@ -1011,11 +1014,11 @@ class Wan2_2_VAE:
         self.scale = [self.mean, self.inv_std]
 
     def to_cuda(self):
-        self.model.encoder = self.model.encoder.to("cuda")
-        self.model.decoder = self.model.decoder.to("cuda")
-        self.model = self.model.to("cuda")
-        self.mean = self.mean.cuda()
-        self.inv_std = self.inv_std.cuda()
+        self.model.encoder = self.model.encoder.to(AI_DEVICE)
+        self.model.decoder = self.model.decoder.to(AI_DEVICE)
+        self.model = self.model.to(AI_DEVICE)
+        self.mean = self.mean.to(AI_DEVICE)
+        self.inv_std = self.inv_std.to(AI_DEVICE)
         self.scale = [self.mean, self.inv_std]
 
     def encode(self, video):

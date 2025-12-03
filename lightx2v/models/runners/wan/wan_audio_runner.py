@@ -435,7 +435,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def process_single_mask(self, mask_file):
         mask_img = load_image(mask_file)
-        mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
 
         if mask_img.shape[1] == 3:  # If it is an RGB three-channel image
             mask_img = mask_img[:, :1]  # Only take the first channel

@@ -13,6 +13,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class VAEWrapper:
@@ -90,8 +91,8 @@ def get_current_action(mode="universal"):
                     flag = 1
             except Exception as e:
                 pass
-        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse]).cuda()
-        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).cuda()
+        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse]).to(AI_DEVICE)
+        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).to(AI_DEVICE)
     elif mode == "gta_drive":
         print()
         print("-" * 30)
@@ -118,8 +119,8 @@ def get_current_action(mode="universal"):
                 flag = 1
             except Exception as e:
                 pass
-        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse[0]]).cuda()
-        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard[0]]).cuda()
+        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse[0]]).to(AI_DEVICE)
+        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard[0]]).to(AI_DEVICE)
     elif mode == "templerun":
         print()
         print("-" * 30)
@@ -142,7 +143,7 @@ def get_current_action(mode="universal"):
                     flag = 1
             except Exception as e:
                 pass
-        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).cuda()
+        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).to(AI_DEVICE)
 
     if mode != "templerun":
         return {"mouse": mouse_cond, "keyboard": keyboard_cond}

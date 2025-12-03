@@ -2,6 +2,9 @@ import torch
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import HunyuanVideo15TransformerInfer
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class HunyuanVideo15OffloadTransformerInfer(HunyuanVideo15TransformerInfer):
@@ -26,6 +29,6 @@ class HunyuanVideo15OffloadTransformerInfer(HunyuanVideo15TransformerInfer):
                 self.offload_manager.init_first_buffer(weights.double_blocks)
             if block_idx < self.double_blocks_num - 1:
                 self.offload_manager.prefetch_weights(block_idx + 1, weights.double_blocks)
-            with torch.cuda.stream(self.offload_manager.compute_stream):
+            with torch_device_module.stream(self.offload_manager.compute_stream):
                 infer_module_out.img, infer_module_out.txt = self.infer_double_block(self.offload_manager.cuda_buffers[0], infer_module_out)
             self.offload_manager.swap_blocks()
