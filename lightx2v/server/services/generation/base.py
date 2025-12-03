@@ -118,6 +118,7 @@ class BaseGenerationService(ABC):
 
             self._prepare_output_path(message.save_result_path, task_data)
             task_data["seed"] = message.seed
+            task_data["resize_mode"] = message.resize_mode
 
             result = await self.inference_service.submit_task_async(task_data)
 
