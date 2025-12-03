@@ -1119,7 +1119,7 @@ class WanVAE:
 
         return encoded.squeeze(0)
 
-    def encode(self, video):
+    def encode(self, video, world_size_h=None, world_size_w=None):
         """
         video: one video  with shape [1, C, T, H, W].
         """
@@ -1132,7 +1132,8 @@ class WanVAE:
             height, width = video.shape[3], video.shape[4]
 
             if self.use_2d_split:
-                world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
+                if world_size_h is None or world_size_w is None:
+                    world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
                 cur_rank_h = cur_rank // world_size_w
                 cur_rank_w = cur_rank % world_size_w
                 out = self.encode_dist_2d(video, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
