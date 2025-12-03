@@ -515,7 +515,7 @@ class T5Encoder(nn.Module):
             e = pos_bias
         else:
             lq, lk = x.size(1), x.size(1)
-            rel_pos = torch.arange(lk, device="cuda").unsqueeze(0) - torch.arange(lq, device="cuda").unsqueeze(1)
+            rel_pos = torch.arange(lk, device=AI_DEVICE).unsqueeze(0) - torch.arange(lq, device=AI_DEVICE).unsqueeze(1)
             num_buckets = block.pos_embedding.weight.shape[0] // 2
             rel_buckets = (rel_pos > 0).long() * num_buckets
             rel_pos = torch.abs(rel_pos)
