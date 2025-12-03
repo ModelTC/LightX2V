@@ -176,6 +176,43 @@ We provide multiple frontend interface deployment options:
 
 ## 🏆 Performance Benchmarks
 
+### 📊 Cross-Framework Performance Comparison (H100)
+
+| Framework | Cards | Step Time | Speedup |
+|-----------|---------|---------|---------|
+| Diffusers | 1 | 9.77s/it | 1x |
+| xDiT | 1 | 8.93s/it | 1.1x |
+| FastVideo | 1 | 7.35s/it | 1.3x |
+| SGL-Diffusion | 1 | 6.13s/it | 1.6x |
+| **LightX2V** | 1 | 5.18s/it | **1.9x** |
+| FastVideo | 8 | 2.94s/it | 1x |
+| xDiT | 8 | 2.70s/it | 1.1x |
+| SGL-Diffusion | 8 | 1.19s/it | 2.5x |
+| **LightX2V** | 8 | 0.75s/it | **3.9x** |
+
+### 📊 Cross-Framework Performance Comparison (RTX 4090D)
+
+| Framework | Cards | Step Time | Speedup |
+|-----------|---------|---------|---------|
+| Diffusers | 1 | 30.50s/it | 1x |
+| FastVideo | 1 | 22.66s/it | 1.3x |
+| **LightX2V** | 1 | 20.26s/it | **1.5x** |
+| FastVideo | 8 | 15.48s/it | 1x |
+| **LightX2V** | 8 | 4.75s/it | **3.3x** |
+
+*Test Configuration: Wan2.1-I2V-14B-480P, 40 steps, 81 frames*
+
+### 🚀 LightX2V Performance Comparison (Wan2.1-I2V-14B-480P)
+
+| GPU | Configuration | Step Time | Speedup |
+|-----|---------------|-----------|---------------|
+| **H100** | 8 cards + cfg | 0.75s/it | 1x |
+| **H100** | 8 cards + no cfg | 0.39s/it | 1.9x |
+| **H100** | 8 cards + no cfg + fp8 | 0.35s/it | **2.1x** |
+| **RTX 4090D** | 8 cards + cfg | 4.75s/it | 1x |
+| **RTX 4090D** | 8 cards + no cfg | 3.13s/it | 1.5x |
+| **RTX 4090D** | 8 cards + no cfg + fp8 | 2.35s/it | **2.0x** |
+
 For detailed performance metrics and comparisons, please refer to our [benchmark documentation](https://github.com/ModelTC/LightX2V/blob/main/docs/EN/source/getting_started/benchmark_source.md).
 
 [Detailed Service Deployment Guide →](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html)
