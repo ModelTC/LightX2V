@@ -12,7 +12,7 @@ class WeightAsyncStreamManager(object):
         self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
         torch_version = parse(torch.__version__.split("+")[0])
-        if torch_version >= parse("2.7"):
+        if AI_DEVICE == "cuda" and torch_version >= parse("2.7"):
             self.cuda_load_stream = torch_device_module.Stream(priority=1)
             self.compute_stream = torch_device_module.Stream(priority=1)
         else:
