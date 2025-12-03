@@ -5,6 +5,7 @@ from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.autoencoders.vae import BaseOutput, DiagonalGaussianDistribution
@@ -12,6 +13,11 @@ from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
 from einops import rearrange
 from torch import Tensor, nn
+
+# import lightx2v_platform.set_ai_device
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 @dataclass
@@ -783,9 +789,11 @@ class AutoencoderKLConv3D(ModelMixin, ConfigMixin):
 
 
 class HunyuanVideo15VAE:
-    def __init__(self, checkpoint_path=None, dtype=torch.float16, device="cuda", cpu_offload=False):
+    def __init__(self, checkpoint_path=None, dtype=torch.float16, device="cuda", cpu_offload=False, parallel=False):
         self.vae = AutoencoderKLConv3D.from_pretrained(os.path.join(checkpoint_path, "vae")).to(dtype).to(device)
         self.vae.cpu_offload = cpu_offload
+        self.parallel = parallel
+        self.world_size_h, self.world_size_w = None, None
 
     @torch.no_grad()
     def encode(self, x):
@@ -796,9 +804,104 @@ class HunyuanVideo15VAE:
         z = z / self.vae.config.scaling_factor
 
         self.vae.enable_tiling()
-        video_frames = self.vae.decode(z, return_dict=False)[0]
+        if self.parallel and self.world_size_h is not None and self.world_size_w is not None:
+            video_frames = self.decode_dist_2d(z, self.world_size_h, self.world_size_w)
+            self.world_size_h, self.world_size_w = None, None
+        else:
+            video_frames = self.vae.decode(z, return_dict=False)[0]
         self.vae.disable_tiling()
         return video_frames
+
+    @torch.no_grad()
+    def decode_dist_2d(self, z, world_size_h, world_size_w):
+        cur_rank = dist.get_rank()
+        cur_rank_h = cur_rank // world_size_w
+        cur_rank_w = cur_rank % world_size_w
+        total_h = z.shape[3]
+        total_w = z.shape[4]
+
+        chunk_h = total_h // world_size_h
+        chunk_w = total_w // world_size_w
+
+        padding_size = 1
+
+        # Calculate H dimension slice
+        if cur_rank_h == 0:
+            h_start = 0
+            h_end = chunk_h + 2 * padding_size
+        elif cur_rank_h == world_size_h - 1:
+            h_start = total_h - (chunk_h + 2 * padding_size)
+            h_end = total_h
+        else:
+            h_start = cur_rank_h * chunk_h - padding_size
+            h_end = (cur_rank_h + 1) * chunk_h + padding_size
+
+        # Calculate W dimension slice
+        if cur_rank_w == 0:
+            w_start = 0
+            w_end = chunk_w + 2 * padding_size
+        elif cur_rank_w == world_size_w - 1:
+            w_start = total_w - (chunk_w + 2 * padding_size)
+            w_end = total_w
+        else:
+            w_start = cur_rank_w * chunk_w - padding_size
+            w_end = (cur_rank_w + 1) * chunk_w + padding_size
+
+        # Extract the latent chunk for this process
+        zs_chunk = z[:, :, :, h_start:h_end, w_start:w_end].contiguous()
+
+        # Decode the chunk
+        images_chunk = self.vae.decode(zs_chunk, return_dict=False)[0]
+
+        # Remove padding from decoded chunk
+        spatial_ratio = 16
+        if cur_rank_h == 0:
+            decoded_h_start = 0
+            decoded_h_end = chunk_h * spatial_ratio
+        elif cur_rank_h == world_size_h - 1:
+            decoded_h_start = images_chunk.shape[3] - chunk_h * spatial_ratio
+            decoded_h_end = images_chunk.shape[3]
+        else:
+            decoded_h_start = padding_size * spatial_ratio
+            decoded_h_end = images_chunk.shape[3] - padding_size * spatial_ratio
+
+        if cur_rank_w == 0:
+            decoded_w_start = 0
+            decoded_w_end = chunk_w * spatial_ratio
+        elif cur_rank_w == world_size_w - 1:
+            decoded_w_start = images_chunk.shape[4] - chunk_w * spatial_ratio
+            decoded_w_end = images_chunk.shape[4]
+        else:
+            decoded_w_start = padding_size * spatial_ratio
+            decoded_w_end = images_chunk.shape[4] - padding_size * spatial_ratio
+
+        images_chunk = images_chunk[:, :, :, decoded_h_start:decoded_h_end, decoded_w_start:decoded_w_end].contiguous()
+
+        # Gather all chunks
+        total_processes = world_size_h * world_size_w
+        full_images = [torch.empty_like(images_chunk) for _ in range(total_processes)]
+
+        dist.all_gather(full_images, images_chunk)
+
+        self.device_synchronize()
+
+        # Reconstruct the full image tensor
+        image_rows = []
+        for h_idx in range(world_size_h):
+            image_cols = []
+            for w_idx in range(world_size_w):
+                process_idx = h_idx * world_size_w + w_idx
+                image_cols.append(full_images[process_idx])
+            image_rows.append(torch.cat(image_cols, dim=4))
+
+        images = torch.cat(image_rows, dim=3)
+
+        return images
+
+    def device_synchronize(
+        self,
+    ):
+        torch_device_module.synchronize()
 
 
 if __name__ == "__main__":
