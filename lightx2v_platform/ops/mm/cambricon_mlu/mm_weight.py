@@ -1,8 +1,8 @@
 import torch
 
+from lightx2v.utils.quant_utils import IntegerQuantizer
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
-from lightx2v.utils.quant_utils import IntegerQuantizer
 
 try:
     import torch_mlu_ops as tmo
