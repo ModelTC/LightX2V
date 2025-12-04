@@ -311,7 +311,7 @@ class DefaultRunner(BaseRunner):
                     frames = []
                     for frame_segment in self.run_vae_decoder_stream(latents):
                         frames.append(frame_segment)
-                        logger.info(f'ok!{len(frames)}')
+                        logger.info(f"frame sagment: {len(frames)} done")
                     self.gen_video = torch.cat(frames, dim=2)
                 else:
                     self.gen_video = self.run_vae_decoder(latents)
@@ -331,7 +331,6 @@ class DefaultRunner(BaseRunner):
             torch.cuda.empty_cache()
             gc.collect()
         return images
-
 
     @ProfilingContext4DebugL1("Run VAE Decoder Stream", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_decode_duration, metrics_labels=["DefaultRunner"])
     def run_vae_decoder_stream(self, latents):

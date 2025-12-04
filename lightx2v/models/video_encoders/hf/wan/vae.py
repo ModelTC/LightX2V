@@ -1424,7 +1424,6 @@ class WanVAE:
 
         return images
 
-
     def decode_stream(self, zs):
         if self.cpu_offload:
             self.to_cuda()
@@ -1439,7 +1438,6 @@ class WanVAE:
             cur_rank_w = cur_rank % world_size_w
             for images in self.decode_dist_2d_stream(zs, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
                 yield images
-
         else:
             for image in self.model.decode_stream(zs.unsqueeze(0), self.scale):
                 yield image.clamp_(-1, 1)
