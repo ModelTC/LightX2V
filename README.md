@@ -64,9 +64,9 @@
 | **LightX2V** | H100 | 8 cards + cfg | 0.75s/it | 1x |
 | **LightX2V** | H100 | 8 cards + no cfg | 0.39s/it | 1.9x |
 | **LightX2V** | H100 | 8 cards + no cfg + fp8 | **0.35s/it** | **2.1x**🚀 |
-| **LightX2V** | RTX 4090D | 8 cards + cfg | 4.75s/it | 1x |
-| **LightX2V** | RTX 4090D | 8 cards + no cfg | 3.13s/it | 1.5x |
-| **LightX2V** | RTX 4090D | 8 cards + no cfg + fp8 | **2.35s/it** | **2.0x**🚀 |
+| **LightX2V** | 4090D | 8 cards + cfg | 4.75s/it | 1x |
+| **LightX2V** | 4090D | 8 cards + no cfg | 3.13s/it | 1.5x |
+| **LightX2V** | 4090D | 8 cards + no cfg + fp8 | **2.35s/it** | **2.0x**🚀 |
 
 
 ## 💡 Quick Start
