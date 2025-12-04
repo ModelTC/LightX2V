@@ -68,7 +68,7 @@
 | **LightX2V** | 4090D | 8 cards + no cfg | 3.13s/it | 1.5x |
 | **LightX2V** | 4090D | **8 cards + no cfg + fp8** | **2.35s/it** | **2.0x** 🚀 |
 
-**Note**: All the above performance data were tested on Wan2.1-I2V-14B-480P(40 steps, 81 frames). In addition, we also provide a 4-step distilled model on the [HuggingFace page](https://huggingface.co/lightx2v).
+**注意**: 所有以上性能数据均在 Wan2.1-I2V-14B-480P(40 steps, 81 frames) 上测试。此外，我们[HuggingFace 主页](https://huggingface.co/lightx2v)还提供了4步蒸馏模型。
 
 
 ## 💡 快速开始
