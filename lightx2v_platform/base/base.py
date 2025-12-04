@@ -1,3 +1,5 @@
+import os
+
 from loguru import logger
 
 from lightx2v_platform.base import global_var
@@ -21,6 +23,11 @@ def check_ai_device(platform="cuda"):
         raise RuntimeError(f"Unsupported platform: {platform}. Available platforms: {available_platforms}")
     is_available = platform_device.is_available()
     if not is_available:
-        raise RuntimeError(f"AI device for platform '{platform}' is not available. Please check your runtime environment.")
+        skip_platform_check = os.getenv("SKIP_PLATFORM_CHECK", "False") in ["1", "True"]
+        error_msg = f"AI device for platform '{platform}' is not available. Please check your runtime environment."
+        if skip_platform_check:
+            logger.warning(error_msg)
+            return True
+        raise RuntimeError(error_msg)
     logger.info(f"AI device for platform '{platform}' is available.")
     return True
