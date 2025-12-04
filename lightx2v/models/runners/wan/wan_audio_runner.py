@@ -526,6 +526,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
         img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        if self.config.get("f2v_process", False):
+            self.ref_img = img
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
@@ -558,8 +560,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if prev_video is not None:
             # Extract and process last frames
             last_frames = prev_video[:, :, -prev_frame_length:].clone().to(AI_DEVICE)
-            if self.config["model_cls"] != "wan2.2_audio":
+            if self.config["model_cls"] != "wan2.2_audio" and not self.config.get("f2v_process", False):
                 last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
+            logger.info(f"Using previous video frames for conditioning, last_frames shape: {last_frames.shape}")
             prev_frames[:, :, :prev_frame_length] = last_frames
             prev_len = (prev_frame_length - 1) // 4 + 1
         else:
@@ -620,7 +623,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run(self):
         super().init_run()
         self.scheduler.set_audio_adapter(self.audio_adapter)
-        self.prev_video = None
+        if self.config.get("f2v_process", False):
+            self.prev_video = self.ref_img.unsqueeze(2)
+        else:
+            self.prev_video = None
         if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
