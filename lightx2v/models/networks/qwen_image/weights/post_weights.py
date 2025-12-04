@@ -37,3 +37,13 @@ class QwenImagePostWeights(WeightModule):
                 self.lazy_load_file,
             ),
         )
+
+    def to_cpu(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cpu"):
+                module.to_cpu(non_blocking=non_blocking)
+
+    def to_cuda(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cuda"):
+                module.to_cuda(non_blocking=non_blocking)

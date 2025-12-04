@@ -59,7 +59,10 @@ class WanAudioPreInfer(WanPreInfer):
 
         y = weights.patch_embedding.apply(y.unsqueeze(0))
         y = y.flatten(2).transpose(1, 2).contiguous()
-        x = torch.cat([x, y], dim=1).squeeze(0)
+        if not self.config.get("f2v_process", False):
+            x = torch.cat([x, y], dim=1).squeeze(0)
+        else:
+            x = x.squeeze(0)
 
         ####for r2v # zero temporl component corresponding to ref embeddings
         # self.freqs[grid_sizes_t:, : self.rope_t_dim] = 0

@@ -24,6 +24,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import load_weights, remove_substrings_from_keys
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("wan2.2_animate")
@@ -182,7 +183,7 @@ class WanAnimateRunner(WanRunner):
                         ],
                         dim=1,
                     )
-                    .cuda()
+                    .to(AI_DEVICE)
                     .unsqueeze(0)
                 )
                 mask_pixel_values = 1 - mask_pixel_values
@@ -210,7 +211,7 @@ class WanAnimateRunner(WanRunner):
                         ],
                         dim=1,
                     )
-                    .cuda()
+                    .to(AI_DEVICE)
                     .unsqueeze(0)
                 )
                 msk_reft = self.get_i2v_mask(self.latent_t, self.latent_h, self.latent_w, self.mask_reft_len)
@@ -330,7 +331,7 @@ class WanAnimateRunner(WanRunner):
                 dtype=GET_DTYPE(),
             )  # c t h w
         else:
-            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach().cuda()  # c t h w
+            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach().to(AI_DEVICE)  # c t h w
 
         bg_pixel_values, mask_pixel_values = None, None
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
@@ -408,8 +409,8 @@ class WanAnimateRunner(WanRunner):
         return model
 
     def load_encoders(self):
-        motion_encoder = Generator(size=512, style_dim=512, motion_dim=20).eval().requires_grad_(False).to(GET_DTYPE()).cuda()
-        face_encoder = FaceEncoder(in_dim=512, hidden_dim=5120, num_heads=4).eval().requires_grad_(False).to(GET_DTYPE()).cuda()
+        motion_encoder = Generator(size=512, style_dim=512, motion_dim=20).eval().requires_grad_(False).to(GET_DTYPE()).to(AI_DEVICE)
+        face_encoder = FaceEncoder(in_dim=512, hidden_dim=5120, num_heads=4).eval().requires_grad_(False).to(GET_DTYPE()).to(AI_DEVICE)
         motion_weight_dict = remove_substrings_from_keys(load_weights(self.config["model_path"], include_keys=["motion_encoder"]), "motion_encoder.")
         face_weight_dict = remove_substrings_from_keys(load_weights(self.config["model_path"], include_keys=["face_encoder"]), "face_encoder.")
         motion_encoder.load_state_dict(motion_weight_dict)
