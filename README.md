@@ -77,6 +77,8 @@
 
 For comprehensive usage instructions, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
 
+**We highly recommend using the Docker environment, as it is the simplest and fastest way to set up the environment. For details, please refer to the Quick Start section in the documentation.**
+
 ### Installation from Git
 ```bash
 pip install -v git+https://github.com/ModelTC/LightX2V.git

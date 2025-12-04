@@ -77,6 +77,8 @@
 
 详细使用说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
 
+**我们强烈推荐使用 Docker 环境，这是最简单快捷的环境安装方式。具体参考：文档中的快速入门章节。**
+
 ### 从 Git 安装
 ```bash
 pip install -v git+https://github.com/ModelTC/LightX2V.git
