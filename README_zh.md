@@ -48,9 +48,9 @@
 | Framework | Cards | Step Time | Speedup |
 |-----------|---------|---------|---------|
 | Diffusers | 1 | 30.50s/it | 1x |
+| FastVideo | 1 | 22.66s/it | 1.3x |
 | xDiT | 1 | OOM | OOM |
-| FastVideo | 1 | OOM | OOM |
-| SGL-Diffusion | 1 | 22.66s/it | 1.3x |
+| SGL-Diffusion | 1 | OOM | OOM |
 | **LightX2V** | 1 | **20.26s/it** | **1.5x** 🚀 |
 | FastVideo | 8 | 15.48s/it | 1x |
 | xDiT | 8 | OOM | OOM |
