@@ -1,5 +1,5 @@
 @import "tailwindcss";
-
+@import "@flaticon/flaticon-uicons/css/all/all";
 /* Tailwind v4 深色模式配置 */
 @variant dark (&:is(.dark *));
 
@@ -61,7 +61,8 @@
 html {
     background: #ffffff;
     color: #1d1d1f;
-    transition: background-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, color;
 }
 
 html.dark {
@@ -69,11 +70,18 @@ html.dark {
     color: #f5f5f7;
 }
 
+/* 主题切换时禁用过渡动画，提高切换速度 */
+html.theme-transitioning,
+html.theme-transitioning * {
+    transition: none !important;
+}
+
 /* Body 主题支持 */
 body {
     background: #ffffff;
     color: #1d1d1f;
-    transition: background-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, color;
 }
 
 html.dark body {

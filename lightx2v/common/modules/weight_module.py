@@ -23,35 +23,6 @@ class WeightModule:
             if hasattr(parameter, "load"):
                 parameter.load(weight_dict)
 
-    def calculate_size(self):
-        total_size = 0
-        for _, module in self._modules.items():
-            if hasattr(module, "_calculate_size"):
-                total_size += module._calculate_size()
-
-        for _, parameter in self._parameters.items():
-            if hasattr(parameter, "_calculate_size"):
-                total_size += parameter._calculate_size()
-        return total_size
-
-    def load_from_disk(self):
-        for _, module in self._modules.items():
-            if hasattr(module, "load_from_disk"):
-                module.load_from_disk()
-
-        for _, parameter in self._parameters.items():
-            if hasattr(parameter, "load_from_disk"):
-                parameter.load_from_disk()
-
-    def clear(self):
-        for _, module in self._modules.items():
-            if hasattr(module, "clear"):
-                module.clear()
-
-        for _, parameter in self._parameters.items():
-            if hasattr(parameter, "clear"):
-                parameter.clear()
-
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
@@ -73,6 +44,14 @@ class WeightModule:
             if module is not None:
                 module.load_state_dict(destination, block_index, adapter_block_index)
         return destination
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        for _, param in self._parameters.items():
+            if param is not None:
+                param.load_state_dict_from_disk(block_index, adapter_block_index)
+        for _, module in self._modules.items():
+            if module is not None:
+                module.load_state_dict_from_disk(block_index, adapter_block_index)
 
     def named_parameters(self, prefix=""):
         for name, param in self._parameters.items():

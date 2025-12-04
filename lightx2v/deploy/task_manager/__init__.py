@@ -72,6 +72,18 @@ class BaseTaskManager:
     async def query_share(self, share_id):
         raise NotImplementedError
 
+    async def insert_podcast(self, podcast):
+        raise NotImplementedError
+
+    async def query_podcast(self, session_id, user_id=None):
+        raise NotImplementedError
+
+    async def list_podcasts(self, **kwargs):
+        raise NotImplementedError
+
+    async def delete_podcast(self, session_id, user_id):
+        raise NotImplementedError
+
     def fmt_dict(self, data):
         for k in ["status"]:
             if k in data:
@@ -81,6 +93,14 @@ class BaseTaskManager:
         for k in ["status"]:
             if k in data:
                 data[k] = TaskStatus[data[k]]
+
+    def align_extra_inputs(self, task, subtask):
+        if "extra_inputs" in task.get("params", {}):
+            for inp, fs in task["params"]["extra_inputs"].items():
+                if inp in subtask["inputs"]:
+                    for f in fs:
+                        subtask["inputs"][f] = task["inputs"][f]
+                        logger.info(f"Align extra input: {f} for subtask {subtask['task_id']} {subtask['worker_name']}")
 
     async def create_share(self, task_id, user_id, share_type, valid_days, auth_type, auth_value):
         assert share_type in ["task", "template"], f"do not support {share_type} share type!"
@@ -129,6 +149,9 @@ class BaseTaskManager:
         task_type, model_cls, stage = worker_keys
         cur_t = current_time()
         task_id = str(uuid.uuid4())
+        extra_inputs = []
+        for fs in params.get("extra_inputs", {}).values():
+            extra_inputs.extend(fs)
         task = {
             "task_id": task_id,
             "task_type": task_type,
@@ -140,7 +163,7 @@ class BaseTaskManager:
             "status": TaskStatus.CREATED,
             "extra_info": "",
             "tag": "",
-            "inputs": {x: data_name(x, task_id) for x in inputs},
+            "inputs": {x: data_name(x, task_id) for x in inputs + extra_inputs},
             "outputs": {x: data_name(x, task_id) for x in outputs},
             "user_id": user_id,
         }
@@ -172,6 +195,24 @@ class BaseTaskManager:
         assert ret, f"create task {task_id} failed"
         self.metrics_commit(records)
         return task_id
+
+    async def create_podcast(self, session_id, user_id, user_input, audio_path, rounds):
+        cur_t = current_time()
+        podcast = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "user_input": user_input,
+            "create_t": cur_t,
+            "update_t": cur_t,
+            "has_audio": True,
+            "audio_path": audio_path,
+            "metadata_path": "",
+            "rounds": rounds,
+            "subtitles": [],
+            "extra_info": {},
+            "tag": "",
+        }
+        assert await self.insert_podcast(podcast), f"create podcast {podcast} failed"
 
     async def mark_server_restart(self):
         pass

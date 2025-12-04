@@ -515,7 +515,7 @@ class T5Encoder(nn.Module):
             e = pos_bias
         else:
             lq, lk = x.size(1), x.size(1)
-            rel_pos = torch.arange(lk, device="cuda").unsqueeze(0) - torch.arange(lq, device="cuda").unsqueeze(1)
+            rel_pos = torch.arange(lk, device=AI_DEVICE).unsqueeze(0) - torch.arange(lq, device=AI_DEVICE).unsqueeze(1)
             num_buckets = block.pos_embedding.weight.shape[0] // 2
             rel_buckets = (rel_pos > 0).long() * num_buckets
             rel_pos = torch.abs(rel_pos)
@@ -532,28 +532,21 @@ class T5Encoder(nn.Module):
         return x
 
     def forward_with_offload(self, ids, mask=None):
-        self.token_embedding = self.token_embedding.to("cuda")
-        self.pos_embedding = self.pos_embedding.to("cuda") if self.pos_embedding is not None else None
+        self.token_embedding = self.token_embedding.to(AI_DEVICE)
+        self.pos_embedding = self.pos_embedding.to(AI_DEVICE) if self.pos_embedding is not None else None
 
         x = self.token_embedding(ids)
         x = self.dropout(x)
         e = self.pos_embedding(x.size(1), x.size(1)) if self.shared_pos else None
-        self.norm = self.norm.to("cuda")
+        self.norm = self.norm.to(AI_DEVICE)
 
         for block_idx in range(len(self.blocks)):
             self.block_idx = block_idx
-            if block_idx == 0:
-                self.offload_manager.cuda_buffers[0].load_state_dict(
-                    self.blocks[block_idx].state_dict(),
-                    block_idx,
-                )
-
-            if block_idx < len(self.blocks) - 1:
-                self.offload_manager.prefetch_weights(block_idx + 1, self.blocks)
-
-            with torch.cuda.stream(self.offload_manager.compute_stream):
-                x = self.forward_block_with_offload(self.offload_manager.cuda_buffers[0], x, mask, pos_bias=e)
-            self.offload_manager.swap_blocks()
+            self.offload_manager.cuda_buffers[0].load_state_dict(
+                self.blocks[block_idx].state_dict(),
+                block_idx,
+            )
+            x = self.forward_block_with_offload(self.offload_manager.cuda_buffers[0], x, mask, pos_bias=e)
 
         x = self.norm(x)
         x = self.dropout(x)

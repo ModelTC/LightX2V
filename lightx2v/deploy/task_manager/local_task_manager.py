@@ -19,6 +19,9 @@ class LocalTaskManager(BaseTaskManager):
     def get_user_filename(self, user_id):
         return os.path.join(self.local_dir, f"user_{user_id}.json")
 
+    def get_podcast_filename(self, session_id):
+        return os.path.join(self.local_dir, f"podcast_{session_id}.json")
+
     def fmt_dict(self, data):
         super().fmt_dict(data)
         for k in ["create_t", "update_t", "ping_t", "valid_t"]:
@@ -54,6 +57,23 @@ class LocalTaskManager(BaseTaskManager):
         for sub in subtasks:
             self.parse_dict(sub)
         return task, subtasks
+
+    def save_podcast(self, podcast, with_fmt=True):
+        if with_fmt:
+            self.fmt_dict(podcast)
+        out_name = self.get_podcast_filename(podcast["session_id"])
+        with open(out_name, "w") as fout:
+            fout.write(json.dumps(podcast, indent=4, ensure_ascii=False))
+
+    def load_podcast(self, session_id, user_id=None):
+        fpath = self.get_podcast_filename(session_id)
+        data = json.load(open(fpath))
+        if user_id is not None and data.get("user_id") != user_id:
+            raise Exception(f"Podcast {session_id} is not belong to user {user_id}")
+        if data["tag"] == "delete":
+            raise Exception(f"Podcast {session_id} is deleted")
+        self.parse_dict(data)
+        return data
 
     @class_try_catch_async
     async def insert_task(self, task, subtasks):
@@ -142,6 +162,7 @@ class LocalTaskManager(BaseTaskManager):
                     sub["params"] = task["params"]
                     sub["status"] = TaskStatus.PENDING
                     sub["update_t"] = current_time()
+                    self.align_extra_inputs(task, sub)
                     nexts.append(sub)
         if len(nexts) > 0:
             task["status"] = TaskStatus.PENDING
@@ -348,6 +369,46 @@ class LocalTaskManager(BaseTaskManager):
         data = json.load(open(fpath))
         self.parse_dict(data)
         return data
+
+    @class_try_catch_async
+    async def insert_podcast(self, podcast):
+        self.save_podcast(podcast)
+        return True
+
+    @class_try_catch_async
+    async def query_podcast(self, session_id, user_id=None):
+        fpath = self.get_podcast_filename(session_id)
+        if not os.path.exists(fpath):
+            return None
+        data = json.load(open(fpath))
+        self.parse_dict(data)
+        return data
+
+    @class_try_catch_async
+    async def list_podcasts(self, **kwargs):
+        sessions = []
+        for f in os.listdir(self.local_dir):
+            if not f.startswith("podcast_"):
+                continue
+            fpath = os.path.join(self.local_dir, f)
+            session = json.load(open(fpath))
+            self.parse_dict(session)
+            if "user_id" in kwargs and session["user_id"] != kwargs["user_id"]:
+                continue
+            if "has_audio" in kwargs and session["has_audio"] != kwargs["has_audio"]:
+                continue
+            if not kwargs.get("include_delete", False) and session.get("tag", "") == "delete":
+                continue
+            sessions.append(session)
+        if "count" in kwargs:
+            return len(sessions)
+        sort_key = "update_t" if kwargs.get("sort_by_update_t", False) else "create_t"
+        sessions = sorted(sessions, key=lambda x: x[sort_key], reverse=True)
+        if "offset" in kwargs:
+            sessions = sessions[kwargs["offset"] :]
+        if "limit" in kwargs:
+            sessions = sessions[: kwargs["limit"]]
+        return sessions
 
 
 async def test():

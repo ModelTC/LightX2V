@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 from typing import Any, Dict
 
@@ -9,7 +8,7 @@ from loguru import logger
 
 from lightx2v.infer import init_runner
 from lightx2v.utils.input_info import set_input_info
-from lightx2v.utils.set_config import set_config
+from lightx2v.utils.set_config import set_config, set_parallel_config
 
 from ..distributed_utils import DistributedManager
 
@@ -34,8 +33,12 @@ class TorchrunInferenceWorker:
                 self.dist_manager.is_initialized = False
 
             config = set_config(args)
+
+            if config["parallel"]:
+                set_parallel_config(config)
+
             if self.rank == 0:
-                logger.info(f"Config:\n {json.dumps(config, ensure_ascii=False, indent=4)}")
+                logger.info(f"Config:\n {config}")
 
             self.runner = init_runner(config)
             logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed")
@@ -47,6 +50,9 @@ class TorchrunInferenceWorker:
             return False
 
     async def process_request(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        has_error = False
+        error_msg = ""
+
         try:
             if self.world_size > 1 and self.rank == 0:
                 task_data = self.dist_manager.broadcast_task_data(task_data)
@@ -68,36 +74,35 @@ class TorchrunInferenceWorker:
 
             await asyncio.sleep(0)
 
-            if self.world_size > 1:
-                self.dist_manager.barrier()
+        except Exception as e:
+            has_error = True
+            error_msg = str(e)
+            logger.exception(f"Rank {self.rank} inference failed: {error_msg}")
 
-            if self.rank == 0:
+        if self.world_size > 1:
+            self.dist_manager.barrier()
+
+        if self.rank == 0:
+            if has_error:
+                return {
+                    "task_id": task_data.get("task_id", "unknown"),
+                    "status": "failed",
+                    "error": error_msg,
+                    "message": f"Inference failed: {error_msg}",
+                }
+            else:
                 return {
                     "task_id": task_data["task_id"],
                     "status": "success",
                     "save_result_path": task_data.get("video_path", task_data["save_result_path"]),
                     "message": "Inference completed",
                 }
-            else:
-                return None
-
-        except Exception as e:
-            logger.exception(f"Rank {self.rank} inference failed: {str(e)}")
-            if self.world_size > 1:
-                self.dist_manager.barrier()
-
-            if self.rank == 0:
-                return {
-                    "task_id": task_data.get("task_id", "unknown"),
-                    "status": "failed",
-                    "error": str(e),
-                    "message": f"Inference failed: {str(e)}",
-                }
-            else:
-                return None
+        else:
+            return None
 
     async def worker_loop(self):
         while True:
+            task_data = None
             try:
                 task_data = self.dist_manager.broadcast_task_data()
                 if task_data is None:
@@ -108,6 +113,12 @@ class TorchrunInferenceWorker:
 
             except Exception as e:
                 logger.error(f"Rank {self.rank} worker loop error: {str(e)}")
+                if self.world_size > 1 and task_data is not None:
+                    try:
+                        self.dist_manager.barrier()
+                    except Exception as barrier_error:
+                        logger.error(f"Rank {self.rank} barrier failed after error: {barrier_error}")
+                        break
                 continue
 
     def cleanup(self):

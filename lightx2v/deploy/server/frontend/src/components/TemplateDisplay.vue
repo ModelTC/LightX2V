@@ -139,7 +139,7 @@ onMounted(() => {
             <!-- 视频预览 -->
             <video v-if="item?.outputs?.output_video"
                    :src="getTemplateFileUrl(item.outputs.output_video,'videos')"
-                   :poster="getTemplateFileUrl(item.inputs.input_image,'images')"
+                   :poster="item?.inputs?.input_image ? getTemplateFileUrl(item.inputs.input_image,'images') : undefined"
                    class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                    preload="auto" playsinline webkit-playsinline
                    @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
@@ -147,11 +147,15 @@ onMounted(() => {
                    @ended="onVideoEnded($event)"
                    @error="onVideoError($event)"></video>
             <!-- 图片缩略图 -->
-            <img v-else
+            <img v-else-if="item?.inputs?.input_image"
                  :src="getTemplateFileUrl(item.inputs.input_image,'images')"
                  :alt="item.params?.prompt || '模板图片'"
                  class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                  @error="handleThumbnailError" />
+            <!-- 如果没有图片，显示占位符 -->
+            <div v-else class="w-full h-[200px] flex items-center justify-center bg-[#f5f5f7] dark:bg-[#1c1c1e]">
+                <i class="fas fa-image text-3xl text-[#86868b]/30 dark:text-[#98989d]/30"></i>
+            </div>
             <!-- 移动端播放按钮 - Apple 风格 -->
             <button v-if="item?.outputs?.output_video"
                     @click.stop="toggleVideoPlay($event)"
@@ -211,7 +215,7 @@ onMounted(() => {
               <!-- 视频预览 -->
               <video v-if="item?.outputs?.output_video"
                      :src="getTemplateFileUrl(item.outputs.output_video,'videos')"
-                     :poster="getTemplateFileUrl(item.inputs.input_image,'images')"
+                     :poster="item?.inputs?.input_image ? getTemplateFileUrl(item.inputs.input_image,'images') : undefined"
                      class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                      preload="auto" playsinline webkit-playsinline
                      @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
@@ -220,7 +224,7 @@ onMounted(() => {
                      @error="onVideoError($event)"></video>
               <!-- 图片缩略图 -->
               <img v-else
-                   :src="getTemplateFileUrl(item.inputs.input_image,'images')"
+                   :src="item?.inputs?.input_image ? getTemplateFileUrl(item.inputs.input_image,'images') : undefined"
                    :alt="item.params?.prompt || '模板图片'"
                    class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                    @error="handleThumbnailError" />

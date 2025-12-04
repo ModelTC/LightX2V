@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
+
 import router from './router'
 import { init, handleLoginCallback, handleClickOutside, validateToken } from './utils/other'
 import { initLanguage } from './utils/i18n'
@@ -76,7 +77,7 @@ onMounted(async () => {
         localStorage.removeItem('currentUser')
         isLoggedIn.value = false
         console.log('Token已过期')
-        showAlert('请重新登录', 'warning', {
+        showAlert(t('pleaseRelogin'), 'warning', {
           label: t('login'),
           onClick: login
         })
@@ -87,7 +88,7 @@ onMounted(async () => {
     }
   } catch (error) {
     console.error('初始化失败', error)
-    showAlert('初始化失败，请刷新页面重试', 'danger')
+    showAlert(t('initFailedPleaseRefresh'), 'danger')
     isLoggedIn.value = false
   } finally {
     loginLoading.value = false

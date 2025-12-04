@@ -94,7 +94,7 @@
             }
         },
         "s2v": {
-            "seko_talk": {
+            "SekoTalk": {
                 "single_stage": {
                     "pipeline": {
                         "inputs": ["input_image", "input_audio"],
@@ -125,12 +125,24 @@
                     }
                 }
             }
+        },
+        "animate": {
+            "wan2.2_animate": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image","input_video"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            }
         }
+
     },
     "meta": {
         "special_types": {
             "input_image": "IMAGE",
             "input_audio": "AUDIO",
+            "input_video": "VIDEO",
             "latents": "TENSOR",
             "output_video": "VIDEO"
         },

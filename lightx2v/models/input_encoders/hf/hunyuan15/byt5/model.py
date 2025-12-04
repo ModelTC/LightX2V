@@ -257,6 +257,29 @@ class ByT5TextEncoder:
         result = list(dict.fromkeys(result)) if len(result) > 1 else result
         return result
 
+    def get_byt5_text_tokens(self, byt5_tokenizer, byt5_max_length, text_prompt):
+        """
+        Tokenize text prompt for byT5 model.
+
+        Args:
+            byt5_tokenizer: The byT5 tokenizer
+            byt5_max_length: Maximum sequence length
+            text_prompt: Text prompt to tokenize
+
+        Returns:
+            Tuple of (input_ids, attention_mask)
+        """
+        byt5_text_inputs = byt5_tokenizer(
+            text_prompt,
+            padding="max_length",
+            max_length=byt5_max_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+
+        return byt5_text_inputs.input_ids, byt5_text_inputs.attention_mask
+
     def _process_single_byt5_prompt(self, prompt_text, device):
         """
         Process a single prompt for byT5 encoding.

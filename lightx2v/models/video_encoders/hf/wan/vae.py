@@ -892,8 +892,8 @@ class WanVAE:
             2.8251,
             1.9160,
         ]
-        self.mean = torch.tensor(mean, dtype=dtype, device=device)
-        self.inv_std = 1.0 / torch.tensor(std, dtype=dtype, device=device)
+        self.mean = torch.tensor(mean, dtype=dtype, device=AI_DEVICE)
+        self.inv_std = 1.0 / torch.tensor(std, dtype=dtype, device=AI_DEVICE)
         self.scale = [self.mean, self.inv_std]
 
         # (height, width, world_size) -> (world_size_h, world_size_w)

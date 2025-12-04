@@ -14,6 +14,8 @@ class BaseDataManager:
         self.template_audios_dir = None
         self.template_videos_dir = None
         self.template_tasks_dir = None
+        self.podcast_temp_session_dir = None
+        self.podcast_output_dir = None
 
     async def init(self):
         pass
@@ -188,7 +190,8 @@ class BaseDataManager:
         template_dir = self.get_template_dir(template_type)
         if template_dir is None:
             return None
-        return await self.save_bytes(bytes_data, None, abs_path=os.path.join(template_dir, filename))
+        abs_path = os.path.join(template_dir, filename)
+        return await self.save_bytes(bytes_data, None, abs_path=abs_path)
 
     @class_try_catch_async
     async def presign_template_url(self, template_type, filename):
@@ -196,6 +199,46 @@ class BaseDataManager:
         if template_dir is None:
             return None
         return await self.presign_url(None, abs_path=os.path.join(template_dir, filename))
+
+    @class_try_catch_async
+    async def list_podcast_temp_session_files(self, session_id):
+        session_dir = os.path.join(self.podcast_temp_session_dir, session_id)
+        return await self.list_files(base_dir=session_dir)
+
+    @class_try_catch_async
+    async def save_podcast_temp_session_file(self, session_id, filename, bytes_data):
+        fpath = os.path.join(self.podcast_temp_session_dir, session_id, filename)
+        await self.save_bytes(bytes_data, None, abs_path=fpath)
+
+    @class_try_catch_async
+    async def load_podcast_temp_session_file(self, session_id, filename):
+        fpath = os.path.join(self.podcast_temp_session_dir, session_id, filename)
+        return await self.load_bytes(None, abs_path=fpath)
+
+    @class_try_catch_async
+    async def delete_podcast_temp_session_file(self, session_id, filename):
+        fpath = os.path.join(self.podcast_temp_session_dir, session_id, filename)
+        return await self.delete_bytes(None, abs_path=fpath)
+
+    @class_try_catch_async
+    async def save_podcast_output_file(self, filename, bytes_data):
+        fpath = os.path.join(self.podcast_output_dir, filename)
+        await self.save_bytes(bytes_data, None, abs_path=fpath)
+
+    @class_try_catch_async
+    async def load_podcast_output_file(self, filename):
+        fpath = os.path.join(self.podcast_output_dir, filename)
+        return await self.load_bytes(None, abs_path=fpath)
+
+    @class_try_catch_async
+    async def delete_podcast_output_file(self, filename):
+        fpath = os.path.join(self.podcast_output_dir, filename)
+        return await self.delete_bytes(None, abs_path=fpath)
+
+    @class_try_catch_async
+    async def presign_podcast_output_url(self, filename):
+        fpath = os.path.join(self.podcast_output_dir, filename)
+        return await self.presign_url(None, abs_path=fpath)
 
 
 # Import data manager implementations

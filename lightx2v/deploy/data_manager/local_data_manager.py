@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 
 from loguru import logger
 
@@ -23,6 +24,12 @@ class LocalDataManager(BaseDataManager):
             assert os.path.exists(self.template_audios_dir), f"{self.template_audios_dir} not exists!"
             assert os.path.exists(self.template_videos_dir), f"{self.template_videos_dir} not exists!"
             assert os.path.exists(self.template_tasks_dir), f"{self.template_tasks_dir} not exists!"
+
+        # podcast temp session dir and output dir
+        self.podcast_temp_session_dir = os.path.join(self.local_dir, "podcast_temp_session")
+        self.podcast_output_dir = os.path.join(self.local_dir, "podcast_output")
+        os.makedirs(self.podcast_temp_session_dir, exist_ok=True)
+        os.makedirs(self.podcast_output_dir, exist_ok=True)
 
     @class_try_catch_async
     async def save_bytes(self, bytes_data, filename, abs_path=None):
@@ -53,6 +60,20 @@ class LocalDataManager(BaseDataManager):
     async def list_files(self, base_dir=None):
         prefix = base_dir if base_dir else self.local_dir
         return os.listdir(prefix)
+
+    @class_try_catch_async
+    async def create_podcast_temp_session_dir(self, session_id):
+        dir_path = os.path.join(self.podcast_temp_session_dir, session_id)
+        os.makedirs(dir_path, exist_ok=True)
+        return dir_path
+
+    @class_try_catch_async
+    async def clear_podcast_temp_session_dir(self, session_id):
+        session_dir = os.path.join(self.podcast_temp_session_dir, session_id)
+        if os.path.isdir(session_dir):
+            shutil.rmtree(session_dir)
+            logger.info(f"cleared podcast temp session dir {session_dir}")
+        return True
 
 
 async def test():

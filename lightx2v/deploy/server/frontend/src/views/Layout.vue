@@ -38,7 +38,7 @@ const handleTTSComplete = (audioBlob) => {
     showVoiceTTSModal.value = false
 
     // 显示成功提示
-    showAlert('语音合成完成，已自动添加到音频素材', 'success')
+    showAlert(t('ttsCompleted'), 'success')
 }
 </script>
 
