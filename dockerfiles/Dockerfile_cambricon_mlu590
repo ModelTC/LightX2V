@@ -8,8 +8,8 @@ ENV PYTHONPATH=/workspace/LightX2V
 ENV LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
 # Install deps
-RUN apt install ffmpeg
-RUN pip install --no-cache-dir \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+    pip install --no-cache-dir \
     ftfy \
     imageio \
     imageio-ffmpeg \
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir \
     gguf \
     diffusers \
     peft==0.17.0 \
-    transformers==4.57.1
+    transformers==4.57.1 &&
 
 # Copy files
 COPY app app
