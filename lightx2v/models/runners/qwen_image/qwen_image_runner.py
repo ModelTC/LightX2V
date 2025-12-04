@@ -7,6 +7,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
+from lightx2v.models.networks.qwen_image.lora_adapter import QwenImageLoraWrapper
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
@@ -46,6 +47,15 @@ class QwenImageRunner(DefaultRunner):
 
     def load_transformer(self):
         model = QwenImageTransformerModel(self.config)
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            assert not self.config.get("dit_quantized", False)
+            lora_wrapper = QwenImageLoraWrapper(model)
+            for lora_config in self.config.lora_configs:
+                lora_path = lora_config["path"]
+                strength = lora_config.get("strength", 1.0)
+                lora_name = lora_wrapper.load_lora(lora_path)
+                lora_wrapper.apply_lora(lora_name, strength)
+                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
         return model
 
     def load_text_encoder(self):
