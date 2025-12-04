@@ -35,11 +35,11 @@
 | xDiT | 1 | 8.93s/it | 1.1x |
 | FastVideo | 1 | 7.35s/it | 1.3x |
 | SGL-Diffusion | 1 | 6.13s/it | 1.6x |
-| **LightX2V** | 1 | 5.18s/it | **1.9x** |
+| **LightX2V** | 1 | **5.18s/it** | **1.9x** |
 | FastVideo | 8 | 2.94s/it | 1x |
 | xDiT | 8 | 2.70s/it | 1.1x |
 | SGL-Diffusion | 8 | 1.19s/it | 2.5x |
-| **LightX2V** | 8 | 0.75s/it | **3.9x** |
+| **LightX2V** | 8 | **0.75s/it** | **3.9x** |
 
 ### 📊 Cross-Framework Performance Comparison (RTX 4090D)
 
@@ -49,11 +49,11 @@
 | xDiT | 1 | OOM | OOM |
 | FastVideo | 1 | OOM | OOM |
 | SGL-Diffusion | 1 | 6.13s/it | 1.6x |
-| **LightX2V** | 1 | 20.26s/it | **1.5x** |
+| **LightX2V** | 1 | **20.26s/it** | **1.5x** |
 | FastVideo | 8 | 15.48s/it | 1x |
 | xDiT | 8 | OOM | OOM |
 | SGL-Diffusion | 8 | OOM | OOM |
-| **LightX2V** | 8 | 4.75s/it | **3.3x** |
+| **LightX2V** | 8 | **4.75s/it** | **3.3x** |
 
 *Test Configuration: Wan2.1-I2V-14B-480P, 40 steps, 81 frames*
 
@@ -63,10 +63,10 @@
 |-----|---------------|-----------|---------------|
 | **H100** | 8 cards + cfg | 0.75s/it | 1x |
 | **H100** | 8 cards + no cfg | 0.39s/it | 1.9x |
-| **H100** | 8 cards + no cfg + fp8 | 0.35s/it | **2.1x** |
+| **H100** | 8 cards + no cfg + fp8 | **0.35s/it** | **2.1x** |
 | **RTX 4090D** | 8 cards + cfg | 4.75s/it | 1x |
 | **RTX 4090D** | 8 cards + no cfg | 3.13s/it | 1.5x |
-| **RTX 4090D** | 8 cards + no cfg + fp8 | 2.35s/it | **2.0x** |
+| **RTX 4090D** | 8 cards + no cfg + fp8 | **2.35s/it** | **2.0x** |
 
 
 ## 💡 Quick Start
