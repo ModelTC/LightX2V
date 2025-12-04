@@ -24,6 +24,51 @@
 
 - **November 21, 2025:** 🚀 We support the [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update more models on our [HuggingFace page](https://huggingface.co/lightx2v), including step distillation, VAE distillation, and other related models. Quantized models and lightweight VAE models are now available: [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) for quantized inference, and [LightTAE for HunyuanVideo-1.5](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors) for fast VAE decoding. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials, or check out the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples) for code examples.
 
+
+## 🏆 Performance Benchmarks (Updated on 2025.12.01)
+
+### 📊 Cross-Framework Performance Comparison (H100)
+
+| Framework | Cards | Step Time | Speedup |
+|-----------|---------|---------|---------|
+| Diffusers | 1 | 9.77s/it | 1x |
+| xDiT | 1 | 8.93s/it | 1.1x |
+| FastVideo | 1 | 7.35s/it | 1.3x |
+| SGL-Diffusion | 1 | 6.13s/it | 1.6x |
+| **LightX2V** | 1 | 5.18s/it | **1.9x** |
+| FastVideo | 8 | 2.94s/it | 1x |
+| xDiT | 8 | 2.70s/it | 1.1x |
+| SGL-Diffusion | 8 | 1.19s/it | 2.5x |
+| **LightX2V** | 8 | 0.75s/it | **3.9x** |
+
+### 📊 Cross-Framework Performance Comparison (RTX 4090D)
+
+| Framework | Cards | Step Time | Speedup |
+|-----------|---------|---------|---------|
+| Diffusers | 1 | 30.50s/it | 1x |
+| xDiT | 1 | OOM | OOM |
+| FastVideo | 1 | OOM | OOM |
+| SGL-Diffusion | 1 | 6.13s/it | 1.6x |
+| **LightX2V** | 1 | 20.26s/it | **1.5x** |
+| FastVideo | 8 | 15.48s/it | 1x |
+| xDiT | 8 | OOM | OOM |
+| SGL-Diffusion | 8 | OOM | OOM |
+| **LightX2V** | 8 | 4.75s/it | **3.3x** |
+
+*Test Configuration: Wan2.1-I2V-14B-480P, 40 steps, 81 frames*
+
+### 🚀 LightX2V Performance Comparison (Wan2.1-I2V-14B-480P)
+
+| GPU | Configuration | Step Time | Speedup |
+|-----|---------------|-----------|---------------|
+| **H100** | 8 cards + cfg | 0.75s/it | 1x |
+| **H100** | 8 cards + no cfg | 0.39s/it | 1.9x |
+| **H100** | 8 cards + no cfg + fp8 | 0.35s/it | **2.1x** |
+| **RTX 4090D** | 8 cards + cfg | 4.75s/it | 1x |
+| **RTX 4090D** | 8 cards + no cfg | 3.13s/it | 1.5x |
+| **RTX 4090D** | 8 cards + no cfg + fp8 | 2.35s/it | **2.0x** |
+
+
 ## 💡 Quick Start
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
@@ -174,49 +219,6 @@ We provide multiple frontend interface deployment options:
 - **🎞️ Video Frame Interpolation**: RIFE-based frame interpolation for smooth frame rate enhancement
 
 
-## 🏆 Performance Benchmarks
-
-### 📊 Cross-Framework Performance Comparison (H100)
-
-| Framework | Cards | Step Time | Speedup |
-|-----------|---------|---------|---------|
-| Diffusers | 1 | 9.77s/it | 1x |
-| xDiT | 1 | 8.93s/it | 1.1x |
-| FastVideo | 1 | 7.35s/it | 1.3x |
-| SGL-Diffusion | 1 | 6.13s/it | 1.6x |
-| **LightX2V** | 1 | 5.18s/it | **1.9x** |
-| FastVideo | 8 | 2.94s/it | 1x |
-| xDiT | 8 | 2.70s/it | 1.1x |
-| SGL-Diffusion | 8 | 1.19s/it | 2.5x |
-| **LightX2V** | 8 | 0.75s/it | **3.9x** |
-
-### 📊 Cross-Framework Performance Comparison (RTX 4090D)
-
-| Framework | Cards | Step Time | Speedup |
-|-----------|---------|---------|---------|
-| Diffusers | 1 | 30.50s/it | 1x |
-| FastVideo | 1 | 22.66s/it | 1.3x |
-| **LightX2V** | 1 | 20.26s/it | **1.5x** |
-| FastVideo | 8 | 15.48s/it | 1x |
-| **LightX2V** | 8 | 4.75s/it | **3.3x** |
-
-*Test Configuration: Wan2.1-I2V-14B-480P, 40 steps, 81 frames*
-
-### 🚀 LightX2V Performance Comparison (Wan2.1-I2V-14B-480P)
-
-| GPU | Configuration | Step Time | Speedup |
-|-----|---------------|-----------|---------------|
-| **H100** | 8 cards + cfg | 0.75s/it | 1x |
-| **H100** | 8 cards + no cfg | 0.39s/it | 1.9x |
-| **H100** | 8 cards + no cfg + fp8 | 0.35s/it | **2.1x** |
-| **RTX 4090D** | 8 cards + cfg | 4.75s/it | 1x |
-| **RTX 4090D** | 8 cards + no cfg | 3.13s/it | 1.5x |
-| **RTX 4090D** | 8 cards + no cfg + fp8 | 2.35s/it | **2.0x** |
-
-For detailed performance metrics and comparisons, please refer to our [benchmark documentation](https://github.com/ModelTC/LightX2V/blob/main/docs/EN/source/getting_started/benchmark_source.md).
-
-[Detailed Service Deployment Guide →](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html)
-
 ## 📚 Technical Documentation
 
 ### 📖 **Method Tutorials**
@@ -282,7 +284,6 @@ If you find LightX2V useful in your research, please consider citing our work:
 
 For questions, suggestions, or support, please feel free to reach out through:
 - 🐛 [GitHub Issues](https://github.com/ModelTC/lightx2v/issues) - Bug reports and feature requests
-- 💬 [GitHub Discussions](https://github.com/ModelTC/lightx2v/discussions) - Community discussions and Q&A
 
 ---
 
