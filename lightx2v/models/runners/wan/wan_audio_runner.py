@@ -562,7 +562,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
             last_frames = prev_video[:, :, -prev_frame_length:].clone().to(AI_DEVICE)
             if self.config["model_cls"] != "wan2.2_audio" and not self.config.get("f2v_process", False):
                 last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
-            logger.info(f"Using previous video frames for conditioning, last_frames shape: {last_frames.shape}")
             prev_frames[:, :, :prev_frame_length] = last_frames
             prev_len = (prev_frame_length - 1) // 4 + 1
         else:
