@@ -1,4 +1,4 @@
-FROM mlu_lightx2v_torch2.8:base AS base
+FROM cambricon-base/pytorch:v25.10.0-torch2.8.0-torchmlu1.29.1-ubuntu22.04-py310 AS base
 
 RUN mkdir /workspace/LightX2V
 WORKDIR /workspace/LightX2V
