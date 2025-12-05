@@ -20,7 +20,7 @@
 
 ## :fire: Latest News
 
-- **December 4, 2025:** 🚀 We support GGUF format model inference. We support Cambricon MLU590 and MetaX C500 deployment.
+- **December 4, 2025:** 🚀 Supported GGUF format model inference & deployment on Cambricon MLU590/MetaX C500.
 
 - **November 24, 2025:** 🚀 We released 4-step distilled models for HunyuanVideo-1.5! These models enable **ultra-fast 4-step inference** without CFG requirements, achieving approximately **25x speedup** compared to standard 50-step inference. Both base and FP8 quantized versions are now available: [Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models).
 
@@ -31,7 +31,7 @@
 
 ### 📊 Cross-Framework Performance Comparison (H100)
 
-| Framework | Cards | Step Time | Speedup |
+| Framework | GPUs | Step Time | Speedup |
 |-----------|---------|---------|---------|
 | Diffusers | 1 | 9.77s/it | 1x |
 | xDiT | 1 | 8.93s/it | 1.1x |
@@ -45,7 +45,7 @@
 
 ### 📊 Cross-Framework Performance Comparison (RTX 4090D)
 
-| Framework | Cards | Step Time | Speedup |
+| Framework | GPUs | Step Time | Speedup |
 |-----------|---------|---------|---------|
 | Diffusers | 1 | 30.50s/it | 1x |
 | FastVideo | 1 | 22.66s/it | 1.3x |
@@ -61,12 +61,12 @@
 
 | Framework | GPU | Configuration | Step Time | Speedup |
 |-----------|-----|---------------|-----------|---------------|
-| **LightX2V** | H100 | 8 cards + cfg | 0.75s/it | 1x |
-| **LightX2V** | H100 | 8 cards + no cfg | 0.39s/it | 1.9x |
-| **LightX2V** | H100 | **8 cards + no cfg + fp8** | **0.35s/it** | **2.1x** 🚀 |
-| **LightX2V** | 4090D | 8 cards + cfg | 4.75s/it | 1x |
-| **LightX2V** | 4090D | 8 cards + no cfg | 3.13s/it | 1.5x |
-| **LightX2V** | 4090D | **8 cards + no cfg + fp8** | **2.35s/it** | **2.0x** 🚀 |
+| **LightX2V** | H100 | 8 GPUs + cfg | 0.75s/it | 1x |
+| **LightX2V** | H100 | 8 GPUs + no cfg | 0.39s/it | 1.9x |
+| **LightX2V** | H100 | **8 GPUs + no cfg + fp8** | **0.35s/it** | **2.1x** 🚀 |
+| **LightX2V** | 4090D | 8 GPUs + cfg | 4.75s/it | 1x |
+| **LightX2V** | 4090D | 8 GPUs + no cfg | 3.13s/it | 1.5x |
+| **LightX2V** | 4090D | **8 GPUs + no cfg + fp8** | **2.35s/it** | **2.0x** 🚀 |
 
 **Note**: All the above performance data were tested on Wan2.1-I2V-14B-480P(40 steps, 81 frames). In addition, we also provide 4-step distilled models on the [HuggingFace page](https://huggingface.co/lightx2v).
 
