@@ -3,7 +3,12 @@ import math
 import os
 
 import torch
-from transformers import Qwen2Tokenizer, Qwen2_5_VLForConditionalGeneration
+
+try:
+    from transformers import Qwen2Tokenizer, Qwen2_5_VLForConditionalGeneration
+except ImportError:
+    Qwen2Tokenizer = None
+    Qwen2_5_VLForConditionalGeneration = None
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 

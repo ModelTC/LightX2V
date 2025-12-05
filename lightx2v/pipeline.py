@@ -113,12 +113,14 @@ class LightX2VPipeline:
         boundary_step_index=2,
         denoising_step_list=[1000, 750, 500, 250],
         config_json=None,
+        rope_type="torch",
     ):
         if config_json is not None:
             self.set_infer_config_json(config_json)
         else:
             self.set_infer_config(
                 attn_mode,
+                rope_type,
                 infer_steps,
                 num_frames,
                 height,
@@ -142,6 +144,7 @@ class LightX2VPipeline:
     def set_infer_config(
         self,
         attn_mode,
+        rope_type,
         infer_steps,
         num_frames,
         height,
@@ -164,7 +167,7 @@ class LightX2VPipeline:
             self.enable_cfg = False
         else:
             self.enable_cfg = True
-
+        self.rope_type = rope_type
         self.fps = fps
         self.aspect_ratio = aspect_ratio
         self.boundary = boundary
