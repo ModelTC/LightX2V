@@ -5,6 +5,8 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
+from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
+from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -19,6 +21,8 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
+from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 def init_runner(config):
@@ -49,6 +53,8 @@ def main():
             "wan2.2_moe_distill",
             "qwen_image",
             "wan2.2_animate",
+            "hunyuan_video_1.5",
+            "hunyuan_video_1.5_distill",
         ],
         default="wan2.1",
     )
@@ -85,7 +91,30 @@ def main():
         default=None,
         help="The file of the source mask. Default None.",
     )
-
+    parser.add_argument(
+        "--src_pose_path",
+        type=str,
+        default=None,
+        help="The file of the source pose. Default None.",
+    )
+    parser.add_argument(
+        "--src_face_path",
+        type=str,
+        default=None,
+        help="The file of the source face. Default None.",
+    )
+    parser.add_argument(
+        "--src_bg_path",
+        type=str,
+        default=None,
+        help="The file of the source background. Default None.",
+    )
+    parser.add_argument(
+        "--src_mask_path",
+        type=str,
+        default=None,
+        help="The file of the source mask. Default None.",
+    )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     args = parser.parse_args()
@@ -96,8 +125,8 @@ def main():
     config = set_config(args)
 
     if config["parallel"]:
-        dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(dist.get_rank())
+        platform_device = PLATFORM_DEVICE_REGISTER.get(AI_DEVICE, None)
+        platform_device.init_parallel_env()
         set_parallel_config(config)
 
     print_config(config)

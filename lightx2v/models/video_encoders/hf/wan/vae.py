@@ -8,6 +8,10 @@ from einops import rearrange
 from loguru import logger
 
 from lightx2v.utils.utils import load_weights
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 __all__ = [
     "WanVAE",
@@ -869,8 +873,8 @@ class WanVAE:
             2.8251,
             1.9160,
         ]
-        self.mean = torch.tensor(mean, dtype=dtype, device=device)
-        self.inv_std = 1.0 / torch.tensor(std, dtype=dtype, device=device)
+        self.mean = torch.tensor(mean, dtype=dtype, device=AI_DEVICE)
+        self.inv_std = 1.0 / torch.tensor(std, dtype=dtype, device=AI_DEVICE)
         self.scale = [self.mean, self.inv_std]
 
         # (height, width, world_size) -> (world_size_h, world_size_w)
@@ -953,11 +957,11 @@ class WanVAE:
         self.scale = [self.mean, self.inv_std]
 
     def to_cuda(self):
-        self.model.encoder = self.model.encoder.to("cuda")
-        self.model.decoder = self.model.decoder.to("cuda")
-        self.model = self.model.to("cuda")
-        self.mean = self.mean.cuda()
-        self.inv_std = self.inv_std.cuda()
+        self.model.encoder = self.model.encoder.to(AI_DEVICE)
+        self.model.decoder = self.model.decoder.to(AI_DEVICE)
+        self.model = self.model.to(AI_DEVICE)
+        self.mean = self.mean.to(AI_DEVICE)
+        self.inv_std = self.inv_std.to(AI_DEVICE)
         self.scale = [self.mean, self.inv_std]
 
     def encode_dist(self, video, world_size, cur_rank, split_dim):
@@ -1018,7 +1022,7 @@ class WanVAE:
         full_encoded = [torch.empty_like(encoded_chunk) for _ in range(world_size)]
         dist.all_gather(full_encoded, encoded_chunk)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         encoded = torch.cat(full_encoded, dim=split_dim)
 
@@ -1100,7 +1104,7 @@ class WanVAE:
 
         dist.all_gather(full_encoded, encoded_chunk)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         # Reconstruct the full encoded tensor
         encoded_rows = []
@@ -1115,7 +1119,7 @@ class WanVAE:
 
         return encoded.squeeze(0)
 
-    def encode(self, video):
+    def encode(self, video, world_size_h=None, world_size_w=None):
         """
         video: one video  with shape [1, C, T, H, W].
         """
@@ -1128,7 +1132,8 @@ class WanVAE:
             height, width = video.shape[3], video.shape[4]
 
             if self.use_2d_split:
-                world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
+                if world_size_h is None or world_size_w is None:
+                    world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
                 cur_rank_h = cur_rank // world_size_w
                 cur_rank_w = cur_rank % world_size_w
                 out = self.encode_dist_2d(video, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
@@ -1197,7 +1202,7 @@ class WanVAE:
         full_images = [torch.empty_like(images) for _ in range(world_size)]
         dist.all_gather(full_images, images)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         images = torch.cat(full_images, dim=split_dim + 1)
 
@@ -1271,7 +1276,7 @@ class WanVAE:
 
         dist.all_gather(full_images, images_chunk)
 
-        torch.cuda.synchronize()
+        self.device_synchronize()
 
         # Reconstruct the full image tensor
         image_rows = []
@@ -1324,3 +1329,8 @@ class WanVAE:
 
     def decode_video(self, vid_enc):
         return self.model.decode_video(vid_enc)
+
+    def device_synchronize(
+        self,
+    ):
+        torch_device_module.synchronize()

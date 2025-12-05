@@ -220,7 +220,7 @@ onMounted(() => {
                                                         <!-- 视频预览 -->
                                                         <video v-if="item?.outputs?.output_video"
                                                             :src="getTemplateFileUrl(item.outputs.output_video,'videos')"
-                                                            :poster="getTemplateFileUrl(item.inputs.input_image,'images')"
+                                                            :poster="item?.inputs?.input_image ? getTemplateFileUrl(item.inputs.input_image,'images') : undefined"
                                 class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
                                                             preload="auto" playsinline webkit-playsinline
                                                             @mouseenter="playVideo($event)" @mouseleave="pauseVideo($event)"
@@ -228,7 +228,7 @@ onMounted(() => {
                                                             @ended="onVideoEnded($event)"
                                                             @error="onVideoError($event)"></video>
                                                     <!-- 图片缩略图 -->
-                                                        <img v-else
+                                                        <img v-else-if="item?.inputs?.input_image"
                                                         :src="getTemplateFileUrl(item.inputs.input_image,'images')"
                                                         :alt="item.params?.prompt || '模板图片'"
                                 class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"

@@ -1,0 +1,32 @@
+FROM node:alpine3.21 AS frontend_builder
+COPY lightx2v /opt/lightx2v
+
+RUN cd /opt/lightx2v/deploy/server/frontend \
+    && npm install \
+    && npm run build
+
+FROM lightx2v/lightx2v:25111101-cu128 AS base
+
+RUN mkdir /workspace/LightX2V
+WORKDIR /workspace/LightX2V
+ENV PYTHONPATH=/workspace/LightX2V
+
+# for multi-person & animate
+RUN pip install ultralytics moviepy pydub pyannote.audio onnxruntime decord peft onnxruntime pandas matplotlib loguru sentencepiece
+
+RUN export COMMIT=0e78a118995e66bb27d78518c4bd9a3e95b4e266 \
+    && export TORCH_CUDA_ARCH_LIST="9.0" \
+    && git clone --depth 1 https://github.com/facebookresearch/sam2.git \
+    && cd sam2 \
+    && git fetch --depth 1 origin $COMMIT \
+    && git checkout $COMMIT \
+    && python setup.py install
+
+COPY tools tools
+COPY assets assets
+COPY configs configs
+COPY lightx2v lightx2v
+COPY lightx2v_kernel lightx2v_kernel
+COPY lightx2v_platform lightx2v_platform
+
+COPY --from=frontend_builder /opt/lightx2v/deploy/server/frontend/dist lightx2v/deploy/server/frontend/dist

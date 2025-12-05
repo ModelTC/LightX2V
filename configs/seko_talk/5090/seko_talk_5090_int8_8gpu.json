@@ -29,6 +29,6 @@
     "t5_quant_scheme": "int8-q8f",
     "parallel": {
         "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses"
+        "seq_p_attn_type": "ulysses-4090"
     }
 }

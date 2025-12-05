@@ -54,7 +54,7 @@ class MultiDistillModelStruct(MultiModelStruct):
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
+            #  self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
@@ -64,7 +64,7 @@ class MultiDistillModelStruct(MultiModelStruct):
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
+            # self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)
@@ -78,21 +78,27 @@ class MultiDistillModelStruct(MultiModelStruct):
 class Wan22MoeDistillRunner(WanDistillRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
-        if not os.path.isdir(self.high_noise_model_path):
-            self.high_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "high_noise_model")
         if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
             self.high_noise_model_path = self.config["high_noise_quantized_ckpt"]
         elif self.config.get("high_noise_original_ckpt", None):
             self.high_noise_model_path = self.config["high_noise_original_ckpt"]
+        else:
+            self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
+            if not os.path.isdir(self.high_noise_model_path):
+                self.high_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "high_noise_model")
+                if not os.path.isdir(self.high_noise_model_path):
+                    raise FileNotFoundError(f"High Noise Model does not find")
 
-        self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
-        if not os.path.isdir(self.low_noise_model_path):
-            self.low_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "low_noise_model")
         if self.config.get("dit_quantized", False) and self.config.get("low_noise_quantized_ckpt", None):
             self.low_noise_model_path = self.config["low_noise_quantized_ckpt"]
         elif not self.config.get("dit_quantized", False) and self.config.get("low_noise_original_ckpt", None):
             self.low_noise_model_path = self.config["low_noise_original_ckpt"]
+        else:
+            self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
+            if not os.path.isdir(self.low_noise_model_path):
+                self.low_noise_model_path = os.path.join(self.config["model_path"], "distill_models", "low_noise_model")
+                if not os.path.isdir(self.high_noise_model_path):
+                    raise FileNotFoundError(f"Low Noise Model does not find")
 
     def load_transformer(self):
         use_high_lora, use_low_lora = False, False

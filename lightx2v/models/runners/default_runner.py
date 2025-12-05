@@ -15,6 +15,7 @@ from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .base_runner import BaseRunner
 
@@ -40,7 +41,8 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        self.model.set_scheduler(self.scheduler)  # set scheduler to model
+        if hasattr(self, "model"):
+            self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif self.config["task"] == "flf2v":
@@ -54,7 +56,7 @@ class DefaultRunner(BaseRunner):
         elif self.config["task"] == "s2v":
             self.run_input_encoder = self._run_input_encoder_local_s2v
         self.config.lock()  # lock config to avoid modification
-        if self.config.get("compile", False):
+        if self.config.get("compile", False) and hasattr(self.model, "comple"):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
 
@@ -62,7 +64,7 @@ class DefaultRunner(BaseRunner):
         if self.config["cpu_offload"]:
             self.init_device = torch.device("cpu")
         else:
-            self.init_device = torch.device("cuda")
+            self.init_device = torch.device(AI_DEVICE)
 
     def load_vfi_model(self):
         if self.config["video_frame_interpolation"].get("algo", None) == "rife":
@@ -132,21 +134,21 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    # @# peak_memory_decorator
-    def run_segment(self, total_steps=None):
-        if total_steps is None:
-            total_steps = self.model.scheduler.infer_steps
-        for step_index in range(total_steps):
+    @peak_memory_decorator
+    def run_segment(self, segment_idx=0):
+        infer_steps = self.model.scheduler.infer_steps
+
+        for step_index in range(infer_steps):
             # only for single segment, check stop signal every step
             with ProfilingContext4DebugL1(
                 f"Run Dit every step",
                 recorder_mode=GET_RECORDER_MODE(),
                 metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
-                metrics_labels=[step_index + 1, total_steps],
+                metrics_labels=[step_index + 1, infer_steps],
             ):
                 if self.video_segment_num == 1:
                     self.check_stop()
-                # logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+                logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
 
                 with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.step_pre(step_index=step_index)
@@ -158,24 +160,31 @@ class DefaultRunner(BaseRunner):
                     self.model.scheduler.step_post()
 
                 if self.progress_callback:
-                    self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+                    current_step = segment_idx * infer_steps + step_index + 1
+                    total_all_steps = self.video_segment_num * infer_steps
+                    self.progress_callback((current_step / total_all_steps) * 100, 100)
+
+        if segment_idx is not None and segment_idx == self.video_segment_num - 1:
+            del self.inputs
+            torch.cuda.empty_cache()
 
         return self.model.scheduler.latents
 
     def run_step(self):
         self.inputs = self.run_input_encoder()
+        if hasattr(self, "sr_version") and self.sr_version is not None is not None:
+            self.config_sr["is_sr_running"] = True
+            self.inputs_sr = self.run_input_encoder()
+            self.config_sr["is_sr_running"] = False
+
         self.run_main(total_steps=1)
 
     def end_run(self):
         self.model.scheduler.clear()
-        del self.inputs
+        if hasattr(self, "inputs"):
+            del self.inputs
         self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
-                self.model.transformer_infer.weights_stream_mgr.clear()
-            if hasattr(self.model.transformer_weights, "clear"):
-                self.model.transformer_weights.clear()
-            self.model.pre_weight.clear()
             del self.model
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
@@ -192,7 +201,7 @@ class DefaultRunner(BaseRunner):
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
-        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
         self.input_info.original_size = img_ori.size
         return img, img_ori
 
@@ -209,7 +218,7 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
-        self.input_info.latent_shape = self.get_latent_shape_with_target_hw(self.config["target_height"], self.config["target_width"])  # Important: set latent_shape in input_info
+        self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
         gc.collect()
@@ -266,15 +275,23 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
 
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
+        if hasattr(self, "sr_version") and self.sr_version is not None:
+            self.lq_latents_shape = self.model.scheduler.latents.shape
+            self.model_sr.set_scheduler(self.scheduler_sr)
+            self.config_sr["is_sr_running"] = True
+            self.inputs_sr = self.run_input_encoder()
+            self.config_sr["is_sr_running"] = False
+
     @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self, total_steps=None):
+    def run_main(self):
         self.init_run()
-        if self.config.get("compile", False):
+        if self.config.get("compile", False) and hasattr(self.model, "comple"):
             self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
@@ -288,7 +305,7 @@ class DefaultRunner(BaseRunner):
                 # 1. default do nothing
                 self.init_run_segment(segment_idx)
                 # 2. main inference loop
-                latents = self.run_segment(total_steps=total_steps)
+                latents = self.run_segment(segment_idx)
                 # 3. vae decoder
                 self.gen_video = self.run_vae_decoder(latents)
                 # 4. default do nothing

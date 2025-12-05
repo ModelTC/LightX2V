@@ -38,6 +38,10 @@ class S3DataManager(BaseDataManager):
             self.template_videos_dir = os.path.join(template_dir, "videos")
             self.template_tasks_dir = os.path.join(template_dir, "tasks")
 
+        # podcast temp session dir and output dir
+        self.podcast_temp_session_dir = os.path.join(self.base_path, "podcast_temp_session")
+        self.podcast_output_dir = os.path.join(self.base_path, "podcast_output")
+
     async def init_presign_client(self):
         # init tos client for volces.com
         if "volces.com" in self.endpoint_url:
@@ -128,12 +132,42 @@ class S3DataManager(BaseDataManager):
 
     @class_try_catch_async
     async def list_files(self, base_dir=None):
-        prefix = base_dir if base_dir else self.base_path
-        response = await self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
+        if base_dir:
+            prefix = self.fmt_path(self.base_path, None, abs_path=base_dir)
+        else:
+            prefix = self.base_path
+        prefix = prefix + "/" if not prefix.endswith("/") else prefix
+
+        # Handle pagination for S3 list_objects_v2
         files = []
-        if "Contents" in response:
-            for obj in response["Contents"]:
-                files.append(obj["Key"].replace(prefix + "/", ""))
+        continuation_token = None
+        page = 1
+
+        while True:
+            list_kwargs = {"Bucket": self.bucket_name, "Prefix": prefix, "MaxKeys": 1000}
+            if continuation_token:
+                list_kwargs["ContinuationToken"] = continuation_token
+            response = await self.s3_client.list_objects_v2(**list_kwargs)
+
+            if "Contents" in response:
+                page_files = []
+                for obj in response["Contents"]:
+                    # Remove the prefix from the key to get just the filename
+                    key = obj["Key"]
+                    if key.startswith(prefix):
+                        filename = key[len(prefix) :]
+                        if filename:  # Skip empty filenames (the directory itself)
+                            page_files.append(filename)
+                files.extend(page_files)
+            else:
+                logger.warning(f"[S3DataManager.list_files] Page {page}: No files found in this page.")
+
+            # Check if there are more pages
+            if response.get("IsTruncated", False):
+                continuation_token = response.get("NextContinuationToken")
+                page += 1
+            else:
+                break
         return files
 
     @class_try_catch_async
@@ -148,6 +182,18 @@ class S3DataManager(BaseDataManager):
             return out.signed_url
         else:
             return None
+
+    @class_try_catch_async
+    async def create_podcast_temp_session_dir(self, session_id):
+        pass
+
+    @class_try_catch_async
+    async def clear_podcast_temp_session_dir(self, session_id):
+        session_dir = os.path.join(self.podcast_temp_session_dir, session_id)
+        fs = await self.list_files(base_dir=session_dir)
+        logger.info(f"clear podcast temp session dir {session_dir} with files: {fs}")
+        for f in fs:
+            await self.delete_bytes(f, abs_path=os.path.join(session_dir, f))
 
 
 async def test():

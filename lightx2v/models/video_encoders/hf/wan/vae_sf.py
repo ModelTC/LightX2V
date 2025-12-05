@@ -3,6 +3,9 @@ import torch.nn as nn
 from einops import rearrange, repeat
 
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE_, _video_vae
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class WanSFVAE:
@@ -46,11 +49,11 @@ class WanSFVAE:
         self.scale = [self.mean, self.inv_std]
 
     def to_cuda(self):
-        self.model.encoder = self.model.encoder.to("cuda")
-        self.model.decoder = self.model.decoder.to("cuda")
-        self.model = self.model.to("cuda")
-        self.mean = self.mean.cuda()
-        self.inv_std = self.inv_std.cuda()
+        self.model.encoder = self.model.encoder.to(AI_DEVICE)
+        self.model.decoder = self.model.decoder.to(AI_DEVICE)
+        self.model = self.model.to(AI_DEVICE)
+        self.mean = self.mean.to(AI_DEVICE)
+        self.inv_std = self.inv_std.to(AI_DEVICE)
         self.scale = [self.mean, self.inv_std]
 
     def decode(self, latent: torch.Tensor, use_cache: bool = False) -> torch.Tensor:

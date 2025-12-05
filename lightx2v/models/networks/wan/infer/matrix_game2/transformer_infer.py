@@ -8,9 +8,13 @@ try:
 
     FLASH_ATTN_3_AVAILABLE = True
 except ImportError:
-    from flash_attn import flash_attn_func
+    try:
+        from flash_attn import flash_attn_func
 
-    FLASH_ATTN_3_AVAILABLE = False
+        FLASH_ATTN_3_AVAILABLE = False
+
+    except ImportError:
+        FLASH_ATTN_3_AVAILABLE = False
 
 
 from lightx2v.models.networks.wan.infer.matrix_game2.posemb_layers import apply_rotary_emb, get_nd_rotary_pos_embed

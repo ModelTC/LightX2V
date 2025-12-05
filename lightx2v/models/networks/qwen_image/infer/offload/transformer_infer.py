@@ -2,6 +2,9 @@ import torch
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
@@ -24,7 +27,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 assert NotImplementedError
 
             if offload_granularity != "model":
-                self.weights_stream_mgr = WeightAsyncStreamManager(blocks_num=self.num_blocks, offload_ratio=self.offload_ratio, phases_num=self.phases_num)
+                self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             else:
                 assert NotImplementedError
 
@@ -32,16 +35,16 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         for block_idx in range(self.num_blocks):
             self.block_idx = block_idx
             if block_idx == 0:
-                self.weights_stream_mgr.active_weights[0] = block_weights.blocks[0]
-                self.weights_stream_mgr.active_weights[0].to_cuda()
+                self.offload_manager.init_first_buffer(block_weights.blocks)
 
             if block_idx < self.num_blocks - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, block_weights.blocks)
+                self.offload_manager.prefetch_weights(block_idx + 1, block_weights.blocks)
 
-            with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
+            with torch_device_module.stream(self.offload_manager.compute_stream):
                 encoder_hidden_states, hidden_states = self.infer_block(
-                    block_weight=block_weights.blocks[block_idx], hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb
+                    block_weight=self.offload_manager.cuda_buffers[0], hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb
                 )
 
-            self.weights_stream_mgr.swap_weights()
+            self.offload_manager.swap_blocks()
+
         return encoder_hidden_states, hidden_states

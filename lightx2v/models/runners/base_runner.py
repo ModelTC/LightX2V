@@ -3,6 +3,8 @@ from abc import ABC
 import torch
 import torch.distributed as dist
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 class BaseRunner(ABC):
     """Abstract base class for all Runners
@@ -121,7 +123,7 @@ class BaseRunner(ABC):
     def init_run_segment(self, segment_idx):
         self.segment_idx = segment_idx
 
-    def run_segment(self, total_steps=None):
+    def run_segment(self, segment_idx=0):
         pass
 
     def end_run_segment(self, segment_idx=None):
@@ -148,13 +150,13 @@ class BaseRunner(ABC):
 
         if world_size > 1:
             if rank == signal_rank:
-                t1 = torch.tensor([stopped], dtype=torch.int32).to(device="cuda")
+                t1 = torch.tensor([stopped], dtype=torch.int32).to(device=AI_DEVICE)
             else:
-                t1 = torch.zeros(1, dtype=torch.int32, device="cuda")
+                t1 = torch.zeros(1, dtype=torch.int32, device=AI_DEVICE)
             if rank == pause_rank:
-                t2 = torch.tensor([paused], dtype=torch.int32).to(device="cuda")
+                t2 = torch.tensor([paused], dtype=torch.int32).to(device=AI_DEVICE)
             else:
-                t2 = torch.zeros(1, dtype=torch.int32, device="cuda")
+                t2 = torch.zeros(1, dtype=torch.int32, device=AI_DEVICE)
             dist.broadcast(t1, src=signal_rank)
             dist.broadcast(t2, src=pause_rank)
             stopped = t1.item()

@@ -4,6 +4,7 @@ from typing import Union
 import torch
 
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanStepDistillScheduler(WanScheduler):
@@ -19,7 +20,8 @@ class WanStepDistillScheduler(WanScheduler):
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
-        self.set_denoising_timesteps(device=self.device)
+        self.set_denoising_timesteps(device=AI_DEVICE)
+        self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
         sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min)
@@ -43,9 +45,8 @@ class WanStepDistillScheduler(WanScheduler):
         sigma = self.sigmas[self.step_index].item()
         noisy_image_or_video = self.latents.to(torch.float32) - sigma * flow_pred
         if self.step_index < self.infer_steps - 1:
-            sigma = self.sigmas[self.step_index + 1].item()
-            noise = torch.randn(noisy_image_or_video.shape, dtype=torch.float32, device=self.device, generator=self.generator)
-            noisy_image_or_video = self.add_noise(noisy_image_or_video, noise=noise, sigma=self.sigmas[self.step_index + 1].item())
+            sigma_n = self.sigmas[self.step_index + 1].item()
+            noisy_image_or_video = noisy_image_or_video + flow_pred * sigma_n
         self.latents = noisy_image_or_video.to(self.latents.dtype)
 
 

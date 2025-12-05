@@ -8,6 +8,7 @@ from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def get_default_config():
@@ -43,36 +44,43 @@ def set_config(args):
             config_json = json.load(f)
         config.update(config_json)
 
-    if os.path.exists(os.path.join(config["model_path"], "config.json")):
-        with open(os.path.join(config["model_path"], "config.json"), "r") as f:
-            model_config = json.load(f)
-        config.update(model_config)
-    elif os.path.exists(os.path.join(config["model_path"], "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
-        with open(os.path.join(config["model_path"], "low_noise_model", "config.json"), "r") as f:
-            model_config = json.load(f)
-        config.update(model_config)
-    elif os.path.exists(os.path.join(config["model_path"], "distill_models", "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
-        with open(os.path.join(config["model_path"], "distill_models", "low_noise_model", "config.json"), "r") as f:
-            model_config = json.load(f)
-        config.update(model_config)
-    elif os.path.exists(os.path.join(config["model_path"], "original", "config.json")):
-        with open(os.path.join(config["model_path"], "original", "config.json"), "r") as f:
-            model_config = json.load(f)
-        config.update(model_config)
-    # load quantized config
-    if config.get("dit_quantized_ckpt", None) is not None:
-        config_path = os.path.join(config["dit_quantized_ckpt"], "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
+    if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
+        config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]
+        if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
+            with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    else:
+        if os.path.exists(os.path.join(config["model_path"], "config.json")):
+            with open(os.path.join(config["model_path"], "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        elif os.path.exists(os.path.join(config["model_path"], "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
+            with open(os.path.join(config["model_path"], "low_noise_model", "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        elif os.path.exists(os.path.join(config["model_path"], "distill_models", "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
+            with open(os.path.join(config["model_path"], "distill_models", "low_noise_model", "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        elif os.path.exists(os.path.join(config["model_path"], "original", "config.json")):
+            with open(os.path.join(config["model_path"], "original", "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        # load quantized config
+        if config.get("dit_quantized_ckpt", None) is not None:
+            config_path = os.path.join(config["dit_quantized_ckpt"], "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    model_config = json.load(f)
+                config.update(model_config)
 
     if config["task"] in ["i2v", "s2v"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
-    if config["task"] not in ["t2i", "i2i"]:
+    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
         config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
         if config["model_cls"] == "seko_talk":
             config["attnmap_frame_num"] += 1
@@ -85,7 +93,7 @@ def set_parallel_config(config):
         cfg_p_size = config["parallel"].get("cfg_p_size", 1)
         seq_p_size = config["parallel"].get("seq_p_size", 1)
         assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size * seq_p_size must be equal to world_size"
-        config["device_mesh"] = init_device_mesh("cuda", (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+        config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
 
         if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
             config["seq_parallel"] = True
@@ -93,7 +101,7 @@ def set_parallel_config(config):
         if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
             config["cfg_parallel"] = True
         # warmup dist
-        _a = torch.zeros([1]).to(f"cuda:{dist.get_rank()}")
+        _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
         dist.all_reduce(_a)
 
 

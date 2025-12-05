@@ -29,6 +29,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("wan2.1")
@@ -65,7 +66,7 @@ class WanRunner(DefaultRunner):
             if clip_offload:
                 clip_device = torch.device("cpu")
             else:
-                clip_device = torch.device("cuda")
+                clip_device = torch.device(AI_DEVICE)
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
@@ -101,8 +102,8 @@ class WanRunner(DefaultRunner):
         if t5_offload:
             t5_device = torch.device("cpu")
         else:
-            t5_device = torch.device("cuda")
-
+            t5_device = torch.device(AI_DEVICE)
+        tokenizer_path = os.path.join(self.config["model_path"], "google/umt5-xxl")
         # quant_config
         t5_quantized = self.config.get("t5_quantized", False)
         if t5_quantized:
@@ -112,13 +113,11 @@ class WanRunner(DefaultRunner):
             t5_model_name = f"models_t5_umt5-xxl-enc-{tmp_t5_quant_scheme}.pth"
             t5_quantized_ckpt = find_torch_model_path(self.config, "t5_quantized_ckpt", t5_model_name)
             t5_original_ckpt = None
-            tokenizer_path = os.path.join(os.path.dirname(t5_quantized_ckpt), "google/umt5-xxl")
         else:
             t5_quant_scheme = None
             t5_quantized_ckpt = None
             t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
             t5_original_ckpt = find_torch_model_path(self.config, "t5_original_ckpt", t5_model_name)
-            tokenizer_path = os.path.join(os.path.dirname(t5_original_ckpt), "google/umt5-xxl")
 
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
@@ -142,7 +141,7 @@ class WanRunner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(AI_DEVICE)
 
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
@@ -165,7 +164,7 @@ class WanRunner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(AI_DEVICE)
 
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
@@ -179,7 +178,7 @@ class WanRunner(DefaultRunner):
         }
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to("cuda")
+            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
@@ -222,7 +221,7 @@ class WanRunner(DefaultRunner):
             monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
         neg_prompt = input_info.negative_prompt
 
-        if self.config["cfg_parallel"]:
+        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -236,8 +235,11 @@ class WanRunner(DefaultRunner):
         else:
             context = self.text_encoders[0].infer([prompt])
             context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-            context_null = self.text_encoders[0].infer([neg_prompt])
-            context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+            if self.config.get("enable_cfg", False):
+                context_null = self.text_encoders[0].infer([neg_prompt])
+                context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+            else:
+                context_null = None
             text_encoder_output = {
                 "context": context,
                 "context_null": context_null,
@@ -269,6 +271,58 @@ class WanRunner(DefaultRunner):
             gc.collect()
         return clip_encoder_out
 
+    def _adjust_latent_for_grid_splitting(self, latent_h, latent_w, world_size):
+        """
+        Adjust latent dimensions for optimal 2D grid splitting.
+        Prefers balanced grids like 2x4 or 4x2 over 1x8 or 8x1.
+        """
+        world_size_h, world_size_w = 1, 1
+        if world_size <= 1:
+            return latent_h, latent_w, world_size_h, world_size_w
+
+        # Define priority grids for different world sizes
+        priority_grids = []
+        if world_size == 8:
+            # For 8 cards, prefer 2x4 and 4x2 over 1x8 and 8x1
+            priority_grids = [(2, 4), (4, 2), (1, 8), (8, 1)]
+        elif world_size == 4:
+            priority_grids = [(2, 2), (1, 4), (4, 1)]
+        elif world_size == 2:
+            priority_grids = [(1, 2), (2, 1)]
+        else:
+            # For other sizes, try factor pairs
+            for h in range(1, int(np.sqrt(world_size)) + 1):
+                if world_size % h == 0:
+                    w = world_size // h
+                    priority_grids.append((h, w))
+
+        # Try priority grids first
+        for world_size_h, world_size_w in priority_grids:
+            if latent_h % world_size_h == 0 and latent_w % world_size_w == 0:
+                return latent_h, latent_w, world_size_h, world_size_w
+
+        # If no perfect fit, find minimal padding solution
+        best_grid = (1, world_size)  # fallback
+        min_total_padding = float("inf")
+
+        for world_size_h, world_size_w in priority_grids:
+            # Calculate required padding
+            pad_h = (world_size_h - (latent_h % world_size_h)) % world_size_h
+            pad_w = (world_size_w - (latent_w % world_size_w)) % world_size_w
+            total_padding = pad_h + pad_w
+
+            # Prefer grids with minimal total padding
+            if total_padding < min_total_padding:
+                min_total_padding = total_padding
+                best_grid = (world_size_h, world_size_w)
+
+        # Apply padding
+        world_size_h, world_size_w = best_grid
+        pad_h = (world_size_h - (latent_h % world_size_h)) % world_size_h
+        pad_w = (world_size_w - (latent_w % world_size_w)) % world_size_w
+
+        return latent_h + pad_h, latent_w + pad_w, world_size_h, world_size_w
+
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -279,8 +333,19 @@ class WanRunner(DefaultRunner):
         h, w = first_frame.shape[2:]
         aspect_ratio = h / w
         max_area = self.config["target_height"] * self.config["target_width"]
-        latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
-        latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+
+        # Calculate initial latent dimensions
+        ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
+        ori_latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+
+        # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            latent_h, latent_w, world_size_h, world_size_w = self._adjust_latent_for_grid_splitting(ori_latent_h, ori_latent_w, dist.get_world_size())
+            logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
+        else:
+            latent_h, latent_w = ori_latent_h, ori_latent_w
+            world_size_h, world_size_w = None, None
+
         latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)  # Important: latent_shape is used to set the input_info
 
         if self.config.get("changing_resolution", False):
@@ -291,8 +356,8 @@ class WanRunner(DefaultRunner):
                     int(latent_h * self.config["resolution_rate"][i]) // 2 * 2,
                     int(latent_w * self.config["resolution_rate"][i]) // 2 * 2,
                 )
-                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp))
-            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w))
+                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp, world_size_h=world_size_h, world_size_w=world_size_w))
+            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w, world_size_h=world_size_h, world_size_w=world_size_w))
             return vae_encode_out_list, latent_shape
         else:
             if last_frame is not None:
@@ -305,10 +370,10 @@ class WanRunner(DefaultRunner):
                         round(last_frame_size[1] * last_frame_resize_ratio),
                     ]
                     last_frame = TF.center_crop(last_frame, last_frame_size)
-            vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame)
+            vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame, world_size_h=world_size_h, world_size_w=world_size_w)
             return vae_encoder_out, latent_shape
 
-    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None):
+    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None, world_size_h=None, world_size_w=None):
         h = lat_h * self.config["vae_stride"][1]
         w = lat_w * self.config["vae_stride"][2]
         msk = torch.ones(
@@ -316,7 +381,7 @@ class WanRunner(DefaultRunner):
             self.config["target_video_length"],
             lat_h,
             lat_w,
-            device=torch.device("cuda"),
+            device=torch.device(AI_DEVICE),
         )
         if last_frame is not None:
             msk[:, 1:-1] = 0
@@ -338,7 +403,7 @@ class WanRunner(DefaultRunner):
                     torch.nn.functional.interpolate(last_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
                 ],
                 dim=1,
-            ).cuda()
+            ).to(AI_DEVICE)
         else:
             vae_input = torch.concat(
                 [
@@ -346,9 +411,9 @@ class WanRunner(DefaultRunner):
                     torch.zeros(3, self.config["target_video_length"] - 1, h, w),
                 ],
                 dim=1,
-            ).cuda()
+            ).to(AI_DEVICE)
 
-        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0).to(GET_DTYPE()))
+        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0).to(GET_DTYPE()), world_size_h=world_size_h, world_size_w=world_size_w)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
@@ -376,12 +441,12 @@ class WanRunner(DefaultRunner):
         ]
         return latent_shape
 
-    def get_latent_shape_with_target_hw(self, target_h, target_w):
+    def get_latent_shape_with_target_hw(self):
         latent_shape = [
             self.config.get("num_channels_latents", 16),
             (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-            int(target_h) // self.config["vae_stride"][1],
-            int(target_w) // self.config["vae_stride"][2],
+            int(self.config["target_height"]) // self.config["vae_stride"][1],
+            int(self.config["target_width"]) // self.config["vae_stride"][2],
         ]
         return latent_shape
 
@@ -529,7 +594,7 @@ class Wan22DenseRunner(WanRunner):
         assert img.width == ow and img.height == oh
 
         # to tensor
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda().unsqueeze(1)
+        img = TF.to_tensor(img).sub_(0.5).div_(0.5).to(AI_DEVICE).unsqueeze(1)
         vae_encoder_out = self.get_vae_encoder_output(img)
         latent_w, latent_h = ow // self.config["vae_stride"][2], oh // self.config["vae_stride"][1]
         latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)

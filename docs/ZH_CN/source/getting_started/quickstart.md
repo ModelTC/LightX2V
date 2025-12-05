@@ -83,7 +83,6 @@ conda activate lightx2v
 pip install -v -e .
 ```
 
-
 #### 步骤 4: 安装注意力机制算子
 
 **选项 A: Flash Attention 2**
@@ -103,12 +102,45 @@ git clone https://github.com/thu-ml/SageAttention.git
 cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .
 ```
 
-**选项 D: Q8 Kernels**
+#### 步骤 4: 安装量化算子（可选）
+
+量化算子用于支持模型量化功能，可以显著降低显存占用并加速推理。根据您的需求选择合适的量化算子：
+
+**选项 A: VLLM Kernels（推荐）**
+适用于多种量化方案，支持 FP8 等量化格式。
+
+```bash
+pip install vllm
+```
+
+或者从源码安装以获得最新功能：
+
+```bash
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+uv pip install -e .
+```
+
+**选项 B: SGL Kernels**
+适用于 SGL 量化方案，需要 torch == 2.8.0。
+
+```bash
+pip install sgl-kernel --upgrade
+```
+
+**选项 C: Q8 Kernels**
+适用于 Ada 架构显卡（如 RTX 4090、L40S 等）。
+
 ```bash
 git clone https://github.com/KONAKONA666/q8_kernels.git
 cd q8_kernels && git submodule init && git submodule update
 python setup.py install
 ```
+
+> 💡 **提示**:
+> - 如果不需要使用量化功能，可以跳过此步骤
+> - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
+> - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
 
 #### 步骤 5: 验证安装
 ```python
@@ -215,6 +247,31 @@ cd LightX2V
 
 # 安装 Windows 专用依赖
 pip install -r requirements_win.txt
+pip install -v -e .
+```
+
+#### 步骤 7: 安装量化算子（可选）
+
+量化算子用于支持模型量化功能，可以显著降低显存占用并加速推理。
+
+**安装 VLLM（推荐）：**
+
+从 [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases) 下载对应的 wheel 包并安装。
+
+```cmd
+# 安装 vLLM（请根据实际文件名调整）
+pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
+```
+
+> 💡 **提示**:
+> - 如果不需要使用量化功能，可以跳过此步骤
+> - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
+> - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
+
+#### 步骤 8: 验证安装
+```python
+import lightx2v
+print(f"LightX2V 版本: {lightx2v.__version__}")
 ```
 
 ## 🎯 推理使用
@@ -248,6 +305,40 @@ bash scripts/wan/run_wan_t2v.sh
 # 使用 Windows 批处理脚本
 scripts\win\run_wan_t2v.bat
 ```
+#### Python脚本启动
+
+```python
+from lightx2v import LightX2VPipeline
+
+pipe = LightX2VPipeline(
+    model_path="/path/to/Wan2.1-T2V-14B",
+    model_cls="wan2.1",
+    task="t2v",
+)
+
+pipe.create_generator(
+    attn_mode="sage_attn2",
+    infer_steps=50,
+    height=480, # 720
+    width=832, # 1280
+    num_frames=81,
+    guidance_scale=5.0,
+    sample_shift=5.0,
+)
+
+seed = 42
+prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+save_result_path="/path/to/save_results/output.mp4"
+
+pipe.generate(
+    seed=seed,
+    prompt=prompt,
+    negative_prompt=negative_prompt,
+    save_result_path=save_result_path,
+)
+```
+
 
 ## 📞 获取帮助
 

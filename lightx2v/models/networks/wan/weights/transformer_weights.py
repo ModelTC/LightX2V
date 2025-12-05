@@ -1,5 +1,3 @@
-import os
-
 from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
@@ -13,7 +11,7 @@ from lightx2v.utils.registry_factory import (
 
 
 class WanTransformerWeights(WeightModule):
-    def __init__(self, config):
+    def __init__(self, config, lazy_load_path=None):
         super().__init__()
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
@@ -23,7 +21,28 @@ class WanTransformerWeights(WeightModule):
             assert config.get("dit_quantized") is True
         if config.get("do_mm_calib", False):
             self.mm_type = "Calib"
-        self.blocks = WeightModuleList([WanTransformerAttentionBlock(i, self.task, self.mm_type, self.config) for i in range(self.blocks_num)])
+        self.lazy_load = self.config.get("lazy_load", False)
+        if not self.lazy_load:
+            self.lazy_load_file = None
+        else:
+            self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
+        self.blocks = WeightModuleList(
+            [
+                WanTransformerAttentionBlock(
+                    block_index=i,
+                    task=self.task,
+                    mm_type=self.mm_type,
+                    config=self.config,
+                    create_cuda_buffer=False,
+                    create_cpu_buffer=False,
+                    block_prefix="blocks",
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
+                )
+                for i in range(self.blocks_num)
+            ]
+        )
+        self.register_offload_buffers(config)
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
@@ -31,10 +50,78 @@ class WanTransformerWeights(WeightModule):
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
-    def clear(self):
-        for block in self.blocks:
-            for phase in block.compute_phases:
-                phase.clear()
+    def register_offload_buffers(self, config):
+        if config["cpu_offload"]:
+            if config["offload_granularity"] == "block":
+                self.offload_blocks_num = 2
+                self.offload_block_cuda_buffers = WeightModuleList(
+                    [
+                        WanTransformerAttentionBlock(
+                            block_index=i,
+                            task=self.task,
+                            mm_type=self.mm_type,
+                            config=self.config,
+                            create_cuda_buffer=True,
+                            create_cpu_buffer=False,
+                            block_prefix="blocks",
+                            lazy_load=self.lazy_load,
+                            lazy_load_file=self.lazy_load_file,
+                        )
+                        for i in range(self.offload_blocks_num)
+                    ]
+                )
+                self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
+                self.offload_phase_cuda_buffers = None
+
+                if self.lazy_load:
+                    self.offload_blocks_num = 2
+                    self.offload_block_cpu_buffers = WeightModuleList(
+                        [
+                            WanTransformerAttentionBlock(
+                                block_index=i,
+                                task=self.task,
+                                mm_type=self.mm_type,
+                                config=self.config,
+                                create_cuda_buffer=False,
+                                create_cpu_buffer=True,
+                                block_prefix="blocks",
+                                lazy_load=self.lazy_load,
+                                lazy_load_file=self.lazy_load_file,
+                            )
+                            for i in range(self.offload_blocks_num)
+                        ]
+                    )
+                    self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
+                    self.offload_phase_cpu_buffers = None
+
+            elif config["offload_granularity"] == "phase":
+                self.offload_phase_cuda_buffers = WanTransformerAttentionBlock(
+                    block_index=0,
+                    task=self.task,
+                    mm_type=self.mm_type,
+                    config=self.config,
+                    create_cuda_buffer=True,
+                    create_cpu_buffer=False,
+                    block_prefix="blocks",
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
+                ).compute_phases
+                self.add_module("offload_phase_cuda_buffers", self.offload_phase_cuda_buffers)
+                self.offload_block_cuda_buffers = None
+                if self.lazy_load:
+                    self.offload_phase_cpu_buffers = WanTransformerAttentionBlock(
+                        block_index=0,
+                        task=self.task,
+                        mm_type=self.mm_type,
+                        config=self.config,
+                        create_cuda_buffer=False,
+                        create_cpu_buffer=True,
+                        block_prefix="blocks",
+                        lazy_load=self.lazy_load,
+                        lazy_load_file=self.lazy_load_file,
+                    ).compute_phases
+                    self.add_module("offload_phase_cpu_buffers", self.offload_phase_cpu_buffers)
+                    self.offload_block_cpu_buffers = None
 
     def non_block_weights_to_cuda(self):
         self.norm.to_cuda()
@@ -48,20 +135,29 @@ class WanTransformerWeights(WeightModule):
 
 
 class WanTransformerAttentionBlock(WeightModule):
-    def __init__(self, block_index, task, mm_type, config, block_prefix="blocks"):
+    def __init__(
+        self,
+        block_index,
+        task,
+        mm_type,
+        config,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        block_prefix="blocks",
+        lazy_load=False,
+        lazy_load_file=None,
+    ):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
         self.task = task
         self.config = config
+        self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
         self.quant_method = config.get("quant_method", None)
 
-        self.lazy_load = self.config.get("lazy_load", False)
-        if self.lazy_load:
-            lazy_load_path = os.path.join(self.config["dit_quantized_ckpt"], f"block_{block_index}.safetensors")
-            self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
-        else:
-            self.lazy_load_file = None
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
 
         self.compute_phases = WeightModuleList(
             [
@@ -71,6 +167,8 @@ class WanTransformerAttentionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -80,6 +178,8 @@ class WanTransformerAttentionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -89,6 +189,8 @@ class WanTransformerAttentionBlock(WeightModule):
                     task,
                     mm_type,
                     config,
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -99,7 +201,18 @@ class WanTransformerAttentionBlock(WeightModule):
 
 
 class WanSelfAttention(WeightModule):
-    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(
+        self,
+        block_index,
+        block_prefix,
+        task,
+        mm_type,
+        config,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+    ):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -119,6 +232,8 @@ class WanSelfAttention(WeightModule):
             "modulation",
             TENSOR_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.modulation",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -134,6 +249,8 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.q.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -144,6 +261,8 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.k.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -153,6 +272,8 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.v.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -162,6 +283,8 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.o.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -170,6 +293,8 @@ class WanSelfAttention(WeightModule):
             "self_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -178,6 +303,8 @@ class WanSelfAttention(WeightModule):
             "self_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -192,7 +319,12 @@ class WanSelfAttention(WeightModule):
                 context_length=self.config.get("svg_context_length", 0),
                 sparsity=self.config.get("svg_sparsity", 0.25),
             )
-        if self.config["self_attn_1_type"] in ["svg_attn", "radial_attn", "nbhd_attn", "nbhd_attn_flashinfer"]:
+        if self.config["self_attn_1_type"] in [
+            "svg_attn",
+            "radial_attn",
+            "nbhd_attn",
+            "nbhd_attn_flashinfer",
+        ]:
             attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
         # nbhd_attn setting
         if self.config["self_attn_1_type"] in ["nbhd_attn", "nbhd_attn_flashinfer"]:
@@ -204,13 +336,18 @@ class WanSelfAttention(WeightModule):
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
-            self.add_module("self_attn_1_parallel", ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")]())
+            self.add_module(
+                "self_attn_1_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
         if self.quant_method in ["advanced_ptq"]:
             self.add_module(
                 "smooth_norm1_weight",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm1.weight",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -219,6 +356,8 @@ class WanSelfAttention(WeightModule):
                 "smooth_norm1_bias",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm1.bias",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -226,7 +365,18 @@ class WanSelfAttention(WeightModule):
 
 
 class WanCrossAttention(WeightModule):
-    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(
+        self,
+        block_index,
+        block_prefix,
+        task,
+        mm_type,
+        config,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+    ):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -245,6 +395,8 @@ class WanCrossAttention(WeightModule):
             LN_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -254,6 +406,8 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.q.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -263,6 +417,8 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.k.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -272,6 +428,8 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.v.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -281,6 +439,8 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.o.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -289,6 +449,8 @@ class WanCrossAttention(WeightModule):
             "cross_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -297,6 +459,8 @@ class WanCrossAttention(WeightModule):
             "cross_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -309,6 +473,8 @@ class WanCrossAttention(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.k_img.weight",
                     f"{block_prefix}.{self.block_index}.cross_attn.k_img.bias",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -318,6 +484,8 @@ class WanCrossAttention(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.v_img.weight",
                     f"{block_prefix}.{self.block_index}.cross_attn.v_img.bias",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -326,6 +494,8 @@ class WanCrossAttention(WeightModule):
                 "cross_attn_norm_k_img",
                 RMS_WEIGHT_REGISTER[self.attn_rms_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -334,7 +504,18 @@ class WanCrossAttention(WeightModule):
 
 
 class WanFFN(WeightModule):
-    def __init__(self, block_index, block_prefix, task, mm_type, config, lazy_load, lazy_load_file):
+    def __init__(
+        self,
+        block_index,
+        block_prefix,
+        task,
+        mm_type,
+        config,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+    ):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -354,6 +535,8 @@ class WanFFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.ffn.0.weight",
                 f"{block_prefix}.{self.block_index}.ffn.0.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -363,6 +546,8 @@ class WanFFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.ffn.2.weight",
                 f"{block_prefix}.{self.block_index}.ffn.2.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),
@@ -373,6 +558,8 @@ class WanFFN(WeightModule):
                 "smooth_norm2_weight",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm3.weight",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -381,6 +568,8 @@ class WanFFN(WeightModule):
                 "smooth_norm2_bias",
                 TENSOR_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.affine_norm3.bias",
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),

@@ -188,7 +188,7 @@ const handleCancel = async () => {
         await cancelTask(currentTask.value.task_id)
     } catch (error) {
         console.error('取消任务失败:', error)
-        showAlert('取消任务失败，请重试', 'danger')
+        showAlert(t('cancelTaskFailedRetry'), 'danger')
     }
 }
 
@@ -201,7 +201,7 @@ const handleShareTask = async () => {
         // copyShareLink 函数内部已经显示了带"查看"按钮的 alert，不需要再次调用
     } catch (error) {
         console.error('分享失败:', error)
-        showAlert('分享失败，请重试', 'danger')
+        showAlert(t('shareFailedRetry'), 'danger')
     }
 }
 
@@ -213,7 +213,7 @@ const handleRetry = async () => {
         await resumeTask(currentTask.value.task_id)
     } catch (error) {
         console.error('重试任务失败:', error)
-        showAlert('重试任务失败，请重试', 'danger')
+        showAlert(t('retryTaskFailedRetry'), 'danger')
     }
 }
 

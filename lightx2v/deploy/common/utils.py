@@ -69,6 +69,8 @@ def class_try_catch_async(func):
 def data_name(x, task_id):
     if x == "input_image":
         x = x + ".png"
+    elif x == "input_video":
+        x = x + ".mp4"
     elif x == "output_video":
         x = x + ".mp4"
     return f"{task_id}-{x}"
@@ -165,7 +167,14 @@ async def preload_data(inp, inp_type, typ, val):
             timeout = int(os.getenv("REQUEST_TIMEOUT", "5"))
             data = await fetch_resource(val, timeout=timeout)
         elif typ == "base64":
-            data = base64.b64decode(val)
+            # Decode base64 in background thread to avoid blocking event loop
+            data = await asyncio.to_thread(base64.b64decode, val)
+        # For multi-person audio directory, val should be a dict with file structure
+        elif typ == "directory":
+            data = {}
+            for fname, b64_data in val.items():
+                data[fname] = await asyncio.to_thread(base64.b64decode, b64_data)
+            return {"type": "directory", "data": data}
         elif typ == "stream":
             # no bytes data need to be saved by data_manager
             data = None
@@ -176,8 +185,13 @@ async def preload_data(inp, inp_type, typ, val):
         if inp_type == "IMAGE":
             data = await asyncio.to_thread(format_image_data, data)
         elif inp_type == "AUDIO":
-            if typ != "stream":
+            if typ != "stream" and typ != "directory":
                 data = await asyncio.to_thread(format_audio_data, data)
+        elif inp_type == "VIDEO":
+            # Video data doesn't need special formatting, just validate it's not empty
+            if len(data) == 0:
+                raise ValueError("Video file is empty")
+            logger.info(f"load video: {len(data)} bytes")
         else:
             raise Exception(f"cannot parse inp_type={inp_type} data")
         return data
@@ -191,7 +205,15 @@ async def load_inputs(params, raw_inputs, types):
     for inp in raw_inputs:
         item = params.pop(inp)
         bytes_data = await preload_data(inp, types[inp], item["type"], item["data"])
-        if bytes_data is not None:
+
+        # Handle multi-person audio directory
+        if bytes_data is not None and isinstance(bytes_data, dict) and bytes_data.get("type") == "directory":
+            fs = []
+            for fname, fdata in bytes_data["data"].items():
+                inputs_data[f"{inp}/{fname}"] = fdata
+                fs.append(f"{inp}/{fname}")
+            params["extra_inputs"] = {inp: fs}
+        elif bytes_data is not None:
             inputs_data[inp] = bytes_data
         else:
             params[inp] = item
@@ -202,11 +224,15 @@ def check_params(params, raw_inputs, raw_outputs, types):
     stream_audio = os.getenv("STREAM_AUDIO", "0") == "1"
     stream_video = os.getenv("STREAM_VIDEO", "0") == "1"
     for x in raw_inputs + raw_outputs:
-        if x in params and "type" in params[x] and params[x]["type"] == "stream":
-            if types[x] == "AUDIO":
-                assert stream_audio, "stream audio is not supported, please set env STREAM_AUDIO=1"
-            elif types[x] == "VIDEO":
-                assert stream_video, "stream video is not supported, please set env STREAM_VIDEO=1"
+        if x in params and "type" in params[x]:
+            if params[x]["type"] == "stream":
+                if types[x] == "AUDIO":
+                    assert stream_audio, "stream audio is not supported, please set env STREAM_AUDIO=1"
+                elif types[x] == "VIDEO":
+                    assert stream_video, "stream video is not supported, please set env STREAM_VIDEO=1"
+            elif params[x]["type"] == "directory":
+                # Multi-person audio directory is only supported for AUDIO type
+                assert types[x] == "AUDIO", f"directory type is only supported for AUDIO input, got {types[x]}"
 
 
 if __name__ == "__main__":

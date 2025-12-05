@@ -5,6 +5,8 @@ from typing import Optional
 
 import torch
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 try:
     from diffusers import AutoencoderKLQwenImage
     from diffusers.image_processor import VaeImageProcessor
@@ -33,7 +35,7 @@ class AutoencoderKLQwenImageVAE:
         if self.cpu_offload:
             self.device = torch.device("cpu")
         else:
-            self.device = torch.device("cuda")
+            self.device = torch.device(AI_DEVICE)
         self.dtype = torch.bfloat16
         self.latent_channels = config["vae_z_dim"]
         self.load()

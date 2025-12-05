@@ -36,6 +36,7 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
 from lightx2v.models.runners.vsr.vsr_wrapper import compute_scaled_and_target_dims
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
@@ -171,19 +172,29 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             if ori_height * ori_weight >= resolution[0] * resolution[1]:
                 target_h, target_w = resolution
     elif resize_mode == "keep_ratio_fixed_area":
-        assert fixed_area in ["480p", "720p"], f"fixed_area must be in ['480p', '720p'], but got {fixed_area}, please set fixed_area in config."
-        fixed_area = 480 * 832 if fixed_area == "480p" else 720 * 1280
-        target_h = round(np.sqrt(fixed_area * ori_ratio))
-        target_w = round(np.sqrt(fixed_area / ori_ratio))
+        area_in_pixels = 480 * 832
+        if fixed_area == "480p":
+            area_in_pixels = 480 * 832
+        elif fixed_area == "720p":
+            area_in_pixels = 720 * 1280
+        else:
+            area_in_pixels = 480 * 832
+        target_h = round(np.sqrt(area_in_pixels * ori_ratio))
+        target_w = round(np.sqrt(area_in_pixels / ori_ratio))
     elif resize_mode == "fixed_min_area":
         aspect_ratios = np.array(np.array(list(bucket_config.keys())))
         closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
         closet_ratio = aspect_ratios[closet_aspect_idx]
         target_h, target_w = bucket_config[closet_ratio][0]
     elif resize_mode == "fixed_min_side":
-        assert fixed_area in ["480p", "720p"], f"fixed_min_side mode requires fixed_area to be '480p' or '720p', got {fixed_area}"
-
-        min_side = 720 if fixed_area == "720p" else 480
+        min_side = 720
+        if fixed_area == "720p":
+            min_side = 720
+        elif fixed_area == "480p":
+            min_side = 480
+        else:
+            logger.warning(f"[wan_audio] fixed_area is not '480p' or '720p', using default 480p: {fixed_area}")
+            min_side = 480
         if ori_ratio < 1.0:
             target_h = min_side
             target_w = round(target_h / ori_ratio)
@@ -197,6 +208,7 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         target_h, target_w = bucket_config[closet_ratio][-1]
 
     cropped_img = isotropic_crop_resize(img, (target_h, target_w))
+    logger.info(f"[wan_audio] resize_image: {img.shape} -> {cropped_img.shape}, resize_mode: {resize_mode}, target_h: {target_h}, target_w: {target_w}")
     return cropped_img, target_h, target_w
 
 
@@ -426,7 +438,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def process_single_mask(self, mask_file):
         mask_img = load_image(mask_file)
-        mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
 
         if mask_img.shape[1] == 3:  # If it is an RGB three-channel image
             mask_img = mask_img[:, :1]  # Only take the first channel
@@ -453,7 +465,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             ref_img = img_path
         else:
             ref_img = load_image(img_path)
-        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
 
         ref_img, h, w = resize_image(
             ref_img,
@@ -517,6 +529,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
         img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        if self.config.get("f2v_process", False):
+            self.ref_img = img
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
@@ -541,16 +555,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
-        device = torch.device("cuda")
         dtype = GET_DTYPE()
 
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=device)
+        prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=AI_DEVICE)
 
         if prev_video is not None:
             # Extract and process last frames
-            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
-            if self.config["model_cls"] != "wan2.2_audio":
+            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(AI_DEVICE)
+            if self.config["model_cls"] != "wan2.2_audio" and not self.config.get("f2v_process", False):
                 last_frames = self.frame_preprocessor.process_prev_frames(last_frames)
             prev_frames[:, :, :prev_frame_length] = last_frames
             prev_len = (prev_frame_length - 1) // 4 + 1
@@ -577,7 +590,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
 
             frames_n = (nframe - 1) * 4 + 1
-            prev_mask = torch.ones((1, frames_n, height, width), device=device, dtype=dtype)
+            prev_mask = torch.ones((1, frames_n, height, width), device=AI_DEVICE, dtype=dtype)
             prev_frame_len = max((prev_len - 1) * 4 + 1, 0)
             prev_mask[:, prev_frame_len:] = 0
             prev_mask = self._wan_mask_rearrange(prev_mask)
@@ -612,7 +625,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run(self):
         super().init_run()
         self.scheduler.set_audio_adapter(self.audio_adapter)
-        self.prev_video = None
+        if self.config.get("f2v_process", False):
+            self.prev_video = self.ref_img.unsqueeze(2)
+        else:
+            self.prev_video = None
         if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
@@ -772,7 +788,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     target_rank=1,
                 )
 
-    def run_main(self, total_steps=None):
+    def run_main(self):
         try:
             rank, world_size = self.get_rank_and_world_size()
             tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
@@ -792,7 +808,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             logger.info(f"init va_recorder: {self.va_recorder} and va_reader: {self.va_reader}")
 
             if self.va_reader is None:
-                return super().run_main(total_steps)
+                return super().run_main()
+
             self.va_reader.start()
             if rank == self.target_recorder_rank:
                 assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
@@ -861,7 +878,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                         self.pause_signal = False
                         self.init_run_segment(segment_idx, audio_array)
                         self.check_stop()
-                        latents = self.run_segment(total_steps=None)
+                        latents = self.run_segment(segment_idx)
                         self.check_stop()
                         self.gen_video = self.run_vae_decoder(latents)
                         self.check_stop()
@@ -918,7 +935,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if audio_adapter_offload:
             device = torch.device("cpu")
         else:
-            device = torch.device("cuda")
+            device = torch.device(AI_DEVICE)
         audio_adapter = AudioAdapter(
             attention_head_dim=self.config["dim"] // self.config["num_heads"],
             num_attention_heads=self.config["num_heads"],
@@ -966,7 +983,7 @@ class Wan22AudioRunner(WanAudioRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(AI_DEVICE)
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,
@@ -982,7 +999,7 @@ class Wan22AudioRunner(WanAudioRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(AI_DEVICE)
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
             "device": vae_device,

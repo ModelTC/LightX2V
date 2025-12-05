@@ -10,8 +10,10 @@ from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearInt8
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearFp8, VllmQuantLinearInt8
 from lightx2v.utils.utils import load_weights
+from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
 
 __all__ = [
     "XLMRobertaCLIP",
@@ -63,12 +65,16 @@ class SelfAttention(nn.Module):
                 linear_cls = VllmQuantLinearInt8
             elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
+            elif quant_scheme == "fp8-vllm":
+                linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
             elif quant_scheme == "int8-q8f":
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-tmo":
+                linear_cls = MluQuantLinearInt8
             else:
                 NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
@@ -143,12 +149,16 @@ class AttentionBlock(nn.Module):
                 linear_cls = VllmQuantLinearInt8
             elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
+            elif quant_scheme == "fp8-vllm":
+                linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
             elif quant_scheme == "int8-q8f":
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-tmo":
+                linear_cls = MluQuantLinearInt8
             else:
                 NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
@@ -288,7 +298,7 @@ class VisionTransformer(nn.Module):
         b = x.size(0)
 
         # embeddings
-        x = self.patch_embedding(x).flatten(2).permute(0, 2, 1)
+        x = self.patch_embedding(x.type(self.patch_embedding.weight.type())).flatten(2).permute(0, 2, 1)
         if self.pool_type in ("token", "token_fc"):
             x = torch.cat([self.cls_embedding.expand(b, -1, -1), x], dim=1)
         if interpolation:
@@ -424,7 +434,6 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 class CLIPModel:
     def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False):
         self.dtype = dtype
-        self.device = device
         self.quantized = clip_quantized
         self.cpu_offload = cpu_offload
         self.use_31_block = use_31_block
@@ -458,7 +467,7 @@ class CLIPModel:
         return out
 
     def to_cuda(self):
-        self.model = self.model.cuda()
+        self.model = self.model.to(AI_DEVICE)
 
     def to_cpu(self):
         self.model = self.model.cpu()

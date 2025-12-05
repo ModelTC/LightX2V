@@ -7,11 +7,14 @@ from loguru import logger
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import masks_like
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class EulerScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
+        d = config["dim"] // config["num_heads"]
+        self.rope_t_dim = d // 2 - 2 * (d // 6)
 
         if self.config["parallel"]:
             self.sp_size = self.config["parallel"].get("seq_p_size", 1)
@@ -56,14 +59,14 @@ class EulerScheduler(WanScheduler):
             )
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.device).manual_seed(seed)
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(
             latent_shape[0],
             latent_shape[1],
             latent_shape[2],
             latent_shape[3],
             dtype=dtype,
-            device=self.device,
+            device=AI_DEVICE,
             generator=self.generator,
         )
         if self.config["model_cls"] == "wan2.2_audio":
@@ -75,13 +78,16 @@ class EulerScheduler(WanScheduler):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         timesteps = np.linspace(self.num_train_timesteps, 0, self.infer_steps + 1, dtype=np.float32)
 
-        self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=self.device)
+        self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=AI_DEVICE)
         self.timesteps_ori = self.timesteps.clone()
 
         self.sigmas = self.timesteps_ori / self.num_train_timesteps
         self.sigmas = self.sample_shift * self.sigmas / (1 + (self.sample_shift - 1) * self.sigmas)
 
         self.timesteps = self.sigmas * self.num_train_timesteps
+
+        self.freqs[latent_shape[1] // self.patch_size[0] :, : self.rope_t_dim] = 0
+        self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0] + 1, latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def step_post(self):
         model_output = self.noise_pred.to(torch.float32)

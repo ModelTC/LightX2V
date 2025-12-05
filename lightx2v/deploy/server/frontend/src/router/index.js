@@ -6,7 +6,9 @@ import Generate from '../components/Generate.vue'
 import Projects from '../components/Projects.vue'
 import Inspirations from '../components/Inspirations.vue'
 import Share from '../views/Share.vue'
+import PodcastGenerate from '../views/PodcastGenerate.vue'
 import { showAlert } from '../utils/other'
+import i18n from '../utils/i18n'
 
 const routes = [
   {
@@ -21,6 +23,12 @@ const routes = [
   },
   {
     path: '/share/:shareId', name: 'Share', component: Share, meta: { requiresAuth: false }
+  },
+  {
+    path: '/podcast_generate', name: 'PodcastGenerate', component: PodcastGenerate, meta: { requiresAuth: true }
+  },
+  {
+    path: '/podcast_generate/:session_id', name: 'PodcastSession', component: PodcastGenerate, meta: { requiresAuth: true }
   },
   {
     path: '/home',
@@ -114,7 +122,7 @@ router.beforeEach((to, from, next) => {
     next('/login')
     // 延迟显示提示，确保路由跳转完成
     setTimeout(() => {
-      showAlert('请先登录', 'warning')
+      showAlert(i18n.global.t('pleaseLoginFirst'), 'warning')
     }, 100)
     return
   }

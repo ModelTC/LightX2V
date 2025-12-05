@@ -9,9 +9,6 @@ export CUDA_VISIBLE_DEVICES=0
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-export SENSITIVE_LAYER_DTYPE=None
 
 python -m lightx2v.infer \
 --model_cls seko_talk \

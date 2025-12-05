@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import topMenu from '../components/TopBar.vue'
 import Loading from '../components/Loading.vue'
+import Alert from '../components/Alert.vue'
+import Confirm from '../components/Confirm.vue'
 import {
     isLoading,
     selectedTaskId,
@@ -146,7 +148,7 @@ const createSimilar = async () => {
     }
 
     if (!shareData.value) {
-        showAlert('分享数据不完整', 'danger')
+        showAlert(t('shareDataIncomplete'), 'danger')
         return
     }
 
@@ -169,7 +171,7 @@ const createSimilar = async () => {
         // 如果有输入图片，先设置URL，延迟加载文件
         if (shareData.value.inputs && shareData.value.inputs.input_image) {
             let imageUrl
-            if (shareData.value.share_type === 'template') {
+            if (shareData.value.share_type === 'template' && shareData.value.inputs?.input_image) {
                 // 对于模板，使用模板文件URL
                 imageUrl = getTemplateFileUrl(shareData.value.inputs.input_image, 'images')
             } else {
@@ -203,7 +205,7 @@ const createSimilar = async () => {
         // 如果有输入音频，先设置URL，延迟加载文件
         if (shareData.value.inputs && shareData.value.inputs.input_audio) {
             let audioUrl
-            if (shareData.value.share_type === 'template') {
+            if (shareData.value.share_type === 'template' && shareData.value.inputs?.input_audio) {
                 // 对于模板，使用模板文件URL
                 audioUrl = getTemplateFileUrl(shareData.value.inputs.input_audio, 'audios')
             } else {
@@ -499,6 +501,8 @@ onMounted(async () => {
     <div v-show="isLoading" class="fixed inset-0 bg-[#f5f5f7] dark:bg-[#000000] flex items-center justify-center z-[9999]">
         <Loading />
     </div>
+    <Alert />
+    <Confirm />
 </template>
 
 <style scoped>

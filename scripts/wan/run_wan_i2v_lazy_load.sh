@@ -5,7 +5,6 @@ lightx2v_path=
 model_path=
 
 export CUDA_VISIBLE_DEVICES=0
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 export DTYPE=FP16

@@ -7,6 +7,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
+from lightx2v.models.networks.qwen_image.lora_adapter import QwenImageLoraWrapper
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
@@ -15,6 +16,9 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def calculate_dimensions(target_area, ratio):
@@ -43,6 +47,15 @@ class QwenImageRunner(DefaultRunner):
 
     def load_transformer(self):
         model = QwenImageTransformerModel(self.config)
+        if self.config.get("lora_configs") and self.config.lora_configs:
+            assert not self.config.get("dit_quantized", False)
+            lora_wrapper = QwenImageLoraWrapper(model)
+            for lora_config in self.config.lora_configs:
+                lora_path = lora_config["path"]
+                strength = lora_config.get("strength", 1.0)
+                lora_name = lora_wrapper.load_lora(lora_path)
+                lora_wrapper.apply_lora(lora_name, strength)
+                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
         return model
 
     def load_text_encoder(self):
@@ -85,7 +98,7 @@ class QwenImageRunner(DefaultRunner):
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -100,7 +113,7 @@ class QwenImageRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
-        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
         self.input_info.original_size.append(img_ori.size)
         return img, img_ori
 
@@ -119,8 +132,7 @@ class QwenImageRunner(DefaultRunner):
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
             image_encoder_output = self.run_vae_encoder(image=vae_image)
             image_encoder_output_list.append(image_encoder_output)
-
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -235,7 +247,7 @@ class QwenImageRunner(DefaultRunner):
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         return images
 
@@ -254,7 +266,7 @@ class QwenImageRunner(DefaultRunner):
         image.save(f"{input_info.save_result_path}")
 
         del latents, generator
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
 
         # Return (images, audio) - audio is None for default runner

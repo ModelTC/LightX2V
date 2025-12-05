@@ -13,14 +13,18 @@ import torchvision
 from einops import rearrange
 from loguru import logger
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 def seed_all(seed):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    torch_device_module.manual_seed(seed)
+    torch_device_module.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
@@ -329,16 +333,13 @@ def load_safetensors(in_path, remove_key=None, include_keys=None):
 
 
 def load_safetensors_from_path(in_path, remove_key=None, include_keys=None):
-    """从单个safetensors文件加载权重，支持按key筛选"""
     include_keys = include_keys or []
     tensors = {}
     with safetensors.safe_open(in_path, framework="pt", device="cpu") as f:
         for key in f.keys():
-            # 优先处理include_keys：如果非空，只保留包含任意指定key的条目
             if include_keys:
                 if any(inc_key in key for inc_key in include_keys):
                     tensors[key] = f.get_tensor(key)
-            # 否则使用remove_key排除
             else:
                 if not (remove_key and remove_key in key):
                     tensors[key] = f.get_tensor(key)
