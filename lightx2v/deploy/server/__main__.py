@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import base64
+import copy
 import json
 import mimetypes
 import os
@@ -8,7 +9,6 @@ import re
 import tempfile
 import traceback
 import uuid
-import copy
 from contextlib import asynccontextmanager
 
 import uvicorn

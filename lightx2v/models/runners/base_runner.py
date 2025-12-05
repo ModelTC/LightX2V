@@ -1,3 +1,4 @@
+import os
 from abc import ABC
 
 import torch
@@ -139,17 +140,17 @@ class BaseRunner(ABC):
         if dist.is_initialized():
             rank = dist.get_rank()
             world_size = dist.get_world_size()
-        signal_rank = world_size - 1 # same as worker hub target_rank
-        pause_rank = 1 % world_size # same as va_reader target_rank
+        stop_rank = int(os.getenv("WORKER_RANK", "0")) % world_size  # same as worker hub target_rank
+        pause_rank = int(os.getenv("READER_RANK", "0")) % world_size  # same as va_reader target_rank
 
         stopped, paused = 0, 0
-        if rank == signal_rank and hasattr(self, "stop_signal") and self.stop_signal:
+        if rank == stop_rank and hasattr(self, "stop_signal") and self.stop_signal:
             stopped = 1
         if rank == pause_rank and hasattr(self, "pause_signal") and self.pause_signal:
             paused = 1
 
         if world_size > 1:
-            if rank == signal_rank:
+            if rank == stop_rank:
                 t1 = torch.tensor([stopped], dtype=torch.int32).to(device=AI_DEVICE)
             else:
                 t1 = torch.zeros(1, dtype=torch.int32, device=AI_DEVICE)
@@ -157,7 +158,7 @@ class BaseRunner(ABC):
                 t2 = torch.tensor([paused], dtype=torch.int32).to(device=AI_DEVICE)
             else:
                 t2 = torch.zeros(1, dtype=torch.int32, device=AI_DEVICE)
-            dist.broadcast(t1, src=signal_rank)
+            dist.broadcast(t1, src=stop_rank)
             dist.broadcast(t2, src=pause_rank)
             stopped = t1.item()
             paused = t2.item()

@@ -38,7 +38,9 @@ class VARecorder:
         self.width = None
         self.height = None
         self.stoppable_t = None
-        self.realtime = True
+        self.realtime = False
+        if self.livestream_url.startswith("rtmp://") or self.livestream_url.startswith("http"):
+            self.realtime = True
 
         # ffmpeg process for mix video and audio data and push to livestream
         self.ffmpeg_process = None
@@ -367,13 +369,13 @@ class VARecorder:
             self.start_ffmpeg_process_whip()
         else:
             self.start_ffmpeg_process_local()
-            self.realtime = False
         self.audio_thread = threading.Thread(target=self.audio_worker)
         self.video_thread = threading.Thread(target=self.video_worker)
-        self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
         self.audio_thread.start()
         self.video_thread.start()
-        self.schedule_thread.start()
+        if self.realtime:
+            self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
+            self.schedule_thread.start()
 
     # Publish ComfyUI Image tensor and audio tensor to livestream
     def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor):
@@ -408,7 +410,7 @@ class VARecorder:
         rets = []
         for i in range(0, N, self.slice_frame):
             end_frame = i + self.slice_frame
-            img = images[i : end_frame]
+            img = images[i:end_frame]
             aud = audios[i * self.audio_samples_per_frame : end_frame * self.audio_samples_per_frame]
             gen = gen_video[:, :, (end_frame - self.prev_frame) : end_frame]
             rets.append((img, aud, gen))
@@ -426,7 +428,7 @@ class VARecorder:
             self.stream_buffer = self.stream_buffer[:size]
             logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
             if len(self.stream_buffer) > 0:
-                return self.stream_buffer[-1][2] # return the last video tensor
+                return self.stream_buffer[-1][2]  # return the last video tensor
             else:
                 return None
 
@@ -470,10 +472,11 @@ class VARecorder:
                 time.sleep(t)
             self.stoppable_t = None
 
-        self.stop_schedule = True
-        self.schedule_thread.join(timeout=5)
-        if self.schedule_thread and self.schedule_thread.is_alive():
-            logger.error(f"Schedule thread did not stop after 5s")
+        if self.schedule_thread:
+            self.stop_schedule = True
+            self.schedule_thread.join(timeout=5)
+            if self.schedule_thread and self.schedule_thread.is_alive():
+                logger.error(f"Schedule thread did not stop after 5s")
 
         # Send stop signals to queues
         if self.audio_queue:

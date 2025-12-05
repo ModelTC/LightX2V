@@ -34,7 +34,7 @@ HEADERS = {"Authorization": f"Bearer {WORKER_SECRET_KEY}", "Content-Type": "appl
 STOPPED = False
 WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
 RANK = int(os.environ.get("RANK", 0))
-TARGET_RANK = WORLD_SIZE - 1
+TARGET_RANK = int(os.getenv("WORKER_RANK", "0")) % WORLD_SIZE
 
 
 async def ping_life(server_url, worker_identity, keys):
@@ -241,6 +241,7 @@ async def main(args):
                 if RANK == TARGET_RANK:
                     ping_task = asyncio.create_task(ping_subtask(args.server, sub["worker_identity"], sub["task_id"], sub["worker_name"], sub["queue"], run_task, args.ping_interval))
                 ret = await run_task
+                await sync_subtask()
                 if ret is True:
                     status = TaskStatus.SUCCEED.name
 

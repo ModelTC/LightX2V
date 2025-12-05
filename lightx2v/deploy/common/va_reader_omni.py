@@ -1,25 +1,24 @@
+import datetime
+import json
 import os
+import random
 import subprocess
+import sys
 import threading
 import time
 import traceback
+from collections import deque
+from copy import deepcopy
 
+import jsonschema
 import numpy as np
 import torch
 import torch.distributed as dist
-from loguru import logger
-
 import zmq
-import random
 from bson import BSON
-import datetime
-import json
-from collections import deque
-from copy import deepcopy
-import jsonschema
+from loguru import logger
 from scipy.signal import resample
 
-import sys
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
@@ -32,7 +31,7 @@ class AudioInfo:
         self.sample_fmt = info["sample_fmt"]
         self.pts = info["pts"]
 
-    def is_spec_equal(self, other: 'AudioInfo') -> bool:
+    def is_spec_equal(self, other: "AudioInfo") -> bool:
         return self.sample_fmt == other.sample_fmt and self.sample_rate == other.sample_rate and self.channel_count == other.channel_count
 
     def duration(self) -> datetime.timedelta:
@@ -83,7 +82,8 @@ class ByteBuffer:
 
 
 class ChatAdapter:
-    def __init__(self,
+    def __init__(
+        self,
         omni_work_dir: str,
         whep_url: str,
         session_id: str,
@@ -106,12 +106,18 @@ class ChatAdapter:
         self.audio_info = None
         self.chat_server_cmd = [
             os.path.join(self.omni_work_dir, "bin", "seko-chatter"),
-            "--session-id", session_id,
-            "--account", account,
-            "--whep-server-url", whep_url,
-            "--w2f-endpoint", self.w2f_url,
-            "--f2w-endpoint", self.f2w_url,
-            "--config-files", *config_files,
+            "--session-id",
+            session_id,
+            "--account",
+            account,
+            "--whep-server-url",
+            whep_url,
+            "--w2f-endpoint",
+            self.w2f_url,
+            "--f2w-endpoint",
+            self.f2w_url,
+            "--config-files",
+            *config_files,
         ]
         override_config = {}
         if huoshan_tts_voice_type is not None:
@@ -136,7 +142,7 @@ class ChatAdapter:
         self.model_runner = model_runner
 
     def launch_chat_server(self):
-        env={
+        env = {
             "RUST_LOG": "info,duplex_server=debug,backend_5o=debug",
             "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", "") + ":" + os.path.join(self.omni_work_dir, "lib/"),
             "PATH": os.environ["PATH"] + ":" + os.path.join(self.omni_work_dir, "bin/"),
@@ -174,7 +180,7 @@ class ChatAdapter:
         while True:
             try:
                 message = self.w2f_socket.recv()
-            except:
+            except Exception:
                 logger.error(f"Error receiving message: {traceback.format_exc()}")
                 break
             try:
@@ -307,7 +313,9 @@ class OmniVAReader:
         self.config_schema_path = os.getenv("OMNI_CONFIG_SCHEMA_PATH", None)
         assert os.path.exists(self.omni_work_dir), f"OMNI work directory {self.omni_work_dir} does not exist"
         assert self.session_id and self.account, "OMNI_SESSION_ID and OMNI_ACCOUNT are required"
-        logger.info(f"OMNI work directory: {self.omni_work_dir}, session_id: {self.session_id}, account: {self.account}, config_files: {self.config_files}, config_schema_path: {self.config_schema_path}")
+        logger.info(
+            f"OMNI work directory: {self.omni_work_dir}, session_id: {self.session_id}, account: {self.account}, config_files: {self.config_files}, config_schema_path: {self.config_schema_path}"
+        )
 
     def start(self):
         if self.rank == self.target_rank:
@@ -371,9 +379,9 @@ class OmniVAReader:
         # logger.info(f"audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()}")
         if audio_info.sample_rate != self.sample_rate:
             sample_count = int(len(audio) * self.sample_rate / audio_info.sample_rate)
-            audio = resample(audio,  sample_count).astype(np.int16)
+            audio = resample(audio, sample_count).astype(np.int16)
             # logger.info(f"resampled audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")
-        logger.warning(f"valid audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")   
+        logger.warning(f"valid audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")
         return audio, sample_count
 
     def prepare_audio_data(self, chat_audio_result):
@@ -384,7 +392,7 @@ class OmniVAReader:
         if chat_audio_result is not None:
             audio_data, audio_info = chat_audio_result
             audio, sample_count = self.convert_pcm_s16le_to_mono_resampled(audio_data, audio_info)
- 
+
         # if is not the first segment, concat with previous segment
         if self.prev_seg_chunk is not None:
             audio = np.concatenate([self.prev_seg_chunk, audio])
