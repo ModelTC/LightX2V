@@ -19,9 +19,6 @@ from bson import BSON
 from loguru import logger
 from scipy.signal import resample
 
-logger.remove()
-logger.add(sys.stderr, level="INFO")
-
 
 class AudioInfo:
     def __init__(self, info: dict):
@@ -305,7 +302,7 @@ class OmniVAReader:
         logger.info(f"VAReader initialized for stream: {stream_url} target_rank: {self.target_rank}")
         logger.info(f"Audio duration per chunk: {segment_duration}s, sample rate: {sample_rate}Hz")
 
-    def init_onmi_env(self):
+    def init_omni_env(self):
         self.omni_work_dir = os.getenv("OMNI_WORK_DIR", "/path/of/seko_chatter/")
         self.session_id = os.getenv("OMNI_SESSION_ID", "")
         self.account = os.getenv("OMNI_ACCOUNT", "")
@@ -319,7 +316,7 @@ class OmniVAReader:
 
     def start(self):
         if self.rank == self.target_rank:
-            self.init_onmi_env()
+            self.init_omni_env()
             assert self.stream_url.startswith("http"), "Only HTTP stream is supported for OmniVAReader"
             self.chat_adapter = ChatAdapter(
                 omni_work_dir=self.omni_work_dir,

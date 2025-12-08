@@ -101,8 +101,8 @@ class VAController:
         assert self.audio_path["type"] == "stream", f"unexcept audio_path: {self.audio_path}"
         segment_duration = self.max_num_frames / self.target_fps
         prev_duration = self.prev_frame_length / self.target_fps
-        onmi_work_dir = os.getenv("OMNI_WORK_DIR", None)
-        if onmi_work_dir:
+        omni_work_dir = os.getenv("OMNI_WORK_DIR", None)
+        if omni_work_dir:
             self.reader = OmniVAReader(
                 rank=self.rank,
                 world_size=self.world_size,
