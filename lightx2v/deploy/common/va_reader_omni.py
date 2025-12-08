@@ -374,7 +374,7 @@ class OmniVAReader:
         assert len(audio) == sample_count * audio_info.channel_count, f"audio length {len(audio)} != sample_count * channel_count {sample_count * audio_info.channel_count}"
         # convert to mono
         if audio_info.channel_count > 1:
-            audio = audio.reshaple(-1, audio_info.channel_count).mean(axis=1)
+            audio = audio.reshape(-1, audio_info.channel_count).mean(axis=1)
 
         # logger.info(f"audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()}")
         if audio_info.sample_rate != self.sample_rate:
