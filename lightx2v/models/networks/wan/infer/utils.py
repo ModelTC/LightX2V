@@ -36,29 +36,26 @@ def apply_wan_rope_with_chunk(
     rope_func,
 ):
     seq_len = cos_sin_cache.size(0)
+    x_q = torch.empty_like(xq)
+    x_k = torch.empty_like(xk)
 
-    xq_output_chunks = []
-    xk_output_chunks = []
     for start in range(0, seq_len, chunk_size):
         end = min(start + chunk_size, seq_len)
         xq_chunk = xq[start:end]
         xk_chunk = xk[start:end]
         cos_sin_chunk = cos_sin_cache[start:end]
+        xq_chunk_out, xk_chunk_out = rope_func(xq_chunk, xk_chunk, cos_sin_chunk)
+        x_q[start:end].copy_(xq_chunk_out, non_blocking=True)
+        x_k[start:end].copy_(xk_chunk_out, non_blocking=True)
+        del xq_chunk_out, xk_chunk_out
 
-        xq_chunk, xk_chunk = rope_func(xq_chunk, xk_chunk, cos_sin_chunk)
-        xq_output_chunks.append(xq_chunk)
-        xk_output_chunks.append(xk_chunk)
-        torch.cuda.empty_cache()
+    target_dtype = GET_DTYPE()
+    if x_q.dtype != target_dtype:
+        x_q = x_q.to(target_dtype)
+    if x_k.dtype != target_dtype:
+        x_k = x_k.to(target_dtype)
 
-    x_q = torch.cat(xq_output_chunks, dim=0)
-    del xq_output_chunks
-    torch.cuda.empty_cache()
-
-    x_k = torch.cat(xk_output_chunks, dim=0)
-    del xk_output_chunks
-    torch.cuda.empty_cache()
-
-    return x_q.to(GET_DTYPE()), x_k.to(GET_DTYPE())
+    return x_q, x_k
 
 
 def apply_wan_rope_with_flashinfer(

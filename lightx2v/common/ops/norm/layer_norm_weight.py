@@ -1,7 +1,9 @@
+import os
 import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
@@ -53,9 +55,11 @@ class LNWeightTemplate(metaclass=ABCMeta):
         if name is None:
             return None
         if self.lazy_load:
-            tensor = self.lazy_load_file.get_tensor(name)
-            if use_infer_dtype:
-                tensor = tensor.to(self.infer_dtype)
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                tensor = lazy_load_file.get_tensor(name)
+                if use_infer_dtype:
+                    tensor = tensor.to(self.infer_dtype)
         else:
             tensor = weight_dict[name]
         return tensor
@@ -151,24 +155,28 @@ class LNWeightTemplate(metaclass=ABCMeta):
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
         if self.weight_name is not None:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
             if self.is_post_adapter:
                 self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
             else:
                 self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
 
-            weight_tensor = self.lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
+                self.pin_weight = self.pin_weight.copy_(weight_tensor)
             del weight_tensor
 
         if self.bias_name is not None:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
             if self.is_post_adapter:
                 assert adapter_block_index is not None
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
 
-            bias_tensor = self.lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
-            self.pin_bias.copy_(bias_tensor)
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                bias_tensor = lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
+                self.pin_bias.copy_(bias_tensor)
             del bias_tensor
 
 
