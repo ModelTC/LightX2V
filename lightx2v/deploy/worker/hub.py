@@ -40,8 +40,8 @@ class BaseWorker:
             self.rank = dist.get_rank()
             self.world_size = dist.get_world_size()
             set_parallel_config(config)
-        # same as va_recorder rank and worker main ping rank
-        self.out_video_rank = self.world_size - 1
+        # same as va_recorder rank
+        self.out_video_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
         torch.set_grad_enabled(False)
         self.runner = RUNNER_REGISTER[config["model_cls"]](config)
         self.input_info = set_input_info(args)

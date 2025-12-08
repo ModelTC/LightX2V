@@ -173,8 +173,12 @@ class WanModel(CompiledMethodsMixin):
             safetensors_files = [safetensors_path]
 
         if self.lazy_load:
-            assert len(safetensors_files) == 1, "Only support single safetensors file in lazy load mode"
-            self.lazy_load_path = safetensors_files[0]
+            self.lazy_load_path = safetensors_path
+            non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+            if os.path.exists(non_block_file):
+                safetensors_files = [non_block_file]
+            else:
+                raise ValueError(f"Non-block file not found in {safetensors_path}")
 
         weight_dict = {}
         for file_path in safetensors_files:
@@ -189,7 +193,6 @@ class WanModel(CompiledMethodsMixin):
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
-
         if self.config.get("dit_quantized_ckpt", None):
             safetensors_path = self.config["dit_quantized_ckpt"]
         else:
@@ -213,8 +216,12 @@ class WanModel(CompiledMethodsMixin):
             safetensors_path = os.path.dirname(safetensors_path)
 
         if self.lazy_load:
-            assert len(safetensors_files) == 1, "Only support single safetensors file in lazy load mode"
-            self.lazy_load_path = safetensors_files[0]
+            self.lazy_load_path = safetensors_path
+            non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+            if os.path.exists(non_block_file):
+                safetensors_files = [non_block_file]
+            else:
+                raise ValueError(f"Non-block file not found in {safetensors_path}, Please check the lazy load model path")
 
         weight_dict = {}
         for safetensor_path in safetensors_files:
@@ -372,9 +379,14 @@ class WanModel(CompiledMethodsMixin):
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
-            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
-            if self.lazy_load:
-                self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
+            self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
+        if self.lazy_load:
+            self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
+            if self.config.get("warm_up_cpu_buffers", False):
+                self.transformer_infer.offload_manager.warm_up_cpu_buffers(self.transformer_weights.blocks_num)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

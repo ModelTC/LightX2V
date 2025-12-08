@@ -19,6 +19,13 @@ from loguru import logger
 # Import pyannote.audio for speaker diarization
 from pyannote.audio import Audio, Pipeline
 
+_origin_torch_load = torch.load
+
+
+def our_torch_load(checkpoint_file, *args, **kwargs):
+    kwargs["weights_only"] = False
+    return _origin_torch_load(checkpoint_file, *args, **kwargs)
+
 
 class AudioSeparator:
     """
@@ -51,6 +58,7 @@ class AudioSeparator:
             model_name = model_path or "pyannote/speaker-diarization-community-1"
 
             try:
+                torch.load = our_torch_load
                 # Try loading with token if available
                 if huggingface_token:
                     self.pipeline = Pipeline.from_pretrained(model_name, token=huggingface_token)
@@ -61,6 +69,8 @@ class AudioSeparator:
                 if "gated" in str(e).lower() or "token" in str(e).lower():
                     raise RuntimeError(f"Model requires authentication. Set HUGGINGFACE_TOKEN or HF_TOKEN environment variable: {e}")
                 raise RuntimeError(f"Failed to load pyannote model: {e}")
+            finally:
+                torch.load = _origin_torch_load
 
             # Move pipeline to specified device
             if self.device:

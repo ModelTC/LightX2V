@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import base64
+import copy
 import json
 import mimetypes
 import os
@@ -1030,13 +1031,17 @@ async def api_v1_share_get(share_id: str):
 
 
 @app.get("/api/v1/voices/list")
-async def api_v1_voices_list():
+async def api_v1_voices_list(request: Request):
     try:
+        version = request.query_params.get("version", "all")
         if volcengine_tts_client is None:
             return error_response("Volcengine TTS client not loaded", 500)
         voices = volcengine_tts_client.get_voice_list()
         if voices is None:
             return error_response("No voice list found", 404)
+        if version != "all":
+            voices = copy.deepcopy(voices)
+            voices["voices"] = [v for v in voices["voices"] if v["version"] == version]
         return voices
     except Exception as e:
         traceback.print_exc()
@@ -1352,7 +1357,7 @@ async def api_v1_face_detect(request: FaceDetectRequest, user=Depends(verify_use
             return error_response(f"Invalid image format: {str(e)}", 400)
 
         # Detect faces only (no cropping)
-        result = face_detector.detect_faces(image_bytes, return_image=False)
+        result = await asyncio.to_thread(face_detector.detect_faces, image_bytes, return_image=False)
         faces_data = []
         for i, face in enumerate(result["faces"]):
             faces_data.append(
@@ -1392,13 +1397,13 @@ async def api_v1_audio_separate(request: AudioSeparateRequest, user=Depends(veri
             return error_response(f"Invalid base64 audio data", 400)
 
         # Separate speakers
-        result = audio_separator.separate_speakers(audio_bytes, num_speakers=request.num_speakers)
+        result = await asyncio.to_thread(audio_separator.separate_speakers, audio_bytes, num_speakers=request.num_speakers)
 
         # Convert audio tensors to base64 strings (without saving to file)
         speakers_data = []
         for speaker in result["speakers"]:
             # Convert audio tensor directly to base64
-            audio_base64 = audio_separator.speaker_audio_to_base64(speaker["audio"], speaker["sample_rate"], format="wav")
+            audio_base64 = await asyncio.to_thread(audio_separator.speaker_audio_to_base64, speaker["audio"], speaker["sample_rate"], format="wav")
             speakers_data.append(
                 {
                     "speaker_id": speaker["speaker_id"],

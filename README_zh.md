@@ -20,7 +20,7 @@
 
 ## :fire: 最新动态
 
-- **2025年12月4日:** 🚀 我们支持了GGUF格式模型推理。我们支持了寒武纪MLU590和沐曦C500的部署。
+- **2025年12月4日:** 🚀 支持 GGUF 格式模型推理，以及在寒武纪 MLU590、MetaX C500 硬件上的部署。
 
 - **2025年11月24日:** 🚀 我们发布了HunyuanVideo-1.5的4步蒸馏模型！这些模型支持**超快速4步推理**，无需CFG配置，相比标准50步推理可实现约**25倍加速**。现已提供基础版本和FP8量化版本：[Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models)。
 
@@ -31,7 +31,7 @@
 
 ### 📊 推理框架之间性能对比 (H100)
 
-| Framework | Cards | Step Time | Speedup |
+| Framework | GPUs | Step Time | Speedup |
 |-----------|---------|---------|---------|
 | Diffusers | 1 | 9.77s/it | 1x |
 | xDiT | 1 | 8.93s/it | 1.1x |
@@ -45,7 +45,7 @@
 
 ### 📊 推理框架之间性能对比 (RTX 4090D)
 
-| Framework | Cards | Step Time | Speedup |
+| Framework | GPUs | Step Time | Speedup |
 |-----------|---------|---------|---------|
 | Diffusers | 1 | 30.50s/it | 1x |
 | FastVideo | 1 | 22.66s/it | 1.3x |
@@ -61,12 +61,12 @@
 
 | Framework | GPU | Configuration | Step Time | Speedup |
 |-----------|-----|---------------|-----------|---------------|
-| **LightX2V** | H100 | 8 cards + cfg | 0.75s/it | 1x |
-| **LightX2V** | H100 | 8 cards + no cfg | 0.39s/it | 1.9x |
-| **LightX2V** | H100 | **8 cards + no cfg + fp8** | **0.35s/it** | **2.1x** 🚀 |
-| **LightX2V** | 4090D | 8 cards + cfg | 4.75s/it | 1x |
-| **LightX2V** | 4090D | 8 cards + no cfg | 3.13s/it | 1.5x |
-| **LightX2V** | 4090D | **8 cards + no cfg + fp8** | **2.35s/it** | **2.0x** 🚀 |
+| **LightX2V** | H100 | 8 GPUs + cfg | 0.75s/it | 1x |
+| **LightX2V** | H100 | 8 GPUs + no cfg | 0.39s/it | 1.9x |
+| **LightX2V** | H100 | **8 GPUs + no cfg + fp8** | **0.35s/it** | **2.1x** 🚀 |
+| **LightX2V** | 4090D | 8 GPUs + cfg | 4.75s/it | 1x |
+| **LightX2V** | 4090D | 8 GPUs + no cfg | 3.13s/it | 1.5x |
+| **LightX2V** | 4090D | **8 GPUs + no cfg + fp8** | **2.35s/it** | **2.0x** 🚀 |
 
 **注意**: 所有以上性能数据均在 Wan2.1-I2V-14B-480P(40 steps, 81 frames) 上测试。此外，我们[HuggingFace 主页](https://huggingface.co/lightx2v)还提供了4步蒸馏模型。
 

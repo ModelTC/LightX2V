@@ -1,7 +1,9 @@
+import os
 import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
@@ -128,7 +130,9 @@ class MMWeight(MMWeightTemplate):
 
     def _get_source_tensor(self, source_name, weight_dict=None):
         if self.lazy_load:
-            return self.lazy_load_file.get_tensor(source_name)
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{source_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                return lazy_load_file.get_tensor(source_name)
         return weight_dict[source_name]
 
     def _create_pin_tensor(self, tensor, transpose=False):
@@ -145,15 +149,18 @@ class MMWeight(MMWeightTemplate):
             self.bias_cuda_buffer = self._get_source_tensor(self.bias_name, weight_dict).to(AI_DEVICE)
 
     def _load_cpu_pin_buffers(self):
-        weight_tensor = self.lazy_load_file.get_tensor(self.weight_name)
-        self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
+        if self.lazy_load:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+                self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
 
-        if self.bias_name is not None:
-            bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
-            self.pin_bias = self._create_pin_tensor(bias_tensor)
-        else:
-            self.bias = None
-            self.pin_bias = None
+                if self.bias_name is not None:
+                    bias_tensor = lazy_load_file.get_tensor(self.bias_name)
+                    self.pin_bias = self._create_pin_tensor(bias_tensor)
+                else:
+                    self.bias = None
+                    self.pin_bias = None
 
     def _load_default_tensors(self, weight_dict):
         if not self.lazy_load:
@@ -197,10 +204,6 @@ class MMWeight(MMWeightTemplate):
         else:
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
 
-        weight_tensor = self.lazy_load_file.get_tensor(self.weight_name).t()
-        self.pin_weight = self.pin_weight.copy_(weight_tensor)
-        del weight_tensor
-
         if self.bias_name is not None:
             if self.is_post_adapter:
                 assert adapter_block_index is not None
@@ -208,9 +211,16 @@ class MMWeight(MMWeightTemplate):
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
 
-            bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
-            self.pin_bias.copy_(bias_tensor)
-            del bias_tensor
+        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
+            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+            del weight_tensor
+
+            if self.bias_name is not None:
+                bias_tensor = lazy_load_file.get_tensor(self.bias_name)
+                self.pin_bias.copy_(bias_tensor)
+                del bias_tensor
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
         if self.is_post_adapter:
@@ -283,9 +293,15 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self._load_default_tensors(weight_dict)
 
     def _load_cuda_buffers(self, weight_dict):
-        source = self.lazy_load_file if self.lazy_load else weight_dict
-        self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
-        self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
+        if self.lazy_load:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
+                self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
+                self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
+        else:
+            source = weight_dict
+            self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
+            self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
 
     def _get_cuda_tensor_pair(self, source, is_lazy):
         if is_lazy:
@@ -318,30 +334,38 @@ class MMWeightQuantTemplate(MMWeightTemplate):
 
     def _get_cpu_pin_tensor_pair(self, source, is_lazy):
         if is_lazy:
-            weight_tensor = source.get_tensor(self.weight_name)
-            scale_tensor = source.get_tensor(self.weight_scale_name)
-            scale_dtype = torch.float
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
+                weight_tensor = source.get_tensor(self.weight_name)
+                scale_tensor = source.get_tensor(self.weight_scale_name)
+                scale_dtype = torch.float
+                pin_weight = self._create_pin_tensor(weight_tensor)
+                pin_scale = self._create_pin_tensor(scale_tensor, scale_dtype)
         else:
             weight_tensor = source[self.weight_name]
             scale_tensor = source[self.weight_scale_name]
             scale_dtype = torch.float
-
-        pin_weight = self._create_pin_tensor(weight_tensor)
-        pin_scale = self._create_pin_tensor(scale_tensor, scale_dtype)
+            pin_weight = self._create_pin_tensor(weight_tensor)
+            pin_scale = self._create_pin_tensor(scale_tensor, scale_dtype)
         return pin_weight, pin_scale
 
     def _get_cpu_pin_bias_tensor(self, source, is_lazy):
         if self.bias_name is None:
             return None
         if is_lazy:
-            bias_tensor = source.get_tensor(self.bias_name)
-            if not self.bias_force_fp32:
-                bias_tensor = bias_tensor.to(self.infer_dtype)
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
+                bias_tensor = source.get_tensor(self.bias_name)
+                if not self.bias_force_fp32:
+                    bias_tensor = bias_tensor.to(self.infer_dtype)
+                if self.bias_force_fp32:
+                    bias_tensor = bias_tensor.to(torch.float32)
+                return self._create_pin_tensor(bias_tensor)
         else:
             bias_tensor = source[self.bias_name]
-        if self.bias_force_fp32:
-            bias_tensor = bias_tensor.to(torch.float32)
-        return self._create_pin_tensor(bias_tensor)
+            if self.bias_force_fp32:
+                bias_tensor = bias_tensor.to(torch.float32)
+            return self._create_pin_tensor(bias_tensor)
 
     def _create_pin_tensor(self, tensor, dtype=None):
         dtype = dtype or tensor.dtype
@@ -643,17 +667,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
             self.weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
 
-        if self.weight_need_transpose:
-            weight_tensor = self.lazy_load_file.get_tensor(self.weight_name).t()
-        else:
-            weight_tensor = self.lazy_load_file.get_tensor(self.weight_name)
-        self.pin_weight = self.pin_weight.copy_(weight_tensor)
-
-        weight_scale_tensor = self.lazy_load_file.get_tensor(self.weight_scale_name)
-        self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
-
-        del weight_tensor
-
         if self.bias_name is not None:
             if self.is_post_adapter:
                 assert adapter_block_index is not None
@@ -661,9 +674,24 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
 
-            bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
-            self.pin_bias.copy_(bias_tensor)
-            del bias_tensor
+        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            if self.weight_need_transpose:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
+            else:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+
+            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+            del weight_tensor
+
+            weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
+            self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
+            del weight_scale_tensor
+
+            if self.bias_name is not None:
+                bias_tensor = lazy_load_file.get_tensor(self.bias_name)
+                self.pin_bias.copy_(bias_tensor)
+                del bias_tensor
 
 
 @MM_WEIGHT_REGISTER("fp8-vllm")

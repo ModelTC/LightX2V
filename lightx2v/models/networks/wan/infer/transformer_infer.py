@@ -171,7 +171,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
 
         if self.clean_cuda_cache:
-            del norm1_out, norm1_weight, norm1_bias
+            del norm1_out, shift_msa, scale_msa
             torch.cuda.empty_cache()
 
         if self.config["seq_parallel"]:
@@ -300,7 +300,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         y = phase.ffn_0.apply(norm2_out)
         if self.clean_cuda_cache:
-            del norm2_out, x, norm2_weight, norm2_bias
+            del norm2_out, x
             torch.cuda.empty_cache()
         y = torch.nn.functional.gelu(y, approximate="tanh")
         if self.clean_cuda_cache:
