@@ -1,5 +1,3 @@
-from safetensors import safe_open
-
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -22,10 +20,6 @@ class WanTransformerWeights(WeightModule):
         if config.get("do_mm_calib", False):
             self.mm_type = "Calib"
         self.lazy_load = self.config.get("lazy_load", False)
-        if not self.lazy_load:
-            self.lazy_load_file = None
-        else:
-            self.lazy_load_file = safe_open(lazy_load_path, framework="pt", device="cpu")
         self.blocks = WeightModuleList(
             [
                 WanTransformerAttentionBlock(
@@ -37,12 +31,12 @@ class WanTransformerWeights(WeightModule):
                     create_cpu_buffer=False,
                     block_prefix="blocks",
                     lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file,
+                    lazy_load_path=lazy_load_path,
                 )
                 for i in range(self.blocks_num)
             ]
         )
-        self.register_offload_buffers(config)
+        self.register_offload_buffers(config, lazy_load_path)
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
@@ -50,7 +44,7 @@ class WanTransformerWeights(WeightModule):
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
-    def register_offload_buffers(self, config):
+    def register_offload_buffers(self, config, lazy_load_path):
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
@@ -65,7 +59,7 @@ class WanTransformerWeights(WeightModule):
                             create_cpu_buffer=False,
                             block_prefix="blocks",
                             lazy_load=self.lazy_load,
-                            lazy_load_file=self.lazy_load_file,
+                            lazy_load_path=lazy_load_path,
                         )
                         for i in range(self.offload_blocks_num)
                     ]
@@ -86,7 +80,7 @@ class WanTransformerWeights(WeightModule):
                                 create_cpu_buffer=True,
                                 block_prefix="blocks",
                                 lazy_load=self.lazy_load,
-                                lazy_load_file=self.lazy_load_file,
+                                lazy_load_path=lazy_load_path,
                             )
                             for i in range(self.offload_blocks_num)
                         ]
@@ -104,22 +98,27 @@ class WanTransformerWeights(WeightModule):
                     create_cpu_buffer=False,
                     block_prefix="blocks",
                     lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file,
+                    lazy_load_path=lazy_load_path,
                 ).compute_phases
                 self.add_module("offload_phase_cuda_buffers", self.offload_phase_cuda_buffers)
                 self.offload_block_cuda_buffers = None
                 if self.lazy_load:
-                    self.offload_phase_cpu_buffers = WanTransformerAttentionBlock(
-                        block_index=0,
-                        task=self.task,
-                        mm_type=self.mm_type,
-                        config=self.config,
-                        create_cuda_buffer=False,
-                        create_cpu_buffer=True,
-                        block_prefix="blocks",
-                        lazy_load=self.lazy_load,
-                        lazy_load_file=self.lazy_load_file,
-                    ).compute_phases
+                    self.offload_phase_cpu_buffers = WeightModuleList(
+                        [
+                            WanTransformerAttentionBlock(
+                                block_index=i,
+                                task=self.task,
+                                mm_type=self.mm_type,
+                                config=self.config,
+                                create_cuda_buffer=False,
+                                create_cpu_buffer=True,
+                                block_prefix="blocks",
+                                lazy_load=self.lazy_load,
+                                lazy_load_path=lazy_load_path,
+                            ).compute_phases
+                            for i in range(2)
+                        ]
+                    )
                     self.add_module("offload_phase_cpu_buffers", self.offload_phase_cpu_buffers)
                     self.offload_block_cpu_buffers = None
 
@@ -145,7 +144,7 @@ class WanTransformerAttentionBlock(WeightModule):
         create_cpu_buffer=False,
         block_prefix="blocks",
         lazy_load=False,
-        lazy_load_file=None,
+        lazy_load_path=None,
     ):
         super().__init__()
         self.block_index = block_index
@@ -157,7 +156,10 @@ class WanTransformerAttentionBlock(WeightModule):
         self.quant_method = config.get("quant_method", None)
 
         self.lazy_load = lazy_load
-        self.lazy_load_file = lazy_load_file
+        if self.lazy_load:
+            self.lazy_load_file = lazy_load_path
+        else:
+            self.lazy_load_file = None
 
         self.compute_phases = WeightModuleList(
             [

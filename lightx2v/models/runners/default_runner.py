@@ -185,7 +185,19 @@ class DefaultRunner(BaseRunner):
             del self.inputs
         self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.model
+            if hasattr(self.model, "model") and len(self.model.model) == 2:  # MultiModelStruct
+                for model in self.model.model:
+                    if hasattr(model.transformer_infer, "offload_manager"):
+                        del model.transformer_infer.offload_manager
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                    del model
+            else:
+                if hasattr(self.model.transformer_infer, "offload_manager"):
+                    del self.model.transformer_infer.offload_manager
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                del self.model
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
             torch.save(CALIB, calib_path)

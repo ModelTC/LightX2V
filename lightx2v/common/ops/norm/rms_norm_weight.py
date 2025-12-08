@@ -1,7 +1,9 @@
+import os
 import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -46,9 +48,11 @@ class RMSWeightTemplate(metaclass=ABCMeta):
 
     def _get_weight_tensor(self, weight_dict=None, use_infer_dtype=False):
         if self.lazy_load:
-            tensor = self.lazy_load_file.get_tensor(self.weight_name)
-            if use_infer_dtype:
-                tensor = tensor.to(self.infer_dtype)
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                tensor = lazy_load_file.get_tensor(self.weight_name)
+                if use_infer_dtype:
+                    tensor = tensor.to(self.infer_dtype)
         else:
             tensor = weight_dict[self.weight_name]
         return tensor
@@ -107,9 +111,10 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
         else:
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-
-        weight_tensor = self.lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
-        self.pin_weight = self.pin_weight.copy_(weight_tensor)
+        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
+            self.pin_weight = self.pin_weight.copy_(weight_tensor)
         del weight_tensor
 
 

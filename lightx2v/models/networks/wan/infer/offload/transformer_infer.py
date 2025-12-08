@@ -32,6 +32,9 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
 
             if offload_granularity != "model":
                 self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
+            self.lazy_load = self.config.get("lazy_load", False)
+            if self.lazy_load and offload_granularity == "phase":
+                self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
@@ -57,6 +60,10 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
     def infer_with_phases_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
+            if self.lazy_load:
+                next_prefetch = (block_idx + 1) % len(blocks)
+                self.offload_manager.start_prefetch_block(next_prefetch)
+
             x = self.infer_phases(block_idx, blocks, x, pre_infer_out)
             if self.clean_cuda_cache:
                 del (
@@ -77,6 +84,9 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.offload_manager.init_first_buffer(blocks)
             next_block_idx = (block_idx + 1) % len(blocks) if phase_idx == self.phases_num - 1 else block_idx
             next_phase_idx = (phase_idx + 1) % self.phases_num
+            if self.lazy_load:
+                if phase_idx == self.phases_num - 1:
+                    self.offload_manager.swap_cpu_buffers()
             self.offload_manager.prefetch_phase(next_block_idx, next_phase_idx, blocks)
             with torch_device_module.stream(self.offload_manager.compute_stream):
                 x = self.infer_phase(phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)

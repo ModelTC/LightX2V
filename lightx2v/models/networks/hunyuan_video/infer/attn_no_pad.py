@@ -1,8 +1,18 @@
 import torch
 from einops import rearrange
-from flash_attn import flash_attn_varlen_qkvpacked_func
-from flash_attn.bert_padding import pad_input, unpad_input
 from loguru import logger
+
+try:
+    from flash_attn import flash_attn_varlen_qkvpacked_func
+except ImportError:
+    flash_attn_varlen_qkvpacked_func = None
+    logger.info("flash_attn_varlen_qkvpacked_func not available")
+try:
+    from flash_attn.bert_padding import pad_input, unpad_input
+except ImportError:
+    pad_input = None
+    unpad_input = None
+    logger.info("flash_attn.bert_padding not available")
 
 try:
     from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v3
