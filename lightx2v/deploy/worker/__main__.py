@@ -241,7 +241,6 @@ async def main(args):
                 if RANK == TARGET_RANK:
                     ping_task = asyncio.create_task(ping_subtask(args.server, sub["worker_identity"], sub["task_id"], sub["worker_name"], sub["queue"], run_task, args.ping_interval))
                 ret = await run_task
-                await sync_subtask()
                 if ret is True:
                     status = TaskStatus.SUCCEED.name
 
@@ -252,14 +251,17 @@ async def main(args):
                 logger.warning("Main loop cancelled, do not shut down")
 
             finally:
+                try:
+                    if ping_task:
+                        ping_task.cancel()
+                    await sync_subtask()
+                except Exception:
+                    logger.warning(f"Sync subtask failed: {traceback.format_exc()}")
                 if RANK == TARGET_RANK and sub["task_id"] in RUNNING_SUBTASKS:
                     try:
                         await report_task(status=status, **sub)
-                    except:  # noqa
+                    except Exception:
                         logger.warning(f"Report failed: {traceback.format_exc()}")
-                if ping_task:
-                    ping_task.cancel()
-                await sync_subtask()
 
 
 async def shutdown(loop):
