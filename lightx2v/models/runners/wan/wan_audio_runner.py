@@ -18,9 +18,7 @@ from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
-from lightx2v.deploy.common.va_reader import VAReader
-from lightx2v.deploy.common.va_recorder import VARecorder
-from lightx2v.deploy.common.va_recorder_x264 import X264VARecorder
+from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
@@ -694,15 +692,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
             )
 
         if "video_super_resolution" in self.config and self.vsr_model is not None:
-            logger.info(f"Applying video super resolution with scale {self.config['video_super_resolution']['scale']}")
+            # logger.info(f"Applying video super resolution with scale {self.config['video_super_resolution']['scale']}")
             video_seg = self.vsr_model.super_resolve_frames(
                 video_seg,
                 seed=self.config["video_super_resolution"]["seed"],
                 scale=self.config["video_super_resolution"]["scale"],
             )
 
-        if self.va_recorder:
-            self.va_recorder.pub_livestream(video_seg, audio_seg)
+        if self.va_controller.recorder is not None:
+            self.va_controller.pub_livestream(video_seg, audio_seg, self.gen_video[:, :, :useful_length])
         elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
@@ -721,85 +719,35 @@ class WanAudioRunner(WanRunner):  # type:ignore
             world_size = dist.get_world_size()
         return rank, world_size
 
-    def init_va_recorder(self):
-        output_video_path = self.input_info.save_result_path
-        self.va_recorder = None
-        if isinstance(output_video_path, dict):
-            output_video_path = output_video_path["data"]
-        logger.info(f"init va_recorder with output_video_path: {output_video_path}")
-        rank, world_size = self.get_rank_and_world_size()
-        if output_video_path and rank == world_size - 1:
-            record_fps = self.config.get("target_fps", 16)
-            audio_sr = self.config.get("audio_sr", 16000)
-            if "video_frame_interpolation" in self.config and self.vfi_model is not None:
-                record_fps = self.config["video_frame_interpolation"]["target_fps"]
-
-            whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
-            if whip_shared_path and output_video_path.startswith("http"):
-                self.va_recorder = X264VARecorder(
-                    whip_shared_path=whip_shared_path,
-                    livestream_url=output_video_path,
-                    fps=record_fps,
-                    sample_rate=audio_sr,
-                )
-            else:
-                self.va_recorder = VARecorder(
-                    livestream_url=output_video_path,
-                    fps=record_fps,
-                    sample_rate=audio_sr,
-                )
-
-    def init_va_reader(self):
-        audio_path = self.input_info.audio_path
-        self.va_reader = None
-        if isinstance(audio_path, dict):
-            assert audio_path["type"] == "stream", f"unexcept audio_path: {audio_path}"
-            rank, world_size = self.get_rank_and_world_size()
-            target_fps = self.config.get("target_fps", 16)
-            max_num_frames = self.config.get("target_video_length", 81)
-            audio_sr = self.config.get("audio_sr", 16000)
-            prev_frames = self.config.get("prev_frame_length", 5)
-            self.va_reader = VAReader(
-                rank=rank,
-                world_size=world_size,
-                stream_url=audio_path["data"],
-                sample_rate=audio_sr,
-                segment_duration=max_num_frames / target_fps,
-                prev_duration=prev_frames / target_fps,
-                target_rank=1,
-            )
-
     def run_main(self):
         try:
-            self.init_va_recorder()
-            self.init_va_reader()
-            logger.info(f"init va_recorder: {self.va_recorder} and va_reader: {self.va_reader}")
+            self.va_controller = VAController(self)
+            logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
-            if self.va_reader is None:
+            # fixed audio segments inputs
+            if self.va_controller.reader is None:
                 return super().run_main()
 
-            self.va_reader.start()
-            rank, world_size = self.get_rank_and_world_size()
-            if rank == world_size - 1:
-                assert self.va_recorder is not None, "va_recorder is required for stream audio input for rank 2"
-                self.va_recorder.start(self.input_info.target_shape[1], self.input_info.target_shape[0])
-            if world_size > 1:
-                dist.barrier()
-
+            self.va_controller.start()
             self.init_run()
-            if self.config.get("compile", False):
+            if self.config.get("compile", False) and hasattr(self.model, "comple"):
                 self.model.select_graph_for_compile(self.input_info)
-            self.video_segment_num = "unlimited"
-
-            fetch_timeout = self.va_reader.segment_duration + 1
+            # steam audio input, video segment num is unlimited
+            self.video_segment_num = 1000000
             segment_idx = 0
-            fail_count = 0
-            max_fail_count = 10
+            fail_count, max_fail_count = 0, 10
+            self.va_controller.before_control()
 
             while True:
                 with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
-                    self.check_stop()
-                    audio_array = self.va_reader.get_audio_segment(timeout=fetch_timeout)
+                    control = self.va_controller.next_control()
+                    if control.action == "immediate":
+                        self.prev_video = control.data
+                    elif control.action == "wait":
+                        time.sleep(0.01)
+                        continue
+
+                    audio_array = self.va_controller.reader.get_audio_segment()
                     if audio_array is None:
                         fail_count += 1
                         logger.warning(f"Failed to get audio chunk {fail_count} times")
@@ -808,22 +756,27 @@ class WanAudioRunner(WanRunner):  # type:ignore
                         continue
 
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
-                    fail_count = 0
-                    self.init_run_segment(segment_idx, audio_array)
-                    latents = self.run_segment(segment_idx)
-                    self.gen_video = self.run_vae_decoder(latents)
-                    self.end_run_segment(segment_idx)
-                    segment_idx += 1
-
+                    try:
+                        # reset pause signal
+                        self.pause_signal = False
+                        self.init_run_segment(segment_idx, audio_array)
+                        self.check_stop()
+                        latents = self.run_segment(segment_idx)
+                        self.check_stop()
+                        self.gen_video = self.run_vae_decoder(latents)
+                        self.check_stop()
+                        self.end_run_segment(segment_idx)
+                        segment_idx += 1
+                        fail_count = 0
+                    except Exception as e:
+                        if "pause_signal, pause running" in str(e):
+                            logger.warning(f"model infer audio pause: {e}, should continue")
+                        else:
+                            raise
         finally:
             if hasattr(self.model, "inputs"):
                 self.end_run()
-            if self.va_reader:
-                self.va_reader.stop()
-                self.va_reader = None
-            if self.va_recorder:
-                self.va_recorder.stop()
-                self.va_recorder = None
+            self.va_controller.clear()
 
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self):
