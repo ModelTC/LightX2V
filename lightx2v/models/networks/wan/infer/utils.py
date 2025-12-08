@@ -35,30 +35,48 @@ def apply_wan_rope_with_chunk(
     chunk_size: int,
     rope_func,
 ):
+    """
+    分块应用 RoPE，优化显存使用。
+
+    优化点：
+    1. 预先分配输出张量，避免存储中间结果列表
+    2. 直接在原位置更新，减少临时张量
+    3. 减少 torch.cuda.empty_cache() 调用（开销较大）
+    4. 及时释放不需要的中间变量
+    """
     seq_len = cos_sin_cache.size(0)
 
-    xq_output_chunks = []
-    xk_output_chunks = []
+    # 预先分配输出张量，避免存储中间结果列表
+    x_q = torch.empty_like(xq)
+    x_k = torch.empty_like(xk)
+
+    # 分块处理，直接写入预分配的输出张量
     for start in range(0, seq_len, chunk_size):
         end = min(start + chunk_size, seq_len)
+
+        # 使用切片视图，避免复制
         xq_chunk = xq[start:end]
         xk_chunk = xk[start:end]
         cos_sin_chunk = cos_sin_cache[start:end]
 
-        xq_chunk, xk_chunk = rope_func(xq_chunk, xk_chunk, cos_sin_chunk)
-        xq_output_chunks.append(xq_chunk)
-        xk_output_chunks.append(xk_chunk)
-        torch.cuda.empty_cache()
+        # 应用 RoPE
+        xq_chunk_out, xk_chunk_out = rope_func(xq_chunk, xk_chunk, cos_sin_chunk)
 
-    x_q = torch.cat(xq_output_chunks, dim=0)
-    del xq_output_chunks
-    torch.cuda.empty_cache()
+        # 直接写入预分配的输出张量
+        x_q[start:end].copy_(xq_chunk_out, non_blocking=True)
+        x_k[start:end].copy_(xk_chunk_out, non_blocking=True)
 
-    x_k = torch.cat(xk_output_chunks, dim=0)
-    del xk_output_chunks
-    torch.cuda.empty_cache()
+        # 释放中间变量（如果 rope_func 返回新张量）
+        del xq_chunk_out, xk_chunk_out
 
-    return x_q.to(GET_DTYPE()), x_k.to(GET_DTYPE())
+    # 转换为目标 dtype（如果需要）
+    target_dtype = GET_DTYPE()
+    if x_q.dtype != target_dtype:
+        x_q = x_q.to(target_dtype)
+    if x_k.dtype != target_dtype:
+        x_k = x_k.to(target_dtype)
+
+    return x_q, x_k
 
 
 def apply_wan_rope_with_flashinfer(

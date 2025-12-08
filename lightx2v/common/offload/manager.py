@@ -1,6 +1,12 @@
-import torch
-from packaging.version import parse
+import time
+from concurrent.futures import ThreadPoolExecutor
 
+import torch
+from loguru import logger
+from packaging.version import parse
+from tqdm import tqdm
+
+from lightx2v.utils.profiler import ExcludedProfilingContext
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -11,6 +17,7 @@ class WeightAsyncStreamManager(object):
         self.offload_granularity = offload_granularity
         self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
+        self.lazy_load = False
         torch_version = parse(torch.__version__.split("+")[0])
         if AI_DEVICE == "cuda" and torch_version >= parse("2.7"):
             self.cuda_load_stream = torch_device_module.Stream(priority=1)
@@ -44,7 +51,7 @@ class WeightAsyncStreamManager(object):
     def init_first_buffer(self, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.init_stream):
             if hasattr(self, "cpu_buffers"):
-                self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0].state_dict(), 0, adapter_block_idx)
+                self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0][0].state_dict(), 0, adapter_block_idx)
             else:
                 if self.offload_granularity == "block":
                     self.cuda_buffers[0].load_state_dict(blocks[0].state_dict(), 0, adapter_block_idx)
@@ -52,6 +59,12 @@ class WeightAsyncStreamManager(object):
                     self.cuda_buffers[0].load_state_dict(blocks[0].compute_phases[0].state_dict(), 0, adapter_block_idx)
         self.init_stream.synchronize()
         self.need_init_first_buffer = False
+
+    def init_lazy_load(self, num_workers=6):
+        self.lazy_load = True
+        self.executor = ThreadPoolExecutor(max_workers=num_workers)
+        self.prefetch_futures = []
+        self.prefetch_block_idx = -1
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
@@ -64,8 +77,7 @@ class WeightAsyncStreamManager(object):
     def prefetch_phase(self, block_idx, phase_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
             if hasattr(self, "cpu_buffers"):
-                self.cpu_buffers[phase_idx].load_state_dict_from_disk(block_idx, adapter_block_idx)
-                self.cuda_buffers[phase_idx].load_state_dict(self.cpu_buffers[phase_idx].state_dict(), block_idx, adapter_block_idx)
+                self.cuda_buffers[phase_idx].load_state_dict(self.cpu_buffers[0][phase_idx].state_dict(), block_idx, adapter_block_idx)
             else:
                 self.cuda_buffers[phase_idx].load_state_dict(blocks[block_idx].compute_phases[phase_idx].state_dict(), block_idx, adapter_block_idx)
 
@@ -80,3 +92,45 @@ class WeightAsyncStreamManager(object):
     def swap_phases(self):
         self.cuda_load_stream.synchronize()
         self.compute_stream.synchronize()
+
+    @ExcludedProfilingContext("🔥 warm_up_cpu_buffers")
+    def warm_up_cpu_buffers(self, blocks_num):
+        logger.info("🔥 Warming up cpu buffers...")
+        for i in tqdm(range(blocks_num)):
+            for phase in self.cpu_buffers[0]:
+                phase.load_state_dict_from_disk(i, None)
+            for phase in self.cpu_buffers[1]:
+                phase.load_state_dict_from_disk(i, None)
+
+        for phase in self.cpu_buffers[0]:
+            phase.load_state_dict_from_disk(0, None)
+        for phase in self.cpu_buffers[1]:
+            phase.load_state_dict_from_disk(1, None)
+        logger.info("✅ CPU buffers warm-up completed.")
+
+    def start_prefetch_block(self, block_idx, adapter_block_idx=None):
+        self.prefetch_block_idx = block_idx
+        self.prefetch_futures = []
+        for phase in self.cpu_buffers[1]:
+            future = self.executor.submit(phase.load_state_dict_from_disk, block_idx, adapter_block_idx)
+            self.prefetch_futures.append(future)
+
+    def swap_cpu_buffers(self):
+        wait_start = time.time()
+        already_done = all(f.done() for f in self.prefetch_futures)
+        for f in self.prefetch_futures:
+            f.result()
+        wait_time = time.time() - wait_start
+        logger.debug(f"[Prefetch] block {self.prefetch_block_idx}: wait={wait_time:.3f}s, already_done={already_done}")
+        self.cpu_buffers = [self.cpu_buffers[1], self.cpu_buffers[0]]
+
+    def __del__(self):
+        """Cleanup method to ensure executor is shut down when object is destroyed."""
+        if hasattr(self, "executor") and self.executor is not None:
+            self.executor.shutdown(wait=False)
+            for f in self.prefetch_futures:
+                if not f.done():
+                    f.result()
+            self.prefetch_futures = []
+            self.executor = None
+            logger.debug("ThreadPoolExecutor shut down successfully.")

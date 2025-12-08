@@ -468,11 +468,37 @@ class MultiModelStruct:
     def set_scheduler(self, shared_scheduler):
         self.scheduler = shared_scheduler
         for model in self.model:
-            model.set_scheduler(shared_scheduler)
+            if model is not None:
+                model.set_scheduler(shared_scheduler)
 
     def infer(self, inputs):
         self.get_current_model_index()
-        self.model[self.cur_model_index].infer(inputs)
+        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
+            self.model[self.cur_model_index].infer(inputs)
+        else:
+            if self.model[self.cur_model_index] is not None:
+                self.model[self.cur_model_index].infer(inputs)
+            else:
+                if self.cur_model_index == 0:
+                    high_noise_model = WanModel(
+                        self.high_noise_model_path,
+                        self.config,
+                        self.init_device,
+                        model_type="wan2.2_moe_high_noise",
+                    )
+                    high_noise_model.set_scheduler(self.scheduler)
+                    self.model[0] = high_noise_model
+                    self.model[0].infer(inputs)
+                elif self.cur_model_index == 1:
+                    low_noise_model = WanModel(
+                        self.low_noise_model_path,
+                        self.config,
+                        self.init_device,
+                        model_type="wan2.2_moe_low_noise",
+                    )
+                    low_noise_model.set_scheduler(self.scheduler)
+                    self.model[1] = low_noise_model
+                    self.model[1].infer(inputs)
 
     @ProfilingContext4DebugL2("Swtich models in infer_main costs")
     def get_current_model_index(self):
@@ -526,40 +552,47 @@ class Wan22MoeRunner(WanRunner):
 
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
-        high_noise_model = WanModel(
-            self.high_noise_model_path,
-            self.config,
-            self.init_device,
-            model_type="wan2.2_moe_high_noise",
-        )
-        low_noise_model = WanModel(
-            self.low_noise_model_path,
-            self.config,
-            self.init_device,
-            model_type="wan2.2_moe_low_noise",
-        )
+        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
+            high_noise_model = WanModel(
+                self.high_noise_model_path,
+                self.config,
+                self.init_device,
+                model_type="wan2.2_moe_high_noise",
+            )
+            low_noise_model = WanModel(
+                self.low_noise_model_path,
+                self.config,
+                self.init_device,
+                model_type="wan2.2_moe_low_noise",
+            )
 
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
-            assert not self.config.get("dit_quantized", False)
+            if self.config.get("lora_configs") and self.config["lora_configs"]:
+                assert not self.config.get("dit_quantized", False)
 
-            for lora_config in self.config["lora_configs"]:
-                lora_path = lora_config["path"]
-                strength = lora_config.get("strength", 1.0)
-                base_name = os.path.basename(lora_path)
-                if base_name.startswith("high"):
-                    lora_wrapper = WanLoraWrapper(high_noise_model)
-                    lora_name = lora_wrapper.load_lora(lora_path)
-                    lora_wrapper.apply_lora(lora_name, strength)
-                    logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-                elif base_name.startswith("low"):
-                    lora_wrapper = WanLoraWrapper(low_noise_model)
-                    lora_name = lora_wrapper.load_lora(lora_path)
-                    lora_wrapper.apply_lora(lora_name, strength)
-                    logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-                else:
-                    raise ValueError(f"Unsupported LoRA path: {lora_path}")
+                for lora_config in self.config["lora_configs"]:
+                    lora_path = lora_config["path"]
+                    strength = lora_config.get("strength", 1.0)
+                    base_name = os.path.basename(lora_path)
+                    if base_name.startswith("high"):
+                        lora_wrapper = WanLoraWrapper(high_noise_model)
+                        lora_name = lora_wrapper.load_lora(lora_path)
+                        lora_wrapper.apply_lora(lora_name, strength)
+                        logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+                    elif base_name.startswith("low"):
+                        lora_wrapper = WanLoraWrapper(low_noise_model)
+                        lora_name = lora_wrapper.load_lora(lora_path)
+                        lora_wrapper.apply_lora(lora_name, strength)
+                        logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+                    else:
+                        raise ValueError(f"Unsupported LoRA path: {lora_path}")
 
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+            return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+        else:
+            model_struct = MultiModelStruct([None, None], self.config, self.config["boundary"])
+            model_struct.low_noise_model_path = self.low_noise_model_path
+            model_struct.high_noise_model_path = self.high_noise_model_path
+            model_struct.init_device = self.init_device
+            return model_struct
 
 
 @RUNNER_REGISTER("wan2.2")
