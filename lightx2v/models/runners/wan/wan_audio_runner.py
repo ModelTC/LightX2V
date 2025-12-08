@@ -721,7 +721,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def run_main(self):
         try:
-            self.va_controller = VAController(self.config, self.input_info, self.vfi_model is not None, self.vsr_model is not None)
+            self.va_controller = VAController(self)
             logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
             # fixed audio segments inputs
@@ -757,6 +757,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
                     try:
+                        # reset pause signal
+                        self.pause_signal = False
                         self.init_run_segment(segment_idx, audio_array)
                         self.check_stop()
                         latents = self.run_segment(segment_idx)

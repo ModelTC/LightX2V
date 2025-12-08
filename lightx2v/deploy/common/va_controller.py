@@ -23,7 +23,7 @@ class NextControl:
 
 
 class VAController:
-    def __init__(self, config, input_info, has_vfi_model=False, has_vsr_model=False):
+    def __init__(self, model_runner):
         self.reader = None
         self.recorder = None
         self.rank = 0
@@ -33,9 +33,9 @@ class VAController:
             self.world_size = dist.get_world_size()
         self.target_reader_rank = int(os.getenv("READER_RANK", "0")) % self.world_size
         self.target_recorder_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
-        self.init_base(config, input_info, has_vfi_model, has_vsr_model)
+        self.init_base(model_runner.config, model_runner.input_info, model_runner.vfi_model is not None, model_runner.vsr_model is not None)
         self.init_recorder()
-        self.init_reader()
+        self.init_reader(model_runner)
 
     def init_base(self, config, input_info, has_vfi_model, has_vsr_model):
         self.audio_path = input_info.audio_path
@@ -83,6 +83,8 @@ class VAController:
                 livestream_url=self.output_video_path,
                 fps=self.record_fps,
                 sample_rate=self.audio_sr,
+                slice_frame=self.slice_frame,
+                prev_frame=self.prev_frame_length,
             )
         else:
             self.recorder = VARecorder(
@@ -172,7 +174,7 @@ class VAController:
         return NextControl(action="fetch")
 
     def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor):
-        if isinstance(self.recorder, VARecorder) and self.recorder.realtime:
+        if self.recorder.realtime:
             self.recorder.buffer_stream(images, audios, gen_video)
         else:
             self.recorder.pub_livestream(images, audios)

@@ -18,6 +18,8 @@ class X264VARecorder:
         livestream_url: str,
         fps: float = 16.0,
         sample_rate: int = 16000,
+        slice_frame: int = 1,
+        prev_frame: int = 1,
     ):
         assert livestream_url.startswith("http"), "X264VARecorder only support whip http livestream"
         self.livestream_url = livestream_url
@@ -33,16 +35,29 @@ class X264VARecorder:
         self.whip_shared_lib = None
         self.whip_shared_handle = None
 
+        assert livestream_url.startswith("http"), "X264VARecorder only support whip http livestream"
+        self.realtime = True
+
         # queue for send data to whip shared api
         self.queue = queue.Queue()
         self.worker_thread = None
+
+        # buffer for stream data
+        self.target_sample_rate = 48000
+        self.target_samples_per_frame = round(self.target_sample_rate / self.fps)
+        self.target_chunks_per_frame = self.target_samples_per_frame * 2
+        self.stream_buffer = []
+        self.stream_buffer_lock = threading.Lock()
+        self.stop_schedule = False
+        self.schedule_thread = None
+        self.slice_frame = slice_frame
+        self.prev_frame = prev_frame
+        assert self.slice_frame >= self.prev_frame, "Slice frame must be greater than previous frame"
 
     def worker(self):
         try:
             fail_time, max_fail_time = 0, 10
             packet_secs = 1.0 / self.fps
-            audio_chunk = round(48000 * 2 / self.fps)
-            audio_samples = round(48000 / self.fps)
             while True:
                 try:
                     if self.queue is None:
@@ -55,14 +70,16 @@ class X264VARecorder:
 
                     for i in range(images.shape[0]):
                         t0 = time.time()
-                        cur_audio = audios[i * audio_chunk : (i + 1) * audio_chunk].flatten()
+                        cur_audio = audios[i * self.target_chunks_per_frame : (i + 1) * self.target_chunks_per_frame].flatten()
                         audio_ptr = cur_audio.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
-                        self.whip_shared_lib.pushWhipRawAudioFrame(self.whip_shared_handle, audio_ptr, audio_samples)
+                        self.whip_shared_lib.pushWhipRawAudioFrame(self.whip_shared_handle, audio_ptr, self.target_samples_per_frame)
 
                         cur_video = images[i].flatten()
                         video_ptr = cur_video.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
                         self.whip_shared_lib.pushWhipRawVideoFrame(self.whip_shared_handle, video_ptr, self.width, self.height)
-                        time.sleep(max(0, packet_secs - (time.time() - t0)))
+
+                        if self.realtime and i < images.shape[0] - 1:
+                            time.sleep(max(0, packet_secs - (time.time() - t0)))
 
                     fail_time = 0
                 except:  # noqa
@@ -115,24 +132,78 @@ class X264VARecorder:
         self.start_libx264_whip_shared_api(width, height)
         self.worker_thread = threading.Thread(target=self.worker)
         self.worker_thread.start()
+        if self.realtime:
+            self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
+            self.schedule_thread.start()
 
-    # Publish ComfyUI Image tensor and audio tensor to livestream
-    def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor):
+    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor):
         N, height, width, C = images.shape
         M = audios.reshape(-1).shape[0]
+        assert N % self.slice_frame == 0, "Video frames must be divisible by slice_frame"
         assert C == 3, "Input must be [N, H, W, C] with C=3"
 
-        logger.info(f"Publishing video [{N}x{width}x{height}], audio: [{M}]")
         audio_frames = round(M * self.fps / self.sample_rate)
         if audio_frames != N:
             logger.warning(f"Video and audio frames mismatch, {N} vs {audio_frames}")
-
         self.set_video_size(width, height)
-
         audio_datas, image_datas = self.convert_data(audios, images)
-        self.queue.put((audio_datas, image_datas))
-        logger.info(f"Published {N} frames and {M} audio samples")
-        self.stoppable_t = time.time() + M / self.sample_rate + 3
+
+        # logger.info(f"Buffer stream images {images.shape} {audios.shape} {gen_video.shape}")
+        rets = []
+        for i in range(0, N, self.slice_frame):
+            end_frame = i + self.slice_frame
+            img = image_datas[i:end_frame]
+            aud = audio_datas[i * self.target_chunks_per_frame : end_frame * self.target_chunks_per_frame]
+            gen = gen_video[:, :, (end_frame - self.prev_frame) : end_frame]
+            rets.append((img, aud, gen))
+
+        with self.stream_buffer_lock:
+            origin_size = len(self.stream_buffer)
+            self.stream_buffer.extend(rets)
+            logger.info(f"Buffered {origin_size} + {len(rets)} = {len(self.stream_buffer)} stream segments")
+
+    def get_buffer_stream_size(self):
+        return len(self.stream_buffer)
+
+    def truncate_stream_buffer(self, size: int):
+        with self.stream_buffer_lock:
+            self.stream_buffer = self.stream_buffer[:size]
+            logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
+            if len(self.stream_buffer) > 0:
+                return self.stream_buffer[-1][2]  # return the last video tensor
+            else:
+                return None
+
+    def schedule_stream_buffer(self):
+        schedule_interval = self.slice_frame / self.fps
+        logger.info(f"Schedule stream buffer with interval: {schedule_interval} seconds")
+        t = None
+        while True:
+            try:
+                if self.stop_schedule:
+                    break
+                img, aud, gen = None, None, None
+                with self.stream_buffer_lock:
+                    if len(self.stream_buffer) > 0:
+                        img, aud, gen = self.stream_buffer.pop(0)
+
+                if t is not None:
+                    wait_secs = schedule_interval - (time.time() - t)
+                    if wait_secs > 0:
+                        time.sleep(wait_secs)
+                t = time.time()
+
+                if img is not None and aud is not None:
+                    self.queue.put((aud, img))
+                    # logger.info(f"Scheduled {img.shape[0]} frames and {aud.shape[0]} audio samples to publish")
+                    del gen
+                    self.stoppable_t = time.time() + img.shape[0] / self.fps + 3
+                else:
+                    logger.warning(f"No stream buffer to schedule")
+            except Exception:
+                logger.error(f"Schedule stream buffer error: {traceback.format_exc()}")
+                break
+        logger.info("Schedule stream buffer thread stopped")
 
     def stop(self, wait=True):
         if wait and self.stoppable_t:
@@ -141,6 +212,12 @@ class X264VARecorder:
                 logger.warning(f"Waiting for {t} seconds to stop ...")
                 time.sleep(t)
             self.stoppable_t = None
+
+        if self.schedule_thread:
+            self.stop_schedule = True
+            self.schedule_thread.join(timeout=5)
+            if self.schedule_thread and self.schedule_thread.is_alive():
+                logger.error(f"Schedule thread did not stop after 5s")
 
         # Send stop signals to queues
         if self.queue:
@@ -219,7 +296,7 @@ if __name__ == "__main__":
         cur_audio_array = np.zeros(int(interval * sample_rate), dtype=np.float32)
         num_frames = int(interval * fps)
         images = create_simple_video(num_frames, height, width)
-        recorder.pub_livestream(images, torch.tensor(cur_audio_array, dtype=torch.float32))
+        recorder.buffer_stream(images, torch.tensor(cur_audio_array, dtype=torch.float32), images)
         i += interval
         time.sleep(interval - (time.time() - t0))
 
@@ -237,7 +314,7 @@ if __name__ == "__main__":
         if started:
             logger.warning(f"start pub_livestream !!!!!!!!!!!!!!!!!!!!!!!")
             started = False
-        recorder.pub_livestream(images, cur_audio_array)
+        recorder.buffer_stream(images, cur_audio_array, images)
         i += interval
         time.sleep(interval - (time.time() - t0))
 
