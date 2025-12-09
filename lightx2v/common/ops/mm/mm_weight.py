@@ -1,6 +1,7 @@
 import os
 import re
 from abc import ABCMeta, abstractmethod
+from pathlib import Path
 
 import torch
 from safetensors import safe_open
@@ -130,7 +131,10 @@ class MMWeight(MMWeightTemplate):
 
     def _get_source_tensor(self, source_name, weight_dict=None):
         if self.lazy_load:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{source_name.split('.')[1]}.safetensors")
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{source_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 return lazy_load_file.get_tensor(source_name)
         return weight_dict[source_name]
@@ -150,7 +154,10 @@ class MMWeight(MMWeightTemplate):
 
     def _load_cpu_pin_buffers(self):
         if self.lazy_load:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name)
                 self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
@@ -210,8 +217,10 @@ class MMWeight(MMWeightTemplate):
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-
-        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        if Path(self.lazy_load_file).is_file():
+            lazy_load_file_path = self.lazy_load_file
+        else:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
             self.pin_weight = self.pin_weight.copy_(weight_tensor)
@@ -294,7 +303,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
 
     def _load_cuda_buffers(self, weight_dict):
         if self.lazy_load:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
                 self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
@@ -334,7 +346,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
 
     def _get_cpu_pin_tensor_pair(self, source, is_lazy):
         if is_lazy:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 weight_tensor = source.get_tensor(self.weight_name)
                 scale_tensor = source.get_tensor(self.weight_scale_name)
@@ -353,7 +368,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         if self.bias_name is None:
             return None
         if is_lazy:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 bias_tensor = source.get_tensor(self.bias_name)
                 if not self.bias_force_fp32:
@@ -673,8 +691,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
             else:
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-
-        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        if Path(self.lazy_load_file).is_file():
+            lazy_load_file_path = self.lazy_load_file
+        else:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             if self.weight_need_transpose:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()

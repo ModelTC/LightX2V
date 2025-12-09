@@ -14,11 +14,11 @@
 
 # Lightx2v project root directory path
 # Example: /home/user/lightx2v or /data/video_gen/lightx2v
-lightx2v_path=/path/to/LightX2V
+lightx2v_path=/data/video_gen/lightx2v_debug/LightX2V
 
 # Model path configuration
 # Example: /path/to/Wan2.1-I2V-14B-720P-Lightx2v
-model_path=/path/to/models
+model_path=/models/
 
 # Server configuration
 server_name="0.0.0.0"
