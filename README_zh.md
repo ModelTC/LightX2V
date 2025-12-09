@@ -20,9 +20,55 @@
 
 ## :fire: 最新动态
 
+- **2025年12月4日:** 🚀 支持 GGUF 格式模型推理，以及在寒武纪 MLU590、MetaX C500 硬件上的部署。
+
 - **2025年11月24日:** 🚀 我们发布了HunyuanVideo-1.5的4步蒸馏模型！这些模型支持**超快速4步推理**，无需CFG配置，相比标准50步推理可实现约**25倍加速**。现已提供基础版本和FP8量化版本：[Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models)。
 
 - **2025年11月21日:** 🚀 我们Day0支持了[HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)的视频生成模型，同样GPU数量，LightX2V可带来约2倍以上的速度提升，并支持更低显存GPU部署(如24G RTX4090)。支持CFG并行/Ulysses并行，高效Offload，TeaCache/MagCache等技术。同时支持沐曦，寒武纪等国产芯片部署。我们很快将在我们的[HuggingFace主页](https://huggingface.co/lightx2v)更新更多模型，包括步数蒸馏，VAE蒸馏等相关模型。量化模型和轻量VAE模型现已可用：[Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)用于量化推理，[HunyuanVideo-1.5轻量TAE](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors)用于快速VAE解码。使用教程参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15)，或查看[示例目录](https://github.com/ModelTC/LightX2V/tree/main/examples)获取代码示例。
+
+
+## 🏆 性能测试数据 (更新于 2025.12.01)
+
+### 📊 推理框架之间性能对比 (H100)
+
+| Framework | GPUs | Step Time | Speedup |
+|-----------|---------|---------|---------|
+| Diffusers | 1 | 9.77s/it | 1x |
+| xDiT | 1 | 8.93s/it | 1.1x |
+| FastVideo | 1 | 7.35s/it | 1.3x |
+| SGL-Diffusion | 1 | 6.13s/it | 1.6x |
+| **LightX2V** | 1 | **5.18s/it** | **1.9x** 🚀 |
+| FastVideo | 8 | 2.94s/it | 1x |
+| xDiT | 8 | 2.70s/it | 1.1x |
+| SGL-Diffusion | 8 | 1.19s/it | 2.5x |
+| **LightX2V** | 8 | **0.75s/it** | **3.9x** 🚀 |
+
+### 📊 推理框架之间性能对比 (RTX 4090D)
+
+| Framework | GPUs | Step Time | Speedup |
+|-----------|---------|---------|---------|
+| Diffusers | 1 | 30.50s/it | 1x |
+| FastVideo | 1 | 22.66s/it | 1.3x |
+| xDiT | 1 | OOM | OOM |
+| SGL-Diffusion | 1 | OOM | OOM |
+| **LightX2V** | 1 | **20.26s/it** | **1.5x** 🚀 |
+| FastVideo | 8 | 15.48s/it | 1x |
+| xDiT | 8 | OOM | OOM |
+| SGL-Diffusion | 8 | OOM | OOM |
+| **LightX2V** | 8 | **4.75s/it** | **3.3x** 🚀 |
+
+### 📊 LightX2V不同配置之间性能对比
+
+| Framework | GPU | Configuration | Step Time | Speedup |
+|-----------|-----|---------------|-----------|---------------|
+| **LightX2V** | H100 | 8 GPUs + cfg | 0.75s/it | 1x |
+| **LightX2V** | H100 | 8 GPUs + no cfg | 0.39s/it | 1.9x |
+| **LightX2V** | H100 | **8 GPUs + no cfg + fp8** | **0.35s/it** | **2.1x** 🚀 |
+| **LightX2V** | 4090D | 8 GPUs + cfg | 4.75s/it | 1x |
+| **LightX2V** | 4090D | 8 GPUs + no cfg | 3.13s/it | 1.5x |
+| **LightX2V** | 4090D | **8 GPUs + no cfg + fp8** | **2.35s/it** | **2.0x** 🚀 |
+
+**注意**: 所有以上性能数据均在 Wan2.1-I2V-14B-480P(40 steps, 81 frames) 上测试。此外，我们[HuggingFace 主页](https://huggingface.co/lightx2v)还提供了4步蒸馏模型。
 
 
 ## 💡 快速开始
@@ -30,6 +76,8 @@
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
 详细使用说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**
+
+**我们强烈推荐使用 Docker 环境，这是最简单快捷的环境安装方式。具体参考：文档中的快速入门章节。**
 
 ### 从 Git 安装
 ```bash
@@ -173,12 +221,6 @@ pipe.generate(
 - **🎞️ 视频帧插值**: 基于RIFE的帧插值技术，实现流畅的帧率提升
 
 
-## 🏆 性能基准测试
-
-详细的性能指标和对比分析，请参考我们的[基准测试文档](https://github.com/ModelTC/LightX2V/blob/main/docs/ZH_CN/source/getting_started/benchmark_source.md)。
-
-[详细服务部署指南 →](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html)
-
 ## 📚 技术文档
 
 ### 📖 **方法教程**
@@ -244,7 +286,6 @@ pipe.generate(
 
 如有任何问题、建议或需要支持，欢迎通过以下方式联系我们：
 - 🐛 [GitHub Issues](https://github.com/ModelTC/lightx2v/issues) - 错误报告和功能请求
-- 💬 [GitHub Discussions](https://github.com/ModelTC/lightx2v/discussions) - 社区讨论和问答
 
 ---
 

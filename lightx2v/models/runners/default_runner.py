@@ -15,6 +15,7 @@ from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .base_runner import BaseRunner
 
@@ -40,7 +41,8 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        self.model.set_scheduler(self.scheduler)  # set scheduler to model
+        if hasattr(self, "model"):
+            self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif self.config["task"] == "flf2v":
@@ -59,11 +61,10 @@ class DefaultRunner(BaseRunner):
             self.model.compile(self.config.get("compile_shapes", []))
 
     def set_init_device(self):
-        self.run_device = self.config.get("run_device", "cuda")
         if self.config["cpu_offload"]:
             self.init_device = torch.device("cpu")
         else:
-            self.init_device = torch.device(self.run_device)
+            self.init_device = torch.device(AI_DEVICE)
 
     def load_vfi_model(self):
         if self.config["video_frame_interpolation"].get("algo", None) == "rife":
@@ -184,12 +185,19 @@ class DefaultRunner(BaseRunner):
             del self.inputs
         self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
-                self.model.transformer_infer.weights_stream_mgr.clear()
-            if hasattr(self.model.transformer_weights, "clear"):
-                self.model.transformer_weights.clear()
-            self.model.pre_weight.clear()
-            del self.model
+            if hasattr(self.model, "model") and len(self.model.model) == 2:  # MultiModelStruct
+                for model in self.model.model:
+                    if hasattr(model.transformer_infer, "offload_manager"):
+                        del model.transformer_infer.offload_manager
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                    del model
+            else:
+                if hasattr(self.model.transformer_infer, "offload_manager"):
+                    del self.model.transformer_infer.offload_manager
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                del self.model
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
             torch.save(CALIB, calib_path)
@@ -205,7 +213,7 @@ class DefaultRunner(BaseRunner):
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
-        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).cuda()
+        img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
         self.input_info.original_size = img_ori.size
         return img, img_ori
 
@@ -279,15 +287,15 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
 
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
-        if hasattr(self, "sr_version") and self.sr_version is not None is not None:
+        if hasattr(self, "sr_version") and self.sr_version is not None:
             self.lq_latents_shape = self.model.scheduler.latents.shape
             self.model_sr.set_scheduler(self.scheduler_sr)
-
             self.config_sr["is_sr_running"] = True
             self.inputs_sr = self.run_input_encoder()
             self.config_sr["is_sr_running"] = False

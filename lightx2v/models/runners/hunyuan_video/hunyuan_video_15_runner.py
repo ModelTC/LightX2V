@@ -21,6 +21,9 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 @RUNNER_REGISTER("hunyuan_video_1.5")
@@ -71,7 +74,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         if qwen25vl_offload:
             qwen25vl_device = torch.device("cpu")
         else:
-            qwen25vl_device = torch.device("cuda")
+            qwen25vl_device = torch.device(AI_DEVICE)
 
         qwen25vl_quantized = self.config.get("qwen25vl_quantized", False)
         qwen25vl_quant_scheme = self.config.get("qwen25vl_quant_scheme", None)
@@ -93,7 +96,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         if byt5_offload:
             byt5_device = torch.device("cpu")
         else:
-            byt5_device = torch.device("cuda")
+            byt5_device = torch.device(AI_DEVICE)
 
         byt5 = ByT5TextEncoder(config=self.config, device=byt5_device, checkpoint_path=self.config["model_path"], cpu_offload=byt5_offload)
         text_encoders = [text_encoder, byt5]
@@ -125,9 +128,74 @@ class HunyuanVideo15Runner(DefaultRunner):
             target_height // self.config["vae_stride"][1],
             target_width // self.config["vae_stride"][2],
         ]
-        self.target_height = target_height
-        self.target_width = target_width
+
+        ori_latent_h, ori_latent_w = latent_shape[2], latent_shape[3]
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            latent_h, latent_w, world_size_h, world_size_w = self._adjust_latent_for_grid_splitting(ori_latent_h, ori_latent_w, dist.get_world_size())
+            latent_shape[2], latent_shape[3] = latent_h, latent_w
+            logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
+        else:
+            latent_shape[2], latent_shape[3] = ori_latent_h, ori_latent_w
+            world_size_h, world_size_w = None, None
+
+        self.vae_decoder.world_size_h = world_size_h
+        self.vae_decoder.world_size_w = world_size_w
+
+        self.target_height = latent_shape[2] * self.config["vae_stride"][1]
+        self.target_width = latent_shape[3] * self.config["vae_stride"][2]
         return latent_shape
+
+    def _adjust_latent_for_grid_splitting(self, latent_h, latent_w, world_size):
+        """
+        Adjust latent dimensions for optimal 2D grid splitting.
+        Prefers balanced grids like 2x4 or 4x2 over 1x8 or 8x1.
+        """
+        world_size_h, world_size_w = 1, 1
+        if world_size <= 1:
+            return latent_h, latent_w, world_size_h, world_size_w
+
+        # Define priority grids for different world sizes
+        priority_grids = []
+        if world_size == 8:
+            # For 8 cards, prefer 2x4 and 4x2 over 1x8 and 8x1
+            priority_grids = [(2, 4), (4, 2), (1, 8), (8, 1)]
+        elif world_size == 4:
+            priority_grids = [(2, 2), (1, 4), (4, 1)]
+        elif world_size == 2:
+            priority_grids = [(1, 2), (2, 1)]
+        else:
+            # For other sizes, try factor pairs
+            for h in range(1, int(np.sqrt(world_size)) + 1):
+                if world_size % h == 0:
+                    w = world_size // h
+                    priority_grids.append((h, w))
+
+        # Try priority grids first
+        for world_size_h, world_size_w in priority_grids:
+            if latent_h % world_size_h == 0 and latent_w % world_size_w == 0:
+                return latent_h, latent_w, world_size_h, world_size_w
+
+        # If no perfect fit, find minimal padding solution
+        best_grid = (1, world_size)  # fallback
+        min_total_padding = float("inf")
+
+        for world_size_h, world_size_w in priority_grids:
+            # Calculate required padding
+            pad_h = (world_size_h - (latent_h % world_size_h)) % world_size_h
+            pad_w = (world_size_w - (latent_w % world_size_w)) % world_size_w
+            total_padding = pad_h + pad_w
+
+            # Prefer grids with minimal total padding
+            if total_padding < min_total_padding:
+                min_total_padding = total_padding
+                best_grid = (world_size_h, world_size_w)
+
+        # Apply padding
+        world_size_h, world_size_w = best_grid
+        pad_h = (world_size_h - (latent_h % world_size_h)) % world_size_h
+        pad_w = (world_size_w - (latent_w % world_size_w)) % world_size_w
+
+        return latent_h + pad_h, latent_w + pad_w, world_size_h, world_size_w
 
     def get_sr_latent_shape_with_target_hw(self):
         SizeMap = {
@@ -229,7 +297,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         if siglip_offload:
             siglip_device = torch.device("cpu")
         else:
-            siglip_device = torch.device("cuda")
+            siglip_device = torch.device(AI_DEVICE)
         image_encoder = SiglipVisionEncoder(
             config=self.config,
             device=siglip_device,
@@ -244,13 +312,14 @@ class HunyuanVideo15Runner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(AI_DEVICE)
 
         vae_config = {
             "checkpoint_path": self.config["model_path"],
             "device": vae_device,
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
+            "parallel": self.config["parallel"],
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
@@ -263,17 +332,18 @@ class HunyuanVideo15Runner(DefaultRunner):
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
-            vae_device = torch.device("cuda")
+            vae_device = torch.device(AI_DEVICE)
 
         vae_config = {
             "checkpoint_path": self.config["model_path"],
             "device": vae_device,
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
+            "parallel": self.config["parallel"],
         }
         if self.config.get("use_tae", False):
             tae_path = self.config["tae_path"]
-            vae_decoder = self.tae_cls(vae_path=tae_path, dtype=GET_DTYPE()).to("cuda")
+            vae_decoder = self.tae_cls(vae_path=tae_path, dtype=GET_DTYPE()).to(AI_DEVICE)
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
@@ -348,7 +418,7 @@ class HunyuanVideo15Runner(DefaultRunner):
                     self.model_sr.scheduler.step_post()
 
         del self.inputs_sr
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
 
         self.config_sr["is_sr_running"] = False
         return self.model_sr.scheduler.latents
@@ -366,10 +436,10 @@ class HunyuanVideo15Runner(DefaultRunner):
         text_encoder_output = self.run_text_encoder(self.input_info)
 
         # vision_states is all zero, because we don't have any image input
-        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.config["hidden_size"], dtype=torch.bfloat16).cuda()
-        siglip_mask = torch.zeros(1, self.vision_num_semantic_tokens, dtype=torch.bfloat16, device=torch.device("cuda"))
+        siglip_output = torch.zeros(1, self.vision_num_semantic_tokens, self.config["hidden_size"], dtype=torch.bfloat16).to(AI_DEVICE)
+        siglip_mask = torch.zeros(1, self.vision_num_semantic_tokens, dtype=torch.bfloat16, device=torch.device(AI_DEVICE))
 
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -396,7 +466,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         siglip_output, siglip_mask = self.run_image_encoder(img_ori) if self.config.get("use_image_encoder", True) else None
         cond_latents = self.run_vae_encoder(img_ori)
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -422,9 +492,9 @@ class HunyuanVideo15Runner(DefaultRunner):
             target_height = self.target_height
 
         input_image_np = self.resize_and_center_crop(first_frame, target_width=target_width, target_height=target_height)
-        vision_states = self.image_encoder.encode_images(input_image_np).last_hidden_state.to(device=torch.device("cuda"), dtype=torch.bfloat16)
+        vision_states = self.image_encoder.encode_images(input_image_np).last_hidden_state.to(device=torch.device(AI_DEVICE), dtype=torch.bfloat16)
         image_encoder_output = self.image_encoder.infer(vision_states)
-        image_encoder_mask = torch.ones((1, image_encoder_output.shape[1]), dtype=torch.bfloat16, device=torch.device("cuda"))
+        image_encoder_mask = torch.ones((1, image_encoder_output.shape[1]), dtype=torch.bfloat16, device=torch.device(AI_DEVICE))
         return image_encoder_output, image_encoder_mask
 
     def resize_and_center_crop(self, image, target_width, target_height):
@@ -475,7 +545,6 @@ class HunyuanVideo15Runner(DefaultRunner):
             ]
         )
 
-        ref_images_pixel_values = ref_image_transform(first_frame).unsqueeze(0).unsqueeze(2).cuda()
-
+        ref_images_pixel_values = ref_image_transform(first_frame).unsqueeze(0).unsqueeze(2).to(AI_DEVICE)
         cond_latents = self.vae_encoder.encode(ref_images_pixel_values.to(GET_DTYPE()))
         return cond_latents

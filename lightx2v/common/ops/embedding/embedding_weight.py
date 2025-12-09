@@ -5,12 +5,14 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.utils.registry_factory import EMBEDDING_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class EmbeddingWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
         self.weight_name = weight_name
         self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.is_post_adapter = is_post_adapter
@@ -19,22 +21,20 @@ class EmbeddingWeightTemplate(metaclass=ABCMeta):
     def load(self, weight_dict):
         if not self.lazy_load:
             if self.create_cuda_buffer:
-                self.weight_cuda_buffer = weight_dict[self.weight_name].cuda()
+                self.weight_cuda_buffer = weight_dict[self.weight_name].to(AI_DEVICE)
             else:
                 device = weight_dict[self.weight_name].device
-                if device.type == "cuda":
-                    self.weight = weight_dict[self.weight_name]
-                elif device.type == "cpu":
+                if device.type == "cpu":
                     weight_shape = weight_dict[self.weight_name].shape
                     weight_dtype = weight_dict[self.weight_name].dtype
                     self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
                     self.pin_weight.copy_(weight_dict[self.weight_name])
                     del weight_dict[self.weight_name]
                 else:
-                    raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+                    self.weight = weight_dict[self.weight_name]
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.cuda(non_blocking=non_blocking)
+        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):

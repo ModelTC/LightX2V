@@ -3,6 +3,7 @@ from abc import ABCMeta, abstractmethod
 import torch
 
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class Conv3dWeightTemplate(metaclass=ABCMeta):
@@ -35,13 +36,7 @@ class Conv3dWeight(Conv3dWeightTemplate):
 
     def load(self, weight_dict):
         device = weight_dict[self.weight_name].device
-        if device.type == "cuda":
-            self.weight = weight_dict[self.weight_name]
-            if self.bias_name is not None:
-                self.bias = weight_dict[self.bias_name]
-            else:
-                self.bias = None
-        elif device.type == "cpu":
+        if device.type == "cpu":
             weight_shape = weight_dict[self.weight_name].shape
             weight_dtype = weight_dict[self.weight_name].dtype
             self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
@@ -57,7 +52,11 @@ class Conv3dWeight(Conv3dWeightTemplate):
                 self.pin_bias = None
             del weight_dict[self.weight_name]
         else:
-            raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+            self.weight = weight_dict[self.weight_name]
+            if self.bias_name is not None:
+                self.bias = weight_dict[self.bias_name]
+            else:
+                self.bias = None
 
     def apply(self, input_tensor):
         input_tensor = torch.nn.functional.conv3d(
@@ -72,9 +71,9 @@ class Conv3dWeight(Conv3dWeightTemplate):
         return input_tensor
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.cuda(non_blocking=non_blocking)
+        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
         if hasattr(self, "pin_bias") and self.pin_bias is not None:
-            self.bias = self.pin_bias.cuda(non_blocking=non_blocking)
+            self.bias = self.pin_bias.to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
@@ -93,10 +92,3 @@ class Conv3dWeight(Conv3dWeightTemplate):
         if self.bias_name is not None:
             destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias  # .cpu().detach().clone()
         return destination
-
-    def clear(self):
-        attrs = ["weight", "bias", "pinned_weight", "pinned_bias"]
-        for attr in attrs:
-            if hasattr(self, attr):
-                delattr(self, attr)
-                setattr(self, attr, None)

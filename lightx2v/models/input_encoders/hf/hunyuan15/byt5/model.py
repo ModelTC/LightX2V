@@ -8,6 +8,8 @@ import torch.nn as nn
 from safetensors import safe_open
 from transformers import AutoTokenizer, T5ForConditionalGeneration
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 from .format_prompt import MultilingualPromptFormat
 
 
@@ -158,14 +160,13 @@ class ByT5TextEncoder:
     def __init__(
         self,
         config,
-        device=torch.cuda.current_device(),
+        device=torch.device("cpu"),
         checkpoint_path=None,
         byt5_max_length=256,
         cpu_offload=False,
     ):
         self.cpu_offload = cpu_offload
         self.config = config
-        self.device = device
         self.byt5_max_length = byt5_max_length
         self.enable_cfg = config.get("enable_cfg", False)
         byT5_google_path = os.path.join(checkpoint_path, "text_encoder", "byt5-small")
@@ -256,6 +257,29 @@ class ByT5TextEncoder:
         result = list(dict.fromkeys(result)) if len(result) > 1 else result
         return result
 
+    def get_byt5_text_tokens(self, byt5_tokenizer, byt5_max_length, text_prompt):
+        """
+        Tokenize text prompt for byT5 model.
+
+        Args:
+            byt5_tokenizer: The byT5 tokenizer
+            byt5_max_length: Maximum sequence length
+            text_prompt: Text prompt to tokenize
+
+        Returns:
+            Tuple of (input_ids, attention_mask)
+        """
+        byt5_text_inputs = byt5_tokenizer(
+            text_prompt,
+            padding="max_length",
+            max_length=byt5_max_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+
+        return byt5_text_inputs.input_ids, byt5_text_inputs.attention_mask
+
     def _process_single_byt5_prompt(self, prompt_text, device):
         """
         Process a single prompt for byT5 encoding.
@@ -277,8 +301,8 @@ class ByT5TextEncoder:
             formatted_text = self.prompt_format.format_prompt(glyph_texts, text_styles)
 
             text_ids, text_mask = self.get_byt5_text_tokens(self.byt5_tokenizer, self.byt5_max_length, formatted_text)
-            text_ids = text_ids.to("cuda")
-            text_mask = text_mask.to("cuda")
+            text_ids = text_ids.to(device)
+            text_mask = text_mask.to(device)
 
             byt5_outputs = self.byt5_model(text_ids, attention_mask=text_mask.float())
             byt5_embeddings = byt5_outputs[0]
@@ -300,12 +324,12 @@ class ByT5TextEncoder:
         negative_masks = []
 
         for prompt in prompt_list:
-            pos_emb, pos_mask = self._process_single_byt5_prompt(prompt, "cuda")
+            pos_emb, pos_mask = self._process_single_byt5_prompt(prompt, AI_DEVICE)
             positive_embeddings.append(pos_emb)
             positive_masks.append(pos_mask)
 
             if self.enable_cfg:  # TODO: 把cfg拆出去，更适合并行
-                neg_emb, neg_mask = self._process_single_byt5_prompt("", "cuda")
+                neg_emb, neg_mask = self._process_single_byt5_prompt("", AI_DEVICE)
                 negative_embeddings.append(neg_emb)
                 negative_masks.append(neg_mask)
 
@@ -327,8 +351,8 @@ class ByT5TextEncoder:
     @torch.no_grad()
     def infer(self, prompts):
         if self.cpu_offload:
-            self.byt5_model = self.byt5_model.to("cuda")
-            self.byt5_mapper = self.byt5_mapper.to("cuda")
+            self.byt5_model = self.byt5_model.to(AI_DEVICE)
+            self.byt5_mapper = self.byt5_mapper.to(AI_DEVICE)
         byt5_embeddings, byt5_masks = self._prepare_byt5_embeddings(prompts)
         byt5_features = self.byt5_mapper(byt5_embeddings.to(torch.bfloat16))
         if self.cpu_offload:

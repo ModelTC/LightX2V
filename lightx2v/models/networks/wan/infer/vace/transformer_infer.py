@@ -9,6 +9,7 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         self.vace_blocks_mapping = {orig_idx: seq_idx for seq_idx, orig_idx in enumerate(self.config["vace_layers"])}
 
     def infer(self, weights, pre_infer_out):
+        self.get_scheduler_values()
         pre_infer_out.c = self.vace_pre_process(weights.vace_patch_embedding, pre_infer_out.vace_context)
         self.infer_vace_blocks(weights.vace_blocks, pre_infer_out)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
@@ -23,11 +24,11 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         pre_infer_out.adapter_args["hints"] = []
         self.infer_state = "vace"
         if hasattr(self, "offload_manager"):
-            self.offload_manager.init_cuda_buffer(self.vace_offload_block_buffers, self.vace_offload_phase_buffers)
+            self.offload_manager.init_cuda_buffer(self.vace_offload_block_cuda_buffers, self.vace_offload_phase_cuda_buffers)
         self.infer_func(vace_blocks, pre_infer_out.c, pre_infer_out)
         self.infer_state = "base"
         if hasattr(self, "offload_manager"):
-            self.offload_manager.init_cuda_buffer(self.offload_block_buffers, self.offload_phase_buffers)
+            self.offload_manager.init_cuda_buffer(self.offload_block_cuda_buffers, self.offload_phase_cuda_buffers)
 
     def post_process(self, x, y, c_gate_msa, pre_infer_out):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)

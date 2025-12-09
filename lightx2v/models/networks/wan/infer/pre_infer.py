@@ -3,26 +3,15 @@ import torch
 from lightx2v.utils.envs import *
 
 from .module_io import GridOutput, WanPreInferModuleOutput
-from .utils import guidance_scale_embedding, rope_params, sinusoidal_embedding_1d
+from .utils import guidance_scale_embedding, sinusoidal_embedding_1d
 
 
 class WanPreInfer:
     def __init__(self, config):
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
         self.config = config
-        d = config["dim"] // config["num_heads"]
-        self.run_device = self.config.get("run_device", "cuda")
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.task = config["task"]
-        self.device = torch.device(self.config.get("run_device", "cuda"))
-        self.freqs = torch.cat(
-            [
-                rope_params(1024, d - 4 * (d // 6)),
-                rope_params(1024, 2 * (d // 6)),
-                rope_params(1024, 2 * (d // 6)),
-            ],
-            dim=1,
-        ).to(torch.device(self.run_device))
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
         self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)
@@ -71,7 +60,7 @@ class WanPreInfer:
 
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
-        seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
+        # seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
         if self.enable_dynamic_cfg:
@@ -130,8 +119,6 @@ class WanPreInfer:
             grid_sizes=grid_sizes,
             x=x.squeeze(0),
             embed0=embed0.squeeze(0),
-            seq_lens=seq_lens,
-            freqs=self.freqs,
             context=context,
             adapter_args={"motion_vec": motion_vec},
         )

@@ -3,9 +3,14 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+
+try:
+    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+except Exception as e:
+    apply_rope_with_cos_sin_cache_inplace = None
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
 from .triton_ops import fuse_scale_shift_kernel
@@ -101,7 +106,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
         else:
             self.seq_p_group = None
-            elf.seq_p_fp8_comm = False
+            self.seq_p_fp8_comm = False
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -217,7 +222,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         key = torch.cat([img_k, txt_k], dim=1)
         value = torch.cat([img_v, txt_v], dim=1)
         seqlen = query.shape[1]
-        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to("cuda", non_blocking=True)
+        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
 
         if self.config["seq_parallel"]:
             attn_out = weights.self_attention_parallel.apply(
@@ -229,16 +234,11 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
+                model_cls=self.config["model_cls"],
             )
         else:
             attn_out = weights.self_attention.apply(
-                q=query,
-                k=key,
-                v=value,
-                cu_seqlens_q=cu_seqlens_qkv,
-                cu_seqlens_kv=cu_seqlens_qkv,
-                max_seqlen_q=seqlen,
-                max_seqlen_kv=seqlen,
+                q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen, model_cls=self.config["model_cls"]
             )
 
         img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]

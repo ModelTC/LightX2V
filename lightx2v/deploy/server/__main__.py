@@ -1,15 +1,18 @@
 import argparse
 import asyncio
+import base64
+import copy
 import json
 import mimetypes
 import os
+import re
 import tempfile
 import traceback
 import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -17,8 +20,11 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pydantic import BaseModel
 
+from lightx2v.deploy.common.audio_separator import AudioSeparator
+from lightx2v.deploy.common.face_detector import FaceDetector
 from lightx2v.deploy.common.pipeline import Pipeline
-from lightx2v.deploy.common.utils import check_params, data_name, load_inputs
+from lightx2v.deploy.common.podcasts import VolcEnginePodcastClient
+from lightx2v.deploy.common.utils import check_params, data_name, fetch_resource, format_image_data, load_inputs
 from lightx2v.deploy.common.volcengine_tts import VolcEngineTTSClient
 from lightx2v.deploy.data_manager import LocalDataManager, S3DataManager
 from lightx2v.deploy.queue_manager import LocalQueueManager, RabbitMQQueueManager
@@ -62,6 +68,9 @@ server_monitor = None
 auth_manager = None
 metrics_monitor = MetricMonitor()
 volcengine_tts_client = None
+volcengine_podcast_client = None
+face_detector = None
+audio_separator = None
 
 
 @asynccontextmanager
@@ -345,7 +354,7 @@ async def api_v1_task_submit(request: Request, user=Depends(verify_user_access))
         # process multimodal inputs data
         inputs_data = await load_inputs(params, inputs, types)
 
-        # init task
+        # init task (we need task_id before preprocessing to save processed files)
         task_id = await task_manager.create_task(keys, workers, params, inputs, outputs, user["user_id"])
         logger.info(f"Submit task: {task_id} {params}")
 
@@ -450,14 +459,26 @@ async def api_v1_task_input_url(request: Request, user=Depends(verify_user_acces
     try:
         name = request.query_params["name"]
         task_id = request.query_params["task_id"]
+        filename = request.query_params.get("filename", None)
+
         task = await task_manager.query_task(task_id, user_id=user["user_id"])
         assert task is not None, f"Task {task_id} not found"
         assert name in task["inputs"], f"Input {name} not found in task {task_id}"
-        assert name not in task["params"], f"Input {name} is a stream"
+        if name in task["params"]:
+            return error_response(f"Input {name} is a stream", 400)
+
+        # eg, multi person audio directory input
+        if filename is not None:
+            extra_inputs = task["params"]["extra_inputs"][name]
+            name = f"{name}/{filename}"
+            assert name in task["inputs"], f"Extra input {name} not found in task {task_id}"
+            assert name in extra_inputs, f"Filename {filename} not found in extra inputs"
 
         url = await data_manager.presign_url(task["inputs"][name])
         if url is None:
             url = f"./assets/task/input?task_id={task_id}&name={name}"
+            if filename is not None:
+                url += f"&filename={filename}"
         return {"url": url}
 
     except Exception as e:
@@ -493,10 +514,20 @@ async def assets_task_input(request: Request, user=Depends(verify_user_access_fr
     try:
         name = request.query_params["name"]
         task_id = request.query_params["task_id"]
+        filename = request.query_params.get("filename", None)
+
         task = await task_manager.query_task(task_id, user_id=user["user_id"])
         assert task is not None, f"Task {task_id} not found"
         assert name in task["inputs"], f"Input {name} not found in task {task_id}"
-        assert name not in task["params"], f"Input {name} is a stream"
+        if name in task["params"]:
+            return error_response(f"Input {name} is a stream", 400)
+
+        # eg, multi person audio directory input
+        if filename is not None:
+            extra_inputs = task["params"]["extra_inputs"][name]
+            name = f"{name}/{filename}"
+            assert name in task["inputs"], f"Extra input {name} not found in task {task_id}"
+            assert name in extra_inputs, f"Filename {filename} not found in extra inputs"
         data = await data_manager.load_bytes(task["inputs"][name])
 
         #  set correct Content-Type
@@ -770,35 +801,61 @@ async def api_v1_template_list(request: Request):
         all_audios = [] if all_audios is None else all_audios
         all_videos = [] if all_videos is None else all_videos
 
-        # page info
-        total_images = len(all_images)
-        total_audios = len(all_audios)
-        total_videos = len(all_videos)
-        total_pages = (max(total_images, total_audios, total_videos) + page_size - 1) // page_size
+        # 创建图片文件名（不含扩展名）到图片信息的映射
+        all_images_sorted = sorted(all_images)
+        image_map = {}  # 文件名（不含扩展名） -> {"filename": 完整文件名, "url": URL}
+        for img_name in all_images_sorted:
+            img_name_without_ext = img_name.rsplit(".", 1)[0] if "." in img_name else img_name
+            url = await data_manager.presign_template_url("images", img_name)
+            if url is None:
+                url = f"./assets/template/images/{img_name}"
+            image_map[img_name_without_ext] = {"filename": img_name, "url": url}
 
-        paginated_image_templates = []
-        paginated_audio_templates = []
-        paginated_video_templates = []
+        # 创建音频文件名（不含扩展名）到音频信息的映射
+        all_audios_sorted = sorted(all_audios)
+        audio_map = {}  # 文件名（不含扩展名） -> {"filename": 完整文件名, "url": URL}
+        for audio_name in all_audios_sorted:
+            audio_name_without_ext = audio_name.rsplit(".", 1)[0] if "." in audio_name else audio_name
+            url = await data_manager.presign_template_url("audios", audio_name)
+            if url is None:
+                url = f"./assets/template/audios/{audio_name}"
+            audio_map[audio_name_without_ext] = {"filename": audio_name, "url": url}
 
+        # 合并音频和图片模板，基于文件名前缀匹配
+        # 获取所有唯一的基础文件名（不含扩展名）
+        all_base_names = set(list(image_map.keys()) + list(audio_map.keys()))
+        all_base_names_sorted = sorted(all_base_names)
+
+        # 构建合并后的模板列表
+        merged_templates = []
+        for base_name in all_base_names_sorted:
+            template_item = {
+                "id": base_name,  # 使用基础文件名作为ID
+                "image": image_map.get(base_name),
+                "audio": audio_map.get(base_name),
+            }
+            merged_templates.append(template_item)
+
+        # 分页处理
+        total = len(merged_templates)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+
+        paginated_templates = []
         if page <= total_pages:
             start_idx = (page - 1) * page_size
             end_idx = start_idx + page_size
+            paginated_templates = merged_templates[start_idx:end_idx]
 
-            async def handle_media(media_type, media_names, paginated_media_templates):
-                media_names.sort(key=lambda x: x)
-                for media_name in media_names[start_idx:end_idx]:
-                    url = await data_manager.presign_template_url(media_type, media_name)
-                    if url is None:
-                        url = f"./assets/template/{media_type}/{media_name}"
-                    paginated_media_templates.append({"filename": media_name, "url": url})
-
-            await handle_media("images", all_images, paginated_image_templates)
-            await handle_media("audios", all_audios, paginated_audio_templates)
-            await handle_media("videos", all_videos, paginated_video_templates)
-
+        # 为了保持向后兼容，仍然返回images和audios字段（但可能为空）
+        # 同时添加新的merged字段
         return {
-            "templates": {"images": paginated_image_templates, "audios": paginated_audio_templates, "videos": paginated_video_templates},
-            "pagination": {"page": page, "page_size": page_size, "total": max(total_images, total_audios), "total_pages": total_pages},
+            "templates": {
+                "images": [],  # 保持向后兼容，但设为空
+                "audios": [],  # 保持向后兼容，但设为空
+                "videos": [],  # 保持向后兼容
+                "merged": paginated_templates,  # 新的合并列表
+            },
+            "pagination": {"page": page, "page_size": page_size, "total": total, "total_pages": total_pages},
         }
     except Exception as e:
         traceback.print_exc()
@@ -974,13 +1031,17 @@ async def api_v1_share_get(share_id: str):
 
 
 @app.get("/api/v1/voices/list")
-async def api_v1_voices_list():
+async def api_v1_voices_list(request: Request):
     try:
+        version = request.query_params.get("version", "all")
         if volcengine_tts_client is None:
             return error_response("Volcengine TTS client not loaded", 500)
         voices = volcengine_tts_client.get_voice_list()
         if voices is None:
             return error_response("No voice list found", 404)
+        if version != "all":
+            voices = copy.deepcopy(voices)
+            voices["voices"] = [v for v in voices["voices"] if v["version"] == version]
         return voices
     except Exception as e:
         traceback.print_exc()
@@ -1027,6 +1088,337 @@ async def api_v1_tts_generate(request: TTSRequest):
         return JSONResponse({"error": f"TTS generation failed: {str(e)}"}, status_code=500)
 
 
+@app.websocket("/api/v1/podcast/generate")
+async def api_v1_podcast_generate_ws(websocket: WebSocket):
+    await websocket.accept()
+
+    def ws_get_user_id():
+        token = websocket.query_params.get("token")
+        if not token:
+            token = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+            if token and token.startswith("Bearer "):
+                token = token[7:]
+        payload = auth_manager.verify_jwt_token(token)
+        user_id = payload["user_id"]
+        return user_id
+
+    async def safe_send_json(payload):
+        try:
+            await websocket.send_json(payload)
+        except (WebSocketDisconnect, RuntimeError) as e:
+            logger.warning(f"WebSocket send skipped: {e}")
+
+    try:
+        user_id = ws_get_user_id()
+        data = await websocket.receive_text()
+        request_data = json.loads(data)
+
+        # stop request
+        if request_data.get("type") == "stop":
+            logger.info("Received stop signal from client")
+            await safe_send_json({"type": "stopped"})
+            return
+
+        # user input prompt
+        input_text = request_data.get("input", "")
+        is_url = input_text.startswith(("http://", "https://"))
+        if not input_text:
+            await safe_send_json({"error": "输入不能为空"})
+            return
+
+        session_id = "session_" + str(uuid.uuid4())
+        params = {
+            "session_id": session_id,
+            "data_manager": data_manager,
+            "text": "" if is_url else input_text,
+            "input_url": input_text if is_url else "",
+            "action": 0,
+            "use_head_music": False,
+            "use_tail_music": False,
+            "skip_round_audio_save": False,
+        }
+        logger.info(f"WebSocket generating podcast with params: {params}")
+
+        # 使用回调函数实时推送音频
+        async def on_round_complete(round_info):
+            await safe_send_json({"type": "audio_update", "data": round_info})
+
+        params["on_round_complete"] = on_round_complete
+
+        # 创建一个任务来处理停止信号
+        async def listen_for_stop(podcast_task):
+            while True:
+                try:
+                    if podcast_task.done():
+                        return
+                    data = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                    request = json.loads(data)
+                    if request.get("type") == "stop":
+                        logger.warning("Stop signal received during podcast generation")
+                        podcast_task.cancel()
+                        return
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    logger.warning(f"Stop listener ended: {e}")
+                    return
+
+        podcast_task = asyncio.create_task(volcengine_podcast_client.podcast_request(**params))
+        stop_listener_task = asyncio.create_task(listen_for_stop(podcast_task))
+        podcast_info = None
+
+        try:
+            podcast_info = await podcast_task
+        except asyncio.CancelledError:
+            logger.warning("Podcast generation cancelled by user")
+            await safe_send_json({"type": "stopped"})
+            return
+        finally:
+            stop_listener_task.cancel()
+        if podcast_info is None:
+            await safe_send_json({"error": "播客生成失败，请稍后重试"})
+            return
+
+        audio_path = podcast_info["audio_name"]
+        rounds = podcast_info["subtitles"]
+        await task_manager.create_podcast(session_id, user_id, input_text, audio_path, rounds)
+        audio_url = await data_manager.presign_podcast_output_url(audio_path)
+        if not audio_url:
+            audio_url = f"/api/v1/podcast/audio?session_id={session_id}&filename={audio_path}"
+        logger.info(f"completed podcast generation (session: {session_id})")
+
+        await safe_send_json(
+            {
+                "type": "complete",
+                "data": {
+                    "audio_url": audio_url,
+                    "subtitles": podcast_info["subtitles"],
+                    "session_id": session_id,
+                    "user_id": user_id,
+                },
+            }
+        )
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+
+    except Exception:
+        logger.error(f"Error in websocket: {traceback.format_exc()}")
+        await safe_send_json({"error": "websocket internal error, please try again later!"})
+
+
+@app.get("/api/v1/podcast/audio")
+async def api_v1_podcast_audio(request: Request, user=Depends(verify_user_access_from_query)):
+    try:
+        user_id = user["user_id"]
+        session_id = request.query_params.get("session_id")
+        filename = request.query_params.get("filename")
+        if not session_id or not filename:
+            return JSONResponse({"error": "session_id and filename are required"}, status_code=400)
+
+        ext = os.path.splitext(filename)[1].lower()
+        assert ext == ".mp3", f"Unsupported file extension: {ext}"
+
+        # 解析 Range 头，格式：bytes=start-end 或 bytes=start-
+        range_header = request.headers.get("Range")
+        start_byte, end_byte = None, None
+        if range_header:
+            match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            if match:
+                start_byte = int(match.group(1))
+                end_byte = int(match.group(2)) + 1 if match.group(2) else None
+
+        podcast_data = await task_manager.query_podcast(session_id, user_id)
+        if podcast_data:
+            # generate is finished and save info to database
+            func = data_manager.load_podcast_output_file
+            filename = podcast_data["audio_path"]
+            func_args = (filename,)
+        else:
+            func = data_manager.load_podcast_temp_session_file
+            func_args = (session_id, filename)
+
+        logger.debug(f"Serving audio file from {func.__name__} with args: {func_args}, start_byte: {start_byte}, end_byte: {end_byte}")
+        file_bytes = await func(*func_args)
+        file_size = len(file_bytes)
+        file_bytes = file_bytes[start_byte:end_byte]
+
+        content_length = len(file_bytes)
+        media_type = "audio/mpeg"
+        status_code = 200
+        headers = {"Content-Length": str(content_length), "Accept-Ranges": "bytes", "Content-Type": media_type, "Content-Disposition": f'attachment; filename="{filename}"'}
+
+        if start_byte is not None and start_byte > 0:
+            status_code = 206  # Partial Content
+            headers["Content-Range"] = f"bytes {start_byte}-{start_byte + content_length - 1}/{file_size}"
+        return Response(content=file_bytes, media_type=media_type, status_code=status_code, headers=headers)
+
+    except Exception as e:
+        logger.error(f"Error serving audio: {e}")
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/v1/podcast/history")
+async def api_v1_podcast_history(request: Request, user=Depends(verify_user_access)):
+    try:
+        user_id = user["user_id"]
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 10))
+        assert page > 0 and page_size > 0, "page and page_size must be greater than 0"
+        status = request.query_params.get("status", None)  # has_audio, no_audio
+
+        query_params = {"user_id": user_id}
+        if status == "has_audio":
+            query_params["has_audio"] = True
+        elif status == "no_audio":
+            query_params["has_audio"] = False
+
+        total_tasks = await task_manager.list_podcasts(count=True, **query_params)
+        total_pages = (total_tasks + page_size - 1) // page_size
+        page_info = {"page": page, "page_size": page_size, "total": total_tasks, "total_pages": total_pages}
+        if page > total_pages:
+            return {"sessions": [], "pagination": page_info}
+
+        query_params["offset"] = (page - 1) * page_size
+        query_params["limit"] = page_size
+        sessions = await task_manager.list_podcasts(**query_params)
+        return {"sessions": sessions, "pagination": page_info}
+
+    except Exception as e:
+        logger.error(f"Error getting podcast history: {e}")
+        traceback.print_exc()
+        return {"sessions": []}
+
+
+@app.get("/api/v1/podcast/session/{session_id}/audio_url")
+async def api_v1_podcast_session_audio_url(session_id: str, user=Depends(verify_user_access)):
+    try:
+        user_id = user["user_id"]
+        podcast_data = await task_manager.query_podcast(session_id, user_id)
+        if not podcast_data:
+            return JSONResponse({"error": "Podcast session not found"}, status_code=404)
+
+        audio_path = podcast_data["audio_path"]
+        audio_url = await data_manager.presign_podcast_output_url(audio_path)
+        if not audio_url:
+            audio_url = f"/api/v1/podcast/audio?session_id={session_id}&filename={audio_path}"
+        return {"audio_url": audio_url}
+
+    except Exception as e:
+        logger.error(f"Error getting podcast session audio URL: {e}")
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+class FaceDetectRequest(BaseModel):
+    image: str  # Base64 encoded image
+
+
+class AudioSeparateRequest(BaseModel):
+    audio: str  # Base64 encoded audio
+    num_speakers: int = None  # Optional: number of speakers to separate
+
+
+@app.post("/api/v1/face/detect")
+async def api_v1_face_detect(request: FaceDetectRequest, user=Depends(verify_user_access)):
+    """Detect faces in image (only detection, no cropping - cropping is done on frontend)
+    Supports both base64 encoded images and URLs (blob URLs, http URLs, etc.)
+    """
+    try:
+        if not face_detector:
+            return error_response("Face detector not initialized", 500)
+
+        # 验证输入
+        if not request.image or not request.image.strip():
+            logger.error("Face detection request: image is empty")
+            return error_response("Image input is empty", 400)
+
+        image_bytes = None
+        try:
+            # Check if input is a URL (blob:, http:, https:, or data: URL)
+            if request.image.startswith(("http://", "https://")):
+                timeout = int(os.getenv("REQUEST_TIMEOUT", "10"))
+                image_bytes = await fetch_resource(request.image, timeout=timeout)
+                logger.debug(f"Fetched image from URL for face detection: {request.image[:100]}... (size: {len(image_bytes)} bytes)")
+            else:
+                encoded = request.image
+                # Data URL format: "data:image/png;base64,..."
+                if encoded.startswith("data:image"):
+                    _, encoded = encoded.split(",", 1)
+                image_bytes = base64.b64decode(encoded)
+                logger.debug(f"Decoded base64 image: {request.image[:100]}... (size: {len(image_bytes)} bytes)")
+
+            # Validate image format before passing to face detector
+            image_bytes = await asyncio.to_thread(format_image_data, image_bytes)
+
+        except Exception as e:
+            logger.error(f"Failed to decode base64 image: {e}, image length: {len(request.image) if request.image else 0}")
+            return error_response(f"Invalid image format: {str(e)}", 400)
+
+        # Detect faces only (no cropping)
+        result = await asyncio.to_thread(face_detector.detect_faces, image_bytes, return_image=False)
+        faces_data = []
+        for i, face in enumerate(result["faces"]):
+            faces_data.append(
+                {
+                    "index": i,
+                    "bbox": face["bbox"],  # [x1, y1, x2, y2] - absolute pixel coordinates in original image
+                    "confidence": face["confidence"],
+                    "class_id": face["class_id"],
+                    "class_name": face["class_name"],
+                    # Note: face_image is not included - frontend will crop it based on bbox
+                }
+            )
+        return {"faces": faces_data, "total": len(faces_data)}
+
+    except Exception as e:
+        logger.error(f"Face detection error: {traceback.format_exc()}")
+        return error_response(f"Face detection failed: {str(e)}", 500)
+
+
+@app.post("/api/v1/audio/separate")
+async def api_v1_audio_separate(request: AudioSeparateRequest, user=Depends(verify_user_access)):
+    """Separate different speakers in audio"""
+    try:
+        if not audio_separator:
+            return error_response("Audio separator not initialized", 500)
+        audio_bytes = None
+        try:
+            encoded = request.audio
+            if encoded.startswith("data:"):
+                # Remove data URL prefix (e.g., "data:audio/mpeg;base64," or "data:application/octet-stream;base64,")
+                _, encoded = encoded.split(",", 1)
+            audio_bytes = await asyncio.to_thread(base64.b64decode, encoded, validate=True)
+            logger.debug(f"Successfully decoded base64 audio, size: {len(audio_bytes)} bytes")
+
+        except Exception as e:
+            logger.error(f"Failed to decode base64 audio {request.audio[:100]}..., error: {str(e)}")
+            return error_response(f"Invalid base64 audio data", 400)
+
+        # Separate speakers
+        result = await asyncio.to_thread(audio_separator.separate_speakers, audio_bytes, num_speakers=request.num_speakers)
+
+        # Convert audio tensors to base64 strings (without saving to file)
+        speakers_data = []
+        for speaker in result["speakers"]:
+            # Convert audio tensor directly to base64
+            audio_base64 = await asyncio.to_thread(audio_separator.speaker_audio_to_base64, speaker["audio"], speaker["sample_rate"], format="wav")
+            speakers_data.append(
+                {
+                    "speaker_id": speaker["speaker_id"],
+                    "audio": audio_base64,  # Base64 encoded audio
+                    "segments": speaker["segments"],
+                    "sample_rate": speaker["sample_rate"],
+                }
+            )
+        return {"speakers": speakers_data, "total": len(speakers_data), "method": result.get("method", "pyannote")}
+
+    except Exception as e:
+        logger.error(f"Audio separation error: {traceback.format_exc()}")
+        return error_response(f"Audio separation failed: {str(e)}", 500)
+
+
 # 所有未知路由 fallback 到 index.html (必须在所有API路由之后)
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 async def vue_fallback(full_path: str):
@@ -1061,11 +1453,16 @@ if __name__ == "__main__":
     parser.add_argument("--volcengine_tts_list_json", type=str, default=dft_volcengine_tts_list_json)
     parser.add_argument("--ip", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--face_detector_model_path", type=str, default=None)
+    parser.add_argument("--audio_separator_model_path", type=str, default="")
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
     model_pipelines = Pipeline(args.pipeline_json)
     volcengine_tts_client = VolcEngineTTSClient(args.volcengine_tts_list_json)
+    volcengine_podcast_client = VolcEnginePodcastClient()
+    face_detector = FaceDetector(model_path=args.face_detector_model_path)
+    audio_separator = AudioSeparator(model_path=args.audio_separator_model_path)
     auth_manager = AuthManager()
     if args.task_url.startswith("/"):
         task_manager = LocalTaskManager(args.task_url, metrics_monitor)

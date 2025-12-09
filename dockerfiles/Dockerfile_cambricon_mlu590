@@ -1,0 +1,31 @@
+FROM cambricon-base/pytorch:v25.10.0-torch2.8.0-torchmlu1.29.1-ubuntu22.04-py310 AS base
+
+WORKDIR /workspace/LightX2V
+
+# Set envs
+ENV PYTHONPATH=/workspace/LightX2V
+ENV LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
+
+# Install deps
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+    pip install --no-cache-dir \
+    ftfy \
+    imageio \
+    imageio-ffmpeg \
+    loguru \
+    aiohttp \
+    gguf \
+    diffusers \
+    peft==0.17.0 \
+    transformers==4.57.1 &&
+
+# Copy files
+COPY app app
+COPY assets assets
+COPY configs configs
+COPY lightx2v lightx2v
+COPY lightx2v_kernel lightx2v_kernel
+COPY lightx2v_platform lightx2v_platform
+COPY scripts scripts
+COPY test_cases test_cases
+COPY tools tools

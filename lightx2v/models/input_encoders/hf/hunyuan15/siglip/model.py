@@ -10,6 +10,8 @@ from safetensors.torch import safe_open
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from transformers.utils import ModelOutput
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 PRECISION_TO_TYPE = {
     "fp32": torch.float32,
     "fp16": torch.float16,
@@ -170,12 +172,12 @@ class VisionEncoder(nn.Module):
             VisionEncoderModelOutput with encoded features
         """
         if self.cpu_offload:
-            self.model = self.model.to("cuda")
-            self.processor = self.processor.to("cuda")
+            self.model = self.model.to(AI_DEVICE)
+            self.processor = self.processor.to(AI_DEVICE)
 
         if isinstance(images, np.ndarray):
             # Preprocess images if they're numpy arrays
-            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device="cuda", dtype=self.model.dtype)
+            preprocessed = self.processor.preprocess(images=images, return_tensors="pt").to(device=AI_DEVICE, dtype=self.model.dtype)
         else:
             # Assume already preprocessed
             preprocessed = images
@@ -229,7 +231,7 @@ class SiglipVisionEncoder:
     def __init__(
         self,
         config,
-        device=torch.cuda.current_device(),
+        device=torch.device("cpu"),
         checkpoint_path=None,
         cpu_offload=False,
     ):
@@ -265,7 +267,7 @@ class SiglipVisionEncoder:
     @torch.no_grad()
     def infer(self, vision_states):
         if self.cpu_offload:
-            self.vision_in = self.vision_in.to("cuda")
+            self.vision_in = self.vision_in.to(AI_DEVICE)
         vision_states = self.vision_in(vision_states)
         if self.cpu_offload:
             self.vision_in = self.vision_in.to("cpu")

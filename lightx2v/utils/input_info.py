@@ -94,6 +94,11 @@ class AnimateInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    src_pose_path: str = field(default_factory=str)
+    src_face_path: str = field(default_factory=str)
+    src_ref_images: str = field(default_factory=str)
+    src_bg_path: str = field(default_factory=str)
+    src_mask_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -181,6 +186,11 @@ def set_input_info(args):
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
+            src_pose_path=args.src_pose_path,
+            src_face_path=args.src_face_path,
+            src_ref_images=args.src_ref_images,
+            src_bg_path=args.src_bg_path,
+            src_mask_path=args.src_mask_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
         )

@@ -1,10 +1,13 @@
+import os
 import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     import sgl_kernel
@@ -13,10 +16,11 @@ except ImportError:
 
 
 class RMSWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
         self.weight_name = weight_name
         self.eps = eps
         self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.is_post_adapter = is_post_adapter
@@ -25,28 +29,47 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.config = {}
 
     def load(self, weight_dict):
-        if not self.lazy_load:
-            if self.create_cuda_buffer:
-                self.weight_cuda_buffer = weight_dict[self.weight_name].cuda()
-            else:
-                device = weight_dict[self.weight_name].device
-                if device.type in ["cuda", "mlu", "npu"]:
-                    self.weight = weight_dict[self.weight_name]
-                elif device.type == "cpu":
-                    weight_shape = weight_dict[self.weight_name].shape
-                    weight_dtype = weight_dict[self.weight_name].dtype
-                    self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-                    self.pin_weight.copy_(weight_dict[self.weight_name])
-                    del weight_dict[self.weight_name]
-                else:
-                    raise ValueError(f"Unsupported device type: {device.type}, only 'cpu' and 'cuda' are supported")
+        if self.create_cuda_buffer:
+            self._load_cuda_buffer(weight_dict)
+        elif self.create_cpu_buffer:
+            self._load_cpu_pin_buffer()
+        else:
+            self._load_default_tensors(weight_dict)
 
-    def clear(self):
-        attrs = ["weight", "pinned_weight"]
-        for attr in attrs:
-            if hasattr(self, attr):
-                delattr(self, attr)
-                setattr(self, attr, None)
+    def _load_default_tensors(self, weight_dict):
+        if not self.lazy_load:
+            device = weight_dict[self.weight_name].device
+            if device.type == "cpu":
+                weight_tensor = weight_dict[self.weight_name]
+                self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
+                del weight_dict[self.weight_name]
+            else:
+                self.weight = weight_dict[self.weight_name]
+
+    def _get_weight_tensor(self, weight_dict=None, use_infer_dtype=False):
+        if self.lazy_load:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+                tensor = lazy_load_file.get_tensor(self.weight_name)
+                if use_infer_dtype:
+                    tensor = tensor.to(self.infer_dtype)
+        else:
+            tensor = weight_dict[self.weight_name]
+        return tensor
+
+    def _create_cpu_pin_weight(self, tensor):
+        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
+        pin_tensor.copy_(tensor)
+        del tensor
+        return pin_tensor
+
+    def _load_cuda_buffer(self, weight_dict):
+        weight_tensor = self._get_weight_tensor(weight_dict, use_infer_dtype=self.lazy_load)
+        self.weight_cuda_buffer = weight_tensor.to(AI_DEVICE)
+
+    def _load_cpu_pin_buffer(self):
+        weight_tensor = self._get_weight_tensor(use_infer_dtype=True)
+        self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
 
     @abstractmethod
     def apply(self, input_tensor):
@@ -57,38 +80,13 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.config = config
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.cuda(non_blocking=non_blocking)
+        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
             self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
         else:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-
-    def _calculate_size(self):
-        return self.weight.numel() * self.weight.element_size()
-
-
-@RMS_WEIGHT_REGISTER("Default")
-class RMSWeight(RMSWeightTemplate):
-    def __init__(self, weight_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
-
-    def load_from_disk(self):
-        if not torch._dynamo.is_compiling():
-            self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(GET_DTYPE()).pin_memory()
-        else:
-            self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(GET_DTYPE())
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-
-    def apply(self, input_tensor):
-        if GET_SENSITIVE_DTYPE() != GET_DTYPE():
-            input_tensor = self._norm(input_tensor).type_as(input_tensor) * self.weight
-        else:
-            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * self.weight
-        return input_tensor
 
     def state_dict(self, destination=None):
         if destination is None:
@@ -108,6 +106,33 @@ class RMSWeight(RMSWeightTemplate):
             return
         self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
 
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        if self.is_post_adapter:
+            self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
+        else:
+            self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
+        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
+            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+        del weight_tensor
+
+
+@RMS_WEIGHT_REGISTER("Default")
+class RMSWeight(RMSWeightTemplate):
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+
+    def apply(self, input_tensor):
+        if GET_SENSITIVE_DTYPE() != GET_DTYPE():
+            input_tensor = self._norm(input_tensor).type_as(input_tensor) * self.weight
+        else:
+            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * self.weight
+        return input_tensor
+
 
 @RMS_WEIGHT_REGISTER("sgl-kernel")
 class RMSWeightSgl(RMSWeight):
@@ -115,18 +140,13 @@ class RMSWeightSgl(RMSWeight):
         self,
         weight_name,
         create_cuda_buffer=False,
+        create_cpu_buffer=False,
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
         eps=1e-6,
     ):
-        super().__init__(weight_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
-
-    def load_from_disk(self):
-        if not torch._dynamo.is_compiling():
-            self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(GET_DTYPE()).pin_memory()
-        else:
-            self.weight = self.lazy_load_file.get_tensor(self.weight_name).to(GET_DTYPE())
+        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):
         if sgl_kernel is not None and self.sensitive_layer_dtype == self.infer_dtype:
@@ -148,8 +168,8 @@ class RMSWeightSgl(RMSWeight):
 
 @RMS_WEIGHT_REGISTER("fp32_variance")
 class RMSWeightFP32(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):
         input_dtype = input_tensor.dtype
@@ -167,8 +187,8 @@ class RMSWeightFP32(RMSWeight):
 
 @RMS_WEIGHT_REGISTER("self_forcing")
 class RMSWeightSF(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)

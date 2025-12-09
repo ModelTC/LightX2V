@@ -34,7 +34,7 @@ HEADERS = {"Authorization": f"Bearer {WORKER_SECRET_KEY}", "Content-Type": "appl
 STOPPED = False
 WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
 RANK = int(os.environ.get("RANK", 0))
-TARGET_RANK = WORLD_SIZE - 1
+TARGET_RANK = int(os.getenv("WORKER_RANK", "0")) % WORLD_SIZE
 
 
 async def ping_life(server_url, worker_identity, keys):
@@ -251,14 +251,17 @@ async def main(args):
                 logger.warning("Main loop cancelled, do not shut down")
 
             finally:
+                try:
+                    if ping_task:
+                        ping_task.cancel()
+                    await sync_subtask()
+                except Exception:
+                    logger.warning(f"Sync subtask failed: {traceback.format_exc()}")
                 if RANK == TARGET_RANK and sub["task_id"] in RUNNING_SUBTASKS:
                     try:
                         await report_task(status=status, **sub)
-                    except:  # noqa
+                    except Exception:
                         logger.warning(f"Report failed: {traceback.format_exc()}")
-                if ping_task:
-                    ping_task.cancel()
-                await sync_subtask()
 
 
 async def shutdown(loop):
@@ -296,18 +299,23 @@ async def shutdown(loop):
 # align args like infer.py
 def align_args(args):
     args.seed = 42
-    args.sf_model_path = ""
+    args.sf_model_path = args.sf_model_path if args.sf_model_path else ""
     args.use_prompt_enhancer = False
     args.prompt = ""
     args.negative_prompt = ""
     args.image_path = ""
     args.last_frame_path = ""
     args.audio_path = ""
+    args.src_pose_path = None
+    args.src_face_path = None
+    args.src_bg_path = None
+    args.src_mask_path = None
     args.src_ref_images = None
     args.src_video = None
     args.src_mask = None
     args.save_result_path = ""
     args.return_result_tensor = False
+    args.is_live = True
 
 
 # =========================
@@ -335,6 +343,7 @@ if __name__ == "__main__":
     parser.add_argument("--metric_port", type=int, default=8001)
 
     parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--sf_model_path", type=str, default="")
     parser.add_argument("--config_json", type=str, required=True)
 
     parser.add_argument("--server", type=str, default="http://127.0.0.1:8080")

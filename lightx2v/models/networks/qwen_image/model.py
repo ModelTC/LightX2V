@@ -28,7 +28,7 @@ class QwenImageTransformerModel:
         self.model_path = os.path.join(config["model_path"], "transformer")
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
-        self.device = torch.device("cpu") if self.cpu_offload else torch.device(self.config.get("run_device", "cuda"))
+        self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
 
         with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
             transformer_config = json.load(f)
@@ -124,12 +124,12 @@ class QwenImageTransformerModel:
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if self.device.type in ["cuda", "mlu", "npu"] and dist.is_initialized():
-            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
+        if self.device.type != "cpu" and dist.is_initialized():
+            device = dist.get_rank()
         else:
-            device = self.device
+            device = str(self.device)
 
-        with safe_open(file_path, framework="pt", device=str(device)) as f:
+        with safe_open(file_path, framework="pt", device=device) as f:
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()
@@ -283,7 +283,7 @@ class QwenImageTransformerModel:
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
-            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
+            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
 
     def to_cpu(self):
         self.pre_weight.to_cpu()

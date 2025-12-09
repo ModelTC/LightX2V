@@ -1,7 +1,87 @@
 import torch
 import torch.distributed as dist
 
+try:
+    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+except ImportError:
+    apply_rope_with_cos_sin_cache_inplace = None
+
 from lightx2v.utils.envs import *
+
+
+def apply_wan_rope_with_torch(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+):
+    n = xq.size(1)
+    seq_len = cos_sin_cache.size(0)
+
+    xq = torch.view_as_complex(xq[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
+    xk = torch.view_as_complex(xk[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
+    # Apply rotary embedding
+    xq = torch.view_as_real(xq * cos_sin_cache).flatten(2)
+    xk = torch.view_as_real(xk * cos_sin_cache).flatten(2)
+    xq = torch.cat([xq, xq[seq_len:]])
+    xk = torch.cat([xk, xk[seq_len:]])
+
+    return xq.to(GET_DTYPE()), xk.to(GET_DTYPE())
+
+
+def apply_wan_rope_with_chunk(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    chunk_size: int,
+    rope_func,
+):
+    seq_len = cos_sin_cache.size(0)
+    x_q = torch.empty_like(xq)
+    x_k = torch.empty_like(xk)
+
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        xq_chunk = xq[start:end]
+        xk_chunk = xk[start:end]
+        cos_sin_chunk = cos_sin_cache[start:end]
+        xq_chunk_out, xk_chunk_out = rope_func(xq_chunk, xk_chunk, cos_sin_chunk)
+        x_q[start:end].copy_(xq_chunk_out, non_blocking=True)
+        x_k[start:end].copy_(xk_chunk_out, non_blocking=True)
+        del xq_chunk_out, xk_chunk_out
+
+    target_dtype = GET_DTYPE()
+    if x_q.dtype != target_dtype:
+        x_q = x_q.to(target_dtype)
+    if x_k.dtype != target_dtype:
+        x_k = x_k.to(target_dtype)
+
+    return x_q, x_k
+
+
+def apply_wan_rope_with_flashinfer(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+):
+    L, H, D = xq.shape
+
+    query = xq.reshape(L, H * D).contiguous()
+    key = xk.reshape(L, H * D).contiguous()
+
+    positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
+
+    apply_rope_with_cos_sin_cache_inplace(
+        positions=positions,
+        query=query,
+        key=key,
+        head_size=D,
+        cos_sin_cache=cos_sin_cache,
+        is_neox=False,
+    )
+
+    xq_out = query.view(L, H, D)
+    xk_out = key.view(L, H, D)
+    return xq_out, xk_out
 
 
 def compute_freqs(c, grid_sizes, freqs):

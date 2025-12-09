@@ -1,4 +1,4 @@
-from .flash_attn import FlashAttn2Weight, FlashAttn3Weight, MluFlashAttnWeight
+from .flash_attn import FlashAttn2Weight, FlashAttn3Weight
 from .nbhd_attn import NbhdAttnWeight, NbhdAttnWeightFlashInfer
 from .radial_attn import RadialAttnWeight
 from .ring_attn import RingAttnWeight

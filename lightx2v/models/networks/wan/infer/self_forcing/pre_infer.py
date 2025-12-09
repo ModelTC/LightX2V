@@ -1,8 +1,12 @@
+from dataclasses import dataclass, field
+from typing import Any, Dict
+
 import torch
 
-from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def sinusoidal_embedding_1d(dim, position):
@@ -24,6 +28,18 @@ def rope_params(max_seq_len, dim, theta=10000):
     return freqs
 
 
+@dataclass
+class WanSFPreInferModuleOutput:
+    embed: torch.Tensor
+    grid_sizes: GridOutput
+    x: torch.Tensor
+    embed0: torch.Tensor
+    seq_lens: torch.Tensor
+    freqs: torch.Tensor
+    context: torch.Tensor
+    conditional_dict: Dict[str, Any] = field(default_factory=dict)
+
+
 class WanSFPreInfer(WanPreInfer):
     def __init__(self, config):
         super().__init__(config)
@@ -35,7 +51,7 @@ class WanSFPreInfer(WanPreInfer):
                 rope_params(1024, 2 * (d // 6)),
             ],
             dim=1,
-        ).cuda()
+        ).to(AI_DEVICE)
 
     def time_embedding(self, weights, embed):
         embed = weights.time_embedding_0.apply(embed)
@@ -87,7 +103,7 @@ class WanSFPreInfer(WanPreInfer):
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
-        return WanPreInferModuleOutput(
+        return WanSFPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
             x=x.squeeze(0),

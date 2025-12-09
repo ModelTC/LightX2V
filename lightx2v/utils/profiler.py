@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from functools import wraps
 
@@ -7,6 +8,16 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
+_excluded_time_local = threading.local()
+
+
+def _get_excluded_time_stack():
+    if not hasattr(_excluded_time_local, "stack"):
+        _excluded_time_local.stack = []
+    return _excluded_time_local.stack
 
 
 class _ProfilingContext:
@@ -27,13 +38,16 @@ class _ProfilingContext:
         self.metrics_labels = metrics_labels
 
     def __enter__(self):
-        self.device_synchronize()
+        torch_device_module.synchronize()
         self.start_time = time.perf_counter()
+        _get_excluded_time_stack().append(0.0)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.device_synchronize()
-        elapsed = time.perf_counter() - self.start_time
+        torch_device_module.synchronize()
+        total_elapsed = time.perf_counter() - self.start_time
+        excluded = _get_excluded_time_stack().pop()
+        elapsed = total_elapsed - excluded
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
                 self.metrics_func.labels(*self.metrics_labels).observe(elapsed)
@@ -44,13 +58,16 @@ class _ProfilingContext:
         return False
 
     async def __aenter__(self):
-        self.device_synchronize()
+        torch_device_module.synchronize()
         self.start_time = time.perf_counter()
+        _get_excluded_time_stack().append(0.0)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.device_synchronize()
-        elapsed = time.perf_counter() - self.start_time
+        torch_device_module.synchronize()
+        total_elapsed = time.perf_counter() - self.start_time
+        excluded = _get_excluded_time_stack().pop()
+        elapsed = total_elapsed - excluded
         if self.enable_recorder and self.metrics_func:
             if self.metrics_labels:
                 self.metrics_func.labels(*self.metrics_labels).observe(elapsed)
@@ -78,15 +95,6 @@ class _ProfilingContext:
 
             return sync_wrapper
 
-    def device_synchronize(
-        self,
-    ):
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        elif hasattr(torch, "mlu") and torch.mlu.is_available():
-            torch.mlu.synchronize()
-        return
-
 
 class _NullContext:
     # Context manager without decision branch logic overhead
@@ -107,6 +115,65 @@ class _NullContext:
 
     def __call__(self, func):
         return func
+
+
+class _ExcludedProfilingContext:
+    """用于标记应该从外层 profiling 中排除的时间段"""
+
+    def __init__(self, name=None):
+        self.name = name
+        if dist.is_initialized():
+            self.rank_info = f"Rank {dist.get_rank()}"
+        else:
+            self.rank_info = "Single GPU"
+
+    def __enter__(self):
+        torch_device_module.synchronize()
+        self.start_time = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        torch_device_module.synchronize()
+        elapsed = time.perf_counter() - self.start_time
+        stack = _get_excluded_time_stack()
+        for i in range(len(stack)):
+            stack[i] += elapsed
+        if self.name and CHECK_PROFILING_DEBUG_LEVEL(1):
+            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling)")
+        return False
+
+    async def __aenter__(self):
+        torch_device_module.synchronize()
+        self.start_time = time.perf_counter()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        torch_device_module.synchronize()
+        elapsed = time.perf_counter() - self.start_time
+        stack = _get_excluded_time_stack()
+        for i in range(len(stack)):
+            stack[i] += elapsed
+        if self.name and CHECK_PROFILING_DEBUG_LEVEL(1):
+            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling)")
+        return False
+
+    def __call__(self, func):
+        if asyncio.iscoroutinefunction(func):
+
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                async with self:
+                    return await func(*args, **kwargs)
+
+            return async_wrapper
+        else:
+
+            @wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                with self:
+                    return func(*args, **kwargs)
+
+            return sync_wrapper
 
 
 class _ProfilingContextL1(_ProfilingContext):
@@ -130,3 +197,4 @@ PROFILING_DEBUG_LEVEL=2: enable ProfilingContext4DebugL1 and ProfilingContext4De
 """
 ProfilingContext4DebugL1 = _ProfilingContextL1 if CHECK_PROFILING_DEBUG_LEVEL(1) else _NullContext  # if user >= 1, enable profiling
 ProfilingContext4DebugL2 = _ProfilingContextL2 if CHECK_PROFILING_DEBUG_LEVEL(2) else _NullContext  # if user >= 2, enable profiling
+ExcludedProfilingContext = _ExcludedProfilingContext if CHECK_PROFILING_DEBUG_LEVEL(1) else _NullContext

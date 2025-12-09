@@ -15,7 +15,7 @@ class WanVaceTransformerWeights(WanTransformerWeights):
         self.patch_size = (1, 2, 2)
         self.register_offload_buffers(config)
         self.vace_blocks = WeightModuleList(
-            [WanVaceTransformerAttentionBlock(self.config["vace_layers"][i], i, self.task, self.mm_type, self.config, False, "vace_blocks") for i in range(len(self.config["vace_layers"]))]
+            [WanVaceTransformerAttentionBlock(self.config["vace_layers"][i], i, self.task, self.mm_type, self.config, False, False, "vace_blocks") for i in range(len(self.config["vace_layers"]))]
         )
         self.add_module("vace_blocks", self.vace_blocks)
         self.add_module(
@@ -27,22 +27,16 @@ class WanVaceTransformerWeights(WanTransformerWeights):
         super().register_offload_buffers(config)
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
-                self.vace_offload_block_buffers = WeightModuleList(
+                self.vace_offload_block_cuda_buffers = WeightModuleList(
                     [
-                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, "vace_blocks"),
-                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, "vace_blocks"),
+                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, False, "vace_blocks"),
+                        WanVaceTransformerAttentionBlock(self.config["vace_layers"][0], 0, self.task, self.mm_type, self.config, True, False, "vace_blocks"),
                     ]
                 )
-                self.add_module("vace_offload_block_buffers", self.vace_offload_block_buffers)
-                self.vace_offload_phase_buffers = None
+                self.add_module("vace_offload_block_cuda_buffers", self.vace_offload_block_cuda_buffers)
+                self.vace_offload_phase_cuda_buffers = None
             elif config["offload_granularity"] == "phase":
                 raise NotImplementedError
-
-    def clear(self):
-        super().clear()
-        for vace_block in self.vace_blocks:
-            for vace_phase in vace_block.compute_phases:
-                vace_phase.clear()
 
     def non_block_weights_to_cuda(self):
         super().non_block_weights_to_cuda()
@@ -54,15 +48,16 @@ class WanVaceTransformerWeights(WanTransformerWeights):
 
 
 class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
-    def __init__(self, base_block_idx, block_index, task, mm_type, config, is_offload_buffer, block_prefix):
-        super().__init__(block_index, task, mm_type, config, is_offload_buffer, block_prefix)
+    def __init__(self, base_block_idx, block_index, task, mm_type, config, create_cuda_buffer, create_cpu_buffer, block_prefix):
+        super().__init__(block_index, task, mm_type, config, create_cuda_buffer, create_cpu_buffer, block_prefix)
         if base_block_idx == 0:
             self.compute_phases[0].add_module(
                 "before_proj",
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.before_proj.weight",
                     f"{block_prefix}.{self.block_index}.before_proj.bias",
-                    is_offload_buffer,
+                    create_cuda_buffer,
+                    create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
                 ),
@@ -73,7 +68,8 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.after_proj.weight",
                 f"{block_prefix}.{self.block_index}.after_proj.bias",
-                is_offload_buffer,
+                create_cuda_buffer,
+                create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
             ),

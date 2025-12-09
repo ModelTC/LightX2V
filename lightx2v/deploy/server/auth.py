@@ -186,7 +186,7 @@ class AuthManager:
         try:
             payload = jwt.decode(token, secret_key, algorithms=[self.jwt_algorithm])
             token_type = payload.get("token_type")
-            if token_type != expected_type:
+            if token_type and token_type != expected_type:
                 raise HTTPException(status_code=401, detail="Token type mismatch")
             return payload
         except jwt.ExpiredSignatureError:

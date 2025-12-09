@@ -12,9 +12,6 @@
     "sample_guide_scale": 5.0,
     "enable_cfg": false,
     "cpu_offload": false,
-    "src_pose_path": "../save_results/animate/process_results/src_pose.mp4",
-    "src_face_path": "../save_results/animate/process_results/src_face.mp4",
-    "src_ref_images": "../save_results/animate/process_results/src_ref.png",
     "refert_num": 1,
     "replace_flag": false,
     "fps": 30

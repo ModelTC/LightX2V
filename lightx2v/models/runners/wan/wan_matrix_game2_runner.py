@@ -1,7 +1,7 @@
 import os
 
 import torch
-from diffusers.utils import load_image
+from diffusers.utils.loading_utils import load_image
 from torchvision.transforms import v2
 
 from lightx2v.models.input_encoders.hf.wan.matrix_game2.clip import CLIPModel
@@ -13,6 +13,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class VAEWrapper:
@@ -90,8 +91,8 @@ def get_current_action(mode="universal"):
                     flag = 1
             except Exception as e:
                 pass
-        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse]).cuda()
-        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).cuda()
+        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse]).to(AI_DEVICE)
+        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).to(AI_DEVICE)
     elif mode == "gta_drive":
         print()
         print("-" * 30)
@@ -118,8 +119,8 @@ def get_current_action(mode="universal"):
                 flag = 1
             except Exception as e:
                 pass
-        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse[0]]).cuda()
-        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard[0]]).cuda()
+        mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse[0]]).to(AI_DEVICE)
+        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard[0]]).to(AI_DEVICE)
     elif mode == "templerun":
         print()
         print("-" * 30)
@@ -142,7 +143,7 @@ def get_current_action(mode="universal"):
                     flag = 1
             except Exception as e:
                 pass
-        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).cuda()
+        keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).to(AI_DEVICE)
 
     if mode != "templerun":
         return {"mouse": mouse_cond, "keyboard": keyboard_cond}
@@ -272,6 +273,55 @@ class WanSFMtxg2Runner(WanSFRunner):
                     if stop == "n":
                         break
             stop = "n"
+
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
         return gen_video_final
+
+    @ProfilingContext4DebugL2("Run DiT")
+    def run_main_live(self, total_steps=None):
+        try:
+            self.init_video_recorder()
+            logger.info(f"init video_recorder: {self.video_recorder}")
+            rank, world_size = self.get_rank_and_world_size()
+            if rank == world_size - 1:
+                assert self.video_recorder is not None, "video_recorder is required for stream audio input for rank 2"
+                self.video_recorder.start(self.width, self.height)
+            if world_size > 1:
+                dist.barrier()
+            self.init_run()
+            if self.config.get("compile", False):
+                self.model.select_graph_for_compile(self.input_info)
+
+            stop = ""
+            while stop != "n":
+                for segment_idx in range(self.video_segment_num):
+                    logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
+                    with ProfilingContext4DebugL1(
+                        f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+                        recorder_mode=GET_RECORDER_MODE(),
+                        metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                        metrics_labels=["DefaultRunner"],
+                    ):
+                        self.check_stop()
+                        # 1. default do nothing
+                        self.init_run_segment(segment_idx)
+                        # 2. main inference loop
+                        latents = self.run_segment(segment_idx=segment_idx)
+                        # 3. vae decoder
+                        self.gen_video = self.run_vae_decoder(latents)
+                        # 4. default do nothing
+                        self.end_run_segment(segment_idx)
+
+                    # 5. stop or not
+                    if self.config["streaming"]:
+                        stop = input("Press `n` to stop generation: ").strip().lower()
+                        if stop == "n":
+                            break
+                stop = "n"
+        finally:
+            if hasattr(self.model, "inputs"):
+                self.end_run()
+            if self.video_recorder:
+                self.video_recorder.stop()
+                self.video_recorder = None

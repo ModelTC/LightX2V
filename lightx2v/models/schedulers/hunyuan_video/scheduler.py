@@ -4,6 +4,7 @@ from einops import rearrange
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .posemb_layers import get_nd_rotary_pos_embed
 
@@ -11,7 +12,6 @@ from .posemb_layers import get_nd_rotary_pos_embed
 class HunyuanVideo15Scheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
-        self.device = torch.device("cuda")
         self.reverse = True
         self.num_train_timesteps = 1000
         self.sample_shift = self.config["sample_shift"]
@@ -25,13 +25,13 @@ class HunyuanVideo15Scheduler(BaseScheduler):
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.bfloat16)
-        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
+        self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
         self.multitask_mask = self.get_task_mask(self.config["task"], latent_shape[-3])
         self.cond_latents_concat, self.mask_concat = self._prepare_cond_latents_and_mask(self.config["task"], image_encoder_output["cond_latents"], self.latents, self.multitask_mask, self.reorg_token)
         self.cos_sin = self.prepare_cos_sin((latent_shape[1], latent_shape[2], latent_shape[3]))
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.bfloat16):
-        self.generator = torch.Generator(device=self.device).manual_seed(seed)
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(
             1,
             latent_shape[0],
@@ -39,7 +39,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
             latent_shape[2],
             latent_shape[3],
             dtype=dtype,
-            device=self.device,
+            device=AI_DEVICE,
             generator=self.generator,
         )
 
@@ -127,13 +127,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         if rope_dim_list is None:
             rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
         assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal to head_dim of attention layer"
-        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(
-            rope_dim_list,
-            rope_sizes,
-            theta=self.config["rope_theta"],
-            use_real=True,
-            theta_rescale_factor=1,
-        )
+        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(rope_dim_list, rope_sizes, theta=self.config["rope_theta"], use_real=True, theta_rescale_factor=1, device=AI_DEVICE)
         cos_half = freqs_cos[:, ::2].contiguous()
         sin_half = freqs_sin[:, ::2].contiguous()
         cos_sin = torch.cat([cos_half, sin_half], dim=-1)
@@ -155,9 +149,8 @@ class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
 
     def prepare(self, seed, latent_shape, lq_latents, upsampler, image_encoder_output=None):
         dtype = lq_latents.dtype
-        device = lq_latents.device
         self.prepare_latents(seed, latent_shape, lq_latents, dtype=dtype)
-        self.set_timesteps(self.infer_steps, device=self.device, shift=self.sample_shift)
+        self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
         self.cos_sin = self.prepare_cos_sin((latent_shape[1], latent_shape[2], latent_shape[3]))
 
         tgt_shape = latent_shape[-2:]

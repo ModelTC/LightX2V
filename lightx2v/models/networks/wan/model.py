@@ -44,11 +44,13 @@ class WanModel(CompiledMethodsMixin):
         super().__init__()
         self.model_path = model_path
         self.config = config
-        self.run_device = self.config.get("run_device", "cuda")
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.model_type = model_type
-
+        self.remove_keys = []
+        self.lazy_load = self.config.get("lazy_load", False)
+        if self.lazy_load:
+            self.remove_keys.extend(["blocks."])
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -147,12 +149,12 @@ class WanModel(CompiledMethodsMixin):
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
-        if (self.device.type == "cuda" or self.device.type == "mlu") and dist.is_initialized():
-            device = torch.device("{}:{}".format(self.device.type, dist.get_rank()))
+        if self.device.type != "cpu" and dist.is_initialized():
+            device = dist.get_rank()
         else:
-            device = self.device
+            device = str(self.device)
 
-        with safe_open(file_path, framework="pt", device=str(device)) as f:
+        with safe_open(file_path, framework="pt", device=device) as f:
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()
@@ -170,6 +172,14 @@ class WanModel(CompiledMethodsMixin):
         else:
             safetensors_files = [safetensors_path]
 
+        if self.lazy_load:
+            self.lazy_load_path = safetensors_path
+            non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+            if os.path.exists(non_block_file):
+                safetensors_files = [non_block_file]
+            else:
+                raise ValueError(f"Non-block file not found in {safetensors_path}")
+
         weight_dict = {}
         for file_path in safetensors_files:
             if self.config.get("adapter_model_path", None) is not None:
@@ -183,7 +193,6 @@ class WanModel(CompiledMethodsMixin):
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
-
         if self.config.get("dit_quantized_ckpt", None):
             safetensors_path = self.config["dit_quantized_ckpt"]
         else:
@@ -205,6 +214,14 @@ class WanModel(CompiledMethodsMixin):
         else:
             safetensors_files = [safetensors_path]
             safetensors_path = os.path.dirname(safetensors_path)
+
+        if self.lazy_load:
+            self.lazy_load_path = safetensors_path
+            non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+            if os.path.exists(non_block_file):
+                safetensors_files = [non_block_file]
+            else:
+                raise ValueError(f"Non-block file not found in {safetensors_path}, Please check the lazy load model path")
 
         weight_dict = {}
         for safetensor_path in safetensors_files:
@@ -238,28 +255,6 @@ class WanModel(CompiledMethodsMixin):
 
         return weight_dict
 
-    def _load_quant_split_ckpt(self, unified_dtype, sensitive_layer):  # Need rewrite
-        lazy_load_model_path = self.dit_quantized_ckpt
-        logger.info(f"Loading splited quant model from {lazy_load_model_path}")
-        pre_post_weight_dict = {}
-
-        safetensor_path = os.path.join(lazy_load_model_path, "non_block.safetensors")
-        with safe_open(safetensor_path, framework="pt", device="cpu") as f:
-            for k in f.keys():
-                if f.get_tensor(k).dtype in [
-                    torch.float16,
-                    torch.bfloat16,
-                    torch.float,
-                ]:
-                    if unified_dtype or all(s not in k for s in sensitive_layer):
-                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
-                    else:
-                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
-                else:
-                    pre_post_weight_dict[k] = f.get_tensor(k).to(self.device)
-
-        return pre_post_weight_dict
-
     def _load_gguf_ckpt(self, gguf_path):
         state_dict = load_gguf_sd_ckpt(gguf_path, to_device=self.device)
         return state_dict
@@ -286,10 +281,7 @@ class WanModel(CompiledMethodsMixin):
                     weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
                 else:
                     # Load quantized weights
-                    if not self.config.get("lazy_load", False):
-                        weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
-                    else:
-                        weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
+                    weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
 
             if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
                 weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
@@ -303,7 +295,10 @@ class WanModel(CompiledMethodsMixin):
 
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
-        self.transformer_weights = self.transformer_weight_class(self.config)
+        if self.lazy_load:
+            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path)
+        else:
+            self.transformer_weights = self.transformer_weight_class(self.config)
         if not self._should_init_empty_model():
             self._apply_weights()
 
@@ -384,7 +379,14 @@ class WanModel(CompiledMethodsMixin):
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
-            self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_buffers, self.transformer_weights.offload_phase_buffers)
+            self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
+        if self.lazy_load:
+            self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
+            if self.config.get("warm_up_cpu_buffers", False):
+                self.transformer_infer.offload_manager.warm_up_cpu_buffers(self.transformer_weights.blocks_num)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
