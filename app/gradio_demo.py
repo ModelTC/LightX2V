@@ -755,7 +755,7 @@ def auto_configure(resolution):
     if is_ada_architecture_gpu():
         quant_op_priority = ["q8f", "vllm", "sgl"]
     else:
-        quant_op_priority = ["sgl", "vllm", "q8f"]
+        quant_op_priority = ["vllm", "sgl", "q8f"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -890,10 +890,7 @@ def auto_configure(resolution):
     )
 
 
-def main():
-    with gr.Blocks(
-        title="Lightx2v (Lightweight Video Inference and Generation Engine)",
-        css="""
+css = """
         .main-content { max-width: 1600px; margin: auto; padding: 20px; }
         .warning { color: #ff6b6b; font-weight: bold; }
 
@@ -961,10 +958,13 @@ def main():
             border-radius: 10px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
         }
-    """,
-    ) as demo:
-        gr.Markdown(f"# 🎬 LightX2V Video Generator")
+    """
 
+
+def main():
+    with gr.Blocks(title="Lightx2v (Lightweight Video Inference and Generation Engine)") as demo:
+        gr.Markdown(f"# 🎬 LightX2V Video Generator")
+        gr.HTML(f"<style>{css}</style>")
         # Main layout: left and right columns
         with gr.Row():
             # Left: configuration and input area
