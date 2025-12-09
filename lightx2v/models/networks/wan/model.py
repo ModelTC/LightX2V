@@ -178,7 +178,7 @@ class WanModel(CompiledMethodsMixin):
             if os.path.exists(non_block_file):
                 safetensors_files = [non_block_file]
             else:
-                raise ValueError(f"Non-block file not found in {safetensors_path}")
+                raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path. Lazy load mode only supports loading chunked model weights.")
 
         weight_dict = {}
         for file_path in safetensors_files:
@@ -221,7 +221,7 @@ class WanModel(CompiledMethodsMixin):
             if os.path.exists(non_block_file):
                 safetensors_files = [non_block_file]
             else:
-                raise ValueError(f"Non-block file not found in {safetensors_path}, Please check the lazy load model path")
+                raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path. Lazy load mode only supports loading chunked model weights.")
 
         weight_dict = {}
         for safetensor_path in safetensors_files:

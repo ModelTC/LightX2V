@@ -1,3 +1,4 @@
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
@@ -115,8 +116,6 @@ class WeightAsyncStreamManager(object):
             self.prefetch_futures.append(future)
 
     def swap_cpu_buffers(self):
-        import time
-
         wait_start = time.time()
         already_done = all(f.done() for f in self.prefetch_futures)
         for f in self.prefetch_futures:
@@ -125,25 +124,11 @@ class WeightAsyncStreamManager(object):
         logger.debug(f"[Prefetch] block {self.prefetch_block_idx}: wait={wait_time:.3f}s, already_done={already_done}")
         self.cpu_buffers = [self.cpu_buffers[1], self.cpu_buffers[0]]
 
-    def shutdown(self, wait=True):
-        """Shutdown the thread pool executor and wait for all pending tasks to complete."""
+    def __del__(self):
         if hasattr(self, "executor") and self.executor is not None:
-            # Wait for all pending futures to complete before shutting down
-            if hasattr(self, "prefetch_futures"):
-                for f in self.prefetch_futures:
-                    try:
-                        if not f.done():
-                            f.result()
-                    except Exception:
-                        pass
-            self.executor.shutdown(wait=wait)
+            for f in self.prefetch_futures:
+                if not f.done():
+                    f.result()
+            self.executor.shutdown(wait=False)
             self.executor = None
             logger.debug("ThreadPoolExecutor shut down successfully.")
-
-    def __del__(self):
-        """Cleanup method to ensure executor is shut down when object is destroyed."""
-        try:
-            if hasattr(self, "executor") and self.executor is not None:
-                self.executor.shutdown(wait=False)
-        except Exception:
-            pass

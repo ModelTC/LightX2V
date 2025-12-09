@@ -38,51 +38,52 @@ Follow the [Quick Start Guide](../getting_started/quickstart.md) to install the 
 - ✅ [sglang-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)
 - ✅ [q8-kernel](https://github.com/KONAKONA666/q8_kernels) (only supports ADA architecture GPUs)
 
-Install according to the project homepage tutorials for each operator as needed
+Install according to the project homepage tutorials for each operator as needed.
 
-### 🤖 Supported Models
+### 📥 Model Download
 
-#### 🎬 Image-to-Video Models
+Refer to the [Model Structure Documentation](../getting_started/model_structure.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
 
-| Model Name | Resolution | Parameters | Features | Recommended Use |
-|------------|------------|------------|----------|-----------------|
-| ✅ [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v) | 480p | 14B | Standard version | Balance speed and quality |
-| ✅ [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v) | 720p | 14B | HD version | Pursue high-quality output |
-| ✅ [Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v) | 480p | 14B | Distilled optimized version | Faster inference speed |
-| ✅ [Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v) | 720p | 14B | HD distilled version | High quality + fast inference |
+#### wan2.1 Model Directory Structure
 
-#### 📝 Text-to-Video Models
+```
+models/
+├── wan2.1_i2v_720p_lightx2v_4step.safetensors                   # Original precision
+├── wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors   # FP8 quantization
+├── wan2.1_i2v_720p_int8_lightx2v_4step.safetensors              # INT8 quantization
+├── wan2.1_i2v_720p_int8_lightx2v_4step_split                    # INT8 quantization block storage directory
+├── wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step_split         # FP8 quantization block storage directory
+├── Other weights (e.g., t2v)
+├── t5/clip/xlm-roberta-large/google    # text and image encoder
+├── vae/lightvae/lighttae               # vae
+└── config.json                         # Model configuration file
+```
 
-| Model Name | Parameters | Features | Recommended Use |
-|------------|------------|----------|-----------------|
-| ✅ [Wan2.1-T2V-1.3B-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-1.3B-Lightx2v) | 1.3B | Lightweight | Fast prototyping and testing |
-| ✅ [Wan2.1-T2V-14B-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-Lightx2v) | 14B | Standard version | Balance speed and quality |
-| ✅ [Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v) | 14B | Distilled optimized version | High quality + fast inference |
+#### wan2.2 Model Directory Structure
 
-**💡 Model Selection Recommendations**:
-- **First-time use**: Recommend choosing distilled versions (`wan2.1_distill`)
-- **Pursuing quality**: Choose 720p resolution or 14B parameter models
-- **Pursuing speed**: Choose 480p resolution or 1.3B parameter models, prioritize distilled versions
-- **Resource-constrained**: Prioritize distilled versions and lower resolutions
-- **Real-time applications**: Strongly recommend using distilled models (`wan2.1_distill`)
+```
+models/
+├── wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030.safetensors        # high noise original precision
+├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step_1030.safetensors    # high noise FP8 quantization
+├── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030.safetensors   # high noise INT8 quantization
+├── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step_1030_split         # high noise INT8 quantization block storage directory
+├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # low noise original precision
+├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # low noise FP8 quantization
+├── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # low noise INT8 quantization
+├── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step_split          # low noise INT8 quantization block storage directory
+├── t5/clip/xlm-roberta-large/google    # text and image encoder
+├── vae/lightvae/lighttae               # vae
+└── config.json                         # Model configuration file
+```
 
-**🎯 Model Category Description**:
-- **`wan2.1`**: Standard model, provides the best video generation quality, suitable for scenarios with extremely high quality requirements
-- **`wan2.1_distill`**: Distilled model, optimized through knowledge distillation technology, significantly improves inference speed, maintains good quality while greatly reducing computation time, suitable for most application scenarios
+**📝 Download Instructions**:
 
-**📥 Model Download**:
-
-Refer to the [Model Structure Documentation](./model_structure.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
-
-**Download Options**:
-
-- **Complete Model**: When downloading complete models with both quantized and non-quantized versions, you can freely choose the quantization precision for DIT/T5/CLIP in the advanced options of the `Gradio` Web frontend.
-
-- **Non-quantized Version Only**: When downloading only non-quantized versions, in the `Gradio` Web frontend, the quantization precision for `DIT/T5/CLIP` can only be set to bf16/fp16. If you need to use quantized versions of models, please manually download quantized weights to the `i2v_model_path` or `t2v_model_path` directory where Gradio is started.
-
-- **Quantized Version Only**: When downloading only quantized versions, in the `Gradio` Web frontend, the quantization precision for `DIT/T5/CLIP` can only be set to fp8 or int8 (depending on the weights you downloaded). If you need to use non-quantized versions of models, please manually download non-quantized weights to the `i2v_model_path` or `t2v_model_path` directory where Gradio is started.
-
-- **Note**: Whether you download complete models or partial models, the values for `i2v_model_path` and `t2v_model_path` parameters should be the first-level directory paths. For example: `Wan2.1-I2V-14B-480P-Lightx2v/`, not `Wan2.1-I2V-14B-480P-Lightx2v/int8`.
+- Model weights can be downloaded from HuggingFace:
+  - [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+  - [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
+- Text and Image Encoders can be downloaded from [Encoders](https://huggingface.co/lightx2v/Encoderss)
+- VAE can be downloaded from [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
+- For `xxx_split` directories (e.g., `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step_split`), which store multiple safetensors by block, suitable for devices with insufficient memory. For example, devices with 16GB or less memory should download according to their own situation.
 
 ### Startup Methods
 
@@ -96,8 +97,7 @@ vim run_gradio.sh
 
 # Configuration items that need to be modified:
 # - lightx2v_path: Lightx2v project root directory path
-# - i2v_model_path: Image-to-video model path
-# - t2v_model_path: Text-to-video model path
+# - model_path: Model root directory path (contains all model files)
 
 # 💾 Important note: Recommend pointing model paths to SSD storage locations
 # Example: /mnt/ssd/models/ or /data/ssd/models/
@@ -105,11 +105,9 @@ vim run_gradio.sh
 # 2. Run the startup script
 bash run_gradio.sh
 
-# 3. Or start with parameters (recommended using distilled models)
-bash run_gradio.sh --task i2v --lang en --model_cls wan2.1 --model_size 14b --port 8032
-bash run_gradio.sh --task t2v --lang en --model_cls wan2.1 --model_size 1.3b --port 8032
-bash run_gradio.sh --task i2v --lang en --model_cls wan2.1_distill --model_size 14b --port 8032
-bash run_gradio.sh --task t2v --lang en --model_cls wan2.1_distill --model_size 1.3b --port 8032
+# 3. Or start with parameters
+bash run_gradio.sh --lang en --port 8032
+bash run_gradio.sh --lang zh --port 7862
 ```
 
 **Windows Environment:**
@@ -120,8 +118,7 @@ notepad run_gradio_win.bat
 
 # Configuration items that need to be modified:
 # - lightx2v_path: Lightx2v project root directory path
-# - i2v_model_path: Image-to-video model path
-# - t2v_model_path: Text-to-video model path
+# - model_path: Model root directory path (contains all model files)
 
 # 💾 Important note: Recommend pointing model paths to SSD storage locations
 # Example: D:\models\ or E:\models\
@@ -129,201 +126,101 @@ notepad run_gradio_win.bat
 # 2. Run the startup script
 run_gradio_win.bat
 
-# 3. Or start with parameters (recommended using distilled models)
-run_gradio_win.bat --task i2v --lang en --model_cls wan2.1 --model_size 14b --port 8032
-run_gradio_win.bat --task t2v --lang en --model_cls wan2.1 --model_size 1.3b --port 8032
-run_gradio_win.bat --task i2v --lang en --model_cls wan2.1_distill --model_size 14b --port 8032
-run_gradio_win.bat --task t2v --lang en --model_cls wan2.1_distill --model_size 1.3b --port 8032
+# 3. Or start with parameters
+run_gradio_win.bat --lang en --port 8032
+run_gradio_win.bat --lang zh --port 7862
 ```
 
 #### Method 2: Direct Command Line Startup
 
-**Linux Environment:**
-
-**Image-to-Video Mode:**
 ```bash
-python gradio_demo.py \
-    --model_path /path/to/Wan2.1-I2V-14B-480P-Lightx2v \
-    --model_cls wan2.1 \
-    --model_size 14b \
-    --task i2v \
-    --server_name 0.0.0.0 \
-    --server_port 7862
+pip install -v git+https://github.com/ModelTC/LightX2V.git
 ```
+
+**Linux Environment:**
 
 **English Interface Version:**
 ```bash
 python gradio_demo.py \
-    --model_path /path/to/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v \
-    --model_cls wan2.1_distill \
-    --model_size 14b \
-    --task t2v \
+    --model_path /path/to/models \
+    --server_name 0.0.0.0 \
+    --server_port 7862
+```
+
+**Chinese Interface Version:**
+```bash
+python gradio_demo_zh.py \
+    --model_path /path/to/models \
     --server_name 0.0.0.0 \
     --server_port 7862
 ```
 
 **Windows Environment:**
 
-**Image-to-Video Mode:**
+**English Interface Version:**
 ```cmd
 python gradio_demo.py ^
-    --model_path D:\models\Wan2.1-I2V-14B-480P-Lightx2v ^
-    --model_cls wan2.1 ^
-    --model_size 14b ^
-    --task i2v ^
+    --model_path D:\models ^
     --server_name 127.0.0.1 ^
     --server_port 7862
 ```
 
-**English Interface Version:**
+**Chinese Interface Version:**
 ```cmd
-python gradio_demo.py ^
-    --model_path D:\models\Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v ^
-    --model_cls wan2.1_distill ^
-    --model_size 14b ^
-    --task t2v ^
+python gradio_demo_zh.py ^
+    --model_path D:\models ^
     --server_name 127.0.0.1 ^
     --server_port 7862
 ```
+
+**💡 Tip**: Model type (wan2.1/wan2.2), task type (i2v/t2v), and specific model file selection are all configured in the Web interface.
 
 ## 📋 Command Line Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `--model_path` | str | ✅ | - | Model folder path |
-| `--model_cls` | str | ❌ | wan2.1 | Model class: `wan2.1` (standard model) or `wan2.1_distill` (distilled model, faster inference) |
-| `--model_size` | str | ✅ | - | Model size: `14b (image-to-video or text-to-video)` or `1.3b (text-to-video)` |
-| `--task` | str | ✅ | - | Task type: `i2v` (image-to-video) or `t2v` (text-to-video) |
+| `--model_path` | str | ✅ | - | Model root directory path (directory containing all model files) |
 | `--server_port` | int | ❌ | 7862 | Server port |
 | `--server_name` | str | ❌ | 0.0.0.0 | Server IP address |
+| `--output_dir` | str | ❌ | ./outputs | Output video save directory |
+
+**💡 Note**: Model type (wan2.1/wan2.2), task type (i2v/t2v), and specific model file selection are all configured in the Web interface.
 
 ## 🎯 Features
 
-### Basic Settings
+### Model Configuration
 
-#### Input Parameters
+- **Model Type**: Supports wan2.1 and wan2.2 model architectures
+- **Task Type**: Supports Image-to-Video (i2v) and Text-to-Video (t2v) generation modes
+- **Model Selection**: Frontend automatically identifies and filters available model files, supports automatic quantization precision detection
+- **Encoder Configuration**: Supports selection of T5 text encoder, CLIP image encoder, and VAE decoder
+- **Operator Selection**: Supports multiple attention operators and quantization matrix multiplication operators, system automatically sorts by installation status
+
+### Input Parameters
+
 - **Prompt**: Describe the expected video content
 - **Negative Prompt**: Specify elements you don't want to appear
+- **Input Image**: Upload input image required in i2v mode
 - **Resolution**: Supports multiple preset resolutions (480p/540p/720p)
 - **Random Seed**: Controls the randomness of generation results
-- **Inference Steps**: Affects the balance between generation quality and speed
+- **Inference Steps**: Affects the balance between generation quality and speed (defaults to 4 steps for distilled models)
 
-#### Video Parameters
+### Video Parameters
+
 - **FPS**: Frames per second
 - **Total Frames**: Video length
-- **CFG Scale Factor**: Controls prompt influence strength (1-10)
+- **CFG Scale Factor**: Controls prompt influence strength (1-10, defaults to 1 for distilled models)
 - **Distribution Shift**: Controls generation style deviation degree (0-10)
-
-### Advanced Optimization Options
-
-#### GPU Memory Optimization
-- **Chunked Rotary Position Embedding**: Saves GPU memory
-- **Rotary Embedding Chunk Size**: Controls chunk granularity
-- **Clean CUDA Cache**: Promptly frees GPU memory
-
-#### Asynchronous Offloading
-- **CPU Offloading**: Transfers partial computation to CPU
-- **Lazy Loading**: Loads model components on-demand, significantly reduces system memory consumption
-- **Offload Granularity Control**: Fine-grained control of offloading strategies
-
-#### Low-Precision Quantization
-- **Attention Operators**: Flash Attention, Sage Attention, etc.
-- **Quantization Operators**: vLLM, SGL, Q8F, etc.
-- **Precision Modes**: FP8, INT8, BF16, etc.
-
-#### VAE Optimization
-- **Lightweight VAE**: Accelerates decoding process
-- **VAE Tiling Inference**: Reduces memory usage
-
-#### Feature Caching
-- **Tea Cache**: Caches intermediate features to accelerate generation
-- **Cache Threshold**: Controls cache trigger conditions
-- **Key Step Caching**: Writes cache only at key steps
 
 ## 🔧 Auto-Configuration Feature
 
-After enabling "Auto-configure Inference Options", the system will automatically optimize parameters based on your hardware configuration:
+The system automatically configures optimal inference options based on your hardware configuration (GPU VRAM and CPU memory) without manual adjustment. The best configuration is automatically applied on startup, including:
 
-### GPU Memory Rules
-- **80GB+**: Default configuration, no optimization needed
-- **48GB**: Enable CPU offloading, offload ratio 50%
-- **40GB**: Enable CPU offloading, offload ratio 80%
-- **32GB**: Enable CPU offloading, offload ratio 100%
-- **24GB**: Enable BF16 precision, VAE tiling
-- **16GB**: Enable chunked offloading, rotary embedding chunking
-- **12GB**: Enable cache cleaning, lightweight VAE
-- **8GB**: Enable quantization, lazy loading
+- **GPU Memory Optimization**: Automatically enables CPU offloading, VAE tiling inference, etc. based on VRAM size
+- **CPU Memory Optimization**: Automatically enables lazy loading, module unloading, etc. based on system memory
+- **Operator Selection**: Automatically selects the best installed operators (sorted by priority)
+- **Quantization Configuration**: Automatically detects and applies quantization precision based on model file names
 
-### CPU Memory Rules
-- **128GB+**: Default configuration
-- **64GB**: Enable DIT quantization
-- **32GB**: Enable lazy loading
-- **16GB**: Enable full model quantization
-
-## ⚠️ Important Notes
-
-### 🚀 Low-Resource Device Optimization Recommendations
-
-**💡 For devices with insufficient VRAM or performance constraints**:
-
-- **🎯 Model Selection**: Prioritize using distilled version models (`wan2.1_distill`)
-- **⚡ Inference Steps**: Recommend setting to 4 steps
-- **🔧 CFG Settings**: Recommend disabling CFG option to improve generation speed
-- **🔄 Auto-Configuration**: Enable "Auto-configure Inference Options"
-- **💾 Storage Optimization**: Ensure models are stored on SSD for optimal loading performance
-
-## 🎨 Interface Description
-
-### Basic Settings Tab
-- **Input Parameters**: Prompts, resolution, and other basic settings
-- **Video Parameters**: FPS, frame count, CFG, and other video generation parameters
-- **Output Settings**: Video save path configuration
-
-### Advanced Options Tab
-- **GPU Memory Optimization**: Memory management related options
-- **Asynchronous Offloading**: CPU offloading and lazy loading
-- **Low-Precision Quantization**: Various quantization optimization options
-- **VAE Optimization**: Variational Autoencoder optimization
-- **Feature Caching**: Cache strategy configuration
-
-## 🔍 Troubleshooting
-
-### Common Issues
-
-**💡 Tip**: Generally, after enabling "Auto-configure Inference Options", the system will automatically optimize parameter settings based on your hardware configuration, and performance issues usually won't occur. If you encounter problems, please refer to the following solutions:
-
-1. **Gradio Webpage Opens Blank**
-   - Try upgrading gradio: `pip install --upgrade gradio`
-
-2. **CUDA Memory Insufficient**
-   - Enable CPU offloading
-   - Reduce resolution
-   - Enable quantization options
-
-3. **System Memory Insufficient**
-   - Enable CPU offloading
-   - Enable lazy loading option
-   - Enable quantization options
-
-4. **Slow Generation Speed**
-   - Reduce inference steps
-   - Enable auto-configuration
-   - Use lightweight models
-   - Enable Tea Cache
-   - Use quantization operators
-   - 💾 **Check if models are stored on SSD**
-
-5. **Slow Model Loading**
-   - 💾 **Migrate models to SSD storage**
-   - Enable lazy loading option
-   - Check disk I/O performance
-   - Consider using NVMe SSD
-
-6. **Poor Video Quality**
-   - Increase inference steps
-   - Increase CFG scale factor
-   - Use 14B models
-   - Optimize prompts
 
 ### Log Viewing
 

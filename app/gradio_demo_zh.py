@@ -4,6 +4,9 @@ import glob
 import importlib.util
 import json
 import os
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["DTYPE"] = "BF16"
 import random
 from datetime import datetime
 
@@ -11,6 +14,15 @@ import gradio as gr
 import psutil
 import torch
 from loguru import logger
+
+from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.set_config import get_default_config
+
+try:
+    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+except ImportError:
+    apply_rope_with_cos_sin_cache_inplace = None
+
 
 logger.add(
     "inference_logs.log",
@@ -24,38 +36,196 @@ logger.add(
 MAX_NUMPY_SEED = 2**32 - 1
 
 
-def find_hf_model_path(model_path, subdir=["original", "fp8", "int8"]):
-    paths_to_check = [model_path]
-    if isinstance(subdir, list):
-        for sub in subdir:
-            paths_to_check.append(os.path.join(model_path, sub))
+def scan_model_path_contents(model_path):
+    """扫描 model_path 目录，返回可用的文件和子目录"""
+    if not model_path or not os.path.exists(model_path):
+        return {"dirs": [], "files": [], "safetensors_dirs": [], "pth_files": []}
+
+    dirs = []
+    files = []
+    safetensors_dirs = []
+    pth_files = []
+
+    try:
+        for item in os.listdir(model_path):
+            item_path = os.path.join(model_path, item)
+            if os.path.isdir(item_path):
+                dirs.append(item)
+                # 检查目录是否包含 safetensors 文件
+                if glob.glob(os.path.join(item_path, "*.safetensors")):
+                    safetensors_dirs.append(item)
+            elif os.path.isfile(item_path):
+                files.append(item)
+                if item.endswith(".pth"):
+                    pth_files.append(item)
+    except Exception as e:
+        logger.warning(f"扫描目录失败: {e}")
+
+    return {
+        "dirs": sorted(dirs),
+        "files": sorted(files),
+        "safetensors_dirs": sorted(safetensors_dirs),
+        "pth_files": sorted(pth_files),
+    }
+
+
+def get_dit_choices(model_path, model_type="wan2.1"):
+    """获取 Diffusion 模型可选项（根据模型类型筛选）"""
+    contents = scan_model_path_contents(model_path)
+    excluded_keywords = ["vae", "tae", "clip", "t5", "high_noise", "low_noise"]
+    fp8_supported = is_fp8_supported_gpu()
+
+    if model_type == "wan2.1":
+        # wan2.1: 筛选包含 wan2.1 或 Wan2.1 的文件/目录
+        def is_valid(name):
+            name_lower = name.lower()
+            if "wan2.1" not in name_lower:
+                return False
+            if not fp8_supported and "fp8" in name_lower:
+                return False
+            return not any(kw in name_lower for kw in excluded_keywords)
     else:
-        paths_to_check.append(os.path.join(model_path, subdir))
+        # wan2.2: 筛选包含 wan2.2 或 Wan2.2 的文件/目录
+        def is_valid(name):
+            name_lower = name.lower()
+            if "wan2.2" not in name_lower:
+                return False
+            if not fp8_supported and "fp8" in name_lower:
+                return False
+            return not any(kw in name_lower for kw in excluded_keywords)
 
-    for path in paths_to_check:
-        safetensors_pattern = os.path.join(path, "*.safetensors")
-        safetensors_files = glob.glob(safetensors_pattern)
-        if safetensors_files:
-            logger.info(f"Found Hugging Face model files in: {path}")
-            return path
-    raise FileNotFoundError(f"No Hugging Face model files (.safetensors) found.\nPlease download the model from: https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
+    # 筛选符合条件的目录和文件
+    dir_choices = [d for d in contents["dirs"] if is_valid(d)]
+    file_choices = [f for f in contents["files"] if is_valid(f)]
+    choices = dir_choices + file_choices
+    return choices if choices else [""]
 
 
-def find_torch_model_path(model_path, filename=None, subdir=["original", "fp8", "int8"]):
-    paths_to_check = [
-        os.path.join(model_path, filename),
-    ]
-    if isinstance(subdir, list):
-        for sub in subdir:
-            paths_to_check.append(os.path.join(model_path, sub, filename))
-    else:
-        paths_to_check.append(os.path.join(model_path, subdir, filename))
-    print(paths_to_check)
-    for path in paths_to_check:
-        if os.path.exists(path):
-            logger.info(f"Found PyTorch model checkpoint: {path}")
-            return path
-    raise FileNotFoundError(f"PyTorch model file '{filename}' not found.\nPlease download the model from https://huggingface.co/lightx2v/ or specify the model path in the configuration file.")
+def get_high_noise_choices(model_path):
+    """获取高噪模型可选项（包含 high_noise 的文件/目录）"""
+    contents = scan_model_path_contents(model_path)
+    fp8_supported = is_fp8_supported_gpu()
+
+    def is_valid(name):
+        name_lower = name.lower()
+        if not fp8_supported and "fp8" in name_lower:
+            return False
+        return "high_noise" in name_lower or "high-noise" in name_lower
+
+    dir_choices = [d for d in contents["dirs"] if is_valid(d)]
+    file_choices = [f for f in contents["files"] if is_valid(f)]
+    choices = dir_choices + file_choices
+    return choices if choices else [""]
+
+
+def get_low_noise_choices(model_path):
+    """获取低噪模型可选项（包含 low_noise 的文件/目录）"""
+    contents = scan_model_path_contents(model_path)
+    fp8_supported = is_fp8_supported_gpu()
+
+    def is_valid(name):
+        name_lower = name.lower()
+        if not fp8_supported and "fp8" in name_lower:
+            return False
+        return "low_noise" in name_lower or "low-noise" in name_lower
+
+    dir_choices = [d for d in contents["dirs"] if is_valid(d)]
+    file_choices = [f for f in contents["files"] if is_valid(f)]
+    choices = dir_choices + file_choices
+    return choices if choices else [""]
+
+
+def get_t5_choices(model_path):
+    """获取 T5 模型可选项（.pth 或 .safetensors 文件，包含 t5 关键字）"""
+    contents = scan_model_path_contents(model_path)
+    fp8_supported = is_fp8_supported_gpu()
+
+    # 从 .pth 文件中筛选
+    pth_choices = [f for f in contents["pth_files"] if "t5" in f.lower() and (fp8_supported or "fp8" not in f.lower())]
+
+    # 从 .safetensors 文件中筛选
+    safetensors_choices = [f for f in contents["files"] if f.endswith(".safetensors") and "t5" in f.lower() and (fp8_supported or "fp8" not in f.lower())]
+
+    # 从包含 safetensors 的目录中筛选
+    safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if "t5" in d.lower() and (fp8_supported or "fp8" not in d.lower())]
+
+    choices = pth_choices + safetensors_choices + safetensors_dir_choices
+    return choices if choices else [""]
+
+
+def get_clip_choices(model_path):
+    """获取 CLIP 模型可选项（.pth 或 .safetensors 文件，包含 clip 关键字）"""
+    contents = scan_model_path_contents(model_path)
+    fp8_supported = is_fp8_supported_gpu()
+
+    # 从 .pth 文件中筛选
+    pth_choices = [f for f in contents["pth_files"] if "clip" in f.lower() and (fp8_supported or "fp8" not in f.lower())]
+
+    # 从 .safetensors 文件中筛选
+    safetensors_choices = [f for f in contents["files"] if f.endswith(".safetensors") and "clip" in f.lower() and (fp8_supported or "fp8" not in f.lower())]
+
+    # 从包含 safetensors 的目录中筛选
+    safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if "clip" in d.lower() and (fp8_supported or "fp8" not in d.lower())]
+
+    choices = pth_choices + safetensors_choices + safetensors_dir_choices
+    return choices if choices else [""]
+
+
+def get_vae_choices(model_path):
+    """获取 VAE 模型可选项（.pth 或 .safetensors 文件，包含 vae/VAE/tae 关键字）"""
+    contents = scan_model_path_contents(model_path)
+    fp8_supported = is_fp8_supported_gpu()
+
+    # 从 .pth 文件中筛选
+    pth_choices = [f for f in contents["pth_files"] if any(kw in f.lower() for kw in ["vae", "tae"]) and (fp8_supported or "fp8" not in f.lower())]
+
+    # 从 .safetensors 文件中筛选
+    safetensors_choices = [f for f in contents["files"] if f.endswith(".safetensors") and any(kw in f.lower() for kw in ["vae", "tae"]) and (fp8_supported or "fp8" not in f.lower())]
+
+    # 从包含 safetensors 的目录中筛选
+    safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if any(kw in d.lower() for kw in ["vae", "tae"]) and (fp8_supported or "fp8" not in d.lower())]
+
+    choices = pth_choices + safetensors_choices + safetensors_dir_choices
+    return choices if choices else [""]
+
+
+def detect_quant_scheme(model_name):
+    """根据模型名字自动检测量化精度
+    - 如果模型名字包含 "int8" → "int8"
+    - 如果模型名字包含 "fp8" 且设备支持 → "fp8"
+    - 否则返回 None（表示不使用量化）
+    """
+    if not model_name:
+        return None
+    name_lower = model_name.lower()
+    if "int8" in name_lower:
+        return "int8"
+    elif "fp8" in name_lower:
+        if is_fp8_supported_gpu():
+            return "fp8"
+        else:
+            # 设备不支持fp8，返回None（使用默认精度）
+            return None
+    return None
+
+
+def update_model_path_options(model_path, model_type="wan2.1"):
+    """当 model_path 或 model_type 改变时，更新所有模型路径选择器"""
+    dit_choices = get_dit_choices(model_path, model_type)
+    high_noise_choices = get_high_noise_choices(model_path)
+    low_noise_choices = get_low_noise_choices(model_path)
+    t5_choices = get_t5_choices(model_path)
+    clip_choices = get_clip_choices(model_path)
+    vae_choices = get_vae_choices(model_path)
+
+    return (
+        gr.update(choices=dit_choices, value=dit_choices[0] if dit_choices else ""),
+        gr.update(choices=high_noise_choices, value=high_noise_choices[0] if high_noise_choices else ""),
+        gr.update(choices=low_noise_choices, value=low_noise_choices[0] if low_noise_choices else ""),
+        gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),
+        gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),
+        gr.update(choices=vae_choices, value=vae_choices[0] if vae_choices else ""),
+    )
 
 
 def generate_random_seed():
@@ -109,11 +279,17 @@ def get_available_attn_ops():
     else:
         available_ops.append(("flash_attn3", False))
 
-    q8f_installed = is_module_installed("sageattention")
-    if q8f_installed:
+    sage_installed = is_module_installed("sageattention")
+    if sage_installed:
         available_ops.append(("sage_attn2", True))
     else:
         available_ops.append(("sage_attn2", False))
+
+    sage3_installed = is_module_installed("sageattn3")
+    if sage3_installed:
+        available_ops.append(("sage_attn3", True))
+    else:
+        available_ops.append(("sage_attn3", False))
 
     torch_installed = is_module_installed("torch")
     if torch_installed:
@@ -165,7 +341,7 @@ def cleanup_memory():
 def generate_unique_filename(output_dir):
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(output_dir, f"{model_cls}_{timestamp}.mp4")
+    return os.path.join(output_dir, f"{timestamp}.mp4")
 
 
 def is_fp8_supported_gpu():
@@ -233,13 +409,25 @@ def get_quantization_options(model_path):
     return {"dit_choices": dit_choices, "dit_default": dit_default, "t5_choices": t5_choices, "t5_default": t5_default, "clip_choices": clip_choices, "clip_default": clip_default}
 
 
+def determine_model_cls(model_type, dit_name, high_noise_name):
+    """根据模型类型和文件名确定 model_cls"""
+    # 确定要检查的文件名
+    if model_type == "wan2.1":
+        check_name = dit_name.lower() if dit_name else ""
+        is_distill = "4step" in check_name
+        return "wan2.1_distill" if is_distill else "wan2.1"
+    else:
+        # wan2.2
+        check_name = high_noise_name.lower() if high_noise_name else ""
+        is_distill = "4step" in check_name
+        return "wan2.2_moe_distill" if is_distill else "wan2.2_moe"
+
+
 global_runner = None
 current_config = None
-cur_dit_quant_scheme = None
-cur_clip_quant_scheme = None
-cur_t5_quant_scheme = None
-cur_precision_mode = None
-cur_enable_teacache = None
+cur_dit_path = None
+cur_t5_path = None
+cur_clip_path = None
 
 available_quant_ops = get_available_quant_ops()
 quant_op_choices = []
@@ -249,8 +437,29 @@ for op_name, is_installed in available_quant_ops:
     quant_op_choices.append((op_name, display_text))
 
 available_attn_ops = get_available_attn_ops()
+# 优先级顺序
+attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
+# 按优先级排序，已安装的在前，未安装的在后
 attn_op_choices = []
-for op_name, is_installed in available_attn_ops:
+attn_op_dict = dict(available_attn_ops)
+
+# 先添加已安装的（按优先级）
+for op_name in attn_priority:
+    if op_name in attn_op_dict and attn_op_dict[op_name]:
+        status_text = "✅ 已安装"
+        display_text = f"{op_name} ({status_text})"
+        attn_op_choices.append((op_name, display_text))
+
+# 再添加未安装的（按优先级）
+for op_name in attn_priority:
+    if op_name in attn_op_dict and not attn_op_dict[op_name]:
+        status_text = "❌ 未安装"
+        display_text = f"{op_name} ({status_text})"
+        attn_op_choices.append((op_name, display_text))
+
+# 添加其他不在优先级列表中的算子（已安装的在前）
+other_ops = [(op_name, is_installed) for op_name, is_installed in available_attn_ops if op_name not in attn_priority]
+for op_name, is_installed in sorted(other_ops, key=lambda x: not x[1]):  # 已安装的在前
     status_text = "✅ 已安装" if is_installed else "❌ 未安装"
     display_text = f"{op_name} ({status_text})"
     attn_op_choices.append((op_name, display_text))
@@ -260,36 +469,36 @@ def run_inference(
     prompt,
     negative_prompt,
     save_result_path,
-    torch_compile,
     infer_steps,
     num_frames,
     resolution,
     seed,
     sample_shift,
-    enable_teacache,
-    teacache_thresh,
-    use_ret_steps,
     enable_cfg,
     cfg_scale,
-    dit_quant_scheme,
-    t5_quant_scheme,
-    clip_quant_scheme,
     fps,
-    use_tae,
     use_tiling_vae,
     lazy_load,
-    precision_mode,
     cpu_offload,
     offload_granularity,
-    offload_ratio,
     t5_cpu_offload,
+    clip_cpu_offload,
+    vae_cpu_offload,
     unload_modules,
-    t5_offload_granularity,
     attention_type,
     quant_op,
-    rotary_chunk,
-    rotary_chunk_size,
+    rope_chunk,
+    rope_chunk_size,
     clean_cuda_cache,
+    model_path_input,
+    model_type_input,
+    task_type_input,
+    dit_path_input,
+    high_noise_path_input,
+    low_noise_path_input,
+    t5_path_input,
+    clip_path_input,
+    vae_path_input,
     image_path=None,
 ):
     cleanup_memory()
@@ -297,8 +506,23 @@ def run_inference(
     quant_op = quant_op.split("(")[0].strip()
     attention_type = attention_type.split("(")[0].strip()
 
-    global global_runner, current_config, model_path, task
-    global cur_dit_quant_scheme, cur_clip_quant_scheme, cur_t5_quant_scheme, cur_precision_mode, cur_enable_teacache
+    global global_runner, current_config, model_path, model_cls
+    global cur_dit_path, cur_t5_path, cur_clip_path
+
+    task = task_type_input
+    model_cls = determine_model_cls(model_type_input, dit_path_input, high_noise_path_input)
+    logger.info(f"自动确定 model_cls: {model_cls} (模型类型: {model_type_input})")
+
+    if model_type_input == "wan2.1":
+        dit_quant_detected = detect_quant_scheme(dit_path_input)
+    else:
+        dit_quant_detected = detect_quant_scheme(high_noise_path_input)
+    t5_quant_detected = detect_quant_scheme(t5_path_input)
+    clip_quant_detected = detect_quant_scheme(clip_path_input)
+    logger.info(f"自动检测量化精度 - DIT: {dit_quant_detected}, T5: {t5_quant_detected}, CLIP: {clip_quant_detected}")
+
+    if model_path_input and model_path_input.strip():
+        model_path = model_path_input.strip()
 
     if os.path.exists(os.path.join(model_path, "config.json")):
         with open(os.path.join(model_path, "config.json"), "r") as f:
@@ -306,159 +530,88 @@ def run_inference(
     else:
         model_config = {}
 
-    if task == "t2v":
-        if model_size == "1.3b":
-            # 1.3B
-            coefficient = [
-                [
-                    -5.21862437e04,
-                    9.23041404e03,
-                    -5.28275948e02,
-                    1.36987616e01,
-                    -4.99875664e-02,
-                ],
-                [
-                    2.39676752e03,
-                    -1.31110545e03,
-                    2.01331979e02,
-                    -8.29855975e00,
-                    1.37887774e-01,
-                ],
-            ]
-        else:
-            # 14B
-            coefficient = [
-                [
-                    -3.03318725e05,
-                    4.90537029e04,
-                    -2.65530556e03,
-                    5.87365115e01,
-                    -3.15583525e-01,
-                ],
-                [
-                    -5784.54975374,
-                    5449.50911966,
-                    -1811.16591783,
-                    256.27178429,
-                    -13.02252404,
-                ],
-            ]
-    elif task == "i2v":
-        if resolution in [
-            "1280x720",
-            "720x1280",
-            "1280x544",
-            "544x1280",
-            "1104x832",
-            "832x1104",
-            "960x960",
-        ]:
-            # 720p
-            coefficient = [
-                [
-                    8.10705460e03,
-                    2.13393892e03,
-                    -3.72934672e02,
-                    1.66203073e01,
-                    -4.17769401e-02,
-                ],
-                [-114.36346466, 65.26524496, -18.82220707, 4.91518089, -0.23412683],
-            ]
-        else:
-            # 480p
-            coefficient = [
-                [
-                    2.57151496e05,
-                    -3.54229917e04,
-                    1.40286849e03,
-                    -1.35890334e01,
-                    1.32517977e-01,
-                ],
-                [
-                    -3.02331670e02,
-                    2.23948934e02,
-                    -5.25463970e01,
-                    5.87348440e00,
-                    -2.01973289e-01,
-                ],
-            ]
-
     save_result_path = generate_unique_filename(output_dir)
 
-    is_dit_quant = dit_quant_scheme != "bf16"
-    is_t5_quant = t5_quant_scheme != "bf16"
+    is_dit_quant = dit_quant_detected != "bf16"
+    is_t5_quant = t5_quant_detected != "bf16"
+    is_clip_quant = clip_quant_detected != "fp16"
 
+    dit_quantized_ckpt = None
+    dit_original_ckpt = None
+    high_noise_quantized_ckpt = None
+    low_noise_quantized_ckpt = None
+    high_noise_original_ckpt = None
+    low_noise_original_ckpt = None
+
+    if is_dit_quant:
+        dit_quant_scheme = f"{dit_quant_detected}-{quant_op}"
+        if "wan2.1" in model_cls:
+            dit_quantized_ckpt = os.path.join(model_path, dit_path_input)
+        else:
+            high_noise_quantized_ckpt = os.path.join(model_path, high_noise_path_input)
+            low_noise_quantized_ckpt = os.path.join(model_path, low_noise_path_input)
+    else:
+        dit_quantized_ckpt = "Default"
+        if "wan2.1" in model_cls:
+            dit_original_ckpt = os.path.join(model_path, dit_path_input)
+        else:
+            high_noise_original_ckpt = os.path.join(model_path, high_noise_path_input)
+            low_noise_original_ckpt = os.path.join(model_path, low_noise_path_input)
+
+    # 使用前端选择的 T5 路径
     if is_t5_quant:
-        t5_model_name = f"models_t5_umt5-xxl-enc-{t5_quant_scheme}.pth"
-        t5_quantized_ckpt = find_torch_model_path(model_path, t5_model_name, t5_quant_scheme)
+        t5_quantized_ckpt = os.path.join(model_path, t5_path_input)
+        t5_quant_scheme = f"{t5_quant_detected}-{quant_op}"
         t5_original_ckpt = None
     else:
         t5_quantized_ckpt = None
-        t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
-        t5_original_ckpt = find_torch_model_path(model_path, t5_model_name, "original")
+        t5_quant_scheme = None
+        t5_original_ckpt = os.path.join(model_path, t5_path_input)
 
-    is_clip_quant = clip_quant_scheme != "fp16"
-
+    # 使用前端选择的 CLIP 路径
     if is_clip_quant:
-        clip_model_name = f"clip-{t5_quant_scheme}.pth"
-        clip_quantized_ckpt = find_torch_model_path(model_path, clip_model_name, clip_quant_scheme)
+        clip_quantized_ckpt = os.path.join(model_path, clip_path_input)
+        clip_quant_scheme = f"{clip_quant_detected}-{quant_op}"
         clip_original_ckpt = None
     else:
         clip_quantized_ckpt = None
-        clip_model_name = "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
-        clip_original_ckpt = find_torch_model_path(model_path, clip_model_name, "original")
+        clip_quant_scheme = None
+        clip_original_ckpt = os.path.join(model_path, clip_path_input)
+
+    if model_type_input == "wan2.1":
+        current_dit_path = dit_path_input
+    else:
+        current_dit_path = f"{high_noise_path_input}|{low_noise_path_input}" if high_noise_path_input and low_noise_path_input else None
+
+    current_t5_path = t5_path_input
+    current_clip_path = clip_path_input
 
     needs_reinit = (
         lazy_load
         or unload_modules
         or global_runner is None
         or current_config is None
-        or cur_dit_quant_scheme is None
-        or cur_dit_quant_scheme != dit_quant_scheme
-        or cur_clip_quant_scheme is None
-        or cur_clip_quant_scheme != clip_quant_scheme
-        or cur_t5_quant_scheme is None
-        or cur_t5_quant_scheme != t5_quant_scheme
-        or cur_precision_mode is None
-        or cur_precision_mode != precision_mode
-        or cur_enable_teacache is None
-        or cur_enable_teacache != enable_teacache
+        or cur_dit_path is None
+        or cur_dit_path != current_dit_path
+        or cur_t5_path is None
+        or cur_t5_path != current_t5_path
+        or cur_clip_path is None
+        or cur_clip_path != current_clip_path
     )
 
-    if torch_compile:
-        os.environ["ENABLE_GRAPH_MODE"] = "true"
+    if cfg_scale == 1:
+        enable_cfg = False
     else:
-        os.environ["ENABLE_GRAPH_MODE"] = "false"
-    if precision_mode == "bf16":
-        os.environ["DTYPE"] = "BF16"
-    else:
-        os.environ.pop("DTYPE", None)
+        enable_cfg = True
 
-    if is_dit_quant:
-        if quant_op == "vllm":
-            mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Vllm"
-        elif quant_op == "sgl":
-            if dit_quant_scheme == "int8":
-                mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Sgl-ActVllm"
-            else:
-                mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Sgl"
-        elif quant_op == "q8f":
-            mm_type = f"W-{dit_quant_scheme}-channel-sym-A-{dit_quant_scheme}-channel-sym-dynamic-Q8F"
-            t5_quant_scheme = f"{t5_quant_scheme}-q8f"
-            clip_quant_scheme = f"{clip_quant_scheme}-q8f"
+    vae_name_lower = vae_path_input.lower() if vae_path_input else ""
+    use_tae = "tae" in vae_name_lower or "lighttae" in vae_name_lower
+    use_lightvae = "lightvae" in vae_name_lower
+    need_scaled = "lighttae" in vae_name_lower
 
-        dit_quantized_ckpt = find_hf_model_path(model_path, dit_quant_scheme)
-        if os.path.exists(os.path.join(dit_quantized_ckpt, "config.json")):
-            with open(os.path.join(dit_quantized_ckpt, "config.json"), "r") as f:
-                quant_model_config = json.load(f)
-        else:
-            quant_model_config = {}
-    else:
-        mm_type = "Default"
-        dit_quantized_ckpt = None
-        quant_model_config = {}
+    logger.info(f"VAE 配置 - use_tae: {use_tae}, use_lightvae: {use_lightvae}, need_scaled: {need_scaled} (VAE: {vae_path_input})")
 
-    config = {
+    config_graio = {
         "infer_steps": infer_steps,
         "target_video_length": num_frames,
         "target_width": int(resolution.split("x")[0]),
@@ -466,38 +619,11 @@ def run_inference(
         "self_attn_1_type": attention_type,
         "cross_attn_1_type": attention_type,
         "cross_attn_2_type": attention_type,
-        "seed": seed,
         "enable_cfg": enable_cfg,
         "sample_guide_scale": cfg_scale,
         "sample_shift": sample_shift,
-        "cpu_offload": cpu_offload,
-        "offload_granularity": offload_granularity,
-        "offload_ratio": offload_ratio,
-        "t5_offload_granularity": t5_offload_granularity,
-        "dit_quantized_ckpt": dit_quantized_ckpt,
-        "mm_config": {
-            "mm_type": mm_type,
-        },
         "fps": fps,
-        "feature_caching": "Tea" if enable_teacache else "NoCaching",
-        "coefficients": coefficient[0] if use_ret_steps else coefficient[1],
-        "use_ret_steps": use_ret_steps,
-        "teacache_thresh": teacache_thresh,
-        "t5_original_ckpt": t5_original_ckpt,
-        "t5_cpu_offload": t5_cpu_offload,
-        "unload_modules": unload_modules,
-        "t5_quantized": is_t5_quant,
-        "t5_quantized_ckpt": t5_quantized_ckpt,
-        "t5_quant_scheme": t5_quant_scheme,
-        "clip_original_ckpt": clip_original_ckpt,
-        "clip_quantized": is_clip_quant,
-        "clip_quantized_ckpt": clip_quantized_ckpt,
-        "clip_quant_scheme": clip_quant_scheme,
-        "vae_path": find_torch_model_path(model_path, "Wan2.1_VAE.pth"),
-        "use_tiling_vae": use_tiling_vae,
-        "use_tae": use_tae,
-        "tae_path": (find_torch_model_path(model_path, "taew2_1.pth") if use_tae else None),
-        "lazy_load": lazy_load,
+        "feature_caching": "NoCaching",
         "do_mm_calib": False,
         "parallel_attn_type": None,
         "parallel_vae": False,
@@ -508,14 +634,49 @@ def run_inference(
         "strength_model": 1.0,
         "use_prompt_enhancer": False,
         "text_len": 512,
-        "rotary_chunk": rotary_chunk,
-        "rotary_chunk_size": rotary_chunk_size,
-        "clean_cuda_cache": clean_cuda_cache,
         "denoising_step_list": [1000, 750, 500, 250],
+        "cpu_offload": True if "wan2.2" in model_cls else cpu_offload,
+        "offload_granularity": "phase" if "wan2.2" in model_cls else offload_granularity,
+        "t5_cpu_offload": t5_cpu_offload,
+        "clip_cpu_offload": clip_cpu_offload,
+        "vae_cpu_offload": vae_cpu_offload,
+        "dit_quantized": is_dit_quant,
+        "dit_quant_scheme": dit_quant_scheme,
+        "dit_quantized_ckpt": dit_quantized_ckpt,
+        "dit_original_ckpt": dit_original_ckpt,
+        "high_noise_quantized_ckpt": high_noise_quantized_ckpt,
+        "low_noise_quantized_ckpt": low_noise_quantized_ckpt,
+        "high_noise_original_ckpt": high_noise_original_ckpt,
+        "low_noise_original_ckpt": low_noise_original_ckpt,
+        "t5_original_ckpt": t5_original_ckpt,
+        "t5_quantized": is_t5_quant,
+        "t5_quantized_ckpt": t5_quantized_ckpt,
+        "t5_quant_scheme": t5_quant_scheme,
+        "clip_original_ckpt": clip_original_ckpt,
+        "clip_quantized": is_clip_quant,
+        "clip_quantized_ckpt": clip_quantized_ckpt,
+        "clip_quant_scheme": clip_quant_scheme,
+        "vae_path": os.path.join(model_path, vae_path_input),
+        "use_tiling_vae": use_tiling_vae,
+        "use_tae": use_tae,
+        "use_lightvae": use_lightvae,
+        "need_scaled": need_scaled,
+        "lazy_load": lazy_load,
+        "rope_chunk": rope_chunk,
+        "rope_chunk_size": rope_chunk_size,
+        "clean_cuda_cache": clean_cuda_cache,
+        "unload_modules": unload_modules,
+        "seq_parallel": False,
+        "warm_up_cpu_buffers": False,
+        "boundary_step_index": 2,
+        "boundary": 0.900,
+        "use_image_encoder": False if "wan2.2" in model_cls else True,
+        "rope_type": "flashinfer" if apply_rope_with_cos_sin_cache_inplace else "torch",
     }
 
     args = argparse.Namespace(
         model_cls=model_cls,
+        seed=seed,
         task=task,
         model_path=model_path,
         prompt_enhancer=None,
@@ -523,11 +684,13 @@ def run_inference(
         negative_prompt=negative_prompt,
         image_path=image_path,
         save_result_path=save_result_path,
+        return_result_tensor=False,
     )
 
+    config = get_default_config()
     config.update({k: v for k, v in vars(args).items()})
     config.update(model_config)
-    config.update(quant_model_config)
+    config.update(config_graio)
 
     logger.info(f"使用模型: {model_path}")
     logger.info(f"推理配置:\n{json.dumps(config, indent=4, ensure_ascii=False)}")
@@ -543,28 +706,19 @@ def run_inference(
         from lightx2v.infer import init_runner  # noqa
 
         runner = init_runner(config)
+        input_info = set_input_info(args)
+
         current_config = config
-        cur_dit_quant_scheme = dit_quant_scheme
-        cur_clip_quant_scheme = clip_quant_scheme
-        cur_t5_quant_scheme = t5_quant_scheme
-        cur_precision_mode = precision_mode
-        cur_enable_teacache = enable_teacache
+        cur_dit_path = current_dit_path
+        cur_t5_path = current_t5_path
+        cur_clip_path = current_clip_path
 
         if not lazy_load:
             global_runner = runner
     else:
         runner.config = config
 
-    runner.run_pipeline()
-
-    del config, args, model_config, quant_model_config
-    if "dit_quantized_ckpt" in locals():
-        del dit_quantized_ckpt
-    if "t5_quant_ckpt" in locals():
-        del t5_quant_ckpt
-    if "clip_quant_ckpt" in locals():
-        del clip_quant_ckpt
-
+    runner.run_pipeline(input_info)
     cleanup_memory()
 
     return save_result_path
@@ -575,44 +729,28 @@ def handle_lazy_load_change(lazy_load_enabled):
     return gr.update(value=lazy_load_enabled)
 
 
-def auto_configure(enable_auto_config, resolution):
+def auto_configure(resolution):
+    """根据机器配置和分辨率自动设置推理选项"""
     default_config = {
-        "torch_compile_val": False,
         "lazy_load_val": False,
-        "rotary_chunk_val": False,
-        "rotary_chunk_size_val": 100,
+        "rope_chunk_val": False,
+        "rope_chunk_size_val": 100,
         "clean_cuda_cache_val": False,
         "cpu_offload_val": False,
         "offload_granularity_val": "block",
-        "offload_ratio_val": 1,
         "t5_cpu_offload_val": False,
+        "clip_cpu_offload_val": False,
+        "vae_cpu_offload_val": False,
         "unload_modules_val": False,
-        "t5_offload_granularity_val": "model",
         "attention_type_val": attn_op_choices[0][1],
         "quant_op_val": quant_op_choices[0][1],
-        "dit_quant_scheme_val": "bf16",
-        "t5_quant_scheme_val": "bf16",
-        "clip_quant_scheme_val": "fp16",
-        "precision_mode_val": "fp32",
-        "use_tae_val": False,
         "use_tiling_vae_val": False,
-        "enable_teacache_val": False,
-        "teacache_thresh_val": 0.26,
-        "use_ret_steps_val": False,
     }
-
-    if not enable_auto_config:
-        return tuple(gr.update(value=default_config[key]) for key in default_config)
 
     gpu_memory = round(get_gpu_memory())
     cpu_memory = round(get_cpu_memory())
 
-    if is_fp8_supported_gpu():
-        quant_type = "fp8"
-    else:
-        quant_type = "int8"
-
-    attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
+    attn_priority = ["sage_attn3", "sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
 
     if is_ada_architecture_gpu():
         quant_op_priority = ["q8f", "vllm", "sgl"]
@@ -647,25 +785,15 @@ def auto_configure(enable_auto_config, resolution):
     else:
         res = "480p"
 
-    if model_size == "14b":
-        is_14b = True
-    else:
-        is_14b = False
-
-    if res == "720p" and is_14b:
+    if res == "720p":
         gpu_rules = [
             (80, {}),
-            (48, {"cpu_offload_val": True, "offload_ratio_val": 0.5, "t5_cpu_offload_val": True}),
-            (40, {"cpu_offload_val": True, "offload_ratio_val": 0.8, "t5_cpu_offload_val": True}),
-            (32, {"cpu_offload_val": True, "offload_ratio_val": 1, "t5_cpu_offload_val": True}),
+            (40, {"cpu_offload_val": False, "t5_cpu_offload_val": True, "vae_cpu_offload_val": True, "clip_cpu_offload_val": True}),
+            (32, {"cpu_offload_val": True, "t5_cpu_offload_val": False, "vae_cpu_offload_val": False, "clip_cpu_offload_val": False}),
             (
                 24,
                 {
                     "cpu_offload_val": True,
-                    "t5_cpu_offload_val": True,
-                    "offload_ratio_val": 1,
-                    "t5_offload_granularity_val": "block",
-                    "precision_mode_val": "bf16",
                     "use_tiling_vae_val": True,
                 },
             ),
@@ -673,154 +801,67 @@ def auto_configure(enable_auto_config, resolution):
                 16,
                 {
                     "cpu_offload_val": True,
-                    "t5_cpu_offload_val": True,
-                    "offload_ratio_val": 1,
-                    "t5_offload_granularity_val": "block",
-                    "precision_mode_val": "bf16",
                     "use_tiling_vae_val": True,
                     "offload_granularity_val": "phase",
-                    "rotary_chunk_val": True,
-                    "rotary_chunk_size_val": 100,
-                },
-            ),
-            (
-                12,
-                {
-                    "cpu_offload_val": True,
-                    "t5_cpu_offload_val": True,
-                    "offload_ratio_val": 1,
-                    "t5_offload_granularity_val": "block",
-                    "precision_mode_val": "bf16",
-                    "use_tiling_vae_val": True,
-                    "offload_granularity_val": "phase",
-                    "rotary_chunk_val": True,
-                    "rotary_chunk_size_val": 100,
-                    "clean_cuda_cache_val": True,
-                    "use_tae_val": True,
+                    "rope_chunk_val": True,
+                    "rope_chunk_size_val": 100,
                 },
             ),
             (
                 8,
                 {
                     "cpu_offload_val": True,
-                    "t5_cpu_offload_val": True,
-                    "offload_ratio_val": 1,
-                    "t5_offload_granularity_val": "block",
-                    "precision_mode_val": "bf16",
                     "use_tiling_vae_val": True,
                     "offload_granularity_val": "phase",
-                    "rotary_chunk_val": True,
-                    "rotary_chunk_size_val": 100,
+                    "rope_chunk_val": True,
+                    "rope_chunk_size_val": 100,
                     "clean_cuda_cache_val": True,
-                    "t5_quant_scheme_val": quant_type,
-                    "clip_quant_scheme_val": quant_type,
-                    "dit_quant_scheme_val": quant_type,
-                    "lazy_load_val": True,
-                    "unload_modules_val": True,
-                    "use_tae_val": True,
                 },
             ),
         ]
 
-    elif is_14b:
+    else:
         gpu_rules = [
             (80, {}),
-            (48, {"cpu_offload_val": True, "offload_ratio_val": 0.2, "t5_cpu_offload_val": True}),
-            (40, {"cpu_offload_val": True, "offload_ratio_val": 0.5, "t5_cpu_offload_val": True}),
-            (24, {"cpu_offload_val": True, "offload_ratio_val": 0.8, "t5_cpu_offload_val": True}),
+            (40, {"cpu_offload_val": False, "t5_cpu_offload_val": True, "vae_cpu_offload_val": True, "clip_cpu_offload_val": True}),
+            (32, {"cpu_offload_val": True, "t5_cpu_offload_val": False, "vae_cpu_offload_val": False, "clip_cpu_offload_val": False}),
+            (
+                24,
+                {
+                    "cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                },
+            ),
             (
                 16,
                 {
                     "cpu_offload_val": True,
-                    "t5_cpu_offload_val": True,
-                    "offload_ratio_val": 1,
-                    "t5_offload_granularity_val": "block",
-                    "precision_mode_val": "bf16",
                     "use_tiling_vae_val": True,
-                    "offload_granularity_val": "block",
+                    "offload_granularity_val": "phase",
                 },
             ),
             (
                 8,
-                (
-                    {
-                        "cpu_offload_val": True,
-                        "t5_cpu_offload_val": True,
-                        "offload_ratio_val": 1,
-                        "t5_offload_granularity_val": "block",
-                        "precision_mode_val": "bf16",
-                        "use_tiling_vae_val": True,
-                        "offload_granularity_val": "phase",
-                        "t5_quant_scheme_val": quant_type,
-                        "clip_quant_scheme_val": quant_type,
-                        "dit_quant_scheme_val": quant_type,
-                        "lazy_load_val": True,
-                        "unload_modules_val": True,
-                        "rotary_chunk_val": True,
-                        "rotary_chunk_size_val": 10000,
-                        "use_tae_val": True,
-                    }
-                    if res == "540p"
-                    else {
-                        "cpu_offload_val": True,
-                        "t5_cpu_offload_val": True,
-                        "offload_ratio_val": 1,
-                        "t5_offload_granularity_val": "block",
-                        "precision_mode_val": "bf16",
-                        "use_tiling_vae_val": True,
-                        "offload_granularity_val": "phase",
-                        "t5_quant_scheme_val": quant_type,
-                        "clip_quant_scheme_val": quant_type,
-                        "dit_quant_scheme_val": quant_type,
-                        "lazy_load_val": True,
-                        "unload_modules_val": True,
-                        "use_tae_val": True,
-                    }
-                ),
-            ),
-        ]
-
-    else:
-        gpu_rules = [
-            (24, {}),
-            (
-                8,
                 {
-                    "t5_cpu_offload_val": True,
-                    "t5_offload_granularity_val": "block",
-                    "t5_quant_scheme_val": quant_type,
+                    "cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
                 },
             ),
         ]
 
-    if is_14b:
-        cpu_rules = [
-            (128, {}),
-            (64, {"dit_quant_scheme_val": quant_type}),
-            (32, {"dit_quant_scheme_val": quant_type, "lazy_load_val": True}),
-            (
-                16,
-                {
-                    "dit_quant_scheme_val": quant_type,
-                    "t5_quant_scheme_val": quant_type,
-                    "clip_quant_scheme_val": quant_type,
-                    "lazy_load_val": True,
-                    "unload_modules_val": True,
-                },
-            ),
-        ]
-    else:
-        cpu_rules = [
-            (64, {}),
-            (
-                16,
-                {
-                    "t5_quant_scheme_val": quant_type,
-                    "unload_modules_val": True,
-                    "use_tae_val": True,
-                },
-            ),
-        ]
+    cpu_rules = [
+        (128, {}),
+        (64, {}),
+        (32, {"unload_modules_val": True}),
+        (
+            16,
+            {
+                "lazy_load_val": True,
+                "unload_modules_val": True,
+            },
+        ),
+    ]
 
     for threshold, updates in gpu_rules:
         if gpu_memory >= threshold:
@@ -832,298 +873,181 @@ def auto_configure(enable_auto_config, resolution):
             default_config.update(updates)
             break
 
-    return tuple(gr.update(value=default_config[key]) for key in default_config)
+    return (
+        gr.update(value=default_config["lazy_load_val"]),
+        gr.update(value=default_config["rope_chunk_val"]),
+        gr.update(value=default_config["rope_chunk_size_val"]),
+        gr.update(value=default_config["clean_cuda_cache_val"]),
+        gr.update(value=default_config["cpu_offload_val"]),
+        gr.update(value=default_config["offload_granularity_val"]),
+        gr.update(value=default_config["t5_cpu_offload_val"]),
+        gr.update(value=default_config["clip_cpu_offload_val"]),
+        gr.update(value=default_config["vae_cpu_offload_val"]),
+        gr.update(value=default_config["unload_modules_val"]),
+        gr.update(value=default_config["attention_type_val"]),
+        gr.update(value=default_config["quant_op_val"]),
+        gr.update(value=default_config["use_tiling_vae_val"]),
+    )
 
 
 def main():
     with gr.Blocks(
         title="Lightx2v (轻量级视频推理和生成引擎)",
         css="""
-        .main-content { max-width: 1400px; margin: auto; }
-        .output-video { max-height: 650px; }
+        .main-content { max-width: 1600px; margin: auto; padding: 20px; }
         .warning { color: #ff6b6b; font-weight: bold; }
-        .advanced-options { background: #f9f9ff; border-radius: 10px; padding: 15px; }
-        .tab-button { font-size: 16px; padding: 10px 20px; }
-        .auto-config-title {
-            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
-            background-clip: text;
-            -webkit-background-clip: text;
-            color: transparent;
-            text-align: center;
-            margin: 0 !important;
-            padding: 8px;
-            border: 2px solid #4ecdc4;
-            border-radius: 8px;
-            background-color: #f0f8ff;
+
+        /* 模型配置区域样式 */
+        .model-config {
+            margin-bottom: 20px !important;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 15px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
         }
-        .auto-config-checkbox {
-            border: 2px solid #ff6b6b !important;
-            border-radius: 8px !important;
-            padding: 10px !important;
-            background: linear-gradient(135deg, #fff5f5, #f0fff0) !important;
-            box-shadow: 0 2px 8px rgba(255, 107, 107, 0.2) !important;
+
+        /* 输入参数区域样式 */
+        .input-params {
+            margin-bottom: 20px !important;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 15px;
+            background: linear-gradient(135deg, #fff5f5 0%, #ffeef0 100%);
         }
-        .auto-config-checkbox label {
-            font-size: 16px !important;
+
+        /* 输出视频区域样式 */
+        .output-video {
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            min-height: 400px;
+        }
+
+        /* 生成按钮样式 */
+        .generate-btn {
+            width: 100%;
+            margin-top: 20px;
+            padding: 15px 30px !important;
+            font-size: 18px !important;
             font-weight: bold !important;
-            color: #2c3e50 !important;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+            border-radius: 10px !important;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+            transition: all 0.3s ease !important;
+        }
+        .generate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6) !important;
+        }
+
+        /* Accordion 标题样式 */
+        .model-config .gr-accordion-header,
+        .input-params .gr-accordion-header,
+        .output-video .gr-accordion-header {
+            font-size: 20px !important;
+            font-weight: bold !important;
+            padding: 15px !important;
+        }
+
+        /* 优化间距 */
+        .gr-row {
+            margin-bottom: 15px;
+        }
+
+        /* 视频播放器样式 */
+        .output-video video {
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
         }
     """,
     ) as demo:
-        gr.Markdown(f"# 🎬 {model_cls} 视频生成器")
-        gr.Markdown(f"### 使用模型: {model_path}")
+        gr.Markdown(f"# 🎬 LightX2V 视频生成器")
 
-        with gr.Tabs() as tabs:
-            with gr.Tab("基本设置", id=1):
-                with gr.Row():
-                    with gr.Column(scale=4):
-                        with gr.Group():
-                            gr.Markdown("## 📥 输入参数")
+        # 主布局：左右分栏
+        with gr.Row():
+            # 左侧：配置和输入区域
+            with gr.Column(scale=5):
+                # 模型配置区域
+                with gr.Accordion("🗂️ 模型配置", open=True, elem_classes=["model-config"]):
+                    # FP8 支持提示
+                    if not is_fp8_supported_gpu():
+                        gr.Markdown("⚠️ **您的设备不支持fp8推理**，已自动隐藏包含fp8的模型选项。")
 
-                            if task == "i2v":
-                                with gr.Row():
-                                    image_path = gr.Image(
-                                        label="输入图像",
-                                        type="filepath",
-                                        height=300,
-                                        interactive=True,
-                                        visible=True,
-                                    )
+                    # 隐藏的状态组件
+                    model_path_input = gr.Textbox(value=model_path, visible=False)
 
-                            with gr.Row():
-                                with gr.Column():
-                                    prompt = gr.Textbox(
-                                        label="提示词",
-                                        lines=3,
-                                        placeholder="描述视频内容...",
-                                        max_lines=5,
-                                    )
-                                with gr.Column():
-                                    negative_prompt = gr.Textbox(
-                                        label="负向提示词",
-                                        lines=3,
-                                        placeholder="不希望出现在视频中的内容...",
-                                        max_lines=5,
-                                        value="镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-                                    )
-                                with gr.Column():
-                                    resolution = gr.Dropdown(
-                                        choices=[
-                                            # 720p
-                                            ("1280x720 (16:9, 720p)", "1280x720"),
-                                            ("720x1280 (9:16, 720p)", "720x1280"),
-                                            ("1280x544 (21:9, 720p)", "1280x544"),
-                                            ("544x1280 (9:21, 720p)", "544x1280"),
-                                            ("1104x832 (4:3, 720p)", "1104x832"),
-                                            ("832x1104 (3:4, 720p)", "832x1104"),
-                                            ("960x960 (1:1, 720p)", "960x960"),
-                                            # 480p
-                                            ("960x544 (16:9, 540p)", "960x544"),
-                                            ("544x960 (9:16, 540p)", "544x960"),
-                                            ("832x480 (16:9, 480p)", "832x480"),
-                                            ("480x832 (9:16, 480p)", "480x832"),
-                                            ("832x624 (4:3, 480p)", "832x624"),
-                                            ("624x832 (3:4, 480p)", "624x832"),
-                                            ("720x720 (1:1, 480p)", "720x720"),
-                                            ("512x512 (1:1, 480p)", "512x512"),
-                                        ],
-                                        value="832x480",
-                                        label="最大分辨率",
-                                    )
-
-                                with gr.Column():
-                                    with gr.Group():
-                                        gr.Markdown("### 🚀 **智能配置推荐**", elem_classes=["auto-config-title"])
-                                        enable_auto_config = gr.Checkbox(
-                                            label="🎯 **自动配置推理选项**",
-                                            value=False,
-                                            info="💡 **智能优化GPU设置以匹配当前分辨率。修改分辨率后，请重新勾选此选项，否则可能导致性能下降或运行失败。**",
-                                            elem_classes=["auto-config-checkbox"],
-                                        )
-                                with gr.Column(scale=9):
-                                    seed = gr.Slider(
-                                        label="随机种子",
-                                        minimum=0,
-                                        maximum=MAX_NUMPY_SEED,
-                                        step=1,
-                                        value=generate_random_seed(),
-                                    )
-                                with gr.Column(scale=1):
-                                    randomize_btn = gr.Button("🎲 随机化", variant="secondary")
-
-                                randomize_btn.click(fn=generate_random_seed, inputs=None, outputs=seed)
-
-                                with gr.Column():
-                                    # 根据模型类别设置默认推理步数
-                                    if model_cls == "wan2.1_distill":
-                                        infer_steps = gr.Slider(
-                                            label="推理步数",
-                                            minimum=4,
-                                            maximum=4,
-                                            step=1,
-                                            value=4,
-                                            interactive=False,
-                                            info="推理步数固定为4，以获得最佳性能(对于蒸馏模型)。",
-                                        )
-                                    elif model_cls == "wan2.1":
-                                        if task == "i2v":
-                                            infer_steps = gr.Slider(
-                                                label="推理步数",
-                                                minimum=1,
-                                                maximum=100,
-                                                step=1,
-                                                value=40,
-                                                info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
-                                            )
-                                        elif task == "t2v":
-                                            infer_steps = gr.Slider(
-                                                label="推理步数",
-                                                minimum=1,
-                                                maximum=100,
-                                                step=1,
-                                                value=50,
-                                                info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
-                                            )
-
-                            # 根据模型类别设置默认CFG
-                            default_enable_cfg = False if model_cls == "wan2.1_distill" else True
-                            enable_cfg = gr.Checkbox(
-                                label="启用无分类器引导",
-                                value=default_enable_cfg,
-                                info="启用无分类器引导以控制提示词强度",
-                            )
-                            cfg_scale = gr.Slider(
-                                label="CFG缩放因子",
-                                minimum=1,
-                                maximum=10,
-                                step=1,
-                                value=5,
-                                info="控制提示词的影响强度。值越高，提示词的影响越大。",
-                            )
-                            sample_shift = gr.Slider(
-                                label="分布偏移",
-                                value=5,
-                                minimum=0,
-                                maximum=10,
-                                step=1,
-                                info="控制样本分布偏移的程度。值越大表示偏移越明显。",
-                            )
-
-                            fps = gr.Slider(
-                                label="每秒帧数(FPS)",
-                                minimum=8,
-                                maximum=30,
-                                step=1,
-                                value=16,
-                                info="视频的每秒帧数。较高的FPS会产生更流畅的视频。",
-                            )
-                            num_frames = gr.Slider(
-                                label="总帧数",
-                                minimum=16,
-                                maximum=120,
-                                step=1,
-                                value=81,
-                                info="视频中的总帧数。更多帧数会产生更长的视频。",
-                            )
-
-                        save_result_path = gr.Textbox(
-                            label="输出视频路径",
-                            value=generate_unique_filename(output_dir),
-                            info="必须包含.mp4扩展名。如果留空或使用默认值，将自动生成唯一文件名。",
-                        )
-                    with gr.Column(scale=6):
-                        gr.Markdown("## 📤 生成的视频")
-                        output_video = gr.Video(
-                            label="结果",
-                            height=624,
-                            width=360,
-                            autoplay=True,
-                            elem_classes=["output-video"],
-                        )
-
-                        infer_btn = gr.Button("生成视频", variant="primary", size="lg")
-
-            with gr.Tab("⚙️ 高级选项", id=2):
-                with gr.Group(elem_classes="advanced-options"):
-                    gr.Markdown("### GPU内存优化")
+                    # 模型类型 + 任务类型
                     with gr.Row():
-                        rotary_chunk = gr.Checkbox(
-                            label="分块旋转位置编码",
-                            value=False,
-                            info="启用时，将旋转位置编码分块处理以节省GPU内存。",
+                        model_type_input = gr.Radio(
+                            label="模型类型",
+                            choices=["wan2.1", "wan2.2"],
+                            value="wan2.1",
+                            info="wan2.2 需要分别指定高噪模型和低噪模型",
+                        )
+                        task_type_input = gr.Radio(
+                            label="任务类型",
+                            choices=["i2v", "t2v"],
+                            value="i2v",
+                            info="i2v: 图生视频, t2v: 文生视频",
                         )
 
-                        rotary_chunk_size = gr.Slider(
-                            label="旋转编码块大小",
-                            value=100,
-                            minimum=100,
-                            maximum=10000,
-                            step=100,
-                            info="控制应用旋转编码的块大小。较大的值可能提高性能但增加内存使用。仅在'rotary_chunk'勾选时有效。",
-                        )
-                        unload_modules = gr.Checkbox(
-                            label="卸载模块",
-                            value=False,
-                            info="推理后卸载模块（T5、CLIP、DIT等）以减少GPU/CPU内存使用",
-                        )
-                        clean_cuda_cache = gr.Checkbox(
-                            label="清理CUDA内存缓存",
-                            value=False,
-                            info="启用时，及时释放GPU内存但会减慢推理速度。",
+                    # wan2.1：Diffusion模型（单独一行）
+                    with gr.Row() as wan21_row:
+                        dit_path_input = gr.Dropdown(
+                            label="🎨 Diffusion模型",
+                            choices=get_dit_choices(model_path, "wan2.1"),
+                            value=get_dit_choices(model_path, "wan2.1")[0] if get_dit_choices(model_path, "wan2.1") else "",
+                            allow_custom_value=True,
+                            visible=True,
                         )
 
-                    gr.Markdown("### 异步卸载")
+                    # wan2.2 专用：高噪模型 + 低噪模型（默认隐藏）
+                    with gr.Row(visible=False) as wan22_row:
+                        high_noise_path_input = gr.Dropdown(
+                            label="🔊 高噪模型",
+                            choices=get_high_noise_choices(model_path),
+                            value=get_high_noise_choices(model_path)[0] if get_high_noise_choices(model_path) else "",
+                            allow_custom_value=True,
+                        )
+                        low_noise_path_input = gr.Dropdown(
+                            label="🔇 低噪模型",
+                            choices=get_low_noise_choices(model_path),
+                            value=get_low_noise_choices(model_path)[0] if get_low_noise_choices(model_path) else "",
+                            allow_custom_value=True,
+                        )
+
+                    # 文本编码器（单独一行）
                     with gr.Row():
-                        cpu_offload = gr.Checkbox(
-                            label="CPU卸载",
-                            value=False,
-                            info="将模型计算的一部分从GPU卸载到CPU以减少GPU内存使用",
+                        t5_path_input = gr.Dropdown(
+                            label="📝 文本编码器",
+                            choices=get_t5_choices(model_path),
+                            value=get_t5_choices(model_path)[0] if get_t5_choices(model_path) else "",
+                            allow_custom_value=True,
                         )
 
-                        lazy_load = gr.Checkbox(
-                            label="启用延迟加载",
-                            value=False,
-                            info="在推理过程中延迟加载模型组件。需要CPU加载和DIT量化。",
-                        )
-
-                        offload_granularity = gr.Dropdown(
-                            label="Dit卸载粒度",
-                            choices=["block", "phase"],
-                            value="phase",
-                            info="设置Dit模型卸载粒度：块或计算阶段",
-                        )
-                        offload_ratio = gr.Slider(
-                            label="Dit模型卸载比例",
-                            minimum=0.0,
-                            maximum=1.0,
-                            step=0.1,
-                            value=1.0,
-                            info="控制将多少Dit模型卸载到CPU",
-                        )
-                        t5_cpu_offload = gr.Checkbox(
-                            label="T5 CPU卸载",
-                            value=False,
-                            info="将T5编码器模型卸载到CPU以减少GPU内存使用",
-                        )
-                        t5_offload_granularity = gr.Dropdown(
-                            label="T5编码器卸载粒度",
-                            choices=["model", "block"],
-                            value="model",
-                            info="控制将T5编码器模型卸载到CPU时的粒度",
-                        )
-
-                    gr.Markdown("### 低精度量化")
+                    # 图像编码器 + VAE解码器
                     with gr.Row():
-                        torch_compile = gr.Checkbox(
-                            label="Torch编译",
-                            value=False,
-                            info="使用torch.compile加速推理过程",
+                        clip_path_input = gr.Dropdown(
+                            label="🖼️ 图像编码器",
+                            choices=get_clip_choices(model_path),
+                            value=get_clip_choices(model_path)[0] if get_clip_choices(model_path) else "",
+                            allow_custom_value=True,
+                        )
+                        vae_path_input = gr.Dropdown(
+                            label="🎞️ VAE解码器",
+                            choices=get_vae_choices(model_path),
+                            value=get_vae_choices(model_path)[0] if get_vae_choices(model_path) else "",
+                            allow_custom_value=True,
                         )
 
+                    # 注意力算子和量化矩阵乘法算子
+                    with gr.Row():
                         attention_type = gr.Dropdown(
-                            label="注意力算子",
+                            label="⚡ 注意力算子",
                             choices=[op[1] for op in attn_op_choices],
-                            value=attn_op_choices[0][1],
+                            value=attn_op_choices[0][1] if attn_op_choices else "",
                             info="使用适当的注意力算子加速推理",
                         )
                         quant_op = gr.Dropdown(
@@ -1133,182 +1057,352 @@ def main():
                             info="选择量化矩阵乘法算子以加速推理",
                             interactive=True,
                         )
-                        # 获取动态量化选项
-                        quant_options = get_quantization_options(model_path)
 
-                        dit_quant_scheme = gr.Dropdown(
-                            label="Dit",
-                            choices=quant_options["dit_choices"],
-                            value=quant_options["dit_default"],
-                            info="Dit模型的量化精度",
-                        )
-                        t5_quant_scheme = gr.Dropdown(
-                            label="T5编码器",
-                            choices=quant_options["t5_choices"],
-                            value=quant_options["t5_default"],
-                            info="T5编码器模型的量化精度",
-                        )
-                        clip_quant_scheme = gr.Dropdown(
-                            label="Clip编码器",
-                            choices=quant_options["clip_choices"],
-                            value=quant_options["clip_default"],
-                            info="Clip编码器的量化精度",
-                        )
-                        precision_mode = gr.Dropdown(
-                            label="敏感层精度模式",
-                            choices=["fp32", "bf16"],
-                            value="fp32",
-                            info="选择用于关键模型组件（如归一化和嵌入层）的数值精度。FP32提供更高精度，而BF16在兼容硬件上提高性能。",
+                    # 判断模型是否是 distill 版本
+                    def is_distill_model(model_type, dit_path, high_noise_path):
+                        """根据模型类型和路径判断是否是 distill 版本"""
+                        if model_type == "wan2.1":
+                            check_name = dit_path.lower() if dit_path else ""
+                        else:
+                            check_name = high_noise_path.lower() if high_noise_path else ""
+                        return "4step" in check_name
+
+                    # 模型类型切换事件
+                    def on_model_type_change(model_type, model_path_val):
+                        if model_type == "wan2.2":
+                            return gr.update(visible=False), gr.update(visible=True), gr.update()
+                        else:
+                            # 更新 wan2.1 的 Diffusion 模型选项
+                            dit_choices = get_dit_choices(model_path_val, "wan2.1")
+                            return (
+                                gr.update(visible=True),
+                                gr.update(visible=False),
+                                gr.update(choices=dit_choices, value=dit_choices[0] if dit_choices else ""),
+                            )
+
+                    model_type_input.change(
+                        fn=on_model_type_change,
+                        inputs=[model_type_input, model_path_input],
+                        outputs=[wan21_row, wan22_row, dit_path_input],
+                    )
+
+                # 输入参数区域
+                with gr.Accordion("📥 输入参数", open=True, elem_classes=["input-params"]):
+                    # 图片输入（i2v 时显示）
+                    with gr.Row(visible=True) as image_input_row:
+                        image_path = gr.Image(
+                            label="输入图像",
+                            type="filepath",
+                            height=300,
+                            interactive=True,
                         )
 
-                    gr.Markdown("### 变分自编码器(VAE)")
+                    # 任务类型切换事件
+                    def on_task_type_change(task_type):
+                        return gr.update(visible=(task_type == "i2v"))
+
+                    task_type_input.change(
+                        fn=on_task_type_change,
+                        inputs=[task_type_input],
+                        outputs=[image_input_row],
+                    )
+
                     with gr.Row():
-                        use_tae = gr.Checkbox(
-                            label="使用轻量级VAE",
-                            value=False,
-                            info="使用轻量级VAE模型加速解码过程",
-                        )
-                        use_tiling_vae = gr.Checkbox(
-                            label="VAE分块推理",
-                            value=False,
-                            info="使用VAE分块推理以减少GPU内存使用",
-                        )
+                        with gr.Column():
+                            prompt = gr.Textbox(
+                                label="提示词",
+                                lines=3,
+                                placeholder="描述视频内容...",
+                                max_lines=5,
+                            )
+                        with gr.Column():
+                            negative_prompt = gr.Textbox(
+                                label="负向提示词",
+                                lines=3,
+                                placeholder="不希望出现在视频中的内容...",
+                                max_lines=5,
+                                value="镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                            )
+                        with gr.Column():
+                            resolution = gr.Dropdown(
+                                choices=[
+                                    # 720p
+                                    ("1280x720 (16:9, 720p)", "1280x720"),
+                                    ("720x1280 (9:16, 720p)", "720x1280"),
+                                    ("1280x544 (21:9, 720p)", "1280x544"),
+                                    ("544x1280 (9:21, 720p)", "544x1280"),
+                                    ("1104x832 (4:3, 720p)", "1104x832"),
+                                    ("832x1104 (3:4, 720p)", "832x1104"),
+                                    ("960x960 (1:1, 720p)", "960x960"),
+                                    # 480p
+                                    ("960x544 (16:9, 540p)", "960x544"),
+                                    ("544x960 (9:16, 540p)", "544x960"),
+                                    ("832x480 (16:9, 480p)", "832x480"),
+                                    ("480x832 (9:16, 480p)", "480x832"),
+                                    ("832x624 (4:3, 480p)", "832x624"),
+                                    ("624x832 (3:4, 480p)", "624x832"),
+                                    ("720x720 (1:1, 480p)", "720x720"),
+                                    ("512x512 (1:1, 480p)", "512x512"),
+                                ],
+                                value="832x480",
+                                label="最大分辨率",
+                            )
 
-                    gr.Markdown("### 特征缓存")
+                        with gr.Column(scale=9):
+                            seed = gr.Slider(
+                                label="随机种子",
+                                minimum=0,
+                                maximum=MAX_NUMPY_SEED,
+                                step=1,
+                                value=generate_random_seed(),
+                            )
+                        with gr.Column():
+                            default_dit = get_dit_choices(model_path, "wan2.1")[0] if get_dit_choices(model_path, "wan2.1") else ""
+                            default_high_noise = get_high_noise_choices(model_path)[0] if get_high_noise_choices(model_path) else ""
+                            default_is_distill = is_distill_model("wan2.1", default_dit, default_high_noise)
+
+                            if default_is_distill:
+                                infer_steps = gr.Slider(
+                                    label="推理步数",
+                                    minimum=1,
+                                    maximum=100,
+                                    step=1,
+                                    value=4,
+                                    info="蒸馏模型推理步数默认为4。",
+                                )
+                            else:
+                                infer_steps = gr.Slider(
+                                    label="推理步数",
+                                    minimum=1,
+                                    maximum=100,
+                                    step=1,
+                                    value=40,
+                                    info="视频生成的推理步数。增加步数可能提高质量但降低速度。",
+                                )
+
+                            # 当模型路径改变时，动态更新推理步数
+                            def update_infer_steps(model_type, dit_path, high_noise_path):
+                                is_distill = is_distill_model(model_type, dit_path, high_noise_path)
+                                if is_distill:
+                                    return gr.update(minimum=1, maximum=100, value=4, interactive=True)
+                                else:
+                                    return gr.update(minimum=1, maximum=100, value=40, interactive=True)
+
+                            # 监听模型路径变化
+                            dit_path_input.change(
+                                fn=lambda mt, dp, hnp: update_infer_steps(mt, dp, hnp),
+                                inputs=[model_type_input, dit_path_input, high_noise_path_input],
+                                outputs=[infer_steps],
+                            )
+                            high_noise_path_input.change(
+                                fn=lambda mt, dp, hnp: update_infer_steps(mt, dp, hnp),
+                                inputs=[model_type_input, dit_path_input, high_noise_path_input],
+                                outputs=[infer_steps],
+                            )
+                            model_type_input.change(
+                                fn=lambda mt, dp, hnp: update_infer_steps(mt, dp, hnp),
+                                inputs=[model_type_input, dit_path_input, high_noise_path_input],
+                                outputs=[infer_steps],
+                            )
+
+                    # 根据模型类别设置默认CFG
+                    # CFG缩放因子：distill 时默认为 1，否则默认为 5
+                    default_cfg_scale = 1 if default_is_distill else 5
+                    # enable_cfg 不暴露到前端，根据 cfg_scale 自动设置
+                    # 如果 cfg_scale == 1，则 enable_cfg = False，否则 enable_cfg = True
+                    default_enable_cfg = False if default_cfg_scale == 1 else True
+                    enable_cfg = gr.Checkbox(
+                        label="启用无分类器引导",
+                        value=default_enable_cfg,
+                        visible=False,  # 隐藏，不暴露到前端
+                    )
+
                     with gr.Row():
-                        enable_teacache = gr.Checkbox(
-                            label="Tea Cache",
-                            value=False,
-                            info="在推理过程中缓存特征以减少推理步数",
-                        )
-                        teacache_thresh = gr.Slider(
-                            label="Tea Cache阈值",
-                            value=0.26,
+                        sample_shift = gr.Slider(
+                            label="分布偏移",
+                            value=5,
                             minimum=0,
-                            maximum=1,
-                            info="较高的加速可能导致质量下降 —— 设置为0.1提供约2.0倍加速，设置为0.2提供约3.0倍加速",
+                            maximum=10,
+                            step=1,
+                            info="控制样本分布偏移的程度。值越大表示偏移越明显。",
                         )
-                        use_ret_steps = gr.Checkbox(
-                            label="仅缓存关键步骤",
-                            value=False,
-                            info="勾选时，仅在调度器返回结果的关键步骤写入缓存；未勾选时，在所有步骤写入缓存以确保最高质量",
+                        cfg_scale = gr.Slider(
+                            label="CFG缩放因子",
+                            minimum=1,
+                            maximum=10,
+                            step=1,
+                            value=default_cfg_scale,
+                            info="控制提示词的影响强度。值越高，提示词的影响越大。当值为1时，自动禁用CFG。",
                         )
 
-                enable_auto_config.change(
-                    fn=auto_configure,
-                    inputs=[enable_auto_config, resolution],
-                    outputs=[
-                        torch_compile,
-                        lazy_load,
-                        rotary_chunk,
-                        rotary_chunk_size,
-                        clean_cuda_cache,
-                        cpu_offload,
-                        offload_granularity,
-                        offload_ratio,
-                        t5_cpu_offload,
-                        unload_modules,
-                        t5_offload_granularity,
-                        attention_type,
-                        quant_op,
-                        dit_quant_scheme,
-                        t5_quant_scheme,
-                        clip_quant_scheme,
-                        precision_mode,
-                        use_tae,
-                        use_tiling_vae,
-                        enable_teacache,
-                        teacache_thresh,
-                        use_ret_steps,
-                    ],
-                )
+                    # 根据 cfg_scale 更新 enable_cfg
+                    def update_enable_cfg(cfg_scale_val):
+                        """根据 cfg_scale 的值自动设置 enable_cfg"""
+                        if cfg_scale_val == 1:
+                            return gr.update(value=False)
+                        else:
+                            return gr.update(value=True)
 
-                lazy_load.change(
-                    fn=handle_lazy_load_change,
-                    inputs=[lazy_load],
-                    outputs=[unload_modules],
-                )
-        if task == "i2v":
-            infer_btn.click(
-                fn=run_inference,
-                inputs=[
-                    prompt,
-                    negative_prompt,
-                    save_result_path,
-                    torch_compile,
-                    infer_steps,
-                    num_frames,
-                    resolution,
-                    seed,
-                    sample_shift,
-                    enable_teacache,
-                    teacache_thresh,
-                    use_ret_steps,
-                    enable_cfg,
-                    cfg_scale,
-                    dit_quant_scheme,
-                    t5_quant_scheme,
-                    clip_quant_scheme,
-                    fps,
-                    use_tae,
-                    use_tiling_vae,
-                    lazy_load,
-                    precision_mode,
-                    cpu_offload,
-                    offload_granularity,
-                    offload_ratio,
-                    t5_cpu_offload,
-                    unload_modules,
-                    t5_offload_granularity,
-                    attention_type,
-                    quant_op,
-                    rotary_chunk,
-                    rotary_chunk_size,
-                    clean_cuda_cache,
-                    image_path,
-                ],
-                outputs=output_video,
-            )
-        else:
-            infer_btn.click(
-                fn=run_inference,
-                inputs=[
-                    prompt,
-                    negative_prompt,
-                    save_result_path,
-                    torch_compile,
-                    infer_steps,
-                    num_frames,
-                    resolution,
-                    seed,
-                    sample_shift,
-                    enable_teacache,
-                    teacache_thresh,
-                    use_ret_steps,
-                    enable_cfg,
-                    cfg_scale,
-                    dit_quant_scheme,
-                    t5_quant_scheme,
-                    clip_quant_scheme,
-                    fps,
-                    use_tae,
-                    use_tiling_vae,
-                    lazy_load,
-                    precision_mode,
-                    cpu_offload,
-                    offload_granularity,
-                    offload_ratio,
-                    t5_cpu_offload,
-                    unload_modules,
-                    t5_offload_granularity,
-                    attention_type,
-                    quant_op,
-                    rotary_chunk,
-                    rotary_chunk_size,
-                    clean_cuda_cache,
-                ],
-                outputs=output_video,
-            )
+                    # 当模型路径改变时，动态更新 CFG 缩放因子和 enable_cfg
+                    def update_cfg_scale(model_type, dit_path, high_noise_path):
+                        is_distill = is_distill_model(model_type, dit_path, high_noise_path)
+                        if is_distill:
+                            new_cfg_scale = 1
+                        else:
+                            new_cfg_scale = 5
+                        new_enable_cfg = False if new_cfg_scale == 1 else True
+                        return gr.update(value=new_cfg_scale), gr.update(value=new_enable_cfg)
+
+                    dit_path_input.change(
+                        fn=lambda mt, dp, hnp: update_cfg_scale(mt, dp, hnp),
+                        inputs=[model_type_input, dit_path_input, high_noise_path_input],
+                        outputs=[cfg_scale, enable_cfg],
+                    )
+                    high_noise_path_input.change(
+                        fn=lambda mt, dp, hnp: update_cfg_scale(mt, dp, hnp),
+                        inputs=[model_type_input, dit_path_input, high_noise_path_input],
+                        outputs=[cfg_scale, enable_cfg],
+                    )
+                    model_type_input.change(
+                        fn=lambda mt, dp, hnp: update_cfg_scale(mt, dp, hnp),
+                        inputs=[model_type_input, dit_path_input, high_noise_path_input],
+                        outputs=[cfg_scale, enable_cfg],
+                    )
+
+                    cfg_scale.change(
+                        fn=update_enable_cfg,
+                        inputs=[cfg_scale],
+                        outputs=[enable_cfg],
+                    )
+
+                    with gr.Row():
+                        fps = gr.Slider(
+                            label="每秒帧数(FPS)",
+                            minimum=8,
+                            maximum=30,
+                            step=1,
+                            value=16,
+                            info="视频的每秒帧数。较高的FPS会产生更流畅的视频。",
+                        )
+                        num_frames = gr.Slider(
+                            label="总帧数",
+                            minimum=16,
+                            maximum=120,
+                            step=1,
+                            value=81,
+                            info="视频中的总帧数。更多帧数会产生更长的视频。",
+                        )
+
+                    save_result_path = gr.Textbox(
+                        label="输出视频路径",
+                        value=generate_unique_filename(output_dir),
+                        info="必须包含.mp4扩展名。如果留空或使用默认值，将自动生成唯一文件名。",
+                        visible=False,  # 隐藏输出路径，自动生成
+                    )
+
+            with gr.Column(scale=4):
+                with gr.Accordion("📤 生成的视频", open=True, elem_classes=["output-video"]):
+                    output_video = gr.Video(
+                        label="",
+                        height=600,
+                        autoplay=True,
+                        show_label=False,
+                    )
+
+                    infer_btn = gr.Button("🎬 生成视频", variant="primary", size="lg", elem_classes=["generate-btn"])
+
+            rope_chunk = gr.Checkbox(label="分块旋转位置编码", value=False, visible=False)
+            rope_chunk_size = gr.Slider(label="旋转编码块大小", value=100, minimum=100, maximum=10000, step=100, visible=False)
+            unload_modules = gr.Checkbox(label="卸载模块", value=False, visible=False)
+            clean_cuda_cache = gr.Checkbox(label="清理CUDA内存缓存", value=False, visible=False)
+            cpu_offload = gr.Checkbox(label="CPU卸载", value=False, visible=False)
+            lazy_load = gr.Checkbox(label="启用延迟加载", value=False, visible=False)
+            offload_granularity = gr.Dropdown(label="Dit卸载粒度", choices=["block", "phase"], value="phase", visible=False)
+            t5_cpu_offload = gr.Checkbox(label="T5 CPU卸载", value=False, visible=False)
+            clip_cpu_offload = gr.Checkbox(label="CLIP CPU卸载", value=False, visible=False)
+            vae_cpu_offload = gr.Checkbox(label="VAE CPU卸载", value=False, visible=False)
+            use_tiling_vae = gr.Checkbox(label="VAE分块推理", value=False, visible=False)
+
+        resolution.change(
+            fn=auto_configure,
+            inputs=[resolution],
+            outputs=[
+                lazy_load,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                use_tiling_vae,
+            ],
+        )
+
+        demo.load(
+            fn=lambda res: auto_configure(res),
+            inputs=[resolution],
+            outputs=[
+                lazy_load,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                use_tiling_vae,
+            ],
+        )
+
+        infer_btn.click(
+            fn=run_inference,
+            inputs=[
+                prompt,
+                negative_prompt,
+                save_result_path,
+                infer_steps,
+                num_frames,
+                resolution,
+                seed,
+                sample_shift,
+                enable_cfg,
+                cfg_scale,
+                fps,
+                use_tiling_vae,
+                lazy_load,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                model_path_input,
+                model_type_input,
+                task_type_input,
+                dit_path_input,
+                high_noise_path_input,
+                low_noise_path_input,
+                t5_path_input,
+                clip_path_input,
+                vae_path_input,
+                image_path,
+            ],
+            outputs=output_video,
+        )
 
     demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
 
@@ -1316,25 +1410,14 @@ def main():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="轻量级视频生成")
     parser.add_argument("--model_path", type=str, required=True, help="模型文件夹路径")
-    parser.add_argument(
-        "--model_cls",
-        type=str,
-        choices=["wan2.1", "wan2.1_distill"],
-        default="wan2.1",
-        help="要使用的模型类别 (wan2.1: 标准模型, wan2.1_distill: 蒸馏模型，推理更快)",
-    )
-    parser.add_argument("--model_size", type=str, required=True, choices=["14b", "1.3b"], help="模型大小：14b 或 1.3b")
-    parser.add_argument("--task", type=str, required=True, choices=["i2v", "t2v"], help="指定任务类型。'i2v'用于图像到视频转换，'t2v'用于文本到视频生成。")
     parser.add_argument("--server_port", type=int, default=7862, help="服务器端口")
     parser.add_argument("--server_name", type=str, default="0.0.0.0", help="服务器IP")
     parser.add_argument("--output_dir", type=str, default="./outputs", help="输出视频保存目录")
     args = parser.parse_args()
 
-    global model_path, model_cls, model_size, output_dir
+    global model_path, model_cls, output_dir
     model_path = args.model_path
-    model_cls = args.model_cls
-    model_size = args.model_size
-    task = args.task
+    model_cls = "wan2.1"
     output_dir = args.output_dir
 
     main()
