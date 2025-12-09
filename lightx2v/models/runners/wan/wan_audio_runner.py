@@ -721,6 +721,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def run_main(self):
         try:
+            self.va_controller = None
             self.va_controller = VAController(self)
             logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
@@ -776,7 +777,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         finally:
             if hasattr(self.model, "inputs"):
                 self.end_run()
-            self.va_controller.clear()
+            if self.va_controller is not None:
+                self.va_controller.clear()
+                self.va_controller = None
 
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self):
