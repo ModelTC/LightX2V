@@ -16,21 +16,9 @@ REM Example: D:\LightX2V
 set lightx2v_path=/path/to/LightX2V
 
 REM Model path configuration
-REM Image-to-video model path (for i2v tasks)
-REM Example: D:\models\Wan2.1-I2V-14B-480P-Lightx2v
-set i2v_model_path=/path/to/Wan2.1-I2V-14B-480P-Lightx2v
-
-REM Text-to-video model path (for t2v tasks)
-REM Example: D:\models\Wan2.1-T2V-1.3B
-set t2v_model_path=/path/to/Wan2.1-T2V-1.3B
-
-REM Model size configuration
-REM Default model size (14b, 1.3b)
-set model_size=14b
-
-REM Model class configuration
-REM Default model class (wan2.1, wan2.1_distill)
-set model_cls=wan2.1
+REM Model root directory path
+REM Example: D:\models\LightX2V
+set model_path=/path/to/LightX2V
 
 REM Server configuration
 set server_name=127.0.0.1
@@ -49,20 +37,12 @@ set PROFILING_DEBUG_LEVEL=2
 set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 REM ==================== Parameter Parsing ====================
-REM Default task type
-set task=i2v
 REM Default interface language
 set lang=zh
 
 REM Parse command line arguments
 :parse_args
 if "%1"=="" goto :end_parse
-if "%1"=="--task" (
-    set task=%2
-    shift
-    shift
-    goto :parse_args
-)
 if "%1"=="--lang" (
     set lang=%2
     shift
@@ -82,18 +62,6 @@ if "%1"=="--gpu" (
     shift
     goto :parse_args
 )
-if "%1"=="--model_size" (
-    set model_size=%2
-    shift
-    shift
-    goto :parse_args
-)
-if "%1"=="--model_cls" (
-    set model_cls=%2
-    shift
-    shift
-    goto :parse_args
-)
 if "%1"=="--output_dir" (
     set output_dir=%2
     shift
@@ -106,38 +74,24 @@ if "%1"=="--help" (
     echo Usage: %0 [options]
     echo.
     echo 📋 Available options:
-    echo   --task i2v^|t2v    Task type (default: i2v)
-    echo                      i2v: Image-to-video generation
-    echo                      t2v: Text-to-video generation
     echo   --lang zh^|en      Interface language (default: zh)
     echo                      zh: Chinese interface
     echo                      en: English interface
     echo   --port PORT        Server port (default: 8032)
     echo   --gpu GPU_ID       GPU device ID (default: 0)
-    echo   --model_size MODEL_SIZE
-    echo                      Model size (default: 14b)
-    echo                      14b: 14B parameter model
-    echo                      1.3b: 1.3B parameter model
-    echo   --model_cls MODEL_CLASS
-    echo                      Model class (default: wan2.1)
-    echo                      wan2.1: Standard model variant
-    echo                      wan2.1_distill: Distilled model variant for faster inference
     echo   --output_dir OUTPUT_DIR
-    echo                      Output video save directory (default: ./saved_videos)
+    echo                      Output video save directory (default: ./outputs)
     echo   --help             Show this help message
     echo.
     echo 🚀 Usage examples:
-    echo   %0                                    # Default startup for image-to-video mode
-    echo   %0 --task i2v --lang zh --port 8032   # Start with specified parameters
-    echo   %0 --task t2v --lang en --port 7860   # Text-to-video with English interface
-    echo   %0 --task i2v --gpu 1 --port 8032     # Use GPU 1
-    echo   %0 --task t2v --model_size 1.3b       # Use 1.3B model
-    echo   %0 --task i2v --model_size 14b        # Use 14B model
-    echo   %0 --task i2v --model_cls wan2.1_distill  # Use distilled model
-    echo   %0 --task i2v --output_dir ./custom_output  # Use custom output directory
+    echo   %0                                    # Default startup
+    echo   %0 --lang zh --port 8032              # Start with specified parameters
+    echo   %0 --lang en --port 7860              # English interface
+    echo   %0 --gpu 1 --port 8032                # Use GPU 1
+    echo   %0 --output_dir ./custom_output       # Use custom output directory
     echo.
     echo 📝 Notes:
-    echo   - Edit script to configure model paths before first use
+    echo   - Edit script to configure model path before first use
     echo   - Ensure required Python dependencies are installed
     echo   - Recommended to use GPU with 8GB+ VRAM
     echo   - 🚨 Strongly recommend storing models on SSD for better performance
@@ -152,13 +106,6 @@ exit /b 1
 :end_parse
 
 REM ==================== Parameter Validation ====================
-if "%task%"=="i2v" goto :valid_task
-if "%task%"=="t2v" goto :valid_task
-echo Error: Task type must be 'i2v' or 't2v'
-pause
-exit /b 1
-
-:valid_task
 if "%lang%"=="zh" goto :valid_lang
 if "%lang%"=="en" goto :valid_lang
 echo Error: Language must be 'zh' or 'en'
@@ -166,29 +113,6 @@ pause
 exit /b 1
 
 :valid_lang
-if "%model_size%"=="14b" goto :valid_size
-if "%model_size%"=="1.3b" goto :valid_size
-echo Error: Model size must be '14b' or '1.3b'
-pause
-exit /b 1
-
-:valid_size
-if "%model_cls%"=="wan2.1" goto :valid_cls
-if "%model_cls%"=="wan2.1_distill" goto :valid_cls
-echo Error: Model class must be 'wan2.1' or 'wan2.1_distill'
-pause
-exit /b 1
-
-:valid_cls
-
-REM Select model path based on task type
-if "%task%"=="i2v" (
-    set model_path=%i2v_model_path%
-    echo 🎬 Starting Image-to-Video mode
-) else (
-    set model_path=%t2v_model_path%
-    echo 🎬 Starting Text-to-Video mode
-)
 
 REM Check if model path exists
 if not exist "%model_path%" (
@@ -230,9 +154,6 @@ echo 🚀 LightX2V Gradio Starting...
 echo ==========================================
 echo 📁 Project path: %lightx2v_path%
 echo 🤖 Model path: %model_path%
-echo 🎯 Task type: %task%
-echo 🤖 Model size: %model_size%
-echo 🤖 Model class: %model_cls%
 echo 🌏 Interface language: %lang%
 echo 🖥️  GPU device: %gpu_id%
 echo 🌐 Server address: %server_name%:%server_port%
@@ -262,11 +183,8 @@ echo ==========================================
 REM Start Python demo
 python %demo_file% ^
     --model_path "%model_path%" ^
-    --model_cls %model_cls% ^
-    --task %task% ^
     --server_name %server_name% ^
     --server_port %server_port% ^
-    --model_size %model_size% ^
     --output_dir "%output_dir%"
 
 REM Display final system resource usage
