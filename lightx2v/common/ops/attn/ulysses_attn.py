@@ -154,34 +154,30 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
             raise ValueError("world_size必须是偶数，奇数情况需要特殊处理")
 
         teams = list(range(world_size))
-        for round_num in range(world_size - 1):
-            pairs = []
-
+        for _ in range(world_size - 1):
+            round_schedule = {}
             for i in range(world_size // 2):
-                team1 = teams[i]
-                team2 = teams[world_size - 1 - i]
-                # 确保配对中较小的进程在前
-                if team1 < team2:
-                    pairs.append((team1, team2))
-                else:
-                    pairs.append((team2, team1))
-
-            self.rounds.append(pairs)
-
+                team1, team2 = teams[i], teams[world_size - 1 - i]
+                smaller, larger = min(team1, team2), max(team1, team2)
+                round_schedule[smaller] = (larger, True)
+                round_schedule[larger] = (smaller, False)
+            self.rounds.append(round_schedule)
             # 旋转列表（固定第一个元素）
             teams = [teams[0]] + [teams[-1]] + teams[1:-1]
 
         # if cur_rank == 0:
-        #    self.print_pairing_schedule()
+        #    self.print_pairing_schedule(seq_p_group)
 
-    def print_pairing_schedule(self):
+    def print_pairing_schedule(self, seq_p_group):
         """打印通信调度表"""
+        world_size = dist.get_world_size(seq_p_group)
         logger.info("循环赛通信调度表:")
         logger.info("=" * 50)
-        for i, round_pairs in enumerate(self.rounds):
+        for i, round_schedule in enumerate(self.rounds):
             logger.info(f"第 {i + 1} 轮:")
-            for src, dst in round_pairs:
-                logger.info(f"  进程 {src} ←→ 进程 {dst}")
+            for cur_rank in range(world_size):
+                partner, is_smaller_in_pair = round_schedule[cur_rank]
+                logger.info(f"  进程 {cur_rank} ←→ 进程 {partner}")
         logger.info("=" * 50)
 
     def load_balanced_all_to_all(self, shards, seq_p_group=None):
@@ -201,20 +197,12 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
             else:
                 gathered_shards[cur_rank] = shards[cur_rank]
 
-        for round_num, round_pairs in enumerate(self.rounds):
+        for i, round_schedule in enumerate(self.rounds):
             # 查找当前进程在本轮的配对
             partner = None
             is_smaller_in_pair = False
-
-            for smaller, larger in round_pairs:
-                if cur_rank == smaller:
-                    partner = larger
-                    is_smaller_in_pair = True
-                    break
-                elif cur_rank == larger:
-                    partner = smaller
-                    is_smaller_in_pair = False
-                    break
+            if cur_rank in round_schedule:
+                partner, is_smaller_in_pair = round_schedule[cur_rank]
 
             # 如果没有找到配对，说明本轮当前进程空闲
             if partner is None:
