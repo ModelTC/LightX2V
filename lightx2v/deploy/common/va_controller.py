@@ -5,10 +5,6 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v.deploy.common.va_reader import VAReader
-from lightx2v.deploy.common.va_reader_omni import OmniVAReader
-from lightx2v.deploy.common.va_recorder import VARecorder
-from lightx2v.deploy.common.va_recorder_x264 import X264VARecorder
 from lightx2v.models.runners.vsr.vsr_wrapper import compute_scaled_and_target_dims
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -65,7 +61,7 @@ class VAController:
             )
 
         # how many frames to publish stream as a batch
-        self.slice_frame = config.get("slice_frame", 1)
+        self.slice_frame = config.get("slice_frame", self.prev_frame_length)
         # estimate the max infer seconds, for immediate switch with local omni
         slice_interval = self.slice_frame / self.record_fps
         est_max_infer_secs = config.get("est_max_infer_secs", 0.6)
@@ -78,6 +74,8 @@ class VAController:
         logger.info(f"Rank {self.rank} init recorder with: {self.output_video_path}")
         whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
         if whip_shared_path and self.output_video_path.startswith("http"):
+            from lightx2v.deploy.common.va_recorder_x264 import X264VARecorder
+
             self.recorder = X264VARecorder(
                 whip_shared_path=whip_shared_path,
                 livestream_url=self.output_video_path,
@@ -87,6 +85,8 @@ class VAController:
                 prev_frame=self.prev_frame_length,
             )
         else:
+            from lightx2v.deploy.common.va_recorder import VARecorder
+
             self.recorder = VARecorder(
                 livestream_url=self.output_video_path,
                 fps=self.record_fps,
@@ -103,6 +103,8 @@ class VAController:
         prev_duration = self.prev_frame_length / self.target_fps
         omni_work_dir = os.getenv("OMNI_WORK_DIR", None)
         if omni_work_dir:
+            from lightx2v.deploy.common.va_reader_omni import OmniVAReader
+
             self.reader = OmniVAReader(
                 rank=self.rank,
                 world_size=self.world_size,
@@ -115,6 +117,8 @@ class VAController:
                 huoshan_tts_voice_type=self.audio_path.get("huoshan_tts_voice_type", None),
             )
         else:
+            from lightx2v.deploy.common.va_reader import VAReader
+
             self.reader = VAReader(
                 rank=self.rank,
                 world_size=self.world_size,
