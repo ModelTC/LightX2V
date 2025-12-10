@@ -14,8 +14,13 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import zmq
-from bson import BSON
 from loguru import logger
+
+try:
+    from bson import BSON
+except ImportError:
+    BSON = None
+    logger.warning("BSON is not installed")
 from scipy.signal import resample
 
 
