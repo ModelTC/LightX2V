@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 
+os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["DTYPE"] = "BF16"
 import random
@@ -795,12 +796,18 @@ def auto_configure(resolution):
                 {
                     "cpu_offload_val": True,
                     "use_tiling_vae_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
                 },
             ),
             (
                 16,
                 {
                     "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
                     "use_tiling_vae_val": True,
                     "offload_granularity_val": "phase",
                     "rope_chunk_val": True,
@@ -811,6 +818,9 @@ def auto_configure(resolution):
                 8,
                 {
                     "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
                     "use_tiling_vae_val": True,
                     "offload_granularity_val": "phase",
                     "rope_chunk_val": True,
@@ -829,6 +839,9 @@ def auto_configure(resolution):
                 24,
                 {
                     "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
                     "use_tiling_vae_val": True,
                 },
             ),
@@ -836,6 +849,9 @@ def auto_configure(resolution):
                 16,
                 {
                     "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
                     "use_tiling_vae_val": True,
                     "offload_granularity_val": "phase",
                 },
@@ -844,6 +860,9 @@ def auto_configure(resolution):
                 8,
                 {
                     "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
                     "use_tiling_vae_val": True,
                     "offload_granularity_val": "phase",
                 },
