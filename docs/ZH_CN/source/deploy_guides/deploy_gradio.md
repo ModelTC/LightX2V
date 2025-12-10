@@ -81,7 +81,7 @@ models/
 - 模型权重可从 HuggingFace 下载：
   - [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
   - [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
-- Text 和 Image Encoder 可从 [Encoders](https://huggingface.co/lightx2v/Encoderss) 下载
+- Text 和 Image Encoder 可从 [Encoders](https://huggingface.co/lightx2v/Encoders) 下载
 - VAE 可从 [Autoencoders](https://huggingface.co/lightx2v/Autoencoders) 下载
 - 对于 `xxx_split` 目录（例如 `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step_split`），即按照 block 存储的多个 safetensors，适用于内存不足的设备。例如内存 16GB 以内，请根据自身情况下载
 

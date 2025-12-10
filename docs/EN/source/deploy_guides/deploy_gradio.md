@@ -81,7 +81,7 @@ models/
 - Model weights can be downloaded from HuggingFace:
   - [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
   - [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
-- Text and Image Encoders can be downloaded from [Encoders](https://huggingface.co/lightx2v/Encoderss)
+- Text and Image Encoders can be downloaded from [Encoders](https://huggingface.co/lightx2v/Encoders)
 - VAE can be downloaded from [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 - For `xxx_split` directories (e.g., `wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step_split`), which store multiple safetensors by block, suitable for devices with insufficient memory. For example, devices with 16GB or less memory should download according to their own situation.
 
