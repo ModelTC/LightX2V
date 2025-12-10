@@ -45,7 +45,7 @@
 
 **📥 下载模型**:
 
-可参考[模型结构文档](./model_structure.md)或者[gradio部署文档](./deploy_gradio.md)下载完整模型（包含量化和非量化版本）或仅下载量化/非量化版本。
+可参考[模型结构文档](../getting_started/model_structure.md)或者[gradio部署文档](./deploy_gradio.md)下载完整模型（包含量化和非量化版本）或仅下载量化/非量化版本。
 
 
 **📋 配置参数**
