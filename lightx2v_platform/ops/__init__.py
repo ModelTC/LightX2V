@@ -10,3 +10,6 @@ elif AI_DEVICE == "cuda":
     if os.getenv("PLATFORM") == "dcu":
         from .attn.dcu import *
         from .mm.dcu import *
+elif AI_DEVICE == "npu":
+    from .attn.ascend_npu import *
+    from .mm.ascend_npu import *
