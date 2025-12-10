@@ -1234,7 +1234,7 @@ class WanVAE:
         chunk_h = total_h // world_size_h
         chunk_w = total_w // world_size_w
 
-        padding_size = 1
+        padding_size = 2
 
         # Calculate H dimension slice
         if cur_rank_h == 0:
@@ -1317,7 +1317,7 @@ class WanVAE:
         chunk_h = total_h // world_size_h
         chunk_w = total_w // world_size_w
 
-        padding_size = 1
+        padding_size = 2
 
         # Calculate H dimension slice
         if cur_rank_h == 0:
