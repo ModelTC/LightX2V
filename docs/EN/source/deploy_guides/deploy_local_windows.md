@@ -46,7 +46,7 @@ After extraction, ensure the directory structure is as follows:
 
 **📥 Model Download**:
 
-Refer to [Model Structure Documentation](./model_structure.md) or [Gradio Deployment Guide](./deploy_gradio.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
+Refer to [Model Structure Documentation](../getting_started/model_structure.md) or [Gradio Deployment Guide](./deploy_gradio.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
 
 
 **📋 Configuration Parameters**
