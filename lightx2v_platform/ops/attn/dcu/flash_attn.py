@@ -20,15 +20,15 @@ except ImportError:
 class FlashAttnDcu(AttnWeightTemplate):
     """
     DCU Flash Attention implementation.
-    
+
     Uses AMD ROCm version of Flash Attention 2.6.1 when available.
     Falls back to PyTorch SDPA (Scaled Dot Product Attention) if Flash Attention is not installed.
-    
+
     Tested Environment:
     - PyTorch: 2.7.1
     - Python: 3.10
     - Flash Attention: 2.6.1 (ROCm)
-    
+
     Reference: https://developer.sourcefind.cn/codes/modelzoo/wan2.1_pytorch/-/blob/master/wan/modules/attention.py
     """
 
@@ -56,7 +56,7 @@ class FlashAttnDcu(AttnWeightTemplate):
     ):
         """
         Execute Flash Attention computation.
-        
+
         Args:
             q: [B, Lq, Nq, C1] Query tensor
             k: [B, Lk, Nk, C1] Key tensor
@@ -68,7 +68,7 @@ class FlashAttnDcu(AttnWeightTemplate):
             causal: Whether to apply causal mask
             window_size: Sliding window size tuple (left, right)
             deterministic: Whether to use deterministic algorithm
-            
+
         Returns:
             Output tensor: [B, Lq, Nq, C2]
         """
@@ -129,14 +129,14 @@ class FlashAttnDcu(AttnWeightTemplate):
     def _sdpa_fallback(self, q, k, v, causal=False, dropout_p=0.0):
         """
         Fallback to PyTorch Scaled Dot Product Attention.
-        
+
         Args:
             q: [B, Lq, Nq, C] Query tensor
             k: [B, Lk, Nk, C] Key tensor
             v: [B, Lk, Nk, C] Value tensor
             causal: Whether to apply causal mask
             dropout_p: Dropout probability
-            
+
         Returns:
             Output tensor: [B, Lq, Nq, C]
         """
@@ -145,10 +145,7 @@ class FlashAttnDcu(AttnWeightTemplate):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p
-        )
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p)
 
         # Transpose back to [B, Lq, Nq, C]
         return out.transpose(1, 2).contiguous()
-
