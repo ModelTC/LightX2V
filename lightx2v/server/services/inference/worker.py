@@ -115,12 +115,16 @@ class TorchrunInferenceWorker:
                 await self.process_request(task_data)
 
             except Exception as e:
-                logger.error(f"Rank {self.rank} worker loop error: {str(e)}")
+                error_str = str(e)
+                if "Connection closed by peer" in error_str or "Connection reset by peer" in error_str:
+                    logger.info(f"Rank {self.rank} detected master process shutdown, exiting worker loop")
+                    break
+                logger.error(f"Rank {self.rank} worker loop error: {error_str}")
                 if self.world_size > 1 and task_data is not None:
                     try:
                         self.dist_manager.barrier()
                     except Exception as barrier_error:
-                        logger.error(f"Rank {self.rank} barrier failed after error: {barrier_error}")
+                        logger.warning(f"Rank {self.rank} barrier failed, exiting: {barrier_error}")
                         break
                 continue
 
