@@ -580,11 +580,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
         prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=AI_DEVICE)
         last_frames = None
         if prev_video is not None:  # prioritize prev_video
-            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(device)
+            last_frames = prev_video[:, :, -prev_frame_length:].clone().to(dtype)
             frame_slice = slice(0, prev_frame_length)
             prev_len = (prev_frame_length - 1) // 4 + 1
         elif frist_img is not None:
-            frist_frame = frist_img.to(device)
+            frist_frame = frist_img.to(dtype)
             last_frames = rearrange(frist_frame, "1 C H W -> 1 C 1 H W")
             frame_slice = slice(0, 1)
             prev_len = 1
