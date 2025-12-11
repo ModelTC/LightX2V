@@ -87,7 +87,12 @@ class EulerScheduler(WanScheduler):
         self.timesteps = self.sigmas * self.num_train_timesteps
 
         self.freqs[latent_shape[1] // self.patch_size[0] :, : self.rope_t_dim] = 0
-        self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0] + 1, latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
+
+        if self.config.get("f2v_process", False):
+            f = latent_shape[1] // self.patch_size[0]
+        else:
+            f = latent_shape[1] // self.patch_size[0] + 1
+        self.cos_sin = self.prepare_cos_sin((f, latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def step_post(self):
         model_output = self.noise_pred.to(torch.float32)
