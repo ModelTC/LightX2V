@@ -655,7 +655,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.prev_video = self.ref_img.unsqueeze(2)
         else:
             self.prev_video = self.inputs.get("prev_video", None)
-            self.prev_latent = self.inputs.get("prev_latent", None)
+            
+        self.prev_latent = self.inputs.get("prev_latent", None)
         
         self.frist_img = self.inputs.get("frist_img", None)
         if self.input_info.return_result_tensor:
