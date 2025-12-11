@@ -1,5 +1,6 @@
 import functools
 import math
+from math import prod
 from typing import List
 
 import torch
@@ -164,6 +165,7 @@ class QwenImagePreInfer:
         self.attention_kwargs = {}
         self.cpu_offload = config.get("cpu_offload", False)
         self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(config["axes_dims_rope"]), scale_rope=True)
+        self.zero_cond_t = config.get("zero_cond_t", False)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -173,6 +175,12 @@ class QwenImagePreInfer:
         hidden_states = weights.img_in.apply(hidden_states)
 
         timestep = timestep.to(hidden_states.dtype)
+        if self.zero_cond_t:
+            timestep = torch.cat([timestep, timestep * 0], dim=0)
+            modulate_index = torch.tensor([[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in img_shapes], device=timestep.device, dtype=torch.int)
+        else:
+            modulate_index = None
+
         encoder_hidden_states = encoder_hidden_states.squeeze(0)
 
         encoder_hidden_states = weights.txt_norm.apply(encoder_hidden_states)
@@ -185,4 +193,4 @@ class QwenImagePreInfer:
 
         image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens[0], device=hidden_states.device)
 
-        return hidden_states, encoder_hidden_states, encoder_hidden_states_mask, (embed0, image_rotary_emb)
+        return hidden_states, encoder_hidden_states, encoder_hidden_states_mask, (embed0, image_rotary_emb, modulate_index)
