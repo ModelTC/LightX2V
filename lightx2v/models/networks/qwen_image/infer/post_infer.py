@@ -6,11 +6,15 @@ class QwenImagePostInfer:
     def __init__(self, config):
         self.config = config
         self.cpu_offload = config.get("cpu_offload", False)
+        self.zero_cond_t = config.get("zero_cond_t", False)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
     def infer(self, weights, hidden_states, temb):
+        if self.zero_cond_t:
+            temb = temb.chunk(2, dim=0)[0]
+
         temb1 = F.silu(temb)
         temb1 = weights.norm_out_linear.apply(temb1)
         scale, shift = torch.chunk(temb1, 2, dim=1)
