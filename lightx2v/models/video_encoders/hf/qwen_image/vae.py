@@ -1,7 +1,6 @@
 import gc
 import json
 import os
-from typing import Optional
 
 import torch
 
@@ -13,18 +12,6 @@ try:
 except ImportError:
     AutoencoderKLQwenImage = None
     VaeImageProcessor = None
-
-
-# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img.retrieve_latents
-def retrieve_latents(encoder_output: torch.Tensor, generator: Optional[torch.Generator] = None, sample_mode: str = "sample"):
-    if hasattr(encoder_output, "latent_dist") and sample_mode == "sample":
-        return encoder_output.latent_dist.sample(generator)
-    elif hasattr(encoder_output, "latent_dist") and sample_mode == "argmax":
-        return encoder_output.latent_dist.mode()
-    elif hasattr(encoder_output, "latents"):
-        return encoder_output.latents
-    else:
-        raise AttributeError("Could not access latents of provided encoder_output")
 
 
 class AutoencoderKLQwenImageVAE:
@@ -92,12 +79,8 @@ class AutoencoderKLQwenImageVAE:
         latents = latents.reshape(batchsize, (height // 2) * (width // 2), num_channels_latents * 4)
         return latents
 
-    def _encode_vae_image(self, image: torch.Tensor, generator: torch.Generator):
-        if isinstance(generator, list):
-            image_latents = [retrieve_latents(self.model.encode(image[i : i + 1]), generator=generator[i], sample_mode="argmax") for i in range(image.shape[0])]
-            image_latents = torch.cat(image_latents, dim=0)
-        else:
-            image_latents = retrieve_latents(self.model.encode(image), generator=generator, sample_mode="argmax")
+    def _encode_vae_image(self, image: torch.Tensor):
+        image_latents = self.model.encode(image).latent_dist.mode()
         latents_mean = torch.tensor(self.model.config["latents_mean"]).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
         latents_std = torch.tensor(self.model.config["latents_std"]).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
         image_latents = (image_latents - latents_mean) / latents_std
@@ -105,12 +88,7 @@ class AutoencoderKLQwenImageVAE:
         return image_latents
 
     @torch.no_grad()
-    def encode_vae_image(self, image, input_info):
-        if self.config["task"] == "i2i":
-            self.generator = torch.Generator().manual_seed(input_info.seed)
-        elif self.config["task"] == "t2i":
-            self.generator = torch.Generator(device="cuda").manual_seed(input_info.seed)
-
+    def encode_vae_image(self, image):
         if self.cpu_offload:
             self.model.to(torch.device("cuda"))
 
@@ -118,7 +96,7 @@ class AutoencoderKLQwenImageVAE:
         image = image.to(self.model.device).to(self.dtype)
 
         if image.shape[1] != self.latent_channels:
-            image_latents = self._encode_vae_image(image=image, generator=self.generator)
+            image_latents = self._encode_vae_image(image=image)
         else:
             image_latents = image
         if self.config["batchsize"] > image_latents.shape[0] and self.config["batchsize"] % image_latents.shape[0] == 0:
