@@ -23,6 +23,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
     SglQuantLinearFp8,  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
+    TorchaoQuantLinearFp8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402,
     VllmQuantLinearFp8,  # noqa E402
 )
@@ -200,6 +201,8 @@ class T5Attention(nn.Module):
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
+            elif quant_scheme == "fp8-torchao":
+                linear_cls = TorchaoQuantLinearFp8
             elif quant_scheme == "int8-q8f":
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
@@ -275,6 +278,8 @@ class T5FeedForward(nn.Module):
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
+            elif quant_scheme == "fp8-torchao":
+                linear_cls = TorchaoQuantLinearFp8
             elif quant_scheme == "int8-q8f":
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":

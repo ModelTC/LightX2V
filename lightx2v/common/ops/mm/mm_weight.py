@@ -57,9 +57,14 @@ except ImportError:
     deep_gemm = None
 
 try:
-    from torchao.quantization.utils import quant_int8_per_token_matmul, quantize_activation_per_token_absmax
+    from torchao.quantization.utils import quant_int8_per_token_matmul as torchao_int8_gemm
+    from torchao.quantization.utils import quantize_activation_per_token_absmax as torchao_int8_quant
 except ImportError:
-    quant_int8_per_token_matmul, quantize_activation_per_token_absmax = None, None
+    try:
+        from torchao.quantization.utils import _quant_int8_per_token_matmul as torchao_int8_gemm
+        from torchao.quantization.utils import _quantize_activation_per_token_absmax as torchao_int8_quant
+    except ImportError:
+        torchao_int8_gemm, torchao_int8_quant = None, None
 
 try:
     import gguf
@@ -595,8 +600,15 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     # act quant kernels
     # =========================
     def act_quant_int8_perchannel_sym_torchao(self, x):
-        input_tensor_quant, input_tensor_scale = quantize_activation_per_token_absmax(x)
+        input_tensor_quant, input_tensor_scale = torchao_int8_quant(x)
         return input_tensor_quant, input_tensor_scale
+
+    def act_quant_fp8_perchannel_sym_torchao(self, x):
+        abs_max = x.abs().max(dim=-1, keepdim=True)[0]
+        abs_max = torch.clamp(abs_max, min=1e-8)
+        scale = abs_max / 448.0
+        quantized = torch.clamp(x / scale, -448, 448).to(torch.float8_e4m3fn)
+        return quantized, scale.float()
 
     def act_quant_fp8_perchannel_sym_vllm(self, x):
         input_tensor_quant, input_tensor_scale = ops.scaled_fp8_quant(x, None, scale_ub=None, use_per_token_if_dynamic=True)
@@ -1109,6 +1121,37 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         return output_tensor
 
 
+@MM_WEIGHT_REGISTER("fp8-torchao")
+class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
+    """
+    Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-Torchao
+
+    Quant MM:
+        Weight: fp8 perchannel sym
+        Act: fp8 perchannel dynamic sym
+        Kernel: Torchao
+    """
+
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
+        self.load_func = self.load_fp8_perchannel_sym
+        self.weight_need_transpose = True
+        self.act_quant_func = self.act_quant_fp8_perchannel_sym_torchao
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_fp8_perchannel_sym_torchao(input_tensor)
+        out = torch._scaled_mm(
+            input_tensor_quant,
+            self.weight,
+            scale_a=input_tensor_scale,
+            scale_b=self.weight_scale.t(),
+            bias=self.bias,
+            out_dtype=self.infer_dtype,
+            use_fast_accum=True,
+        )
+        return out
+
+
 @MM_WEIGHT_REGISTER("int8-torchao")
 class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
     """
@@ -1129,9 +1172,9 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
     def apply(self, input_tensor):
         input_tensor = input_tensor
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = quant_int8_per_token_matmul(input_tensor_quant, input_tensor_scale, self.weight, self.weight_scale.t().float(), output_dtype=self.infer_dtype)
+        output_tensor = torchao_int8_gemm(input_tensor_quant, input_tensor_scale, self.weight, self.weight_scale.t().float(), output_dtype=self.infer_dtype)
         if self.bias is not None:
-            output_tensor = output_tensor + self.bias
+            output_tensor.add_(self.bias)
 
         return output_tensor
 
