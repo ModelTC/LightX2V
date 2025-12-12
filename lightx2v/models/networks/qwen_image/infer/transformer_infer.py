@@ -141,18 +141,52 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_func = self.infer_calculating
         self.attn_type = config.get("attn_type", "flash_attn3")
+        self.zero_cond_t = config.get("zero_cond_t", False)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def _modulate(self, x, mod_params):
+    def _modulate(self, x, mod_params, index=None):
         """Apply modulation to input tensor"""
+        # x: b l d, shift: b d, scale: b d, gate: b d
         shift, scale, gate = mod_params.chunk(3, dim=-1)
-        return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1), gate.unsqueeze(1)
 
-    def infer_block(self, block_weight, hidden_states, encoder_hidden_states, temb, image_rotary_emb):
+        if index is not None:
+            # Assuming mod_params batch dim is 2*actual_batch (chunked into 2 parts)
+            # So shift, scale, gate have shape [2*actual_batch, d]
+            actual_batch = shift.size(0) // 2
+            shift_0, shift_1 = shift[:actual_batch], shift[actual_batch:]  # each: [actual_batch, d]
+            scale_0, scale_1 = scale[:actual_batch], scale[actual_batch:]
+            gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
+
+            # index: [b, l] where b is actual batch size
+            # Expand to [b, l, 1] to match feature dimension
+            index_expanded = index.unsqueeze(-1)  # [b, l, 1]
+
+            # Expand chunks to [b, 1, d] then broadcast to [b, l, d]
+            shift_0_exp = shift_0.unsqueeze(1)  # [b, 1, d]
+            shift_1_exp = shift_1.unsqueeze(1)  # [b, 1, d]
+            scale_0_exp = scale_0.unsqueeze(1)
+            scale_1_exp = scale_1.unsqueeze(1)
+            gate_0_exp = gate_0.unsqueeze(1)
+            gate_1_exp = gate_1.unsqueeze(1)
+
+            # Use torch.where to select based on index
+            shift_result = torch.where(index_expanded == 0, shift_0_exp, shift_1_exp)
+            scale_result = torch.where(index_expanded == 0, scale_0_exp, scale_1_exp)
+            gate_result = torch.where(index_expanded == 0, gate_0_exp, gate_1_exp)
+        else:
+            shift_result = shift.unsqueeze(1)
+            scale_result = scale.unsqueeze(1)
+            gate_result = gate.unsqueeze(1)
+
+        return x * (1 + scale_result) + shift_result, gate_result
+
+    def infer_block(self, block_weight, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index=None):
         # Get modulation parameters for both streams
         img_mod_params = block_weight.img_mod.apply(F.silu(temb))
+        if self.zero_cond_t:
+            temb = torch.chunk(temb, 2, dim=0)[0]
         txt_mod_params = block_weight.txt_mod.apply(F.silu(temb))
 
         # Split modulation parameters for norm1 and norm2
@@ -161,7 +195,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         # Process image stream - norm1 + modulation
         img_normed = block_weight.img_norm1.apply(hidden_states)
-        img_modulated, img_gate1 = self._modulate(img_normed, img_mod1)
+        img_modulated, img_gate1 = self._modulate(img_normed, img_mod1, modulate_index)
 
         # Process text stream - norm1 + modulation
         txt_normed = block_weight.txt_norm1.apply(encoder_hidden_states)
@@ -190,7 +224,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         # Process image stream - norm2 + MLP
         img_normed2 = block_weight.img_norm2.apply(hidden_states)
-        img_modulated2, img_gate2 = self._modulate(img_normed2, img_mod2)
+        img_modulated2, img_gate2 = self._modulate(img_normed2, img_mod2, modulate_index)
         img_mlp_output = F.gelu(block_weight.img_mlp.mlp_0.apply(img_modulated2.squeeze(0)), approximate="tanh")
         img_mlp_output = block_weight.img_mlp.mlp_2.apply(img_mlp_output)
         hidden_states = hidden_states + img_gate2 * img_mlp_output
@@ -210,15 +244,15 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return encoder_hidden_states, hidden_states
 
-    def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb):
+    def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index):
         for idx in range(len(block_weights.blocks)):
             block_weight = block_weights.blocks[idx]
             encoder_hidden_states, hidden_states = self.infer_block(
-                block_weight=block_weight, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb
+                block_weight=block_weight, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb, modulate_index=modulate_index
             )
         return encoder_hidden_states, hidden_states
 
     def infer(self, hidden_states, encoder_hidden_states, pre_infer_out, block_weights):
-        temb, image_rotary_emb = pre_infer_out
-        encoder_hidden_states, hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb)
+        temb, image_rotary_emb, modulate_index = pre_infer_out
+        encoder_hidden_states, hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index)
         return encoder_hidden_states, hidden_states
