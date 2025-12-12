@@ -1,7 +1,7 @@
 {
     "model_cls": "seko_talk",
     "task": "s2v",
-    "model_path":"/data/nvme0/gushiqiao/models/Lightx2v_models/SekoTalk-Distill/",
+    "model_path":"/mnt/afs1/wangshankun/HF_Cache/Wan2.1-i2V1202-Audio-14B-720P/",
     "infer_steps": 4,
     "target_fps": 16,
     "audio_sr": 16000,
@@ -12,10 +12,24 @@
     "sample_guide_scale": 1,
     "sample_shift": 5,
     "enable_cfg": false,
-    "cpu_offload": false,
     "use_31_block": false,
     "rope_type": "torch",
     "video_duration": 2,
     "prev_frame_length": 1,
-    "f2v_process": true
+    "f2v_process": true,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "t5_cpu_offload": true,
+    "clip_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "offload_ratio": 1,
+    "use_tiling_vae": true,
+    "audio_encoder_cpu_offload": true,
+    "audio_adapter_cpu_offload": false,
+    "lora_configs": [
+        {
+        "path": "/mnt/afs1/wangshankun/LightX2V/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "strength": 1.0
+        }
+    ]
 }
