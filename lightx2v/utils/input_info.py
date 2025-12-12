@@ -1,6 +1,8 @@
 import inspect
 from dataclasses import dataclass, field
 
+import torch
+
 
 @dataclass
 class T2VInputInfo:
@@ -85,6 +87,10 @@ class S2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: int = field(default_factory=int)
+
+    # prev info
+    overlap_frame: torch.Tensor = field(default_factory=lambda: None)
+    overlap_latent: torch.Tensor = field(default_factory=lambda: None)
 
 
 # Need Check
@@ -185,6 +191,11 @@ def set_input_info(args):
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
         )
+        if hasattr(args, "overlap_frame"):
+            input_info.overlap_frame = args.overlap_frame
+        if hasattr(args, "overlap_latent"):
+            input_info.overlap_latent = args.overlap_latent
+
     elif args.task == "animate":
         input_info = AnimateInputInfo(
             seed=args.seed,
