@@ -4,6 +4,7 @@ import os
 
 import torch
 
+from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
@@ -23,7 +24,7 @@ class AutoencoderKLQwenImageVAE:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device(AI_DEVICE)
-        self.dtype = torch.bfloat16
+        self.dtype = GET_DTYPE()
         self.latent_channels = config["vae_z_dim"]
         self.load()
 
@@ -93,7 +94,7 @@ class AutoencoderKLQwenImageVAE:
             self.model.to(torch.device("cuda"))
 
         num_channels_latents = self.config["transformer_in_channels"] // 4
-        image = image.to(self.model.device).to(self.dtype)
+        image = image.to(self.model.device)
 
         if image.shape[1] != self.latent_channels:
             image_latents = self._encode_vae_image(image=image)
