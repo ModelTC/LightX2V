@@ -28,8 +28,6 @@ class QwenImageTransformerWeights(WeightModule):
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
                 self.offload_phase_cuda_buffers = None
-            else:
-                raise NotImplementedError
 
 
 class QwenImageTransformerAttentionBlock(WeightModule):
