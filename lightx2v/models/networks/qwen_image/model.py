@@ -304,7 +304,6 @@ class QwenImageTransformerModel:
                 self.pre_weight.to_cuda()
                 self.post_weight.to_cuda()
 
-        t = self.scheduler.timesteps[self.scheduler.step_index]
         latents = self.scheduler.latents
         if self.config["task"] == "i2i":
             image_latents = torch.cat([item["image_latents"] for item in inputs["image_encoder_output"]], dim=1)
@@ -313,41 +312,11 @@ class QwenImageTransformerModel:
             latents_input = latents
 
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-
-        self.scheduler.infer_condition = True
-        hidden_states, encoder_hidden_states, pre_infer_out = self.pre_infer.infer(
-            weights=self.pre_weight,
-            hidden_states=latents_input,
-            encoder_hidden_states=prompt_embeds,
-        )
-
-        encoder_hidden_states, hidden_states = self.transformer_infer.infer(
-            block_weights=self.transformer_weights,
-            hidden_states=hidden_states.unsqueeze(0),
-            encoder_hidden_states=encoder_hidden_states.unsqueeze(0),
-            pre_infer_out=pre_infer_out,
-        )
-
-        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
+        noise_pred = self._infer_cond_uncond(latents_input, prompt_embeds, infer_condition=True)
 
         if self.config["do_true_cfg"]:
             neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
-
-            self.scheduler.infer_condition = False
-            neg_hidden_states, neg_encoder_hidden_states, neg_pre_infer_out = self.pre_infer.infer(
-                weights=self.pre_weight,
-                hidden_states=latents_input,
-                encoder_hidden_states=neg_prompt_embeds,
-            )
-
-            neg_encoder_hidden_states, neg_hidden_states = self.transformer_infer.infer(
-                block_weights=self.transformer_weights,
-                hidden_states=neg_hidden_states.unsqueeze(0),
-                encoder_hidden_states=neg_encoder_hidden_states.unsqueeze(0),
-                pre_infer_out=neg_pre_infer_out,
-            )
-
-            neg_noise_pred = self.post_infer.infer(self.post_weight, neg_hidden_states, neg_pre_infer_out[0])
+            neg_noise_pred = self._infer_cond_uncond(latents_input, neg_prompt_embeds, infer_condition=False)
 
         if self.config["task"] == "i2i":
             noise_pred = noise_pred[:, : latents.size(1)]
@@ -362,3 +331,23 @@ class QwenImageTransformerModel:
 
         noise_pred = noise_pred[:, : latents.size(1)]
         self.scheduler.noise_pred = noise_pred
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
+        self.scheduler.infer_condition = infer_condition
+
+        hidden_states, encoder_hidden_states, pre_infer_out = self.pre_infer.infer(
+            weights=self.pre_weight,
+            hidden_states=latents_input,
+            encoder_hidden_states=prompt_embeds,
+        )
+
+        encoder_hidden_states, hidden_states = self.transformer_infer.infer(
+            block_weights=self.transformer_weights,
+            hidden_states=hidden_states.unsqueeze(0),
+            encoder_hidden_states=encoder_hidden_states.unsqueeze(0),
+            pre_infer_out=pre_infer_out,
+        )
+
+        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
+        return noise_pred
