@@ -312,20 +312,13 @@ class QwenImageTransformerModel:
         else:
             latents_input = latents
 
-        timestep = t.expand(latents.shape[0]).to(latents.dtype)
-        img_shapes = inputs["img_shapes"]
-
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        txt_seq_lens = [prompt_embeds.shape[1]]
 
+        self.scheduler.infer_condition = True
         hidden_states, encoder_hidden_states, pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,
             hidden_states=latents_input,
-            timestep=timestep / 1000,
             encoder_hidden_states=prompt_embeds,
-            img_shapes=img_shapes,
-            txt_seq_lens=txt_seq_lens,
-            attention_kwargs=self.attention_kwargs,
         )
 
         encoder_hidden_states, hidden_states = self.transformer_infer.infer(
@@ -339,16 +332,12 @@ class QwenImageTransformerModel:
 
         if self.config["do_true_cfg"]:
             neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
-            negative_txt_seq_lens = [neg_prompt_embeds.shape[1]]
 
+            self.scheduler.infer_condition = False
             neg_hidden_states, neg_encoder_hidden_states, neg_pre_infer_out = self.pre_infer.infer(
                 weights=self.pre_weight,
                 hidden_states=latents_input,
-                timestep=timestep / 1000,
                 encoder_hidden_states=neg_prompt_embeds,
-                img_shapes=img_shapes,
-                txt_seq_lens=negative_txt_seq_lens,
-                attention_kwargs=self.attention_kwargs,
             )
 
             neg_encoder_hidden_states, neg_hidden_states = self.transformer_infer.infer(

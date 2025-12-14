@@ -152,10 +152,12 @@ class QwenImageRunner(DefaultRunner):
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
         elif self.config["task"] == "i2i":
             prompt_embeds, _, image_info = self.text_encoders[0].infer([text], image_list)
+            self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["image_info"] = image_info
             if self.config["do_true_cfg"] and neg_prompt is not None:
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
+                self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
         return text_encoder_output
 
@@ -206,13 +208,13 @@ class QwenImageRunner(DefaultRunner):
     def set_img_shapes(self):
         if self.config["task"] == "t2i":
             width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
-            img_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * self.config["batchsize"]
+            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * self.config["batchsize"]
         elif self.config["task"] == "i2i":
-            img_shapes = [[(1, self.input_info.auto_hight // self.config["vae_scale_factor"] // 2, self.input_info.auto_width // self.config["vae_scale_factor"] // 2)]]
+            image_shapes = [[(1, self.input_info.auto_hight // self.config["vae_scale_factor"] // 2, self.input_info.auto_width // self.config["vae_scale_factor"] // 2)]]
             for image_height, image_width in self.inputs["text_encoder_output"]["image_info"]["vae_image_info_list"]:
-                img_shapes[0].append((1, image_height // self.config["vae_scale_factor"] // 2, image_width // self.config["vae_scale_factor"] // 2))
+                image_shapes[0].append((1, image_height // self.config["vae_scale_factor"] // 2, image_width // self.config["vae_scale_factor"] // 2))
 
-        self.inputs["img_shapes"] = img_shapes
+        self.input_info.image_shapes = image_shapes
 
     def init_scheduler(self):
         self.scheduler = QwenImageScheduler(self.config)
