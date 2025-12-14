@@ -147,7 +147,7 @@ class QwenImageRunner(DefaultRunner):
         if self.config["task"] == "t2i":
             prompt_embeds, _, _ = self.text_encoders[0].infer([text])
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["do_true_cfg"] and neg_prompt is not None:
+            if self.config["enable_cfg"] and neg_prompt is not None:
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
         elif self.config["task"] == "i2i":
@@ -155,7 +155,7 @@ class QwenImageRunner(DefaultRunner):
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["image_info"] = image_info
-            if self.config["do_true_cfg"] and neg_prompt is not None:
+            if self.config["enable_cfg"] and neg_prompt is not None:
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds

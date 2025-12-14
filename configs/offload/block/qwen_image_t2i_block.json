@@ -80,7 +80,7 @@
     ],
     "_comment_attn": "in [torch_sdpa, flash_attn3, sage_attn2]",
     "attn_type": "flash_attn3",
-    "do_true_cfg": false,
+    "enable_cfg": false,
     "cpu_offload": true,
     "offload_granularity": "block"
 }

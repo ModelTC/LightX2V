@@ -57,7 +57,7 @@
     ],
     "_comment_attn": "in [torch_sdpa, flash_attn3, sage_attn2]",
     "attn_type": "flash_attn3",
-    "do_true_cfg": true,
+    "enable_cfg": true,
     "true_cfg_scale": 4.0,
     "cpu_offload": true,
     "offload_granularity": "block",

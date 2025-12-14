@@ -386,7 +386,7 @@ class QwenImageScheduler(BaseScheduler):
         self.set_timesteps()
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
-        if self.config["do_true_cfg"]:
+        if self.config["enable_cfg"]:
             self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
 
     def step_pre(self, step_index):

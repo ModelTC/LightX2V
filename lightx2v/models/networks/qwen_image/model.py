@@ -314,14 +314,14 @@ class QwenImageTransformerModel:
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
         noise_pred = self._infer_cond_uncond(latents_input, prompt_embeds, infer_condition=True)
 
-        if self.config["do_true_cfg"]:
+        if self.config["enable_cfg"]:
             neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
             neg_noise_pred = self._infer_cond_uncond(latents_input, neg_prompt_embeds, infer_condition=False)
 
         if self.config["task"] == "i2i":
             noise_pred = noise_pred[:, : latents.size(1)]
 
-        if self.config["do_true_cfg"]:
+        if self.config["enable_cfg"]:
             neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
             comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
 
