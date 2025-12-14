@@ -316,16 +316,12 @@ class QwenImageTransformerModel:
         img_shapes = inputs["img_shapes"]
 
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
+        txt_seq_lens = [prompt_embeds.shape[1]]
 
-        txt_seq_lens = prompt_embeds_mask.sum(dim=1).tolist() if prompt_embeds_mask is not None else None
-
-        hidden_states, encoder_hidden_states, _, pre_infer_out = self.pre_infer.infer(
+        hidden_states, encoder_hidden_states, pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,
             hidden_states=latents_input,
             timestep=timestep / 1000,
-            guidance=self.scheduler.guidance,
-            encoder_hidden_states_mask=prompt_embeds_mask,
             encoder_hidden_states=prompt_embeds,
             img_shapes=img_shapes,
             txt_seq_lens=txt_seq_lens,
@@ -343,16 +339,12 @@ class QwenImageTransformerModel:
 
         if self.config["do_true_cfg"]:
             neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
-            neg_prompt_embeds_mask = inputs["text_encoder_output"]["negative_prompt_embeds_mask"]
+            negative_txt_seq_lens = [neg_prompt_embeds.shape[1]]
 
-            negative_txt_seq_lens = neg_prompt_embeds_mask.sum(dim=1).tolist() if neg_prompt_embeds_mask is not None else None
-
-            neg_hidden_states, neg_encoder_hidden_states, _, neg_pre_infer_out = self.pre_infer.infer(
+            neg_hidden_states, neg_encoder_hidden_states, neg_pre_infer_out = self.pre_infer.infer(
                 weights=self.pre_weight,
                 hidden_states=latents_input,
                 timestep=timestep / 1000,
-                guidance=self.scheduler.guidance,
-                encoder_hidden_states_mask=neg_prompt_embeds_mask,
                 encoder_hidden_states=neg_prompt_embeds,
                 img_shapes=img_shapes,
                 txt_seq_lens=negative_txt_seq_lens,

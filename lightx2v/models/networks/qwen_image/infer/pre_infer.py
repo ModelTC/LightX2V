@@ -170,7 +170,7 @@ class QwenImagePreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def infer(self, weights, hidden_states, timestep, guidance, encoder_hidden_states_mask, encoder_hidden_states, img_shapes, txt_seq_lens, attention_kwargs):
+    def infer(self, weights, hidden_states, timestep, encoder_hidden_states, img_shapes, txt_seq_lens, attention_kwargs):
         hidden_states = hidden_states.squeeze(0)
         hidden_states = weights.img_in.apply(hidden_states)
 
@@ -193,4 +193,4 @@ class QwenImagePreInfer:
 
         image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens[0], device=hidden_states.device)
 
-        return hidden_states, encoder_hidden_states, encoder_hidden_states_mask, (embed0, image_rotary_emb, modulate_index)
+        return hidden_states, encoder_hidden_states, (embed0, image_rotary_emb, modulate_index)

@@ -145,22 +145,18 @@ class QwenImageRunner(DefaultRunner):
             monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         text_encoder_output = {}
         if self.config["task"] == "t2i":
-            prompt_embeds, prompt_embeds_mask, _ = self.text_encoders[0].infer([text])
+            prompt_embeds, _, _ = self.text_encoders[0].infer([text])
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            text_encoder_output["prompt_embeds_mask"] = prompt_embeds_mask
             if self.config["do_true_cfg"] and neg_prompt is not None:
-                neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt])
+                neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
-                text_encoder_output["negative_prompt_embeds_mask"] = neg_prompt_embeds_mask
         elif self.config["task"] == "i2i":
-            prompt_embeds, prompt_embeds_mask, image_info = self.text_encoders[0].infer([text], image_list)
+            prompt_embeds, _, image_info = self.text_encoders[0].infer([text], image_list)
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            text_encoder_output["prompt_embeds_mask"] = prompt_embeds_mask
             text_encoder_output["image_info"] = image_info
             if self.config["do_true_cfg"] and neg_prompt is not None:
-                neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt], image_list)
+                neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
-                text_encoder_output["negative_prompt_embeds_mask"] = neg_prompt_embeds_mask
         return text_encoder_output
 
     @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration, metrics_labels=["QwenImageRunner"])
