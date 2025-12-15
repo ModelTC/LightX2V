@@ -1064,7 +1064,7 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
 
 
 @MM_WEIGHT_REGISTER("int8-triton")
-class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
+class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-triton
 
