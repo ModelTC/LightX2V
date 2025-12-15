@@ -22,7 +22,7 @@
 
 ## :fire: Latest News
 
-- **2025年12月15日:** 🚀 Supported deployment on Hygon DCU.
+- **December 15, 2025:** 🚀 Supported deployment on Hygon DCU.
 
 - **December 4, 2025:** 🚀 Supported GGUF format model inference & deployment on Cambricon MLU590/MetaX C500.
 
