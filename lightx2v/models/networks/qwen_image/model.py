@@ -314,7 +314,22 @@ class QwenImageTransformerModel:
         if self.config["enable_cfg"]:
             if self.config["cfg_parallel"]:
                 # ==================== CFG Parallel Processing ====================
-                pass
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+
+                if cfg_p_rank == 0:
+                    noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                    if self.config["task"] == "i2i":
+                        noise_pred = noise_pred[:, : latents.size(1)]
+                else:
+                    noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+                    if self.config["task"] == "i2i":
+                        noise_pred = noise_pred[:, : latents.size(1)]
+                noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
+                dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
+                noise_pred_cond = noise_pred_list[0]  # cfg_p_rank == 0
+                noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
             else:
                 # ==================== CFG Processing ====================
                 noise_pred_cond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
