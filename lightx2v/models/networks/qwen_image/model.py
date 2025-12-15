@@ -311,22 +311,30 @@ class QwenImageTransformerModel:
         else:
             latents_input = latents
 
-        prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        noise_pred = self._infer_cond_uncond(latents_input, prompt_embeds, infer_condition=True)
-        if self.config["task"] == "i2i":
-            noise_pred = noise_pred[:, : latents.size(1)]
-
         if self.config["enable_cfg"]:
-            neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
-            neg_noise_pred = self._infer_cond_uncond(latents_input, neg_prompt_embeds, infer_condition=False)
-            if self.config["task"] == "i2i":
-                neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
-            comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
-            cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
-            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-            noise_pred = comb_pred * (cond_norm / noise_norm)
+            if self.config["cfg_parallel"]:
+                # ==================== CFG Parallel Processing ====================
+                pass
+            else:
+                # ==================== CFG Processing ====================
+                noise_pred_cond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                if self.config["task"] == "i2i":
+                    noise_pred_cond = noise_pred_cond[:, : latents.size(1)]
 
-        self.scheduler.noise_pred = noise_pred
+                noise_pred_uncond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+                if self.config["task"] == "i2i":
+                    noise_pred_uncond = noise_pred_uncond[:, : latents.size(1)]
+
+            comb_pred = noise_pred_uncond + self.config["true_cfg_scale"] * (noise_pred_cond - noise_pred_uncond)
+            noise_pred_cond_norm = torch.norm(noise_pred_cond, dim=-1, keepdim=True)
+            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+            self.scheduler.noise_pred = comb_pred * (noise_pred_cond_norm / noise_norm)
+        else:
+            # ==================== No CFG Processing ====================
+            noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+            if self.config["task"] == "i2i":
+                noise_pred = noise_pred[:, : latents.size(1)]
+            self.scheduler.noise_pred = noise_pred
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
