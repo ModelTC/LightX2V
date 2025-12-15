@@ -393,11 +393,11 @@ class QwenImageScheduler(BaseScheduler):
         super().step_pre(step_index)
         timestep_input = torch.tensor([self.timesteps[self.step_index]], device=AI_DEVICE, dtype=self.dtype) / 1000
         if self.zero_cond_t:
-            timestep = torch.cat([timestep_input, timestep_input * 0], dim=0)
+            timestep_input = torch.cat([timestep_input, timestep_input * 0], dim=0)
             self.modulate_index = torch.tensor([[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in self.input_info.image_shapes], device=AI_DEVICE, dtype=torch.int)
         else:
             self.modulate_index = None
-        self.timesteps_proj = get_timestep_embedding(timestep).to(torch.bfloat16)
+        self.timesteps_proj = get_timestep_embedding(timestep_input).to(torch.bfloat16)
 
     def step_post(self):
         # compute the previous noisy sample x_t -> x_t-1
