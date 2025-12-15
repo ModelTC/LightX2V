@@ -5,6 +5,7 @@ import os
 
 import torch
 import torch.distributed as dist
+from torch.nn import functional as F
 from safetensors import safe_open
 
 from lightx2v.utils.envs import *
@@ -367,26 +368,34 @@ class QwenImageTransformerModel:
             encoder_hidden_states=prompt_embeds,
         )
 
-        # print("pre_infer_out.hidden_states shape before seq parallel:", pre_infer_out.hidden_states.shape)
         if self.config["seq_parallel"]:
-            world_size = dist.get_world_size(self.seq_p_group)
-            cur_rank = dist.get_rank(self.seq_p_group)
-            pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=1)[cur_rank]
+            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
-        # print("pre_infer_out.hidden_states shape:", pre_infer_out.hidden_states.shape)
         hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
             pre_infer_out=pre_infer_out,
         )
-        # print("hidden_states shape after transformer:", hidden_states.shape)
-
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.embed0)
-        # print("noise_pred shape after post_infer:", noise_pred.shape)
 
         if self.config["seq_parallel"]:
-            world_size = dist.get_world_size(self.seq_p_group)
-            gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
-            dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
-            noise_pred = torch.cat(gathered_noise_pred, dim=1)
-        # print("noise_pred shape after seq gather:", noise_pred.shape)
+            noise_pred = self._seq_parallel_post_process(noise_pred)
+        return noise_pred
+
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        seqlen = pre_infer_out.hidden_states.shape[1]
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
+        pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=1)[cur_rank]
+        return pre_infer_out
+
+    @torch.no_grad()
+    def _seq_parallel_post_process(self, noise_pred):
+        world_size = dist.get_world_size(self.seq_p_group)
+        gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
+        dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
+        noise_pred = torch.cat(gathered_noise_pred, dim=1)
         return noise_pred

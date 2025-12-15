@@ -229,7 +229,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 q=query,
                 k=key,
                 v=value,
-                img_qkv_len=img_seqlen,
+                slice_qkv_len=img_seqlen,
                 cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,

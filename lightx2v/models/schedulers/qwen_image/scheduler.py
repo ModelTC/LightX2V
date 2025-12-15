@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from torch import nn
+from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -384,6 +385,10 @@ class QwenImageScheduler(BaseScheduler):
         if self.seq_p_group is not None:
             world_size = dist.get_world_size(self.seq_p_group)
             cur_rank = dist.get_rank(self.seq_p_group)
+            seqlen = self.image_rotary_emb[0].shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                self.image_rotary_emb[0] = F.pad(self.image_rotary_emb[0], (0, 0, 0, padding_size))
             self.image_rotary_emb[0] = torch.chunk(self.image_rotary_emb[0], world_size, dim=0)[cur_rank]
 
         if self.config["enable_cfg"]:
@@ -391,6 +396,10 @@ class QwenImageScheduler(BaseScheduler):
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
+                seqlen = self.negative_image_rotary_emb[0].shape[0]
+                padding_size = (world_size - (seqlen % world_size)) % world_size
+                if padding_size > 0:
+                    self.negative_image_rotary_emb[0] = F.pad(self.negative_image_rotary_emb[0], (0, 0, 0, padding_size))
                 self.negative_image_rotary_emb[0] = torch.chunk(self.negative_image_rotary_emb[0], world_size, dim=0)[cur_rank]
 
         if self.zero_cond_t:
@@ -398,6 +407,10 @@ class QwenImageScheduler(BaseScheduler):
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
+                seqlen = self.modulate_index.shape[1]
+                padding_size = (world_size - (seqlen % world_size)) % world_size
+                if padding_size > 0:
+                    self.modulate_index = F.pad(self.modulate_index, (0, padding_size))
                 self.modulate_index = torch.chunk(self.modulate_index, world_size, dim=1)[cur_rank]
         else:
             self.modulate_index = None
