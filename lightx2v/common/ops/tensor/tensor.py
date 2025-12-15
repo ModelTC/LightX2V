@@ -1,5 +1,6 @@
 import os
 import re
+from pathlib import Path
 
 import torch
 from safetensors import safe_open
@@ -41,7 +42,10 @@ class DefaultTensor:
 
     def _get_tensor(self, weight_dict=None, use_infer_dtype=False):
         if self.lazy_load:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.tensor_name.split('.')[1]}.safetensors")
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.tensor_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 tensor = lazy_load_file.get_tensor(self.tensor_name)
                 if use_infer_dtype:
@@ -96,7 +100,10 @@ class DefaultTensor:
             self.tensor_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.tensor_name, count=1)
         else:
             self.tensor_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.tensor_name, count=1)
-        lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        if Path(self.lazy_load_file).is_file():
+            lazy_load_file_path = self.lazy_load_file
+        else:
+            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             tensor = lazy_load_file.get_tensor(self.tensor_name).to(self.infer_dtype)
             self.pin_tensor = self.pin_tensor.copy_(tensor)

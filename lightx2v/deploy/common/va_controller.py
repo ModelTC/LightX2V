@@ -138,11 +138,15 @@ class VAController:
             dist.barrier()
 
     def next_control(self):
+        from lightx2v.deploy.common.va_reader_omni import OmniVAReader
+
         if isinstance(self.reader, OmniVAReader):
             return self.omni_reader_next_control()
         return NextControl(action="fetch")
 
     def before_control(self):
+        from lightx2v.deploy.common.va_reader_omni import OmniVAReader
+
         if isinstance(self.reader, OmniVAReader):
             self.len_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
             self.flag_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)

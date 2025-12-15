@@ -15,6 +15,7 @@ class DistributedManager:
         self.world_size = 1
         self.device = "cpu"
         self.task_pg = None
+        self._shutting_down = False
 
     CHUNK_SIZE = 1024 * 1024
 
@@ -48,19 +49,33 @@ class DistributedManager:
             logger.error(f"Rank {self.rank} distributed environment initialization failed: {str(e)}")
             return False
 
-    def cleanup(self):
-        try:
-            if dist.is_initialized():
+    def cleanup(self, timeout: int = 2):
+        self._shutting_down = True
+        self.is_initialized = False
+        self.task_pg = None
+
+        if not dist.is_initialized():
+            return
+
+        import threading
+
+        def _destroy():
+            try:
                 dist.destroy_process_group()
-                logger.info(f"Rank {self.rank} distributed environment cleaned up")
-        except Exception as e:
-            logger.error(f"Rank {self.rank} error occurred while cleaning up distributed environment: {str(e)}")
-        finally:
-            self.is_initialized = False
-            self.task_pg = None
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_destroy, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            logger.warning(f"Rank {self.rank} cleanup timed out, forcing exit")
+        else:
+            logger.info(f"Rank {self.rank} distributed environment cleaned up")
 
     def barrier(self):
-        if self.is_initialized:
+        if self.is_initialized and dist.is_initialized():
             if torch.cuda.is_available() and dist.get_backend() == "nccl":
                 dist.barrier(device_ids=[torch.cuda.current_device()])
             else:
@@ -103,7 +118,7 @@ class DistributedManager:
         return bytes(received)
 
     def broadcast_task_data(self, task_data: Optional[Any] = None) -> Optional[Any]:
-        if not self.is_initialized:
+        if self._shutting_down or not self.is_initialized or not dist.is_initialized() or self.task_pg is None:
             return None
 
         if self.is_rank_zero():

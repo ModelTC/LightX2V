@@ -56,7 +56,7 @@ class DefaultRunner(BaseRunner):
         elif self.config["task"] == "s2v":
             self.run_input_encoder = self._run_input_encoder_local_s2v
         self.config.lock()  # lock config to avoid modification
-        if self.config.get("compile", False) and hasattr(self.model, "comple"):
+        if self.config.get("compile", False) and hasattr(self.model, "compile"):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
 
@@ -417,3 +417,17 @@ class DefaultRunner(BaseRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video_final
+
+    def __del__(self):
+        if hasattr(self, "model"):
+            del self.model
+        if hasattr(self, "text_encoders"):
+            del self.text_encoders
+        if hasattr(self, "image_encoder"):
+            del self.image_encoder
+        if hasattr(self, "vae_encoder"):
+            del self.vae_encoder
+        if hasattr(self, "vae_decoder"):
+            del self.vae_decoder
+        torch.cuda.empty_cache()
+        gc.collect()

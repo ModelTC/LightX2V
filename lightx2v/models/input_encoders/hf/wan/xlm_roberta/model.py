@@ -10,7 +10,7 @@ from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearFp8, VllmQuantLinearInt8
+from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearFp8, VllmQuantLinearInt8
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
@@ -69,6 +69,8 @@ class SelfAttention(nn.Module):
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
+            elif quant_scheme == "fp8-torchao":
+                linear_cls = TorchaoQuantLinearFp8
             elif quant_scheme == "int8-q8f":
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
@@ -153,6 +155,8 @@ class AttentionBlock(nn.Module):
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
                 linear_cls = TorchaoQuantLinearInt8
+            elif quant_scheme == "fp8-torchao":
+                linear_cls = TorchaoQuantLinearFp8
             elif quant_scheme == "int8-q8f":
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":

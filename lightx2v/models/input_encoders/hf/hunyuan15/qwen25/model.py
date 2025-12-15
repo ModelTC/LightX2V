@@ -30,6 +30,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
     SglQuantLinearFp8,  # noqa E402
     TorchaoQuantLinearInt8,  # noqa E402
+    TorchaoQuantLinearFp8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402
 )
 from lightx2v_platform.base.global_var import AI_DEVICE  # noqa E402
@@ -131,6 +132,8 @@ def load_text_encoder(
             linear_cls = SglQuantLinearFp8
         elif text_encoder_quant_scheme == "int8-torchao":
             linear_cls = TorchaoQuantLinearInt8
+        elif text_encoder_quant_scheme == "fp8-torchao":
+            linear_cls = TorchaoQuantLinearFp8
         elif text_encoder_quant_scheme == "int8-q8f":
             linear_cls = Q8FQuantLinearInt8
         elif text_encoder_quant_scheme == "fp8-q8f":

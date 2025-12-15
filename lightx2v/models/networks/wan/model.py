@@ -69,6 +69,7 @@ class WanModel(CompiledMethodsMixin):
                 "fp8-sgl",
                 "int8-sgl",
                 "int8-torchao",
+                "fp8-torchao",
                 "nvfp4",
                 "mxfp4",
                 "mxfp6-mxfp8",
@@ -168,17 +169,19 @@ class WanModel(CompiledMethodsMixin):
             safetensors_path = self.model_path
 
         if os.path.isdir(safetensors_path):
-            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
-        else:
-            safetensors_files = [safetensors_path]
-
-        if self.lazy_load:
-            self.lazy_load_path = safetensors_path
-            non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
-            if os.path.exists(non_block_file):
-                safetensors_files = [non_block_file]
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+                non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+                if os.path.exists(non_block_file):
+                    safetensors_files = [non_block_file]
+                else:
+                    raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
             else:
-                raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path. Lazy load mode only supports loading chunked model weights.")
+                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+        else:
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+            safetensors_files = [safetensors_path]
 
         weight_dict = {}
         for file_path in safetensors_files:
@@ -210,18 +213,20 @@ class WanModel(CompiledMethodsMixin):
             return weight_dict
 
         if os.path.isdir(safetensors_path):
-            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+                non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+                if os.path.exists(non_block_file):
+                    safetensors_files = [non_block_file]
+                else:
+                    raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
+            else:
+                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
             safetensors_files = [safetensors_path]
             safetensors_path = os.path.dirname(safetensors_path)
-
-        if self.lazy_load:
-            self.lazy_load_path = safetensors_path
-            non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
-            if os.path.exists(non_block_file):
-                safetensors_files = [non_block_file]
-            else:
-                raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path. Lazy load mode only supports loading chunked model weights.")
 
         weight_dict = {}
         for safetensor_path in safetensors_files:
