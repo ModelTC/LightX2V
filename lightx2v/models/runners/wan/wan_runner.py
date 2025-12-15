@@ -135,6 +135,13 @@ class WanRunner(DefaultRunner):
         text_encoders = [text_encoder]
         return text_encoders
 
+    def get_vae_parallel(self):
+        if isinstance(self.config.get("parallel", False), bool):
+            return self.config.get("parallel", False)
+        if isinstance(self.config.get("parallel", False), dict):
+            return self.config.get("parallel", {}).get("vae_parallel", True)
+        return False
+
     def load_vae_encoder(self):
         # offload config
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
@@ -146,7 +153,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
-            "parallel": self.config.get("parallel", {}).get("vae_parallel", "parallel" in self.config),
+            "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
@@ -169,7 +176,7 @@ class WanRunner(DefaultRunner):
         vae_config = {
             "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
             "device": vae_device,
-            "parallel": self.config.get("parallel", {}).get("vae_parallel", "parallel" in self.config),
+            "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "use_lightvae": self.config.get("use_lightvae", False),
