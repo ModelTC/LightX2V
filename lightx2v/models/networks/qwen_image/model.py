@@ -361,7 +361,7 @@ class QwenImageTransformerModel:
             encoder_hidden_states=prompt_embeds,
         )
 
-        encoder_hidden_states, hidden_states = self.transformer_infer.infer(
+        hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
             pre_infer_out=pre_infer_out,
         )

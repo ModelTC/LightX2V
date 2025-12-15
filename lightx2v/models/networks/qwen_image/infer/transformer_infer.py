@@ -256,12 +256,12 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             encoder_hidden_states, hidden_states = self.infer_block(
                 block_weight=block_weight, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb, modulate_index=modulate_index
             )
-        return encoder_hidden_states, hidden_states
+        return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         embed0 = pre_infer_out.embed0
         image_rotary_emb = pre_infer_out.image_rotary_emb
-        encoder_hidden_states, hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, embed0, image_rotary_emb, self.scheduler.modulate_index)
-        return encoder_hidden_states, hidden_states
+        hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, embed0, image_rotary_emb, self.scheduler.modulate_index)
+        return hidden_states
