@@ -26,6 +26,8 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     TorchaoQuantLinearFp8,  # noqa E402
     VllmQuantLinearInt8,  # noqa E402,
     VllmQuantLinearFp8,  # noqa E402
+    TritonQuantLinearInt8,  # noqa E402,
+    TritonQuantLinearFp8,  # noqa E402
 )
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  # noqa E402
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
@@ -207,6 +209,10 @@ class T5Attention(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-triton":
+                linear_cls = TritonQuantLinearInt8
+            elif quant_scheme == "fp8-triton":
+                linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             else:
@@ -284,6 +290,10 @@ class T5FeedForward(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-triton":
+                linear_cls = TritonQuantLinearInt8
+            elif quant_scheme == "fp8-triton":
+                linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             else:

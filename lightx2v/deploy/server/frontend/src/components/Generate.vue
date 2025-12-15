@@ -39,10 +39,15 @@ import {
             i2vImagePreview,
             s2vImagePreview,
             s2vAudioPreview,
+            i2iImagePreview,
+            flf2vImagePreview,
+            flf2vLastFramePreview,
             getCurrentImagePreview,
             getCurrentAudioPreview,
             getCurrentVideoPreview,
+            getCurrentLastFramePreview,
             setCurrentImagePreview,
+            setCurrentLastFramePreview,
             setCurrentAudioPreview,
             setCurrentVideoPreview,
             updateUploadedContentStatus,
@@ -100,12 +105,15 @@ import {
             updateFaceRoleName,
             toggleFaceEditing,
             saveFaceRoleName,
+            handleLastFrameUpload,
             selectTask,
             selectModel,
             resetForm,
             triggerImageUpload,
+            triggerLastFrameUpload,
             triggerAudioUpload,
             removeImage,
+            removeLastFrame,
             removeAudio,
             removeVideo,
             handleAudioUpload,
@@ -195,6 +203,8 @@ import {
             getCurrentImagePreviewUrl,
             getCurrentAudioPreviewUrl,
             getCurrentVideoPreviewUrl,
+            getCurrentLastFramePreviewUrl,
+            getI2IImagePreviews,
             handleThumbnailError,
             handleImageError,
             handleImageLoad,
@@ -233,6 +243,7 @@ import {
             getImageHistory,
             getAudioHistory,
             selectImageHistory,
+            selectLastFrameImageHistory,
             selectAudioHistory,
             previewAudioHistory,
             clearImageHistory,
@@ -282,6 +293,7 @@ import {
             closeImageZoomModal,
             // 模板素材应用相关
             applyTemplateImage,
+            applyTemplateLastFrameImage,
             applyTemplateAudio,
             applyTemplatePrompt,
             copyPrompt,
@@ -1881,6 +1893,34 @@ const handleImageDrop = (e) => {
     }
 }
 
+const handleLastFrameDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    isDragOver.value = false
+
+    const files = Array.from(e.dataTransfer.files)
+    const imageFile = files.find(file => file.type.startsWith('image/'))
+
+    if (imageFile) {
+        // 创建FileList对象来模拟input[type="file"]的change事件
+        const dataTransfer = new DataTransfer()
+        dataTransfer.items.add(imageFile)
+        const fileList = dataTransfer.files
+
+        // 创建模拟的change事件
+        const event = {
+            target: {
+                files: fileList
+            }
+        }
+
+        handleLastFrameUpload(event)
+        showAlert('尾帧图片拖拽上传成功', 'success')
+    } else {
+        showAlert('请拖拽图片文件', 'warning')
+    }
+}
+
 const handleAudioDrop = (e) => {
     e.preventDefault()
     e.stopPropagation()
@@ -2472,6 +2512,12 @@ onUnmounted(() => {
                                                   class="inline-block animate-fade-in">{{ t('pleaseUploadAnImageAsTheFirstFrameOfTheVideoAndTheMostDetailedVideoScript') }}</span>
                                             <span v-else-if="selectedTaskId === 's2v'"
                                                   class="inline-block animate-fade-in">{{ t('pleaseUploadARoleImageAnAudioAndTheGeneralVideoRequirements') }}</span>
+                                            <span v-else-if="selectedTaskId === 'flf2v'"
+                                                  class="inline-block animate-fade-in">{{ t('pleaseUploadFirstAndLastFrameImagesAndTheMostDetailedVideoScript') }}</span>
+                                            <span v-else-if="selectedTaskId === 'i2i'"
+                                                  class="inline-block animate-fade-in">{{ t('pleaseUploadAnImageAsTheReferenceImageAndThePromptForImageGeneration') }}</span>
+                                            <span v-else-if="selectedTaskId === 't2i'"
+                                                  class="inline-block animate-fade-in">{{ t('pleaseEnterThePromptForImageGeneration') || '请输入图片生成提示词，描述图片的内容、风格和细节要求' }}</span>
                                             <span v-else
                                                   class="inline-block animate-fade-in">选择任务类型开始创作您的视频</span>
                                         </p>
@@ -2497,14 +2543,14 @@ onUnmounted(() => {
                                         </button>
                                     </div>
 
-                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate'" class="upload-section">
+                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate' || selectedTaskId === 'flf2v' || selectedTaskId === 'i2i'" class="upload-section">
                                     <!-- 上传图片 - Apple 风格 -->
-                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate'">
+                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate' || selectedTaskId === 'flf2v' || selectedTaskId === 'i2i'">
                                         <!-- 图片标签 -->
                                         <div class="flex justify-between items-center mb-3">
-                                                <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
-                                                                {{ t('image') }}
-                                                </label>
+                                            <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
+                                                {{ selectedTaskId === 'flf2v' ? t('firstFrameImage') : t('image') }}
+                                            </label>
                                         </div>
                                         <!-- 上传图片区域 - Apple 风格 -->
                                         <div class="relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl p-2 min-h-[220px] transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
@@ -2514,13 +2560,17 @@ onUnmounted(() => {
                                             @dragleave="handleDragLeave"
                                             :class="{
                                                 'border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10': isDragOver,
-                                                'p-8': !getCurrentImagePreview()
+                                                'p-8': !getCurrentImagePreview() && (selectedTaskId !== 'i2i' || getI2IImagePreviews().length === 0)
                                             }"
                                             >
                                             <!-- 默认上传界面 - Apple 风格 -->
-                                            <div v-if="!getCurrentImagePreview()" class="flex flex-col items-center justify-center h-full">
-                                            <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('uploadImage') }}</p>
-                                            <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">{{ t('supportedImageFormats') }}</p>
+                                            <div v-if="!getCurrentImagePreview() && (selectedTaskId !== 'i2i' || getI2IImagePreviews().length === 0)" class="flex flex-col items-center justify-center h-full">
+                                            <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">
+                                                {{ selectedTaskId === 'i2i' ? (t('uploadImages') || '上传图片（支持多张）') : t('uploadImage') }}
+                                            </p>
+                                            <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">
+                                                {{ selectedTaskId === 'i2i' ? (t('supportedImageFormats') + ' ' + (t('multipleImagesSupported') || '（支持多张）')) : t('supportedImageFormats') }}
+                                            </p>
                                             <div class="flex items-center justify-center gap-4">
                                                         <div class="flex flex-col items-center gap-2">
                                                             <button
@@ -2543,8 +2593,39 @@ onUnmounted(() => {
                                             </div>
                                             </div>
 
-                                            <!-- 图片预览区域 - 只显示主图 -->
-                                            <div v-if="getCurrentImagePreview()" class="flex items-center justify-center w-full min-h-[220px]">
+                                            <!-- 图片预览区域 -->
+                                            <!-- i2i 模式：多图预览 -->
+                                            <div v-if="selectedTaskId === 'i2i' && getI2IImagePreviews().length > 0" class="flex items-center justify-center w-full min-h-[220px]">
+                                                <div class="flex flex-wrap justify-center items-center gap-3 p-2 w-full">
+                                                    <div v-for="(preview, index) in getI2IImagePreviews()" :key="index"
+                                                        class="relative group flex items-center justify-center bg-white/40 dark:bg-[#2c2c2e]/40 rounded-xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all duration-200"
+                                                        style="max-height: 220px; aspect-ratio: 1; width: calc((100% - 12px) / 2); min-width: 100px; max-width: 220px;">
+                                                        <img :src="preview" :alt="`${t('previewImage')} ${index + 1}`"
+                                                            class="max-w-full max-h-[220px] w-auto h-auto object-contain">
+                                                        <!-- 删除按钮 -->
+                                                        <button @click.stop="removeImage(index)"
+                                                            class="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100 opacity-0 group-hover:opacity-100"
+                                                            :title="t('deleteImage')">
+                                                            <i class="fas fa-times text-xs"></i>
+                                                        </button>
+                                                        <!-- 图片序号 -->
+                                                        <div class="absolute bottom-2 left-2 px-2 py-1 bg-black/50 dark:bg-black/70 text-white text-xs rounded backdrop-blur-sm">
+                                                            {{ index + 1 }}
+                                                        </div>
+                                                    </div>
+                                                    <!-- 继续添加图片按钮（最多3张） -->
+                                                    <div v-if="getI2IImagePreviews().length < 3" @click="triggerImageUpload"
+                                                        class="relative group flex items-center justify-center bg-white/40 dark:bg-[#2c2c2e]/40 rounded-xl overflow-hidden border-2 border-dashed border-[color:var(--brand-primary)]/30 dark:border-[color:var(--brand-primary-light)]/30 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all duration-200 cursor-pointer"
+                                                        style="max-height: 220px; aspect-ratio: 1; width: calc((100% - 12px) / 2); min-width: 100px; max-width: 220px;">
+                                                        <div class="flex flex-col items-center gap-2">
+                                                            <i class="fas fa-plus text-2xl text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                                            <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('addMoreImages') || '添加更多' }}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <!-- 其他模式或 i2i 单图：单图预览 -->
+                                            <div v-else-if="getCurrentImagePreview()" class="flex items-center justify-center w-full min-h-[220px]">
                                                 <!-- 主图预览 - Apple 风格 -->
                                                 <div class="relative w-auto max-w-full min-h-[220px] flex items-center justify-center group">
                                                     <img :src="getCurrentImagePreviewUrl()" alt="t('previewImage')"
@@ -2560,9 +2641,10 @@ onUnmounted(() => {
                                                         </button>
                                                     </div>
                                                 </div>
-
                                             </div>
-                                                <input type="file" ref="imageInput" @change="handleImageUpload" accept="image/*"
+                                                <input type="file" ref="imageInput" @change="handleImageUpload"
+                                                :accept="selectedTaskId === 'i2i' ? 'image/*' : 'image/*'"
+                                                :multiple="selectedTaskId === 'i2i'"
                                                 style="display: none;">
                                             </div>
 
@@ -2571,6 +2653,73 @@ onUnmounted(() => {
                                                 <i class="fas fa-spinner fa-spin text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                                 <span>{{ t('detectingCharacters') }}</span>
                                             </div>
+                                    </div>
+
+                                    <!-- 上传尾帧图片 - flf2v 任务 - Apple 风格 -->
+                                    <div v-if="selectedTaskId === 'flf2v'" class="mt-6">
+                                        <!-- 尾帧图片标签 -->
+                                        <div class="flex justify-between items-center mb-3">
+                                            <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
+                                                {{ t('lastFrameImage') }}
+                                            </label>
+                                        </div>
+                                        <!-- 上传尾帧图片区域 - Apple 风格 -->
+                                        <div class="relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl p-2 min-h-[220px] transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
+                                            @drop.prevent.stop="handleLastFrameDrop"
+                                            @dragover.prevent.stop="handleDragOver"
+                                            @dragenter.prevent.stop="handleDragEnter"
+                                            @dragleave.prevent.stop="handleDragLeave"
+                                            :class="{
+                                                'border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10': isDragOver,
+                                                'p-8': !getCurrentLastFramePreview()
+                                            }"
+                                            >
+                                            <!-- 默认上传界面 - Apple 风格 -->
+                                            <div v-if="!getCurrentLastFramePreview()" class="flex flex-col items-center justify-center h-full">
+                                                <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('uploadLastFrameImage') }}</p>
+                                                <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">{{ t('supportedImageFormats') }}</p>
+                                                <div class="flex items-center justify-center gap-4">
+                                                    <div class="flex flex-col items-center gap-2">
+                                                        <button
+                                                            class="w-12 h-12 flex items-center justify-center bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.3)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100"
+                                                            @click="triggerLastFrameUpload"
+                                                            :title="t('uploadLastFrameImage')">
+                                                            <i class="fas fa-upload text-base"></i>
+                                                        </button>
+                                                        <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('upload') }}</span>
+                                                    </div>
+                                                    <div class="flex flex-col items-center gap-2">
+                                                        <button
+                                                            @click.stop="isSelectingLastFrame = true; showImageTemplates = true; mediaModalTab = 'history'; getImageHistory()"
+                                                            class="w-12 h-12 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 text-[#1d1d1f] dark:text-[#f5f5f7] rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100"
+                                                            :title="t('templates')">
+                                                            <i class="fas fa-history text-base"></i>
+                                                        </button>
+                                                        <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('templates') }}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <!-- 尾帧图片预览 - Apple 风格 -->
+                                            <div v-if="getCurrentLastFramePreview()" class="relative w-full min-h-[220px] flex items-center justify-center group">
+                                                <img :src="getCurrentLastFramePreviewUrl()" alt="t('previewLastFrameImage')"
+                                                    class="max-w-full max-h-[220px] w-auto h-auto object-contain rounded-xl transition-all duration-200">
+
+                                                <!-- 删除按钮 - Apple 风格 -->
+                                                <div
+                                                    class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200">
+                                                    <div class="flex gap-3">
+                                                        <button @click.stop="removeLastFrame"
+                                                            class="w-11 h-11 flex items-center justify-center bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100"
+                                                            :title="t('deleteLastFrameImage')">
+                                                            <i class="fas fa-trash text-base"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <input type="file" ref="lastFrameInput" @change="handleLastFrameUpload" accept="image/*" data-role="last-frame-input"
+                                                style="display: none;">
+                                        </div>
                                     </div>
 
                                     <!-- 上传音频 - Apple 风格 -->
@@ -3142,7 +3291,7 @@ onUnmounted(() => {
                                         <div v-if="selectedTaskId !== 'animate'">
                                             <div class="mt-8 space-y-3 flex justify-between items-center mb-3">
                                                 <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center tracking-tight">
-                                                        {{ t('prompt') }}
+                                                        {{ selectedTaskId === 's2v' ? t('promptOptional') : t('prompt') }}
                                                         <button @click="showPromptModal = true; promptModalTab = 'templates'"
                                                             class="ml-2 text-xs text-[#86868b] dark:text-[#98989d] hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)] transition-colors"
                                                             :title="t('promptTemplates')">
@@ -3180,7 +3329,9 @@ onUnmounted(() => {
                                         <i v-if="submitting" class="fas fa-spinner fa-spin text-lg mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                         <i v-else-if="templateLoading" class="fas fa-spinner fa-spin text-lg mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                         <i v-else class="fi fi-sr-select text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] transition-all duration-200 pointer-events-none"></i>
-                                        <span class="pl-2 text-base font-semibold transition-all duration-200 pointer-events-none">{{ submitting ? t('submitting') : templateLoading ? '模板加载中...' : t('generateVideo') }}</span>
+                                        <span class="pl-2 text-base font-semibold transition-all duration-200 pointer-events-none">
+                                            {{ submitting ? t('submitting') : templateLoading ? '模板加载中...' : (selectedTaskId === 't2i' || selectedTaskId === 'i2i') ? (t('generateImage') || '生成图片') : t('generateVideo') }}
+                                        </span>
                                         </button>
                                 </div>
 

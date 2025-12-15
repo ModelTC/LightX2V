@@ -172,7 +172,10 @@ export const locale = i18n.global.locale
             't2v': t('textToVideo'),
             'i2v': t('imageToVideo'),
             's2v': t('speechToVideo'),
-            'animate': t('animate')
+            'i2i': t('imageToImage'),
+            't2i': t('textToImage'),
+            'animate': t('animate'),
+            'flf2v': t('firstAndLastFrameToVideo')
         }));
 
         // 任务类型提示信息
@@ -196,9 +199,29 @@ export const locale = i18n.global.locale
                 t('s2vHint4')
             ],
             'animate': [
-                t('animateHint1') || '上传目标角色图片和参考视频',
-                t('animateHint2') || '将视频中的角色替换为目标角色',
-                ]
+                t('animateHint1'),
+                t('animateHint2'),
+                t('animateHint3'),
+                t('animateHint4')
+            ],
+            'i2i': [
+                t('i2iHint1'),
+                t('i2iHint2'),
+                t('i2iHint3'),
+                t('i2iHint4')
+            ],
+            't2i': [
+                t('t2iHint1'),
+                t('t2iHint2'),
+                t('t2iHint3'),
+                t('t2iHint4')
+            ],
+            'flf2v': [
+                t('flf2vHint1'),
+                t('flf2vHint2'),
+                t('flf2vHint3'),
+                t('flf2vHint4')
+            ]
         }));
 
         // 当前任务类型的提示信息
@@ -240,7 +263,7 @@ export const locale = i18n.global.locale
         const i2vForm = ref({
             task: 'i2v',
             model_cls: '',
-            stage: '',
+            stage: 'single_stage',
             imageFile: null,
             prompt: '',
             seed: 42,
@@ -270,6 +293,32 @@ export const locale = i18n.global.locale
             detectedFaces: []  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
         });
 
+        const i2iForm = ref({
+            task: 'i2i',
+            model_cls: '',
+            stage: '',
+            imageFile: null,  // 保持向后兼容，用于单图
+            imageFiles: [],   // 多图支持
+            prompt: 'turn the style of the photo to vintage comic book',
+            seed: 42,
+        });
+
+        const t2iForm = ref({
+            task: 't2i',
+            model_cls: '',
+            stage: '',
+            prompt: '',
+            seed: 42
+        });
+
+        const flf2vForm = ref({
+            task: 'flf2v',
+            model_cls: '',
+            stage: 'single_stage',
+            imageFile: null,
+            lastFrameFile: null,
+        });
+
         // 根据当前选择的任务类型获取对应的表单
         const getCurrentForm = () => {
             switch (selectedTaskId.value) {
@@ -279,12 +328,18 @@ export const locale = i18n.global.locale
                     return i2vForm.value;
                 case 's2v':
                     return s2vForm.value;
+                case 'i2i':
+                    return i2iForm.value;
+                case 't2i':
+                    return t2iForm.value;
                 case 'animate':
                     return animateForm.value;
+                case 'flf2v':
+                    return flf2vForm.value;
                 default:
                     return t2vForm.value;
-            }
-        };
+                    }
+                };
 
         // 控制默认状态显示/隐藏的方法
         const hideDefaultState = () => {
@@ -327,18 +382,24 @@ export const locale = i18n.global.locale
 
         // 为每个任务类型创建独立的预览变量
         const i2vImagePreview = ref(null);
+        const flf2vImagePreview = ref(null);
+        const flf2vLastFramePreview = ref(null);
         const s2vImagePreview = ref(null);
         const s2vAudioPreview = ref(null);
         const animateImagePreview = ref(null);
         const animateVideoPreview = ref(null);
+        const i2iImagePreview = ref(null);  // 保持向后兼容，用于单图预览
+        const i2iImagePreviews = ref([]);    // 多图预览支持
+        // 标记当前是否在选择尾帧图片（用于历史记录和模板选择）
+        const isSelectingLastFrame = ref(false);
 
         // 监听上传内容变化
         const updateUploadedContentStatus = () => {
-            hasUploadedContent.value = !!(getCurrentImagePreview() || getCurrentAudioPreview() || getCurrentVideoPreview() || getCurrentForm().prompt?.trim());
+            hasUploadedContent.value = !!(getCurrentImagePreview() || getCurrentLastFramePreview() || getCurrentAudioPreview() || getCurrentVideoPreview() || getCurrentForm().prompt?.trim());
         };
 
         // 监听表单变化
-        watch([i2vImagePreview, s2vImagePreview, s2vAudioPreview, animateImagePreview, animateVideoPreview, () => getCurrentForm().prompt], () => {
+        watch([i2vImagePreview, flf2vImagePreview, flf2vLastFramePreview, s2vImagePreview, s2vAudioPreview, animateImagePreview, animateVideoPreview, i2iImagePreview, () => getCurrentForm().prompt], () => {
             updateUploadedContentStatus();
         }, { deep: true });
 
@@ -354,15 +415,39 @@ export const locale = i18n.global.locale
             switch (selectedTaskId.value) {
                 case 't2v':
                     return null;
+                case 't2i':
+                    return null;  // t2i 不需要输入图片
                 case 'i2v':
                     return i2vImagePreview.value;
                 case 's2v':
                     return s2vImagePreview.value;
                 case 'animate':
                     return animateImagePreview.value;
+                case 'i2i':
+                    // i2i 模式：如果有多个图片，返回第一个；否则返回单个预览
+                    if (i2iImagePreviews.value && i2iImagePreviews.value.length > 0) {
+                        return i2iImagePreviews.value[0];
+                    }
+                    return i2iImagePreview.value;
+                case 'flf2v':
+                    return flf2vImagePreview.value;
                 default:
                     return null;
             }
+        };
+
+        // 获取 i2i 模式的所有图片预览
+        const getI2IImagePreviews = () => {
+            if (selectedTaskId.value === 'i2i') {
+                if (i2iImagePreviews.value && i2iImagePreviews.value.length > 0) {
+                    return i2iImagePreviews.value;
+                }
+                // 如果没有多图，但有单图，返回单图数组
+                if (i2iImagePreview.value) {
+                    return [i2iImagePreview.value];
+                }
+            }
+            return [];
         };
 
         const getCurrentAudioPreview = () => {
@@ -391,21 +476,46 @@ export const locale = i18n.global.locale
                 case 'animate':
                     animateImagePreview.value = value;
                     break;
+                case 'i2i':
+                    // i2i 模式：只有在多图数组为空时才允许设置单图预览并清空多图数组
+                    // 如果多图数组不为空，说明正在使用多图模式，不应该清空
+                    if (i2iImagePreviews.value && i2iImagePreviews.value.length > 0) {
+                        // 多图模式下，不设置单图预览，避免清空多图数组
+                        // 只更新单图预览值，但不影响多图数组
+                        i2iImagePreview.value = value;
+                    } else {
+                        // 单图模式：正常设置
+                        i2iImagePreview.value = value;
+                        // 如果设置了单图，清空多图数组
+                        if (value) {
+                            i2iImagePreviews.value = [];
+                        }
+                    }
+                    break;
+                case 'flf2v':
+                    flf2vImagePreview.value = value;
+                    break;
             }
             // 清除图片预览缓存，确保新图片能正确显示
             urlCache.value.delete('current_image_preview');
         };
 
+        const setCurrentLastFramePreview = (value) => {
+            switch (selectedTaskId.value) {
+                case 'flf2v':
+                    flf2vLastFramePreview.value = value;
+                    break;
+            }
+            // 清除最后一帧图片预览缓存，确保新图片能正确显示
+            urlCache.value.delete('current_last_frame_preview');
+        };
+
         const setCurrentAudioPreview = (value) => {
             switch (selectedTaskId.value) {
-                case 't2v':
-                    break;
-                case 'i2v':
-                    break;
-                case 'animate':
-                    break;
                 case 's2v':
                     s2vAudioPreview.value = value;
+                    break;
+                default:
                     break;
             }
             // 清除音频预览缓存，确保新音频能正确显示
@@ -599,6 +709,23 @@ export const locale = i18n.global.locale
             const preview = getCurrentVideoPreview();
             if (!preview) return '';
             return getCachedUrl(`current_video_preview`, () => preview);
+        };
+
+        // 根据当前任务类型获取尾帧预览变量
+        const getCurrentLastFramePreview = () => {
+            switch (selectedTaskId.value) {
+                case 'flf2v':
+                    return flf2vLastFramePreview.value;
+                default:
+                    return null;
+            }
+        };
+
+        // 获取当前尾帧图片预览URL（带缓存）
+        const getCurrentLastFramePreviewUrl = () => {
+            const preview = getCurrentLastFramePreview();
+            if (!preview) return '';
+            return getCachedUrl(`current_last_frame_preview`, () => preview);
         };
 
         // Alert定时器，用于清除之前的定时器
@@ -1154,9 +1281,28 @@ export const locale = i18n.global.locale
                 if (selectedTaskId.value === 'i2v') {
                     i2vForm.value.imageFile = file;
                     i2vForm.value.detectedFaces = [];  // Reset detected faces
+                } else if (selectedTaskId.value === 'flf2v') {
+                    flf2vForm.value.imageFile = file;
                 } else if (selectedTaskId.value === 's2v') {
                     s2vForm.value.imageFile = file;
                     s2vForm.value.detectedFaces = [];  // Reset detected faces
+                } else if (selectedTaskId.value === 'i2i') {
+                    // i2i 模式始终使用多图模式
+                    if (!i2iForm.value.imageFiles) {
+                        i2iForm.value.imageFiles = [];
+                    }
+                    i2iForm.value.imageFiles = [file]; // 替换为新的图片
+                    // 同步更新 imageFile 以保持兼容性
+                    i2iForm.value.imageFile = file;
+                    // 更新预览
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        if (!i2iImagePreviews.value) {
+                            i2iImagePreviews.value = [];
+                        }
+                        i2iImagePreviews.value = [e.target.result];
+                    };
+                    reader.readAsDataURL(file);
                 } else if (selectedTaskId.value === 'animate') {
                     animateForm.value.imageFile = file;
                     animateForm.value.detectedFaces = [];  // Reset detected faces
@@ -1264,30 +1410,96 @@ export const locale = i18n.global.locale
         };
 
         const handleImageUpload = async (event) => {
-            const file = event.target.files[0];
-            if (file) {
-                if (selectedTaskId.value === 'i2v') {
-                    i2vForm.value.imageFile = file;
-                    i2vForm.value.detectedFaces = [];  // Reset detected faces
-                } else if (selectedTaskId.value === 's2v') {
-                    s2vForm.value.imageFile = file;
-                    s2vForm.value.detectedFaces = [];  // Reset detected faces
-                } else if (selectedTaskId.value === 'animate') {
-                    animateForm.value.imageFile = file;
-                    animateForm.value.detectedFaces = [];  // Reset detected faces
-                }
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    const imageDataUrl = e.target.result;
-                    setCurrentImagePreview(imageDataUrl);
-                    updateUploadedContentStatus();
-
-                    // 不再自动检测人脸，等待用户手动打开多角色模式开关
-                };
-                reader.readAsDataURL(file);
-            } else {
+            const files = event.target.files;
+            if (!files || files.length === 0) {
                 // 用户取消了选择，保持原有图片不变
-                // 不做任何操作
+                return;
+            }
+
+            // i2i 模式支持多图上传（最多3张）
+            if (selectedTaskId.value === 'i2i') {
+                const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+                if (imageFiles.length === 0) {
+                    return;
+                }
+
+                // 添加到图片列表
+                if (!i2iForm.value.imageFiles) {
+                    i2iForm.value.imageFiles = [];
+                }
+
+                // 计算当前已有图片数量
+                const currentImageCount = i2iForm.value.imageFiles.length;
+                const maxImages = 3;
+
+                // 限制最多3张图片
+                if (currentImageCount >= maxImages) {
+                    showAlert(t('maxImagesReached') || `最多只能上传 ${maxImages} 张图片`, 'warning');
+                    return;
+                }
+
+                // 计算还能添加多少张图片
+                const remainingSlots = maxImages - currentImageCount;
+                const filesToAdd = imageFiles.slice(0, remainingSlots);
+
+                if (filesToAdd.length < imageFiles.length) {
+                    showAlert(t('maxImagesReached') || `最多只能上传 ${maxImages} 张图片，已添加 ${filesToAdd.length} 张`, 'warning');
+                }
+
+                // 读取所有图片
+                const previewPromises = filesToAdd.map(file => {
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            resolve({
+                                file: file,
+                                dataUrl: e.target.result
+                            });
+                        };
+                        reader.readAsDataURL(file);
+                    });
+                });
+
+                const imageData = await Promise.all(previewPromises);
+
+                // 添加到表单和预览（直接操作数组，避免触发 setCurrentImagePreview 清空数组）
+                imageData.forEach(({ file, dataUrl }) => {
+                    i2iForm.value.imageFiles.push(file);
+                    i2iImagePreviews.value.push(dataUrl);
+                });
+
+                // i2i 模式始终使用多图模式，同步更新 imageFile 以保持兼容性
+                if (i2iForm.value.imageFiles.length > 0) {
+                    i2iForm.value.imageFile = i2iForm.value.imageFiles[0];
+                }
+
+                updateUploadedContentStatus();
+            } else {
+                // 其他模式：单图上传
+                const file = files[0];
+                if (file) {
+                    if (selectedTaskId.value === 'i2v') {
+                        i2vForm.value.imageFile = file;
+                        i2vForm.value.detectedFaces = [];  // Reset detected faces
+                    } else if (selectedTaskId.value === 'flf2v') {
+                        flf2vForm.value.imageFile = file;
+                    } else if (selectedTaskId.value === 's2v') {
+                        s2vForm.value.imageFile = file;
+                        s2vForm.value.detectedFaces = [];  // Reset detected faces
+                    } else if (selectedTaskId.value === 'animate') {
+                        animateForm.value.imageFile = file;
+                        animateForm.value.detectedFaces = [];  // Reset detected faces
+                    }
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const imageDataUrl = e.target.result;
+                        setCurrentImagePreview(imageDataUrl);
+                        updateUploadedContentStatus();
+
+                        // 不再自动检测人脸，等待用户手动打开多角色模式开关
+                    };
+                    reader.readAsDataURL(file);
+                }
             }
         };
 
@@ -1567,6 +1779,52 @@ export const locale = i18n.global.locale
                     setCurrentImagePreview(e.target.result);
                 };
                 reader.readAsDataURL(i2vForm.value.imageFile);
+            }
+            else if (taskType === 'i2i') {
+                // i2i 模式：恢复多图预览
+                if (i2iForm.value.imageFiles && i2iForm.value.imageFiles.length > 0) {
+                    const previewPromises = i2iForm.value.imageFiles.map(file => {
+                        return new Promise((resolve) => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => resolve(e.target.result);
+                            reader.readAsDataURL(file);
+                        });
+                    });
+                    Promise.all(previewPromises).then(previews => {
+                        i2iImagePreviews.value = previews;
+                    });
+                } else if (i2iForm.value.imageFile) {
+                    // 向后兼容：如果有单图，转换为多图模式
+                    if (!i2iForm.value.imageFiles) {
+                        i2iForm.value.imageFiles = [];
+                    }
+                    i2iForm.value.imageFiles = [i2iForm.value.imageFile];
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        if (!i2iImagePreviews.value) {
+                            i2iImagePreviews.value = [];
+                        }
+                        i2iImagePreviews.value = [e.target.result];
+                    };
+                    reader.readAsDataURL(i2iForm.value.imageFile);
+                }
+            } else if (taskType === 'flf2v') {
+                // 恢复flf2v首帧图片预览
+                if (flf2vForm.value.imageFile) {
+                    const reader2 = new FileReader();
+                    reader2.onload = (e) => {
+                        setCurrentImagePreview(e.target.result);
+                    };
+                    reader2.readAsDataURL(flf2vForm.value.imageFile);
+                }
+                // 恢复flf2v最后一帧图片预览
+                if (flf2vForm.value.lastFrameFile) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        setCurrentLastFramePreview(e.target.result);
+                    };
+                    reader.readAsDataURL(flf2vForm.value.lastFrameFile);
+                }
             } else if (taskType === 's2v') {
                 // 恢复数字人任务的图片和音频预览
                 if (s2vForm.value.imageFile) {
@@ -1583,6 +1841,9 @@ export const locale = i18n.global.locale
                     };
                     reader.readAsDataURL(s2vForm.value.audioFile);
                 }
+            } else if (taskType === 't2i') {
+                // t2i 任务类型不需要恢复预览（没有输入图片）
+                // 只需要确保表单已正确初始化
             } else if (taskType === 'animate') {
                 // 恢复角色替换任务的图片和视频预览
                 if (animateForm.value.imageFile) {
@@ -1688,23 +1949,88 @@ export const locale = i18n.global.locale
             }
         };
 
-        const removeImage = () => {
-            setCurrentImagePreview(null);
-            if (selectedTaskId.value === 'i2v') {
-                i2vForm.value.imageFile = null;
-                i2vForm.value.detectedFaces = [];
-            } else if (selectedTaskId.value === 's2v') {
-                s2vForm.value.imageFile = null;
-                s2vForm.value.detectedFaces = [];
-            } else if (selectedTaskId.value === 'animate') {
-                animateForm.value.imageFile = null;
-                animateForm.value.detectedFaces = [];
+        const removeImage = (index = null) => {
+            if (selectedTaskId.value === 'i2i' && index !== null) {
+                // i2i 模式：删除指定索引的图片
+                if (i2iForm.value.imageFiles && index >= 0 && index < i2iForm.value.imageFiles.length) {
+                    i2iForm.value.imageFiles.splice(index, 1);
+                    i2iImagePreviews.value.splice(index, 1);
+
+                    // 更新单图预览和文件（保持向后兼容）
+                    if (i2iForm.value.imageFiles.length > 0) {
+                        i2iForm.value.imageFile = i2iForm.value.imageFiles[0];
+                        i2iImagePreview.value = i2iImagePreviews.value[0];
+                    } else {
+                        i2iForm.value.imageFile = null;
+                        i2iImagePreview.value = null;
+                    }
+                }
+            } else {
+                // 其他模式或删除所有图片
+                setCurrentImagePreview(null);
+                if (selectedTaskId.value === 'i2v') {
+                    i2vForm.value.imageFile = null;
+                    i2vForm.value.detectedFaces = [];
+                } else if (selectedTaskId.value === 'flf2v') {
+                    flf2vForm.value.imageFile = null;
+                } else if (selectedTaskId.value === 's2v') {
+                    s2vForm.value.imageFile = null;
+                    s2vForm.value.detectedFaces = [];
+                } else if (selectedTaskId.value === 'i2i') {
+                    i2iForm.value.imageFile = null;
+                    i2iForm.value.imageFiles = [];
+                    i2iImagePreview.value = null;
+                    i2iImagePreviews.value = [];
+                } else if (selectedTaskId.value === 'animate') {
+                    animateForm.value.imageFile = null;
+                    animateForm.value.detectedFaces = [];
+                }
             }
             updateUploadedContentStatus();
             // 重置文件输入框，确保可以重新选择相同文件
-            const imageInput = document.querySelector('input[type="file"][accept="image/*"]');
+            const imageInput = document.querySelector('input[type="file"][accept="image/*"]:not([data-role="last-frame-input"])');
             if (imageInput) {
                 imageInput.value = '';
+            }
+        };
+
+        const handleLastFrameUpload = (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                if (selectedTaskId.value === 'flf2v') {
+                    flf2vForm.value.lastFrameFile = file;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    setCurrentLastFramePreview(e.target.result);
+                    updateUploadedContentStatus();
+                };
+                reader.readAsDataURL(file);
+            } else {
+                // 用户取消了选择，保持原有图片不变
+                // 不做任何操作
+            }
+        };
+
+        const triggerLastFrameUpload = () => {
+            const lastFrameInput = document.querySelector('input[type="file"][data-role="last-frame-input"]');
+            if (lastFrameInput) {
+                lastFrameInput.click();
+            } else {
+                console.warn('尾帧图片输入框未找到');
+            }
+        };
+
+        const removeLastFrame = () => {
+            setCurrentLastFramePreview(null);
+            if (selectedTaskId.value === 'flf2v') {
+                flf2vForm.value.lastFrameFile = null;
+            }
+            updateUploadedContentStatus();
+            // 重置文件输入框，确保可以重新选择相同文件
+            const lastFrameInput = document.querySelector('input[type="file"][data-role="last-frame-input"]');
+            if (lastFrameInput) {
+                lastFrameInput.value = '';
             }
         };
 
@@ -2146,9 +2472,35 @@ export const locale = i18n.global.locale
                     }
                 }
 
+                // t2i 任务类型只需要 prompt，不需要图片输入
+                if (selectedTaskId.value === 't2i') {
+                    if (!currentForm.prompt || currentForm.prompt.trim().length === 0) {
+                        showAlert(t('pleaseEnterPrompt'), 'warning');
+                        return;
+                    }
+                }
+
                 if (selectedTaskId.value === 'i2v' && !currentForm.imageFile) {
                     showAlert(t('i2vTaskRequiresImage'), 'warning');
                     return;
+                }
+
+                if (selectedTaskId.value === 'flf2v' && !currentForm.imageFile) {
+                    showAlert('flf2vTaskRequiresFirstFrameImage', 'warning');
+                    return;
+                }
+
+                if (selectedTaskId.value === 'flf2v' && !currentForm.lastFrameFile) {
+                    showAlert('flf2vTaskRequiresLastFrameImage', 'warning');
+                    return;
+                }
+
+                if (selectedTaskId.value === 'i2i') {
+                    // i2i 模式始终使用多图模式，检查 imageFiles 数组
+                    if (!currentForm.imageFiles || currentForm.imageFiles.length === 0) {
+                        showAlert(t('i2iTaskRequiresImage'), 'warning');
+                        return;
+                    }
                 }
 
                 if (selectedTaskId.value === 's2v' && !currentForm.imageFile) {
@@ -2192,7 +2544,7 @@ export const locale = i18n.global.locale
                     formData.prompt = currentForm.prompt ? currentForm.prompt.trim() : '';
                 }
 
-                if (currentForm.model_cls.startsWith('wan2.1')) {
+                if (currentForm.model_cls.startsWith('wan2.1') || currentForm.model_cls.startsWith('wan2.2')) {
                     formData.negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
                 }
 
@@ -2202,6 +2554,18 @@ export const locale = i18n.global.locale
                         type: 'base64',
                         data: base64
                     };
+                }
+                if (selectedTaskId.value === 'i2i') {
+                    // i2i 模式：始终使用多图模式（imageFiles 数组）
+                    if (currentForm.imageFiles && currentForm.imageFiles.length > 0) {
+                        // 将所有图片的 base64 数据作为数组发送
+                        const base64Promises = currentForm.imageFiles.map(file => fileToBase64(file));
+                        const base64DataList = await Promise.all(base64Promises);
+                        formData.input_image = {
+                            type: 'base64',
+                            data: base64DataList
+                        };
+                    }
                 }
 
                 if (selectedTaskId.value === 'animate' && currentForm.imageFile) {
@@ -2217,6 +2581,22 @@ export const locale = i18n.global.locale
                     formData.input_video = {
                         type: 'base64',
                         data: base64
+                    };
+                }
+
+                // t2i 任务类型不需要输入图片，只需要 prompt
+                // 不需要添加 input_image 字段
+
+                if (selectedTaskId.value === 'flf2v' && currentForm.imageFile) {
+                    const base64_last_frame = await fileToBase64(currentForm.lastFrameFile);
+                    formData.input_last_frame = {
+                        type: 'base64',
+                        data: base64_last_frame
+                    };
+                    const base64_image = await fileToBase64(currentForm.imageFile);
+                    formData.input_image = {
+                        type: 'base64',
+                        data: base64_image
                     };
                 }
 
@@ -2991,9 +3371,29 @@ export const locale = i18n.global.locale
                 const promises = batch.map(async (task) => {
                     if (!task.task_id) return;
 
-                    // 预加载输入图片
+                    // 预加载输入图片（支持多图）
                     if (task.inputs && task.inputs.input_image) {
-                        await getTaskFileUrl(task.task_id, 'input_image');
+                        const inputImage = task.inputs.input_image;
+                        // 检查是否是逗号分隔的多图路径
+                        if (inputImage.includes(',')) {
+                            // 按逗号拆分路径
+                            const imagePaths = inputImage.split(',').map(path => path.trim()).filter(path => path);
+                            // 为每张图片预加载 URL（使用 input_image_0, input_image_1, input_image_2 等）
+                            for (let index = 0; index < imagePaths.length; index++) {
+                                const inputName = `input_image_${index}`;
+                                // 检查 inputs 中是否有对应的独立字段，或者使用 input_image（向后兼容）
+                                if (task.inputs[inputName] || index === 0) {
+                                    await getTaskFileUrl(task.task_id, inputName);
+                                }
+                            }
+                        } else {
+                            // 单图情况：优先使用 input_image_0，如果没有则使用 input_image（向后兼容）
+                            if (task.inputs.input_image_0) {
+                                await getTaskFileUrl(task.task_id, 'input_image_0');
+                            } else {
+                                await getTaskFileUrl(task.task_id, 'input_image');
+                            }
+                        }
                     }
                     // 预加载输入音频
                     if (task.inputs && task.inputs.input_audio) {
@@ -3002,6 +3402,10 @@ export const locale = i18n.global.locale
                     // 预加载输出视频
                     if (task.outputs && task.outputs.output_video && task.status === 'SUCCEED') {
                         await getTaskFileUrl(task.task_id, 'output_video');
+                    }
+                    // 预加载输出图片（i2i 任务）
+                    if (task.outputs && task.outputs.output_image && task.status === 'SUCCEED') {
+                        await getTaskFileUrl(task.task_id, 'output_image');
                     }
                 });
 
@@ -3767,12 +4171,169 @@ export const locale = i18n.global.locale
                     currentForm.prompt = task.params.prompt;
                 }
 
+                // t2i 任务类型只需要 prompt，不需要加载图片、音频或视频
+                if (selectedTaskId.value === 't2i') {
+                    templateLoading.value = false;
+                    templateLoadingMessage.value = '';
+                    console.log('复用任务 - t2i 任务已加载:', {
+                        taskId: task.task_id,
+                        prompt: currentForm.prompt,
+                        model_cls: currentForm.model_cls
+                    });
+                    return;
+                }
+
                 // localStorage 不再保存文件内容，直接从后端获取任务文件
                     try {
-                        // 使用现有的函数获取图片和音频URL
+                        // 使用现有的函数获取图片、音频、视频和尾帧图片URL
                         const imageUrl = await getTaskInputImage(task);
                         const audioUrl = await getTaskInputAudio(task);
+                        const lastFrameUrl = await getTaskInputLastFrame(task);
+                        // 获取视频URL（用于 animate 任务）
+                        let videoUrl = null;
+                        if (selectedTaskId.value === 'animate' && task.inputs && task.inputs.input_video) {
+                            try {
+                                videoUrl = await getTaskFileUrl(task.task_id, 'input_video');
+                            } catch (error) {
+                                console.warn('Failed to get video URL:', error);
+                            }
+                        }
 
+                        // 处理图片文件（支持多图）
+                        if (imageUrl) {
+                            // 检查是否是 i2i 任务且是多图场景
+                            const isI2IMultiImage = selectedTaskId.value === 'i2i' &&
+                                task.inputs &&
+                                task.inputs.input_image &&
+                                typeof task.inputs.input_image === 'string' &&
+                                task.inputs.input_image.includes(',');
+
+                            if (isI2IMultiImage) {
+                                // 多图场景：加载所有图片
+                                try {
+                                    // 解析逗号分隔的图片路径
+                                    const imagePaths = task.inputs.input_image.split(',').map(path => path.trim()).filter(path => path);
+
+                                    // 初始化数组
+                                    if (!i2iForm.value.imageFiles) {
+                                        i2iForm.value.imageFiles = [];
+                                    }
+                                    i2iImagePreviews.value = [];
+
+                                    // 加载每张图片
+                                    const imageLoadPromises = imagePaths.map(async (imagePath, index) => {
+                                        try {
+                                            // 获取图片 URL（使用 input_image_0, input_image_1, input_image_2 等）
+                                            const inputName = `input_image_${index}`;
+                                            const singleImageUrl = await getTaskFileUrl(task.task_id, inputName);
+
+                                            if (singleImageUrl) {
+                                                const imageResponse = await fetch(singleImageUrl);
+                                                if (imageResponse && imageResponse.ok) {
+                                                    const blob = await imageResponse.blob();
+                                                    const filename = task.inputs[inputName] || `image_${index}.png`;
+                                                    const file = new File([blob], filename, { type: blob.type });
+
+                                                    // 读取为 data URL 用于预览
+                                                    const dataUrl = await new Promise((resolve, reject) => {
+                                                        const reader = new FileReader();
+                                                        reader.onload = (e) => resolve(e.target.result);
+                                                        reader.onerror = reject;
+                                                        reader.readAsDataURL(file);
+                                                    });
+
+                                                    return { file, dataUrl };
+                                                }
+                                            }
+                                        } catch (error) {
+                                            console.warn(`Failed to load image ${index}:`, error);
+                                            return null;
+                                        }
+                                        return null;
+                                    });
+
+                                    // 等待所有图片加载完成
+                                    const imageData = await Promise.all(imageLoadPromises);
+                                    const validImageData = imageData.filter(item => item !== null);
+
+                                    // 添加到表单和预览
+                                    validImageData.forEach(({ file, dataUrl }) => {
+                                        i2iForm.value.imageFiles.push(file);
+                                        i2iImagePreviews.value.push(dataUrl);
+                                    });
+
+                                    // 同步更新 imageFile 以保持兼容性
+                                    if (i2iForm.value.imageFiles.length > 0) {
+                                        i2iForm.value.imageFile = i2iForm.value.imageFiles[0];
+                                    }
+
+                                    console.log(`复用任务 - 从后端加载 ${validImageData.length} 张图片（i2i 多图模式）`);
+                                } catch (error) {
+                                    console.warn('Failed to load multiple images:', error);
+                                }
+                            } else {
+                                // 单图场景：原有逻辑
+                                try {
+                                    const imageResponse = await fetch(imageUrl);
+                                    if (imageResponse && imageResponse.ok) {
+                                        const blob = await imageResponse.blob();
+                                        const filename = task.inputs[Object.keys(task.inputs).find(key =>
+                                            key.includes('image') && !key.includes('last_frame') ||
+                                            task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
+                                        )] || 'image.jpg';
+                                        const file = new File([blob], filename, { type: blob.type });
+
+                                        if (selectedTaskId.value === 'i2i') {
+                                            // i2i 单图：也使用 imageFiles 数组（保持一致性）
+                                            if (!i2iForm.value.imageFiles) {
+                                                i2iForm.value.imageFiles = [];
+                                            }
+                                            i2iForm.value.imageFiles = [file];
+                                            i2iForm.value.imageFile = file;
+
+                                            // 读取为 data URL 用于预览
+                                            const reader = new FileReader();
+                                            reader.onload = (e) => {
+                                                if (!i2iImagePreviews.value) {
+                                                    i2iImagePreviews.value = [];
+                                                }
+                                                i2iImagePreviews.value = [e.target.result];
+                                            };
+                                            reader.readAsDataURL(file);
+                                        } else {
+                                            // 其他任务类型：单图模式
+                                            currentForm.imageFile = file;
+                                            setCurrentImagePreview(URL.createObjectURL(file));
+                                        }
+                                    }
+                                } catch (error) {
+                                    console.warn('Failed to load image file:', error);
+                                }
+                            }
+                        }
+
+                        // 加载尾帧图片文件（仅 flf2v 任务）
+                        if (lastFrameUrl && selectedTaskId.value === 'flf2v') {
+                            try {
+                                const lastFrameResponse = await fetch(lastFrameUrl);
+                                if (lastFrameResponse && lastFrameResponse.ok) {
+                                    const blob = await lastFrameResponse.blob();
+                                    const filename = task.inputs.input_last_frame || 'last_frame.jpg';
+                                    const file = new File([blob], filename, { type: blob.type });
+                                    if (selectedTaskId.value === 'flf2v') {
+                                        flf2vForm.value.lastFrameFile = file;
+                                    }
+                                    setCurrentLastFramePreview(URL.createObjectURL(file));
+                                    console.log('复用任务 - 从后端加载尾帧图片文件:', {
+                                        name: file.name,
+                                        type: file.type,
+                                        size: file.size
+                                    });
+                                }
+                            } catch (error) {
+                                console.warn('Failed to load last frame image file:', error);
+                            }
+                        }
 
                         // 加载音频文件
                         if (audioUrl) {
@@ -3857,34 +4418,57 @@ export const locale = i18n.global.locale
                             }
                         }
 
-                                                // 加载图片文件
-                                                if (imageUrl) {
-                                                    try {
-                                                        const imageResponse = await fetch(imageUrl);
-                                                        if (imageResponse && imageResponse.ok) {
-                                                            const blob = await imageResponse.blob();
-                                                            const filename = task.inputs[Object.keys(task.inputs).find(key =>
-                                                                key.includes('image') ||
-                                                                task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
-                                                            )] || 'image.jpg';
-                                                            const file = new File([blob], filename, { type: blob.type });
-                                                            currentForm.imageFile = file;
-                                                            const imagePreviewUrl = URL.createObjectURL(file);
-                                                            setCurrentImagePreview(imageUrl);
+                        // 加载视频文件（仅 animate 任务）
+                        if (videoUrl && selectedTaskId.value === 'animate') {
+                            try {
+                                const videoResponse = await fetch(videoUrl);
+                                if (videoResponse && videoResponse.ok) {
+                                    const blob = await videoResponse.blob();
+                                    const filename = task.inputs.input_video || 'input_video.mp4';
 
-                                                            // Reset detected faces
-                                                            if (selectedTaskId.value === 'i2v') {
-                                                                i2vForm.value.detectedFaces = [];
-                                                            } else if (selectedTaskId.value === 's2v') {
-                                                                s2vForm.value.detectedFaces = [];
-                                                            }
+                                    // 根据文件扩展名确定正确的MIME类型
+                                    let mimeType = blob.type;
+                                    if (!mimeType || mimeType === 'application/octet-stream') {
+                                        const ext = filename.toLowerCase().split('.').pop();
+                                        const mimeTypes = {
+                                            'mp4': 'video/mp4',
+                                            'm4v': 'video/x-m4v',
+                                            'mpeg': 'video/mpeg',
+                                            'webm': 'video/webm',
+                                            'mov': 'video/quicktime'
+                                        };
+                                        mimeType = mimeTypes[ext] || 'video/mp4';
+                                    }
 
-                                                            // 不再自动检测人脸，等待用户手动打开多角色模式开关
-                                                        }
-                                                    } catch (error) {
-                                                        console.warn('Failed to load image file:', error);
-                                                    }
-                                                }
+                                    const file = new File([blob], filename, { type: mimeType });
+                                    animateForm.value.videoFile = file;
+
+                                    // 读取为 data URL 用于预览
+                                    const reader = new FileReader();
+                                    reader.onload = (e) => {
+                                        setCurrentVideoPreview(e.target.result);
+                                    };
+                                    reader.readAsDataURL(file);
+
+                                    console.log('复用任务 - 从后端加载视频文件:', {
+                                        name: file.name,
+                                        type: file.type,
+                                        size: file.size
+                                    });
+                                }
+                            } catch (error) {
+                                console.warn('Failed to load video file:', error);
+                            }
+                        }
+
+                        // Reset detected faces for tasks that support face detection
+                        if (selectedTaskId.value === 'i2v') {
+                            i2vForm.value.detectedFaces = [];
+                        } else if (selectedTaskId.value === 's2v') {
+                            s2vForm.value.detectedFaces = [];
+                        } else if (selectedTaskId.value === 'animate') {
+                            animateForm.value.detectedFaces = [];
+                        }
                     } catch (error) {
                         console.warn('Failed to load task data from backend:', error);
                 }
@@ -4091,7 +4675,10 @@ export const locale = i18n.global.locale
                 't2v': 'fas fa-font',  // 文字A形图标
                 'i2v': 'fas fa-image',     // 图像图标
                 's2v': 'fas fa-user', // 人物图标
-                'animate': 'fi fi-br-running text-lg' // 角色替换图标
+                'animate': 'fi fi-br-running text-lg', // 角色替换图标
+                'i2i': 'fas fa-image', // 图像图标
+                't2i': 'fas fa-image', // 文本生图图标
+                'flf2v': 'fas fa-video' // 视频图标
             };
             return iconMap[taskType] || 'fas fa-video';
         };
@@ -4121,10 +4708,16 @@ export const locale = i18n.global.locale
                 return t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentStyleSceneOfTheVideo');
             } else if (selectedTaskId.value === 'i2v') {
                 return t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentActionRequirementsBasedOnTheImage');
+            } else if (selectedTaskId.value === 'flf2v') {
+                return t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentActionRequirementsBasedOnTheImage');
             } else if (selectedTaskId.value === 's2v') {
                 return t('optional') + ' '+ t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheDigitalHumanImageBackgroundStyleActionRequirements');
             } else if (selectedTaskId.value === 'animate') {
                 return t('optional') + ' '+ t('pleaseEnterThePromptForVideoGeneration') + '，'+ t('describeTheContentActionRequirementsBasedOnTheImage');
+            } else if (selectedTaskId.value === 'i2i') {
+                return t('pleaseEnterThePromptForImageGeneration') + '，'+ t('describeTheRequirementsForImageGeneration');
+            } else if (selectedTaskId.value === 't2i') {
+                return t('pleaseEnterThePromptForImageGeneration');
             }
             return t('pleaseEnterThePromptForVideoGeneration') + '...';
         };
@@ -4162,8 +4755,8 @@ export const locale = i18n.global.locale
             }
 
             const imageInputs = Object.keys(task.inputs).filter(key =>
-                key.includes('image') ||
-                task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)
+                (key.includes('image') && !key.includes('last_frame')) ||
+                (task.inputs[key].toString().toLowerCase().match(/\.(jpg|jpeg|png|gif|bmp|webp)$/) && !key.includes('last_frame'))
             );
 
             if (imageInputs.length > 0) {
@@ -4212,6 +4805,31 @@ export const locale = i18n.global.locale
             }
 
             return url;
+        };
+
+        const getTaskInputLastFrame = async (task) => {
+            if (!task || !task.inputs) {
+                console.log('getTaskInputLastFrame: 任务或输入为空', { task: task?.task_id, inputs: task?.inputs });
+                return null;
+            }
+
+            // 查找 input_last_frame
+            if (task.inputs.input_last_frame) {
+                const lastFrameKey = 'input_last_frame';
+                // 优先从缓存获取
+                const cachedUrl = getTaskFileUrlSync(task.task_id, lastFrameKey);
+                if (cachedUrl) {
+                    console.log('getTaskInputLastFrame: 从缓存获取', { taskId: task.task_id, key: lastFrameKey, url: cachedUrl });
+                    return cachedUrl;
+                }
+                // 缓存没有则生成URL
+                const url = await getTaskInputUrl(task.task_id, lastFrameKey);
+                console.log('getTaskInputLastFrame: 生成URL', { taskId: task.task_id, key: lastFrameKey, url });
+                return url;
+            }
+
+            console.log('getTaskInputLastFrame: 没有找到尾帧图片输入');
+            return null;
         };
 
         const handleThumbnailError = (event) => {
@@ -4422,8 +5040,8 @@ export const locale = i18n.global.locale
                 case 'i2v':
                     i2vForm.value = {
                         task: 'i2v',
-                        model_cls: currentModel,
-                        stage: currentStage,
+                        model_cls: currentModel || '',
+                        stage: currentStage || 'single_stage',
                         imageFile: null,
                         prompt: '',
                         seed: Math.floor(Math.random() * 1000000)
@@ -4471,10 +5089,62 @@ export const locale = i18n.global.locale
                         animateVideoInput.value = '';
                     }
                     break;
+                case 'i2i':
+                    i2iForm.value = {
+                        task: 'i2i',
+                        model_cls: currentModel || '',
+                        stage: currentStage || '',
+                        imageFile: null,
+                        imageFiles: [],
+                        prompt: 'turn the style of the photo to vintage comic book',
+                        seed: Math.floor(Math.random() * 1000000)
+                    };
+                    // 直接清空i2i图片预览
+                    i2iImagePreview.value = null;
+                    i2iImagePreviews.value = [];
+                    // 清理图片文件输入框
+                    const i2iImageInput = document.querySelector('input[type="file"][accept="image/*"]');
+                    if (i2iImageInput) {
+                        i2iImageInput.value = '';
+                    }
+                    break;
+                case 't2i':
+                    t2iForm.value = {
+                        task: 't2i',
+                        model_cls: currentModel || '',
+                        stage: currentStage || '',
+                        prompt: '',
+                        seed: Math.floor(Math.random() * 1000000)
+                    };
+                    break;
+                case 'flf2v':
+                    flf2vForm.value = {
+                        task: 'flf2v',
+                        model_cls: currentModel || '',
+                        stage: currentStage || 'single_stage',
+                        imageFile: null,
+                        lastFrameFile: null,
+                    };
+                    // 清空flf2v图片预览
+                    flf2vImagePreview.value = null;
+                    // 清空flf2v最后一帧图片预览
+                    flf2vLastFramePreview.value = null;
+                    // 清理图片文件输入框
+                    const flf2vImageInput = document.querySelector('input[type="file"][accept="image/*"]');
+                    if (flf2vImageInput) {
+                        flf2vImageInput.value = '';
+                    }
+                    // 清理最后一帧图片文件输入框
+                    const flf2vLastFrameInput = document.querySelector('input[type="file"][accept="image/*"]');
+                    if (flf2vLastFrameInput) {
+                        flf2vLastFrameInput.value = '';
+                    }
+                    break;
             }
 
             // 强制触发Vue响应式更新
             setCurrentImagePreview(null);
+            setCurrentLastFramePreview(null);
             setCurrentAudioPreview(null);
             await nextTick();
         };
@@ -5036,6 +5706,25 @@ export const locale = i18n.global.locale
                     title: '场景转换',
                     prompt: '保持参考图片中的人物形象，将背景转换为不同的季节或环境，如从室内到户外，从白天到夜晚。'
                 }
+            ],
+            'flf2v': [
+                {
+                    id: 'flf2v_1',
+                    title: '首尾帧生视频',
+                    prompt: '根据首帧和尾帧图片，生成一个完整的视频，视频内容根据首帧和尾帧图片适当调整。'
+                }
+            ],
+            'i2i': [
+                {
+                    id: 'i2i_1',
+                    title: '风格转换',
+                    prompt: '根据参考图片，将图片的风格转换为不同的风格，如从现实主义到抽象主义，从写实到卡通。'
+                },
+                {
+                    id: 'i2i_2',
+                    title: '颜色转换',
+                    prompt: '根据参考图片，将图片的颜色转换为不同的颜色，如从彩色到黑白，从暖色调到冷色调。'
+                }
             ]
         };
 
@@ -5220,8 +5909,9 @@ export const locale = i18n.global.locale
                 const uniqueImages = [];
                 const seenImages = new Set();
 
-                // 遍历任务列表，提取唯一的图片
+                // 遍历任务列表，提取唯一的图片（包括首帧和尾帧图片）
                 for (const task of tasks.value) {
+                    // 处理 input_image（首帧图片）
                     if (task.inputs && task.inputs.input_image && !seenImages.has(task.inputs.input_image)) {
                         // 获取图片URL
                         const imageUrl = await getTaskFileUrl(task.task_id, 'input_image');
@@ -5237,13 +5927,30 @@ export const locale = i18n.global.locale
                             seenImages.add(task.inputs.input_image);
                         }
                     }
+
+                    // 处理 input_last_frame（尾帧图片）
+                    if (task.inputs && task.inputs.input_last_frame && !seenImages.has(task.inputs.input_last_frame)) {
+                        // 获取尾帧图片URL
+                        const lastFrameUrl = await getTaskFileUrl(task.task_id, 'input_last_frame');
+                        if (lastFrameUrl) {
+                            uniqueImages.push({
+                                filename: task.inputs.input_last_frame,
+                                url: lastFrameUrl,
+                                thumbnail: lastFrameUrl, // 使用URL作为缩略图
+                                taskId: task.task_id,
+                                timestamp: task.create_t,
+                                taskType: task.task_type
+                            });
+                            seenImages.add(task.inputs.input_last_frame);
+                        }
+                    }
                 }
 
                 // 按时间戳排序，最新的在前
                 uniqueImages.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
                 imageHistory.value = uniqueImages;
-                console.log('从任务列表获取图片历史:', uniqueImages.length, '条');
+                console.log('从任务列表获取图片历史（包含首帧和尾帧）:', uniqueImages.length, '条');
                 return uniqueImages;
             } catch (error) {
                 console.error('获取图片历史失败:', error);
@@ -5326,13 +6033,28 @@ export const locale = i18n.global.locale
                 const blob = await response.blob();
                 const file = new File([blob], history.filename, { type: blob.type });
 
-                // 设置图片预览
-                setCurrentImagePreview(imageUrl);
-                updateUploadedContentStatus();
-
                 // 更新表单
                 const currentForm = getCurrentForm();
-                currentForm.imageFile = file;
+
+                // i2i 模式始终使用多图模式
+                if (selectedTaskId.value === 'i2i') {
+                    if (!i2iForm.value.imageFiles) {
+                        i2iForm.value.imageFiles = [];
+                    }
+                    i2iForm.value.imageFiles = [file]; // 替换为新的图片
+                    i2iForm.value.imageFile = file; // 保持兼容性
+                    // 更新预览
+                    if (!i2iImagePreviews.value) {
+                        i2iImagePreviews.value = [];
+                    }
+                    i2iImagePreviews.value = [imageUrl];
+                } else {
+                    // 其他模式使用单图
+                    setCurrentImagePreview(imageUrl);
+                    currentForm.imageFile = file;
+                }
+
+                updateUploadedContentStatus();
 
                 // Reset detected faces
                 if (selectedTaskId.value === 'i2v') {
@@ -5361,9 +6083,40 @@ export const locale = i18n.global.locale
                     // Don't show error alert, just log it
                 }
 
+                isSelectingLastFrame.value = false;
             } catch (error) {
                 console.error('应用历史图片失败:', error);
                 showAlert(t('applyHistoryImageFailed') + ': ' + error.message, 'danger');
+            }
+        };
+
+        // 选择尾帧图片历史记录 - 从URL获取
+        const selectLastFrameImageHistory = async (history) => {
+            try {
+                // 从URL获取图片文件
+                const response = await fetch(history.url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const blob = await response.blob();
+                const file = new File([blob], history.filename, { type: blob.type });
+
+                // 设置尾帧图片预览
+                setCurrentLastFramePreview(history.url);
+                updateUploadedContentStatus();
+
+                // 更新表单（仅针对 flf2v 任务）
+                if (selectedTaskId.value === 'flf2v') {
+                    flf2vForm.value.lastFrameFile = file;
+                }
+
+                showImageTemplates.value = false;
+                isSelectingLastFrame.value = false;
+                showAlert('已应用尾帧历史图片', 'success');
+            } catch (error) {
+                console.error('应用尾帧历史图片失败:', error);
+                showAlert('应用尾帧历史图片失败', 'danger');
             }
         };
 
@@ -6328,12 +7081,12 @@ export const locale = i18n.global.locale
 
             try {
                 // 先设置任务类型（如果模板有任务类型）
-                if (template.task_type && (template.task_type === 'i2v' || template.task_type === 's2v')) {
+                if (template.task_type && (template.task_type === 'i2v' || template.task_type === 'i2i' || template.task_type === 'animate' || template.task_type === 's2v' || template.task_type === 'flf2v')) {
                     selectedTaskId.value = template.task_type;
                 }
 
                 // 检查当前任务类型是否支持图片
-                if (selectedTaskId.value !== 'i2v' && selectedTaskId.value !== 's2v') {
+                if (selectedTaskId.value !== 'i2v' && selectedTaskId.value !== 'i2i' && selectedTaskId.value !== 'animate' && selectedTaskId.value !== 's2v' && selectedTaskId.value !== 'flf2v') {
                     showAlert(t('applyImageFailed'), 'danger');
                     return;
                 }
@@ -6358,9 +7111,6 @@ export const locale = i18n.global.locale
                     }
                 }
 
-                // 设置预览
-                setCurrentImagePreview(imageUrl);
-
                 // 加载图片文件（与useTemplate相同的逻辑）
                 try {
                     // 直接使用获取到的URL fetch（与useTemplate相同）
@@ -6375,8 +7125,25 @@ export const locale = i18n.global.locale
                         }
                         const filename = template.inputs.input_image || 'template_image.jpg';
                         const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
-                        if (currentForm) {
-                            currentForm.imageFile = file;
+
+                        // i2i 模式始终使用多图模式
+                        if (selectedTaskId.value === 'i2i') {
+                            if (!i2iForm.value.imageFiles) {
+                                i2iForm.value.imageFiles = [];
+                            }
+                            i2iForm.value.imageFiles = [file]; // 替换为新的图片
+                            i2iForm.value.imageFile = file; // 保持兼容性
+                            // 更新预览
+                            if (!i2iImagePreviews.value) {
+                                i2iImagePreviews.value = [];
+                            }
+                            i2iImagePreviews.value = [imageUrl];
+                        } else {
+                            // 其他模式使用单图
+                            setCurrentImagePreview(imageUrl);
+                            if (currentForm) {
+                                currentForm.imageFile = file;
+                            }
                         }
                         console.log('模板图片文件已加载');
 
@@ -6448,6 +7215,80 @@ export const locale = i18n.global.locale
                 });
             } catch (error) {
                 console.error('应用图片失败:', error);
+                showAlert(t('applyImageFailed'), 'danger');
+            }
+        };
+
+        // 应用模板尾帧图片
+        const applyTemplateLastFrameImage = async (template) => {
+            // 检查是否支持尾帧图片（flf2v 任务）
+            if (selectedTaskId.value !== 'flf2v') {
+                showAlert(t('applyImageFailed'), 'danger');
+                return;
+            }
+
+            // 优先使用 input_last_frame，如果没有则使用 input_image
+            const lastFrameKey = template?.inputs?.input_last_frame ? 'input_last_frame' : 'input_image';
+
+            if (!template?.inputs?.[lastFrameKey]) {
+                showAlert(t('applyImageFailed'), 'danger');
+                return;
+            }
+
+            try {
+                // 先设置任务类型（如果模板有任务类型）
+                if (template.task_type && template.task_type === 'flf2v') {
+                    selectedTaskId.value = template.task_type;
+                }
+
+                // 获取尾帧图片URL（用于预览）
+                const imageUrl = await getTemplateFileUrlAsync(template.inputs[lastFrameKey], 'images');
+                if (!imageUrl) {
+                    console.error('无法获取模板尾帧图片URL:', template.inputs[lastFrameKey]);
+                    showAlert(t('applyImageFailed'), 'danger');
+                    return;
+                }
+
+                // 设置尾帧图片预览
+                setCurrentLastFramePreview(imageUrl);
+
+                // 加载图片文件
+                try {
+                    const imageResponse = await fetch(imageUrl);
+                    if (imageResponse.ok) {
+                        const blob = await imageResponse.blob();
+                        // 验证返回的是图片而不是HTML
+                        if (blob.type && blob.type.startsWith('text/html')) {
+                            console.error('返回的是HTML而不是图片:', blob.type);
+                            showAlert(t('applyImageFailed'), 'danger');
+                            return;
+                        }
+                        const filename = template.inputs[lastFrameKey] || 'template_last_frame_image.jpg';
+                        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+
+                        // 更新表单
+                        if (selectedTaskId.value === 'flf2v') {
+                            flf2vForm.value.lastFrameFile = file;
+                        }
+
+                        updateUploadedContentStatus();
+                        console.log('模板尾帧图片文件已加载');
+                    } else {
+                        console.warn('Failed to fetch last frame image from URL:', imageUrl);
+                        showAlert(t('applyImageFailed'), 'danger');
+                        return;
+                    }
+                } catch (fetchError) {
+                    console.error('获取模板尾帧图片失败:', fetchError);
+                    showAlert(t('applyImageFailed'), 'danger');
+                    return;
+                }
+
+                showImageTemplates.value = false;
+                isSelectingLastFrame.value = false;
+                showAlert(t('imageApplied'), 'success');
+            } catch (error) {
+                console.error('应用模板尾帧图片失败:', error);
                 showAlert(t('applyImageFailed'), 'danger');
             }
         };
@@ -7534,14 +8375,21 @@ export {
             t2vForm,
             i2vForm,
             s2vForm,
+            flf2vForm,
+            i2iForm,
+            t2iForm,
             getCurrentForm,
             i2vImagePreview,
             s2vImagePreview,
             s2vAudioPreview,
+            flf2vImagePreview,
+            i2iImagePreview,
+            i2iImagePreviews,
             getCurrentImagePreview,
             getCurrentAudioPreview,
             getCurrentVideoPreview,
             setCurrentImagePreview,
+            setCurrentLastFramePreview,
             setCurrentAudioPreview,
             setCurrentVideoPreview,
             updateUploadedContentStatus,
@@ -7602,12 +8450,15 @@ export {
             updateFaceRoleName,
             toggleFaceEditing,
             saveFaceRoleName,
+            handleLastFrameUpload,
             selectTask,
             selectModel,
             resetForm,
             triggerImageUpload,
+            triggerLastFrameUpload,
             triggerAudioUpload,
             removeImage,
+            removeLastFrame,
             removeAudio,
             removeVideo,
             handleAudioUpload,
@@ -7710,6 +8561,9 @@ export {
             getCurrentImagePreviewUrl,
             getCurrentAudioPreviewUrl,
             getCurrentVideoPreviewUrl,
+            getCurrentLastFramePreview,
+            getCurrentLastFramePreviewUrl,
+            getI2IImagePreviews,
             handleThumbnailError,
             handleImageError,
             handleImageLoad,
@@ -7748,6 +8602,7 @@ export {
             getImageHistory,
             getAudioHistory,
             selectImageHistory,
+            selectLastFrameImageHistory,
             selectAudioHistory,
             previewAudioHistory,
             clearImageHistory,
@@ -7806,6 +8661,7 @@ export {
             closeImageZoomModal,
             // 模板素材应用相关
             applyTemplateImage,
+            applyTemplateLastFrameImage,
             applyTemplateAudio,
             applyTemplatePrompt,
             copyPrompt,
@@ -7836,4 +8692,6 @@ export {
             addTtsHistoryEntry,
             saveTtsHistory,
             clearTtsHistory,
+            flf2vLastFramePreview,
+            isSelectingLastFrame,
         };

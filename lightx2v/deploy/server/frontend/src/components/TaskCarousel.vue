@@ -68,15 +68,43 @@ const currentTaskIndex = computed(() => {
     return sortedTasks.value.findIndex(task => task.task_id === currentTask.value?.task_id)
 })
 
+// 判断是否是图片输出任务（i2i 或 t2i）
+const isImageTask = computed(() => {
+    return currentTask.value?.task_type === 'i2i' || currentTask.value?.task_type === 't2i'
+})
+
+// 保持向后兼容
+const isI2ITask = computed(() => {
+    return currentTask.value?.task_type === 'i2i'
+})
+
 // 获取视频URL
 const videoUrl = computed(() => {
     if (!isCompleted.value || !currentTask.value) return null
+    // 图片输出任务（i2i 或 t2i）没有视频输出
+    if (isImageTask.value) return null
     return getTaskFileUrlSync(currentTask.value.task_id, 'output_video')
+})
+
+// 获取输出图片URL（用于图片输出任务）
+const outputImageUrl = computed(() => {
+    if (!isCompleted.value || !currentTask.value) return null
+    // 只有图片输出任务（i2i 或 t2i）才有输出图片
+    if (!isImageTask.value) return null
+    return getTaskFileUrlSync(currentTask.value.task_id, 'output_image')
 })
 
 // 获取图片URL（用于缩略图）
 const imageUrl = computed(() => {
     if (!currentTask.value) return null
+    // 图片输出任务完成时，优先显示输出图片；否则显示输入图片（t2i 没有输入图片）
+    if (isImageTask.value && isCompleted.value && outputImageUrl.value) {
+        return outputImageUrl.value
+    }
+    // t2i 任务没有输入图片，返回 null
+    if (currentTask.value?.task_type === 't2i') {
+        return null
+    }
     return getTaskFileUrlSync(currentTask.value.task_id, 'input_image')
 })
 
@@ -159,6 +187,13 @@ const onVideoLoaded = () => {
 const onVideoError = () => {
     isVideoError.value = true
     isVideoLoaded.value = false
+}
+
+const onVideoEnded = () => {
+    // 视频播放结束时的处理
+    if (videoElement.value) {
+        videoElement.value.currentTime = 0
+    }
 }
 
 const toggleMute = (event) => {
@@ -291,9 +326,18 @@ onUnmounted(() => {
                     :aria-label="t('viewTaskDetails')">
                     <i class="fas fa-info"></i>
                 </button>
-                <!-- 已完成：显示视频播放器 -->
+                <!-- 已完成：图片输出任务（i2i 或 t2i）显示图片 -->
+                <img
+                    v-if="isCompleted && isImageTask && outputImageUrl"
+                    :src="outputImageUrl"
+                    :alt="getTaskTypeName(currentTask?.task_type)"
+                    class="w-full h-full object-contain"
+                    @load="onVideoLoaded"
+                    @error="onVideoError">
+
+                <!-- 已完成：其他任务显示视频播放器 -->
                 <video
-                    v-if="isCompleted && videoUrl"
+                    v-else-if="isCompleted && videoUrl"
                     :src="videoUrl"
                     :poster="imageUrl"
                     class="w-full h-full object-contain"
@@ -312,7 +356,7 @@ onUnmounted(() => {
                     {{ t('browserNotSupported') }}
                 </video>
                 <button
-                    v-if="isCompleted && videoUrl"
+                    v-if="isCompleted && videoUrl && !isImageTask"
                     class="absolute top-3 right-3 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/55 active:scale-95"
                     @click.stop="toggleMute"
                     :title="isMuted ? t('unmute') : t('mute')">
@@ -425,8 +469,8 @@ onUnmounted(() => {
                 </button>
                 <!-- 已完成：下载按钮 -->
                 <button
-                    v-if="isCompleted && currentTask?.outputs?.output_video"
-                    @click="handleDownloadFile(currentTask.task_id, 'output_video', currentTask.outputs.output_video)"
+                    v-if="isCompleted && ((isImageTask && currentTask?.outputs?.output_image) || (!isImageTask && currentTask?.outputs?.output_video))"
+                    @click="isImageTask ? handleDownloadFile(currentTask.task_id, 'output_image', currentTask.outputs.output_image) : handleDownloadFile(currentTask.task_id, 'output_video', currentTask.outputs.output_video)"
                     :disabled="downloadLoading"
                     class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7]"
                     :class="downloadLoading ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105 active:scale-95'"
@@ -436,7 +480,7 @@ onUnmounted(() => {
 
                 <!-- 已完成：分享按钮 -->
                 <button
-                    v-if="isCompleted && currentTask?.outputs?.output_video"
+                    v-if="isCompleted && ((isImageTask && currentTask?.outputs?.output_image) || (!isImageTask && currentTask?.outputs?.output_video))"
                     @click="handleShareTask"
                     class="w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:scale-105 active:scale-95"
                     :title="t('share')">

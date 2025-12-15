@@ -50,6 +50,9 @@ class AudioSeparator:
         self.sample_rate = sample_rate
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         self._init_pyannote(model_path)
+        self.proxy = os.getenv("HTTPS_PROXY", None)
+        if self.proxy:
+            logger.info(f"audio separator use proxy: {self.proxy}")
 
     def _init_pyannote(self, model_path: str = None):
         """Initialize pyannote.audio pipeline"""
@@ -77,7 +80,7 @@ class AudioSeparator:
                 self.pipeline.to(torch.device(self.device))
 
             # Initialize Audio helper for waveform loading
-            self.pyannote_audio = Audio()
+            self.pyannote_audio = Audio(proxy=self.proxy)
 
             logger.info("Initialized pyannote.audio speaker diarization pipeline")
         except Exception as e:

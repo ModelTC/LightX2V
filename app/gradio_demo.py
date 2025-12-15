@@ -911,6 +911,12 @@ def is_module_installed(module_name):
 def get_available_quant_ops():
     available_ops = []
 
+    triton_installed = is_module_installed("triton")
+    if triton_installed:
+        available_ops.append(("triton", True))
+    else:
+        available_ops.append(("triton", False))
+
     vllm_installed = is_module_installed("vllm")
     if vllm_installed:
         available_ops.append(("vllm", True))
@@ -1010,15 +1016,6 @@ def is_fp8_supported_gpu():
     return (major == 8 and minor == 9) or (major >= 9)
 
 
-def is_sm120_gpu():
-    """Detect if it's an sm120 (compute capability 12.0) GPU"""
-    if not torch.cuda.is_available():
-        return False
-    compute_capability = torch.cuda.get_device_capability(0)
-    major, minor = compute_capability
-    return major == 12 and minor == 0
-
-
 def is_sm_greater_than_90():
     """Detect if compute capability is greater than (9,0)"""
     if not torch.cuda.is_available():
@@ -1026,14 +1023,6 @@ def is_sm_greater_than_90():
     compute_capability = torch.cuda.get_device_capability(0)
     major, minor = compute_capability
     return (major, minor) > (9, 0)
-
-
-def is_ada_architecture_gpu():
-    if not torch.cuda.is_available():
-        return False
-    gpu_name = torch.cuda.get_device_name(0).upper()
-    ada_keywords = ["RTX 40", "RTX40", "4090", "4080", "4070", "4060"]
-    return any(keyword in gpu_name for keyword in ada_keywords)
 
 
 def get_quantization_options(model_path):
@@ -1272,6 +1261,9 @@ def run_inference(
         if quant_op_val == "torch":
             # torch option needs to be converted to torchao, format is fp8-torchao or int8-torchao
             return f"{quant_detected}-torchao"
+        elif quant_op_val == "triton":
+            # triton option format is fp8-triton or int8-triton
+            return f"{quant_detected}-triton"
         else:
             return f"{quant_detected}-{quant_op_val}"
 
@@ -1472,7 +1464,7 @@ def handle_lazy_load_change(lazy_load_enabled):
     return gr.update(value=lazy_load_enabled)
 
 
-def auto_configure(resolution):
+def auto_configure(resolution, num_frames=81):
     """Automatically set inference options based on machine configuration and resolution"""
     default_config = {
         "lazy_load_val": False,
@@ -1489,6 +1481,10 @@ def auto_configure(resolution):
         "quant_op_val": quant_op_choices[0][1],
         "use_tiling_vae_val": False,
     }
+
+    # If num_frames > 81, set rope_chunk to True regardless of resolution
+    if num_frames > 81:
+        default_config["rope_chunk_val"] = True
 
     gpu_memory = round(get_gpu_memory())
     cpu_memory = round(get_cpu_memory())
@@ -1514,18 +1510,7 @@ def auto_configure(resolution):
                 if "sage_attn3" not in attn_priority:
                     attn_priority.insert(0, "sage_attn3")
 
-    # Based on existing priority order, add torch to the end
-    if is_ada_architecture_gpu():
-        quant_op_priority = ["q8f", "vllm", "sgl", "torch"]
-    else:
-        quant_op_priority = ["vllm", "sgl", "q8f", "torch"]
-
-    # If sm > (9,0), put torch at the front
-    if is_sm_greater_than_90():
-        # Remove torch from list, then put it at the front
-        if "torch" in quant_op_priority:
-            quant_op_priority.remove("torch")
-            quant_op_priority.insert(0, "torch")
+    quant_op_priority = ["triton", "q8f", "vllm", "sgl", "torch"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -2756,7 +2741,27 @@ def main():
 
         resolution.change(
             fn=auto_configure,
-            inputs=[resolution],
+            inputs=[resolution, num_frames],
+            outputs=[
+                lazy_load,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                use_tiling_vae,
+            ],
+        )
+
+        num_frames.change(
+            fn=auto_configure,
+            inputs=[resolution, num_frames],
             outputs=[
                 lazy_load,
                 rope_chunk,
@@ -2775,8 +2780,8 @@ def main():
         )
 
         demo.load(
-            fn=lambda res: auto_configure(res),
-            inputs=[resolution],
+            fn=lambda res, nf: auto_configure(res, nf),
+            inputs=[resolution, num_frames],
             outputs=[
                 lazy_load,
                 rope_chunk,

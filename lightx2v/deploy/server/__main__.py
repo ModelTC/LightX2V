@@ -474,6 +474,11 @@ async def api_v1_task_input_url(request: Request, user=Depends(verify_user_acces
             assert name in task["inputs"], f"Extra input {name} not found in task {task_id}"
             assert name in extra_inputs, f"Filename {filename} not found in extra inputs"
 
+        # multi-images, rename input_image to input_image/input_image_1
+        all_extra_inputs = task["params"].get("extra_inputs", {})
+        if name in all_extra_inputs:
+            name = all_extra_inputs[name][0]
+
         url = await data_manager.presign_url(task["inputs"][name])
         if url is None:
             url = f"./assets/task/input?task_id={task_id}&name={name}"
@@ -518,11 +523,13 @@ async def assets_task_input(request: Request, user=Depends(verify_user_access_fr
 
         task = await task_manager.query_task(task_id, user_id=user["user_id"])
         assert task is not None, f"Task {task_id} not found"
+
+        # Standard case: name exists in inputs
         assert name in task["inputs"], f"Input {name} not found in task {task_id}"
         if name in task["params"]:
             return error_response(f"Input {name} is a stream", 400)
 
-        # eg, multi person audio directory input
+        # eg, multi person audio directory input, multi image input
         if filename is not None:
             extra_inputs = task["params"]["extra_inputs"][name]
             name = f"{name}/{filename}"
@@ -986,6 +993,9 @@ async def api_v1_share_get(share_id: str):
         user_info = await task_manager.query_user(share_data["user_id"])
         username = user_info.get("username", "用户") if user_info else "用户"
 
+        # 判断是否是图片输出任务（i2i 或 t2i）
+        is_image_task = task["task_type"] in ["i2i", "t2i"]
+
         share_info = {
             "task_id": task_id,
             "share_type": share_type,
@@ -1004,6 +1014,7 @@ async def api_v1_share_get(share_id: str):
             "auth_type": share_data["auth_type"],
             "auth_value": share_data["auth_value"],
             "output_video_url": None,
+            "output_image_url": None,
             "input_urls": {},
         }
 
@@ -1015,13 +1026,26 @@ async def api_v1_share_get(share_id: str):
                 input_url = await data_manager.presign_url(input_filename)
             share_info["input_urls"][input_name] = input_url
 
+        # 根据任务类型处理输出URL
         for output_name, output_filename in task["outputs"].items():
             if share_type == "template":
-                assert "video" in output_name, "Only video output is supported for template share"
-                output_url = await data_manager.presign_template_url("videos", output_filename)
+                if is_image_task:
+                    # 图片输出任务：使用 images 类型
+                    assert "image" in output_name, "Only image output is supported for image task template share"
+                    output_url = await data_manager.presign_template_url("images", output_filename)
+                    share_info["output_image_url"] = output_url
+                else:
+                    # 视频输出任务：使用 videos 类型
+                    assert "video" in output_name, "Only video output is supported for video task template share"
+                    output_url = await data_manager.presign_template_url("videos", output_filename)
+                    share_info["output_video_url"] = output_url
             else:
+                # 任务分享：根据任务类型设置对应的输出URL
                 output_url = await data_manager.presign_url(output_filename)
-            share_info["output_video_url"] = output_url
+                if is_image_task and "image" in output_name:
+                    share_info["output_image_url"] = output_url
+                elif not is_image_task and "video" in output_name:
+                    share_info["output_video_url"] = output_url
 
         return share_info
 
@@ -1462,7 +1486,11 @@ if __name__ == "__main__":
     volcengine_tts_client = VolcEngineTTSClient(args.volcengine_tts_list_json)
     volcengine_podcast_client = VolcEnginePodcastClient()
     face_detector = FaceDetector(model_path=args.face_detector_model_path)
-    audio_separator = AudioSeparator(model_path=args.audio_separator_model_path)
+    try:
+        audio_separator = AudioSeparator(model_path=args.audio_separator_model_path)
+    except Exception as e:
+        logger.warning(f"Failed to initialize audio_separator, audio separation feature will be disabled: {e}")
+        audio_separator = None
     auth_manager = AuthManager()
     if args.task_url.startswith("/"):
         task_manager = LocalTaskManager(args.task_url, metrics_monitor)

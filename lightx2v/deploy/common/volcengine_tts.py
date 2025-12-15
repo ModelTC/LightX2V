@@ -24,14 +24,16 @@ class VolcEngineTTSClient:
         self.url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
         self.appid = os.getenv("VOLCENGINE_TTS_APPID")
         self.access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN")
-        self.proxy = os.getenv("HTTPS_PROXY", None)
-        if self.proxy:
-            logger.info(f"volcengine tts use proxy: {self.proxy}")
+        if not self.appid or not self.access_token:
+            raise ValueError("VOLCENGINE_TTS_APPID and VOLCENGINE_TTS_ACCESS_TOKEN must be set")
         if voices_list_file is not None:
             with open(voices_list_file, "r", encoding="utf-8") as f:
                 self.voices_list = json.load(f)
         else:
             self.voices_list = None
+        self.proxy = os.getenv("HTTPS_PROXY", None)
+        if self.proxy:
+            logger.info(f"volcengine tts use proxy: {self.proxy}")
 
     def get_voice_list(self):
         return self.voices_list
@@ -43,8 +45,8 @@ class VolcEngineTTSClient:
             audio_data = bytearray()
             total_audio_size = 0
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.url, json=params, headers=headers, proxy=self.proxy) as response:
+            async with aiohttp.ClientSession(proxy=self.proxy) as session:
+                async with session.post(self.url, json=params, headers=headers) as response:
                     response.raise_for_status()
                     async for chunk in response.content:
                         if not chunk:
