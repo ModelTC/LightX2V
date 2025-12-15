@@ -61,79 +61,6 @@ def calculate_q_k_len(q, k_lens):
     return cu_seqlens_q, cu_seqlens_k
 
 
-def apply_attn(block_weight, hidden_states, encoder_hidden_states, image_rotary_emb, attn_type):
-    seq_txt = encoder_hidden_states.shape[1]
-
-    # Compute QKV for image stream (sample projections)
-    img_query = block_weight.attn.to_q.apply(hidden_states[0])
-    img_key = block_weight.attn.to_k.apply(hidden_states[0])
-    img_value = block_weight.attn.to_v.apply(hidden_states[0])
-
-    # Compute QKV for text stream (context projections)
-    txt_query = block_weight.attn.add_q_proj.apply(encoder_hidden_states[0])
-    txt_key = block_weight.attn.add_k_proj.apply(encoder_hidden_states[0])
-    txt_value = block_weight.attn.add_v_proj.apply(encoder_hidden_states[0])
-
-    # Reshape for multi-head attention
-    img_query = img_query.unflatten(-1, (block_weight.attn.heads, -1))
-    img_key = img_key.unflatten(-1, (block_weight.attn.heads, -1))
-    img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1))
-
-    txt_query = txt_query.unflatten(-1, (block_weight.attn.heads, -1))
-    txt_key = txt_key.unflatten(-1, (block_weight.attn.heads, -1))
-    txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1))
-
-    # Apply QK normalization
-    if block_weight.attn.norm_q is not None:
-        img_query = block_weight.attn.norm_q.apply(img_query)
-    if block_weight.attn.norm_k is not None:
-        img_key = block_weight.attn.norm_k.apply(img_key)
-    if block_weight.attn.norm_added_q is not None:
-        txt_query = block_weight.attn.norm_added_q.apply(txt_query)
-    if block_weight.attn.norm_added_k is not None:
-        txt_key = block_weight.attn.norm_added_k.apply(txt_key)
-
-    # Apply RoPE
-    if image_rotary_emb is not None:
-        img_freqs, txt_freqs1 = image_rotary_emb
-        img_query = apply_rotary_emb_qwen(img_query.unsqueeze(0), img_freqs, use_real=False)
-        img_key = apply_rotary_emb_qwen(img_key.unsqueeze(0), img_freqs, use_real=False)
-        txt_query = apply_rotary_emb_qwen(txt_query.unsqueeze(0), txt_freqs1, use_real=False)
-        txt_key = apply_rotary_emb_qwen(txt_key.unsqueeze(0), txt_freqs1, use_real=False)
-
-    # Concatenate for joint attention
-    # Order: [text, image]
-    joint_query = torch.cat([txt_query, img_query], dim=1)
-    joint_key = torch.cat([txt_key, img_key], dim=1)
-    joint_value = torch.cat([txt_value.unsqueeze(0), img_value.unsqueeze(0)], dim=1)
-
-    # Compute joint attention
-    if attn_type == "torch_sdpa":
-        joint_hidden_states = block_weight.attn.calculate.apply(q=joint_query, k=joint_key, v=joint_value)
-
-    else:
-        joint_query = joint_query.squeeze(0)
-        joint_key = joint_key.squeeze(0)
-        joint_value = joint_value.squeeze(0)
-
-        k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
-        cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
-
-        joint_hidden_states = block_weight.attn.calculate.apply(
-            q=joint_query, k=joint_key, v=joint_value, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_k, max_seqlen_q=joint_query.size(0), max_seqlen_kv=joint_key.size(0), model_cls="qwen_image"
-        )
-
-    # Split attention outputs back
-    txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
-    img_attn_output = joint_hidden_states[seq_txt:, :]  # Image part
-
-    # Apply output projections
-    img_attn_output = block_weight.attn.to_out.apply(img_attn_output)
-    txt_attn_output = block_weight.attn.to_add_out.apply(txt_attn_output)
-
-    return img_attn_output, txt_attn_output
-
-
 class QwenImageTransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
@@ -182,6 +109,85 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return x * (1 + scale_result) + shift_result, gate_result
 
+    def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb, attn_type):
+        seq_txt = encoder_hidden_states.shape[1]
+
+        # Compute QKV for image stream (sample projections)
+        img_query = block_weight.attn.to_q.apply(hidden_states[0])
+        img_key = block_weight.attn.to_k.apply(hidden_states[0])
+        img_value = block_weight.attn.to_v.apply(hidden_states[0])
+
+        # Compute QKV for text stream (context projections)
+        txt_query = block_weight.attn.add_q_proj.apply(encoder_hidden_states[0])
+        txt_key = block_weight.attn.add_k_proj.apply(encoder_hidden_states[0])
+        txt_value = block_weight.attn.add_v_proj.apply(encoder_hidden_states[0])
+
+        # Reshape for multi-head attention
+        img_query = img_query.unflatten(-1, (block_weight.attn.heads, -1))
+        img_key = img_key.unflatten(-1, (block_weight.attn.heads, -1))
+        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1))
+
+        txt_query = txt_query.unflatten(-1, (block_weight.attn.heads, -1))
+        txt_key = txt_key.unflatten(-1, (block_weight.attn.heads, -1))
+        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1))
+
+        # Apply QK normalization
+        if block_weight.attn.norm_q is not None:
+            img_query = block_weight.attn.norm_q.apply(img_query)
+        if block_weight.attn.norm_k is not None:
+            img_key = block_weight.attn.norm_k.apply(img_key)
+        if block_weight.attn.norm_added_q is not None:
+            txt_query = block_weight.attn.norm_added_q.apply(txt_query)
+        if block_weight.attn.norm_added_k is not None:
+            txt_key = block_weight.attn.norm_added_k.apply(txt_key)
+
+        # Apply RoPE
+        if image_rotary_emb is not None:
+            img_freqs, txt_freqs1 = image_rotary_emb
+            img_query = apply_rotary_emb_qwen(img_query.unsqueeze(0), img_freqs, use_real=False)
+            img_key = apply_rotary_emb_qwen(img_key.unsqueeze(0), img_freqs, use_real=False)
+            txt_query = apply_rotary_emb_qwen(txt_query.unsqueeze(0), txt_freqs1, use_real=False)
+            txt_key = apply_rotary_emb_qwen(txt_key.unsqueeze(0), txt_freqs1, use_real=False)
+
+        # Concatenate for joint attention
+        # Order: [text, image]
+        joint_query = torch.cat([txt_query, img_query], dim=1)
+        joint_key = torch.cat([txt_key, img_key], dim=1)
+        joint_value = torch.cat([txt_value.unsqueeze(0), img_value.unsqueeze(0)], dim=1)
+
+        # Compute joint attention
+        if attn_type == "torch_sdpa":
+            joint_hidden_states = block_weight.attn.calculate.apply(q=joint_query, k=joint_key, v=joint_value)
+
+        else:
+            joint_query = joint_query.squeeze(0)
+            joint_key = joint_key.squeeze(0)
+            joint_value = joint_value.squeeze(0)
+
+            k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
+            cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
+
+            joint_hidden_states = block_weight.attn.calculate.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_k,
+                max_seqlen_q=joint_query.size(0),
+                max_seqlen_kv=joint_key.size(0),
+                model_cls="qwen_image",
+            )
+
+        # Split attention outputs back
+        txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
+        img_attn_output = joint_hidden_states[seq_txt:, :]  # Image part
+
+        # Apply output projections
+        img_attn_output = block_weight.attn.to_out.apply(img_attn_output)
+        txt_attn_output = block_weight.attn.to_add_out.apply(txt_attn_output)
+
+        return img_attn_output, txt_attn_output
+
     def infer_block(self, block_weight, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index=None):
         # Get modulation parameters for both streams
         img_mod_params = block_weight.img_mod.apply(F.silu(temb))
@@ -207,7 +213,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         # 2. Applies QK normalization and RoPE
         # 3. Concatenates and runs joint attention
         # 4. Splits results back to separate streams
-        attn_output = apply_attn(
+        attn_output = self.apply_attn(
             block_weight=block_weight,
             hidden_states=img_modulated,  # Image stream (will be processed as "sample")
             encoder_hidden_states=txt_modulated,  # Text stream (will be processed as "context")
