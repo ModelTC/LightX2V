@@ -4,25 +4,25 @@ import torch.distributed as dist
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-@PLATFORM_DEVICE_REGISTER("dcu")
-class DcuDevice:
+@PLATFORM_DEVICE_REGISTER("hygon_dcu")
+class HygonDcuDevice:
     """
-    DCU (AMD GPU) Device implementation for LightX2V.
+    Hygon DCU (AMD GPU) Device implementation for LightX2V.
 
-    DCU uses ROCm which provides CUDA-compatible APIs through HIP.
+    Hygon DCU uses ROCm which provides CUDA-compatible APIs through HIP.
     Most PyTorch operations work transparently through the ROCm backend.
     """
 
-    name = "dcu"
+    name = "hygon_dcu"
 
     @staticmethod
     def is_available() -> bool:
         """
-        Check if DCU is available.
+        Check if Hygon DCU is available.
 
-        DCU uses the standard CUDA API through ROCm's HIP compatibility layer.
+        Hygon DCU uses the standard CUDA API through ROCm's HIP compatibility layer.
         Returns:
-            bool: True if DCU/CUDA is available
+            bool: True if Hygon DCU/CUDA is available
         """
         try:
             return torch.cuda.is_available()
@@ -34,7 +34,7 @@ class DcuDevice:
         """
         Get the device type string.
 
-        Returns "cuda" because DCU uses CUDA-compatible APIs through ROCm.
+        Returns "cuda" because Hygon DCU uses CUDA-compatible APIs through ROCm.
         This allows seamless integration with existing PyTorch code.
 
         Returns:
@@ -45,7 +45,7 @@ class DcuDevice:
     @staticmethod
     def init_parallel_env():
         """
-        Initialize distributed parallel environment for DCU.
+        Initialize distributed parallel environment for Hygon DCU.
 
         Uses RCCL (ROCm Collective Communications Library) which is
         compatible with NCCL APIs for multi-GPU communication.
