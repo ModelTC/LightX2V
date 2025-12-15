@@ -69,6 +69,7 @@ class WanModel(CompiledMethodsMixin):
                 "fp8-sgl",
                 "int8-sgl",
                 "int8-torchao",
+                "fp8-torchao",
                 "nvfp4",
                 "mxfp4",
                 "mxfp6-mxfp8",

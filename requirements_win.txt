@@ -16,3 +16,5 @@ ftfy
 gradio
 aiohttp
 pydantic
+torchao
+triton-windows
