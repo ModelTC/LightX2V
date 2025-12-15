@@ -5,8 +5,8 @@ import os
 
 import torch
 import torch.distributed as dist
-from torch.nn import functional as F
 from safetensors import safe_open
+from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
