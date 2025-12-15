@@ -181,7 +181,7 @@ conda activate lightx2v
 **方法一：下载官方 wheel 包（推荐）**
 
 1. 访问 [PyTorch 官方下载页面](https://download.pytorch.org/whl/torch/)
-2. 选择对应版本的 wheel 包，注意匹配：
+2. 选择对应版本的 wheel 包，注意匹配以下参数：
    - **Python 版本**: 与您的环境一致
    - **CUDA 版本**: 与您的 GPU 驱动匹配
    - **平台**: 选择 Windows 版本
@@ -203,18 +203,16 @@ pip install torchvision==0.21.0 torchaudio==2.6.0
 pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 torchaudio==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-#### 步骤 4: 安装 Windows 版 vLLM
-
-从 [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases) 下载对应的 wheel 包。
-
-**版本匹配要求：**
-- Python 版本匹配
-- PyTorch 版本匹配
-- CUDA 版本匹配
+#### 步骤 4: 克隆项目并安装依赖
 
 ```cmd
-# 安装 vLLM（请根据实际文件名调整）
-pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
+# 克隆项目代码
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
+
+# 安装 Windows 专用依赖
+pip install -r requirements_win.txt
+pip install -v -e .
 ```
 
 #### 步骤 5: 安装注意力机制算子
@@ -238,33 +236,40 @@ pip install sageattention-2.1.1+cu126torch2.6.0-cp312-cp312-win_amd64.whl
 
 > ⚠️ **注意**: SageAttention 的 CUDA 版本可以不严格对齐，但 Python 和 PyTorch 版本必须匹配。
 
-#### 步骤 6: 克隆项目
+#### 步骤 6 (可选): 安装量化算子
 
-```cmd
-# 克隆项目代码
-git clone https://github.com/ModelTC/LightX2V.git
-cd LightX2V
+默认使用 Triton kernel 进行量化推理，实现高效且无需安装额外依赖，只需确保已安装 `triton-windows` 即可。
 
-# 安装 Windows 专用依赖
-pip install -r requirements_win.txt
-pip install -v -e .
-```
+如需使用其他量化算子，可安装以下选项：
 
-#### 步骤 7: 安装量化算子（可选）
+**1. 安装 Windows 版 vLLM**
 
-量化算子用于支持模型量化功能，可以显著降低显存占用并加速推理。
+从 [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases) 下载对应的 wheel 包。
 
-**安装 VLLM（推荐）：**
-
-从 [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases) 下载对应的 wheel 包并安装。
+**版本匹配要求：**
+- Python 版本匹配
+- PyTorch 版本匹配
+- CUDA 版本匹配
 
 ```cmd
 # 安装 vLLM（请根据实际文件名调整）
 pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
 ```
 
+**2. 安装 q8-kernels**
+
+对于 RTX 40 系显卡，推荐安装 `q8_kernel==0.1.0`：
+
+```bash
+git clone https://github.com/KONAKONA666/q8_kernels.git
+cd q8_kernels && git submodule init && git submodule update
+python setup.py install
+```
+
+对于其他显卡，推荐安装 `q8_kernel==0.5.0`，请参考 [LTX-Video-Q8-Kernels](https://github.com/Lightricks/LTX-Video-Q8-Kernels)。
+
 > 💡 **提示**:
-> - 如果不需要使用量化功能，可以跳过此步骤
+> - 建议使用默认的 Triton kernel 进行推理
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
 > - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
 

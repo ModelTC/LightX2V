@@ -981,6 +981,15 @@ def get_available_attn_ops():
     return available_ops
 
 
+def get_gpu_memory(gpu_idx=0):
+    if not torch.cuda.is_available():
+        return 0
+    with torch.cuda.device(gpu_idx):
+        memory_info = torch.cuda.mem_get_info()
+        total_memory = memory_info[1] / (1024**3)  # Convert bytes to GB
+        return total_memory
+
+
 def get_cpu_memory():
     available_bytes = psutil.virtual_memory().available
     return available_bytes / 1024**3

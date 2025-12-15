@@ -16,7 +16,7 @@ def int8_quantize_kernel(X, OUT, SCALES, HDIM, BLOCK_SIZE: tl.constexpr):
     x_ptr = X + row_idx * HDIM
     out_ptr = OUT + row_idx * HDIM
     h_offset = tl.arange(0, BLOCK_SIZE)
-    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.bfloat16)
+    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.float32)
     x_scale = 127.0 / tl.max(tl.abs(x))
     x_scaled = x * x_scale
     x_scaled += (0.5 * tl.where(x_scaled >= 0, 1, -1)).to(tl.int8)
@@ -28,7 +28,7 @@ def int8_quantize_triton(x):
     x_shape_orig = x.shape
     x = x.view(-1, x_shape_orig[-1])
     out = torch.empty(x_shape_orig, dtype=torch.int8, device=x.device)
-    scales = torch.empty(x.shape[0], dtype=torch.bfloat16, device=x.device)
+    scales = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
     BLOCK_SIZE = next_power_of_2(x_shape_orig[-1])
     grid = (x.shape[0],)
     int8_quantize_kernel[grid](x, out, scales, x_shape_orig[-1], BLOCK_SIZE, num_warps=8)
@@ -36,61 +36,32 @@ def int8_quantize_triton(x):
 
 
 @jit
-def fp8_quantize_kernel(X, OUT, SCALES, HDIM, BLOCK_SIZE: tl.constexpr):
+def fp8_quantize_kernel(X, OUT, SCALES, HDIM, BLOCK_SIZE: tl.constexpr, FP8_MAX_VAL: tl.constexpr):
     row_idx = tl.program_id(0)
     x_ptr = X + row_idx * HDIM
     out_ptr = OUT + row_idx * HDIM
     h_offset = tl.arange(0, BLOCK_SIZE)
-
-    # Load input
-    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.bfloat16)
-
-    # Compute scale: absmax / 448.0
+    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.float32)
     absmax = tl.max(tl.abs(x))
     eps = 1e-8
-    absmax = tl.maximum(absmax, eps)  # Avoid division by zero
-    x_scale = absmax / 448.0
-
-    # Quantize: x / scale, then clamp to FP8 range
+    absmax = tl.maximum(absmax, eps)
+    x_scale = absmax / FP8_MAX_VAL
     x_scaled = x / x_scale
-    x_scaled = tl.clamp(x_scaled, -448.0, 448.0)
-
-    # Store scaled values (as float32, will convert to FP8 in Python)
+    x_scaled = tl.clamp(x_scaled, -FP8_MAX_VAL, FP8_MAX_VAL)
     tl.store(out_ptr + h_offset, x_scaled, mask=h_offset < HDIM)
-
-    # Store scale
     tl.store(SCALES + row_idx, x_scale)
 
 
-def fp8_quantize_triton(x: torch.Tensor):
-    """
-    FP8 量化函数 (per-token)
-
-    Args:
-        x: Input tensor of shape (seqlen, input_dim) or (..., input_dim)
-
-    Returns:
-        quantized: FP8 quantized tensor (same shape as input)
-        scales: Per-token scales of shape (seqlen,) or (...,)
-    """
+def fp8_quantize_triton(x):
     x_shape_orig = x.shape
     x = x.view(-1, x_shape_orig[-1])
-
-    # Output tensor for scaled values (float32, will convert to FP8)
-    out_scaled = torch.empty(x_shape_orig, dtype=torch.bfloat16, device=x.device)
+    out_scaled = torch.empty(x_shape_orig, dtype=torch.float32, device=x.device)
     scales = torch.empty(x.shape[0], dtype=torch.bfloat16, device=x.device)
-
     BLOCK_SIZE = next_power_of_2(x_shape_orig[-1])
     grid = (x.shape[0],)
-
-    # Run kernel
-    fp8_quantize_kernel[grid](x, out_scaled, scales, x_shape_orig[-1], BLOCK_SIZE, num_warps=8)
-
-    # Convert scaled values to FP8
-    # Clamp again to ensure values are in valid range
-    out_scaled = torch.clamp(out_scaled, -448.0, 448.0)
+    FP8_MAX = 448.0
+    fp8_quantize_kernel[grid](x, out_scaled, scales, x_shape_orig[-1], BLOCK_SIZE, FP8_MAX_VAL=FP8_MAX, num_warps=8)
     quantized = out_scaled.to(torch.float8_e4m3fn)
-
     return quantized.view(x_shape_orig), scales.view(x_shape_orig[:-1])
 
 
