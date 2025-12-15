@@ -16,7 +16,7 @@ def int8_quantize_kernel(X, OUT, SCALES, HDIM, BLOCK_SIZE: tl.constexpr):
     x_ptr = X + row_idx * HDIM
     out_ptr = OUT + row_idx * HDIM
     h_offset = tl.arange(0, BLOCK_SIZE)
-    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.float32)
+    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.bfloat16)
     x_scale = 127.0 / tl.max(tl.abs(x))
     x_scaled = x * x_scale
     x_scaled += (0.5 * tl.where(x_scaled >= 0, 1, -1)).to(tl.int8)
@@ -28,7 +28,7 @@ def int8_quantize_triton(x):
     x_shape_orig = x.shape
     x = x.view(-1, x_shape_orig[-1])
     out = torch.empty(x_shape_orig, dtype=torch.int8, device=x.device)
-    scales = torch.empty(x.shape[0], dtype=torch.float, device=x.device)
+    scales = torch.empty(x.shape[0], dtype=torch.bfloat16, device=x.device)
     BLOCK_SIZE = next_power_of_2(x_shape_orig[-1])
     grid = (x.shape[0],)
     int8_quantize_kernel[grid](x, out, scales, x_shape_orig[-1], BLOCK_SIZE, num_warps=8)
@@ -43,7 +43,7 @@ def fp8_quantize_kernel(X, OUT, SCALES, HDIM, BLOCK_SIZE: tl.constexpr):
     h_offset = tl.arange(0, BLOCK_SIZE)
 
     # Load input
-    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.float32)
+    x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.bfloat16)
 
     # Compute scale: absmax / 448.0
     absmax = tl.max(tl.abs(x))
@@ -77,8 +77,8 @@ def fp8_quantize_triton(x: torch.Tensor):
     x = x.view(-1, x_shape_orig[-1])
 
     # Output tensor for scaled values (float32, will convert to FP8)
-    out_scaled = torch.empty(x_shape_orig, dtype=torch.float32, device=x.device)
-    scales = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
+    out_scaled = torch.empty(x_shape_orig, dtype=torch.bfloat16, device=x.device)
+    scales = torch.empty(x.shape[0], dtype=torch.bfloat16, device=x.device)
 
     BLOCK_SIZE = next_power_of_2(x_shape_orig[-1])
     grid = (x.shape[0],)
