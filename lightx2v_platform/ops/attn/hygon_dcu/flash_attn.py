@@ -58,10 +58,10 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
     ):
         """
         Execute Flash Attention computation with variable-length sequences.
-        
+
         This method signature matches the standard LightX2V attention interface,
         compatible with other platform implementations (e.g., MLU, NVIDIA).
-        
+
         Args:
             q: [B*Lq, Nq, C1] Query tensor (flattened batch)
             k: [B*Lk, Nk, C1] Key tensor (flattened batch)
@@ -85,6 +85,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
 
         # Ensure data types are half precision
         import math
+
         half_dtypes = (torch.float16, torch.bfloat16)
         dtype = q.dtype if q.dtype in half_dtypes else torch.bfloat16
         out_dtype = q.dtype
@@ -125,7 +126,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
     def _sdpa_fallback(self, q, k, v, cu_seqlens_q, max_seqlen_q, causal=False, dropout_p=0.0):
         """
         Fallback to PyTorch Scaled Dot Product Attention when Flash Attention is not available.
-        
+
         Args:
             q: [B*Lq, Nq, C] Query tensor (flattened batch)
             k: [B*Lk, Nk, C] Key tensor (flattened batch)
@@ -139,23 +140,21 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         """
         # Reshape from flattened format to batched format
         bs = cu_seqlens_q.shape[0] - 1
-        
+
         # Reshape q, k, v to [B, L, Nq, C]
         q = q.reshape(bs, max_seqlen_q, q.shape[-2], q.shape[-1])
         k = k.reshape(bs, max_seqlen_q, k.shape[-2], k.shape[-1])
         v = v.reshape(bs, max_seqlen_q, v.shape[-2], v.shape[-1])
-        
+
         # Transpose to [B, Nq, L, C] for SDPA
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p
-        )
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p)
 
         # Transpose back to [B, L, Nq, C] and flatten
         out = out.transpose(1, 2).contiguous()
         out = out.reshape(bs * max_seqlen_q, -1)
-        
+
         return out
