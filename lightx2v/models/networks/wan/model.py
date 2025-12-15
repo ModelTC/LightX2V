@@ -60,6 +60,8 @@ class WanModel(CompiledMethodsMixin):
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
             assert self.config.get("dit_quant_scheme", "Default") in [
+                "fp8-triton",
+                "int8-triton",
                 "Default-Force-FP32",
                 "fp8-vllm",
                 "int8-vllm",

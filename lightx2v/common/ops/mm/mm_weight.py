@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.ops.mm.triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton, int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
 from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tensor
@@ -1019,6 +1020,86 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
             fuse_gelu=False,
             out_dtype=self.infer_dtype,
         )
+        return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
+
+
+@MM_WEIGHT_REGISTER("fp8-triton")
+class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
+    """
+    Name: W-fp8-channel-sym-A-fp8-channel-sym-dynamic-triton
+
+    Quant MM:
+        Weight: fp8 perchannel sym
+        Act: fp8 perchannel dynamic sym
+        Kernel: triton
+    """
+
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
+        self.load_func = self.load_fp8_perchannel_sym
+        self.weight_need_transpose = False
+        self.act_quant_func = fp8_quantize_triton
+        self.bias_force_fp32 = True
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        if self.bias is not None:
+            output_tensor = fp8_gemm_bias_triton(
+                input_tensor_quant,
+                self.weight,
+                self.bias.float() if self.bias is not None else None,
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=self.infer_dtype,
+            )
+        else:
+            output_tensor = fp8_gemm_triton(
+                input_tensor_quant,
+                self.weight,
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=self.infer_dtype,
+            )
+        return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
+
+
+@MM_WEIGHT_REGISTER("int8-triton")
+class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
+    """
+    Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-triton
+
+    Quant MM:
+        Weight: int8 perchannel sym
+        Act: int8 perchannel dynamic sym
+        Kernel: triton
+    """
+
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+        super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
+        self.load_func = self.load_fp8_perchannel_sym
+        self.weight_need_transpose = False
+        self.act_quant_func = int8_quantize_triton
+        self.bias_force_fp32 = True
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        if self.bias is not None:
+            output_tensor = int8_gemm_bias_triton(
+                input_tensor_quant,
+                self.weight,
+                self.bias.float() if self.bias is not None else None,
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=self.infer_dtype,
+            )
+        else:
+            output_tensor = int8_gemm_triton(
+                input_tensor_quant,
+                self.weight,
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=self.infer_dtype,
+            )
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
