@@ -69,6 +69,11 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.infer_func = self.infer_calculating
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.zero_cond_t = config.get("zero_cond_t", False)
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+        self.seq_p_fp8_comm = False
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -125,11 +130,11 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         # Reshape for multi-head attention
         img_query = img_query.unflatten(-1, (block_weight.attn.heads, -1))
         img_key = img_key.unflatten(-1, (block_weight.attn.heads, -1))
-        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1))
+        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1)).unsqueeze(0)
 
         txt_query = txt_query.unflatten(-1, (block_weight.attn.heads, -1))
         txt_key = txt_key.unflatten(-1, (block_weight.attn.heads, -1))
-        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1))
+        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1)).unsqueeze(0)
 
         # Apply QK normalization
         if block_weight.attn.norm_q is not None:
@@ -153,7 +158,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         # Order: [text, image]
         joint_query = torch.cat([txt_query, img_query], dim=1)
         joint_key = torch.cat([txt_key, img_key], dim=1)
-        joint_value = torch.cat([txt_value.unsqueeze(0), img_value.unsqueeze(0)], dim=1)
+        joint_value = torch.cat([txt_value, img_value], dim=1)
 
         # Compute joint attention
         if attn_type == "torch_sdpa":
@@ -167,16 +172,31 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
             cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
 
-            joint_hidden_states = block_weight.attn.calculate.apply(
-                q=joint_query,
-                k=joint_key,
-                v=joint_value,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
-                max_seqlen_q=joint_query.size(0),
-                max_seqlen_kv=joint_key.size(0),
-                model_cls="qwen_image",
-            )
+            txt_qkv_len = txt_query.size(1)
+            if self.config["seq_parallel"]:
+                joint_hidden_states = block_weight.attn.calculate_parallel.apply(
+                    q=joint_query,
+                    k=joint_key,
+                    v=joint_value,
+                    slice_qkv_len=txt_qkv_len,
+                    cu_seqlens_qkv=cu_seqlens_q,
+                    attention_module=block_weight.attn.calculate,
+                    seq_p_group=self.seq_p_group,
+                    use_fp8_comm=self.seq_p_fp8_comm,
+                    model_cls=self.config["model_cls"],
+                    img_first=False,
+                )
+            else:
+                joint_hidden_states = block_weight.attn.calculate.apply(
+                    q=joint_query,
+                    k=joint_key,
+                    v=joint_value,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_k,
+                    max_seqlen_q=joint_query.size(0),
+                    max_seqlen_kv=joint_key.size(0),
+                    model_cls="qwen_image",
+                )
 
         # Split attention outputs back
         txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part

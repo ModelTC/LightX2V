@@ -4,6 +4,7 @@ import json
 import os
 
 import torch
+import torch.distributed as dist
 from safetensors import safe_open
 
 from lightx2v.utils.envs import *
@@ -36,6 +37,11 @@ class QwenImageTransformerModel:
         self.attention_kwargs = {}
 
         self.dit_quantized = self.config.get("dit_quantized", False)
+
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
         self._init_infer_class()
         self._init_weights()
@@ -361,10 +367,26 @@ class QwenImageTransformerModel:
             encoder_hidden_states=prompt_embeds,
         )
 
+        # print("pre_infer_out.hidden_states shape before seq parallel:", pre_infer_out.hidden_states.shape)
+        if self.config["seq_parallel"]:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+            pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=1)[cur_rank]
+
+        # print("pre_infer_out.hidden_states shape:", pre_infer_out.hidden_states.shape)
         hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
             pre_infer_out=pre_infer_out,
         )
+        # print("hidden_states shape after transformer:", hidden_states.shape)
 
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.embed0)
+        # print("noise_pred shape after post_infer:", noise_pred.shape)
+
+        if self.config["seq_parallel"]:
+            world_size = dist.get_world_size(self.seq_p_group)
+            gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
+            dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
+            noise_pred = torch.cat(gathered_noise_pred, dim=1)
+        # print("noise_pred shape after seq gather:", noise_pred.shape)
         return noise_pred
