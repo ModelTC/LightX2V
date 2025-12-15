@@ -28,3 +28,4 @@ dist/
 server_cache/
 app/.gradio/
 *.pkl
+save_results/*

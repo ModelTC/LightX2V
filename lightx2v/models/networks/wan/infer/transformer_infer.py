@@ -179,7 +179,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 q=q,
                 k=k,
                 v=v,
-                img_qkv_len=img_qkv_len,
+                slice_qkv_len=img_qkv_len,
                 cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,

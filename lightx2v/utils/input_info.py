@@ -116,6 +116,8 @@ class T2IInputInfo:
     save_result_path: str = field(default_factory=str)
     # shape related
     target_shape: int = field(default_factory=int)
+    image_shapes: list = field(default_factory=list)
+    txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
 
 
 @dataclass
@@ -127,6 +129,8 @@ class I2IInputInfo:
     save_result_path: str = field(default_factory=str)
     # shape related
     target_shape: int = field(default_factory=int)
+    image_shapes: list = field(default_factory=list)
+    txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
     processed_image_size: int = field(default_factory=list)
     original_size: list = field(default_factory=list)
 

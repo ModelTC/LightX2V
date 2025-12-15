@@ -4,7 +4,9 @@ import json
 import os
 
 import torch
+import torch.distributed as dist
 from safetensors import safe_open
+from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
@@ -36,6 +38,11 @@ class QwenImageTransformerModel:
         self.attention_kwargs = {}
 
         self.dit_quantized = self.config.get("dit_quantized", False)
+
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
         self._init_infer_class()
         self._init_weights()
@@ -304,7 +311,6 @@ class QwenImageTransformerModel:
                 self.pre_weight.to_cuda()
                 self.post_weight.to_cuda()
 
-        t = self.scheduler.timesteps[self.scheduler.step_index]
         latents = self.scheduler.latents
         if self.config["task"] == "i2i":
             image_latents = torch.cat([item["image_latents"] for item in inputs["image_encoder_output"]], dim=1)
@@ -312,72 +318,84 @@ class QwenImageTransformerModel:
         else:
             latents_input = latents
 
-        timestep = t.expand(latents.shape[0]).to(latents.dtype)
-        img_shapes = inputs["img_shapes"]
+        if self.config["enable_cfg"]:
+            if self.config["cfg_parallel"]:
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
 
-        prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
+                if cfg_p_rank == 0:
+                    noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                    if self.config["task"] == "i2i":
+                        noise_pred = noise_pred[:, : latents.size(1)]
+                else:
+                    noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+                    if self.config["task"] == "i2i":
+                        noise_pred = noise_pred[:, : latents.size(1)]
+                noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
+                dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
+                noise_pred_cond = noise_pred_list[0]  # cfg_p_rank == 0
+                noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
+            else:
+                # ==================== CFG Processing ====================
+                noise_pred_cond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                if self.config["task"] == "i2i":
+                    noise_pred_cond = noise_pred_cond[:, : latents.size(1)]
 
-        txt_seq_lens = prompt_embeds_mask.sum(dim=1).tolist() if prompt_embeds_mask is not None else None
+                noise_pred_uncond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+                if self.config["task"] == "i2i":
+                    noise_pred_uncond = noise_pred_uncond[:, : latents.size(1)]
 
-        hidden_states, encoder_hidden_states, _, pre_infer_out = self.pre_infer.infer(
+            comb_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            noise_pred_cond_norm = torch.norm(noise_pred_cond, dim=-1, keepdim=True)
+            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+            self.scheduler.noise_pred = comb_pred * (noise_pred_cond_norm / noise_norm)
+        else:
+            # ==================== No CFG Processing ====================
+            noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+            if self.config["task"] == "i2i":
+                noise_pred = noise_pred[:, : latents.size(1)]
+            self.scheduler.noise_pred = noise_pred
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
+        self.scheduler.infer_condition = infer_condition
+
+        pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,
             hidden_states=latents_input,
-            timestep=timestep / 1000,
-            guidance=self.scheduler.guidance,
-            encoder_hidden_states_mask=prompt_embeds_mask,
             encoder_hidden_states=prompt_embeds,
-            img_shapes=img_shapes,
-            txt_seq_lens=txt_seq_lens,
-            attention_kwargs=self.attention_kwargs,
         )
 
-        encoder_hidden_states, hidden_states = self.transformer_infer.infer(
+        if self.config["seq_parallel"]:
+            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+
+        hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
-            hidden_states=hidden_states.unsqueeze(0),
-            encoder_hidden_states=encoder_hidden_states.unsqueeze(0),
             pre_infer_out=pre_infer_out,
         )
+        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.embed0)
 
-        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
+        if self.config["seq_parallel"]:
+            noise_pred = self._seq_parallel_post_process(noise_pred)
+        return noise_pred
 
-        if self.config["do_true_cfg"]:
-            neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
-            neg_prompt_embeds_mask = inputs["text_encoder_output"]["negative_prompt_embeds_mask"]
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        seqlen = pre_infer_out.hidden_states.shape[1]
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
+        pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=1)[cur_rank]
+        return pre_infer_out
 
-            negative_txt_seq_lens = neg_prompt_embeds_mask.sum(dim=1).tolist() if neg_prompt_embeds_mask is not None else None
-
-            neg_hidden_states, neg_encoder_hidden_states, _, neg_pre_infer_out = self.pre_infer.infer(
-                weights=self.pre_weight,
-                hidden_states=latents_input,
-                timestep=timestep / 1000,
-                guidance=self.scheduler.guidance,
-                encoder_hidden_states_mask=neg_prompt_embeds_mask,
-                encoder_hidden_states=neg_prompt_embeds,
-                img_shapes=img_shapes,
-                txt_seq_lens=negative_txt_seq_lens,
-                attention_kwargs=self.attention_kwargs,
-            )
-
-            neg_encoder_hidden_states, neg_hidden_states = self.transformer_infer.infer(
-                block_weights=self.transformer_weights,
-                hidden_states=neg_hidden_states.unsqueeze(0),
-                encoder_hidden_states=neg_encoder_hidden_states.unsqueeze(0),
-                pre_infer_out=neg_pre_infer_out,
-            )
-
-            neg_noise_pred = self.post_infer.infer(self.post_weight, neg_hidden_states, neg_pre_infer_out[0])
-
-        if self.config["task"] == "i2i":
-            noise_pred = noise_pred[:, : latents.size(1)]
-
-        if self.config["do_true_cfg"]:
-            neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
-            comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
-
-            cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
-            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-            noise_pred = comb_pred * (cond_norm / noise_norm)
-
-        noise_pred = noise_pred[:, : latents.size(1)]
-        self.scheduler.noise_pred = noise_pred
+    @torch.no_grad()
+    def _seq_parallel_post_process(self, noise_pred):
+        world_size = dist.get_world_size(self.seq_p_group)
+        gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
+        dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
+        noise_pred = torch.cat(gathered_noise_pred, dim=1)
+        return noise_pred

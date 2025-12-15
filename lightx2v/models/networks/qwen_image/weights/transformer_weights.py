@@ -28,8 +28,6 @@ class QwenImageTransformerWeights(WeightModule):
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
                 self.offload_phase_cuda_buffers = None
-            else:
-                raise NotImplementedError
 
 
 class QwenImageTransformerAttentionBlock(WeightModule):
@@ -266,6 +264,12 @@ class QwenImageCrossAttention(WeightModule):
         )
         # attn
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
+
+        if self.config["seq_parallel"]:
+            self.add_module(
+                "calculate_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():

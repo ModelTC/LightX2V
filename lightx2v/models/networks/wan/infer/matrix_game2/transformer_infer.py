@@ -215,7 +215,7 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
                 q=q,
                 k=attn_k,
                 v=attn_v,
-                img_qkv_len=q.shape[0],
+                slice_qkv_len=q.shape[0],
                 cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
