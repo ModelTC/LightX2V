@@ -31,6 +31,128 @@ try:
 except ImportError:
     fp8_linear = None
 
+from lightx2v.common.ops.mm.triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton, int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
+
+
+class TritonQuantLinearInt8(nn.Module):
+    def __init__(self, in_features, out_features, bias=True, dtype=torch.bfloat16):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.register_buffer("weight", torch.empty((out_features, in_features), dtype=torch.int8))
+        self.register_buffer("weight_scale", torch.empty((out_features, 1), dtype=torch.float32))
+
+        if bias:
+            self.register_buffer("bias", torch.empty(out_features, dtype=dtype))
+        else:
+            self.register_buffer("bias", None)
+
+    def act_quant_func(self, x):
+        input_tensor_quant, input_tensor_scale = int8_quantize_triton(x)
+        return input_tensor_quant, input_tensor_scale
+
+    def forward(self, input_tensor):
+        input_tensor = input_tensor.squeeze(0)
+        shape = (input_tensor.shape[0], self.weight.shape[0])
+        dtype = input_tensor.dtype
+        device = input_tensor.device
+        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        if self.bias is not None:
+            output_tensor = int8_gemm_bias_triton(
+                input_tensor_quant,
+                self.weight,
+                self.bias.float(),
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=torch.bfloat16,
+            )
+        else:
+            output_tensor = int8_gemm_triton(
+                input_tensor_quant,
+                self.weight,
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=torch.bfloat16,
+            )
+        return output_tensor.unsqueeze(0)
+
+    def _apply(self, fn):
+        for module in self.children():
+            module._apply(fn)
+
+        def maybe_cast(t):
+            if t is not None and t.device != fn(t).device:
+                return fn(t)
+            return t
+
+        self.weight = maybe_cast(self.weight)
+        self.weight_scale = maybe_cast(self.weight_scale)
+        self.bias = maybe_cast(self.bias)
+        return self
+
+
+class TritonQuantLinearFp8(nn.Module):
+    def __init__(self, in_features, out_features, bias=True, dtype=torch.bfloat16):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.register_buffer("weight", torch.empty((out_features, in_features), dtype=torch.float8_e4m3fn))
+        self.register_buffer("weight_scale", torch.empty((out_features, 1), dtype=torch.float32))
+
+        if bias:
+            self.register_buffer("bias", torch.empty(out_features, dtype=dtype))
+        else:
+            self.register_buffer("bias", None)
+
+    def act_quant_func(self, x):
+        input_tensor_quant, input_tensor_scale = fp8_quantize_triton(x)
+        return input_tensor_quant, input_tensor_scale
+
+    def forward(self, input_tensor):
+        input_tensor = input_tensor.squeeze(0)
+        shape = (input_tensor.shape[0], self.weight.shape[0])
+        dtype = input_tensor.dtype
+        device = input_tensor.device
+        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        if self.bias is not None:
+            output_tensor = fp8_gemm_bias_triton(
+                input_tensor_quant,
+                self.weight,
+                self.bias.float(),
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=torch.bfloat16,
+            )
+        else:
+            output_tensor = fp8_gemm_triton(
+                input_tensor_quant,
+                self.weight,
+                input_tensor_scale,
+                self.weight_scale,
+                output_dtype=torch.bfloat16,
+            )
+        return output_tensor.unsqueeze(0)
+
+    def _apply(self, fn):
+        for module in self.children():
+            module._apply(fn)
+
+        def maybe_cast(t):
+            if t is not None and t.device != fn(t).device:
+                return fn(t)
+            return t
+
+        self.weight = maybe_cast(self.weight)
+        self.weight_scale = maybe_cast(self.weight_scale)
+        self.bias = maybe_cast(self.bias)
+        return self
+
 
 class VllmQuantLinearInt8(nn.Module):
     def __init__(self, in_features, out_features, bias=True, dtype=torch.bfloat16):
