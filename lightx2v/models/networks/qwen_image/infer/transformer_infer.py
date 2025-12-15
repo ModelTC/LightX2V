@@ -258,7 +258,10 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             )
         return encoder_hidden_states, hidden_states
 
-    def infer(self, hidden_states, encoder_hidden_states, pre_infer_out, block_weights):
-        temb, image_rotary_emb, modulate_index = pre_infer_out
-        encoder_hidden_states, hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index)
+    def infer(self, block_weights, pre_infer_out):
+        hidden_states = pre_infer_out.hidden_states
+        encoder_hidden_states = pre_infer_out.encoder_hidden_states
+        embed0 = pre_infer_out.embed0
+        image_rotary_emb = pre_infer_out.image_rotary_emb
+        encoder_hidden_states, hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, embed0, image_rotary_emb, self.scheduler.modulate_index)
         return encoder_hidden_states, hidden_states

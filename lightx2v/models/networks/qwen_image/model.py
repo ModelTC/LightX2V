@@ -355,7 +355,7 @@ class QwenImageTransformerModel:
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
         self.scheduler.infer_condition = infer_condition
 
-        hidden_states, encoder_hidden_states, pre_infer_out = self.pre_infer.infer(
+        pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,
             hidden_states=latents_input,
             encoder_hidden_states=prompt_embeds,
@@ -363,10 +363,8 @@ class QwenImageTransformerModel:
 
         encoder_hidden_states, hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
-            hidden_states=hidden_states.unsqueeze(0),
-            encoder_hidden_states=encoder_hidden_states.unsqueeze(0),
             pre_infer_out=pre_infer_out,
         )
 
-        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
+        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.embed0)
         return noise_pred

@@ -2,6 +2,8 @@ import torch
 
 from lightx2v.utils.envs import *
 
+from .module_io import QwenPreInferModuleOutput
+
 
 class QwenImagePreInfer:
     def __init__(self, config):
@@ -27,4 +29,4 @@ class QwenImagePreInfer:
         else:
             image_rotary_emb = self.scheduler.negative_image_rotary_emb
 
-        return hidden_states, encoder_hidden_states, (embed0, image_rotary_emb, self.scheduler.modulate_index)
+        return QwenPreInferModuleOutput(hidden_states=hidden_states.unsqueeze(0), encoder_hidden_states=encoder_hidden_states.unsqueeze(0), embed0=embed0, image_rotary_emb=image_rotary_emb)
