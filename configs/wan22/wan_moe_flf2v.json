@@ -7,8 +7,8 @@
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
     "sample_shift": 16,
-    "enable_cfg": true,
-    "cpu_offload": true,
+    "enable_cfg": false,
+    "cpu_offload": false,
     "sample_guide_scale": [
         3.5,
         3.5
