@@ -289,7 +289,7 @@ class QwenImageScheduler(BaseScheduler):
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
         self.dtype = torch.bfloat16
-        self.guidance_scale = 1.0
+        self.sample_guide_scale = self.config["sample_guide_scale"]
         self.zero_cond_t = config.get("zero_cond_t", False)
         self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(config["axes_dims_rope"]), scale_rope=True)
 
@@ -367,22 +367,12 @@ class QwenImageScheduler(BaseScheduler):
         self._num_timesteps = len(timesteps)
         self.num_warmup_steps = num_warmup_steps
 
-    def prepare_guidance(self):
-        # handle guidance
-        if self.config["guidance_embeds"]:
-            guidance = torch.full([1], self.guidance_scale, device=AI_DEVICE, dtype=torch.float32)
-            guidance = guidance.expand(self.latents.shape[0])
-        else:
-            guidance = None
-        self.guidance = guidance
-
     def prepare(self, input_info):
         if self.config["task"] == "i2i":
             self.generator = torch.Generator().manual_seed(input_info.seed)
         elif self.config["task"] == "t2i":
             self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         self.prepare_latents(input_info)
-        self.prepare_guidance()
         self.set_timesteps()
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)

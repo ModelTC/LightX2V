@@ -325,7 +325,7 @@ class QwenImageTransformerModel:
                 if self.config["task"] == "i2i":
                     noise_pred_uncond = noise_pred_uncond[:, : latents.size(1)]
 
-            comb_pred = noise_pred_uncond + self.config["true_cfg_scale"] * (noise_pred_cond - noise_pred_uncond)
+            comb_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
             noise_pred_cond_norm = torch.norm(noise_pred_cond, dim=-1, keepdim=True)
             noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
             self.scheduler.noise_pred = comb_pred * (noise_pred_cond_norm / noise_norm)
