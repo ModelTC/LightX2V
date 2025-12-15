@@ -64,7 +64,7 @@ class TritonQuantLinearInt8(nn.Module):
             output_tensor = int8_gemm_bias_triton(
                 input_tensor_quant,
                 self.weight,
-                self.bias.float() if self.bias is not None else None,
+                self.bias.float(),
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=torch.bfloat16,
@@ -124,7 +124,7 @@ class TritonQuantLinearFp8(nn.Module):
             output_tensor = fp8_gemm_bias_triton(
                 input_tensor_quant,
                 self.weight,
-                self.bias.float() if self.bias is not None else None,
+                self.bias.float(),
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=torch.bfloat16,
