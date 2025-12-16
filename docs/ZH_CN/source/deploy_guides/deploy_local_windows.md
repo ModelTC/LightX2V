@@ -88,7 +88,7 @@ model_path=models/
 
 #### 下载Windows便携环境：
 
-- [百度网盘下载](https://pan.baidu.com/s/1FVlicTXjmXJA1tAVvNCrBw?pwd=wfid)，提取码：wfid
+- [百度网盘下载](https://pan.baidu.com/s/1SB6JYySKog-tfO_IZDPvtQ?pwd=yxht)
 
 便携环境中已经打包了所有Python运行相关的依赖，也包括ComfyUI和LightX2V的代码及其相关依赖，下载后解压即可使用。
 
