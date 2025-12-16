@@ -91,6 +91,8 @@ class S2VInputInfo:
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
     overlap_latent: torch.Tensor = field(default_factory=lambda: None)
+    # input preprocess audio
+    audio_clip: torch.Tensor = field(default_factory=lambda: None)
 
 
 # Need Check

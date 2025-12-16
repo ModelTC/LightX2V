@@ -24,6 +24,37 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config
 
 
+class SlidingWindowReader:
+    def __init__(self, samples: torch.Tensor, frame_len: int, sr=16000, fps=16):
+        assert isinstance(samples, torch.Tensor)
+        assert samples.dim() == 1, "samples 必须是 1D Tensor"
+
+        self.samples = samples
+        self.frame_len = frame_len  # 单位：视频帧
+        self.audio_per_frame = sr // fps  # samples / frame
+        self.pos = 0  # 单位：视频帧
+
+        print(f"samples len: {self.samples.numel()}")
+
+    def next_frame(self, overlap: int):
+        assert 0 <= overlap < self.frame_len
+
+        hop_frames = self.frame_len - overlap
+
+        start_sample = self.pos * self.audio_per_frame
+        end_sample = start_sample + self.frame_len * self.audio_per_frame
+
+        print(f"start_sample:{start_sample}, end_sample:{end_sample}")
+
+        if end_sample > self.samples.numel():
+            return None
+
+        frame = self.samples[start_sample:end_sample]
+
+        self.pos += hop_frames
+        return frame.float()
+
+
 def array_to_video(
     image_array: np.ndarray,
     output_path: str,
@@ -240,11 +271,6 @@ class ShotStreamPipeline:
 
     def create_clip_generator(self, clip_config: ClipConfig):
         config = self.get_config_json(clip_config.config_json)
-        # 自动计算clip视频帧长度
-        clip_duration = config.get("video_duration", 2)
-        overlap_frame_len = config.get("prev_frame_length", 1)
-        target_fps = config.get("target_fps", 16)
-        config["target_video_length"] = target_fps * clip_duration + overlap_frame_len
         config = set_config(Namespace(**config))
         print_config(config)
 
@@ -266,17 +292,23 @@ class ShotStreamPipeline:
         self.max_tail_len = max(s2v.prev_frame_length, f2v.prev_frame_length)
         self.global_tail_video = None
 
-        # 获取音频路径信息
-        base_audio = self.shot_cfg.audio_path  # "/assets/inputs/audio/seko_input.mp3"
-        audio_dir = os.path.dirname(base_audio)  # "/assets/inputs/audio"
-        audio_prefix = os.path.splitext(os.path.basename(base_audio))[0]  # "seko_input"
-        audio_ext = os.path.splitext(base_audio)[1]  # ".mp3"
-
         gen_video_list = []
         cut_audio_list = []
 
+        audio_array, ori_sr = ta.load(self.shot_cfg.audio_path)
+        audio_array = audio_array.mean(0)
+        if ori_sr != 16000:
+            audio_array = ta.functional.resample(audio_array, ori_sr, 16000)
+        audio_reader = SlidingWindowReader(audio_array, frame_len=33)
+
         # Demo 交替生成 clip
-        for i in range(7):
+        i = 0
+        overlap = 0
+        while True:
+            audio_clip = audio_reader.next_frame(overlap=overlap)
+            if audio_clip is None:
+                break
+            # for i in range(7):
             # 选择当前 pipe
             if i % 2 == 0:
                 pipe = s2v
@@ -287,23 +319,24 @@ class ShotStreamPipeline:
                 inputs.prompt = "A man speaks to the camera with a slightly furrowed brow and focused gaze. He raises both hands upward in powerful, emphatic gestures. "  # 添加动作提示
 
             inputs.seed = self.shot_cfg.seed + i  # 不同 clip 使用不同随机种子
-            audio_name = f"{audio_prefix}_{i + 1}{audio_ext}"  # seko_input_0.mp3
-            inputs.audio_path = os.path.join(audio_dir, audio_name)
+            inputs.audio_clip = audio_clip
+            i = i + 1
 
             if self.global_tail_video is not None:  # 根据当前 pipe 需要多少 overlap_len 来裁剪 tail
-                needed = pipe.prev_frame_length
-                inputs.overlap_frame = self.global_tail_video[:, :, -needed:]
+                inputs.overlap_frame = self.global_tail_video[:, :, -pipe.prev_frame_length :]
 
             gen_clip_video, audio_clip = pipe.run_clip_pipeline(inputs)
-            gen_clip_video = torch.clamp(gen_clip_video, -1, 1)
 
-            aligned_len = gen_clip_video.shape[2] - pipe.prev_frame_length
+            aligned_len = gen_clip_video.shape[2] - overlap
+            logger.info(f"gen_clip_video shape:{gen_clip_video.shape} aligned_len:{aligned_len}")
             gen_video_list.append(gen_clip_video[:, :, :aligned_len])
             cut_audio_list.append(audio_clip)
 
+            overlap = pipe.prev_frame_length
             self.global_tail_video = gen_clip_video[:, :, -self.max_tail_len :]
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()
+        gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
         merge_audio = np.concatenate(cut_audio_list, axis=0).astype(np.float32)
         out_path = os.path.join("./", "video_merge.mp4")
         audio_file = os.path.join("./", "audio_merge.wav")

@@ -835,11 +835,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.input_info.overlap_frame = self.ref_img.unsqueeze(2)
 
         # 处理音频输入
-        audio_clip = self._audio_processor.load_audio(self.input_info.audio_path)
-        audio_len = self.video_duration * self._audio_processor.audio_sr
-        assert audio_len <= audio_clip.shape[0], f"audio length {audio_clip.shape[0]} is shorter than clip_window_duration {self.clip_window_duration}s"
-        audio_clip = audio_clip[0:audio_len]  # 取前clip_window_duration秒
-        audio_clip = torch.Tensor(audio_clip).float()
+        audio_clip = self.input_info.audio_clip
         audio_features = self.audio_encoder.infer(audio_clip)
         audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
         self.inputs["audio_encoder_output"] = audio_features
