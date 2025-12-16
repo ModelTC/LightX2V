@@ -34,27 +34,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
 
 
-def fixed_shape_resize(img, target_height, target_width):
-    orig_height, orig_width = img.shape[-2:]
-
-    target_ratio = target_height / target_width
-    orig_ratio = orig_height / orig_width
-
-    if orig_ratio > target_ratio:
-        crop_width = orig_width
-        crop_height = int(crop_width * target_ratio)
-    else:
-        crop_height = orig_height
-        crop_width = int(crop_height / target_ratio)
-
-    cropped_img = TF.center_crop(img, [crop_height, crop_width])
-
-    resized_img = TF.resize(cropped_img, [target_height, target_width], antialias=True)
-
-    h, w = resized_img.shape[-2:]
-    return resized_img, h, w
-
-
 def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None, fixed_shape=None):
     assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape", "fixed_min_side"]
 
