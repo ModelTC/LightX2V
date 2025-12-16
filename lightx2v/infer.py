@@ -21,12 +21,14 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
+from lightx2v.warmup import warmup
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 def init_runner(config):
     torch.set_grad_enabled(False)
+    warmup(config)
     runner = RUNNER_REGISTER[config["model_cls"]](config)
     runner.init_modules()
     return runner

@@ -976,8 +976,10 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = False
-        self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
-        self.bias_force_fp32 = True
+        if ops is not None:
+            self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
+        else:
+            self.act_quant_func = self.fp8_quantize_triton
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
@@ -1007,7 +1009,10 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = False
-        self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        if ops is not None:
+            self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        else:
+            self.act_quant_func = self.int8_quantize_triton
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
@@ -1100,6 +1105,7 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
             )
+
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 

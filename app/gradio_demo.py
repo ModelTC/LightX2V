@@ -1582,6 +1582,20 @@ def auto_configure(resolution, num_frames=81):
                     "clean_cuda_cache_val": True,
                 },
             ),
+            (
+                -1,
+                {
+                    "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
+                    "rope_chunk_val": True,
+                    "rope_chunk_size_val": 100,
+                    "clean_cuda_cache_val": True,
+                },
+            ),
         ]
 
     else:
@@ -1621,6 +1635,17 @@ def auto_configure(resolution, num_frames=81):
                     "offload_granularity_val": "phase",
                 },
             ),
+            (
+                -1,
+                {
+                    "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
+                },
+            ),
         ]
 
     cpu_rules = [
@@ -1628,8 +1653,16 @@ def auto_configure(resolution, num_frames=81):
         (64, {}),
         (32, {"unload_modules_val": True}),
         (
-            8,
+            16,
             {
+                "lazy_load_val": True,
+                "unload_modules_val": True,
+            },
+        ),
+        (
+            -1,
+            {
+                "t5_lazy_load": True,
                 "lazy_load_val": True,
                 "unload_modules_val": True,
             },
