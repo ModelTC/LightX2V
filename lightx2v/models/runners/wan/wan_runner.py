@@ -337,7 +337,6 @@ class WanRunner(DefaultRunner):
         metrics_labels=["WanRunner"],
     )
     def run_vae_encoder(self, first_frame, last_frame=None):
-        print(self.config.get("resize_mode", None))
         if self.config.get("resize_mode", None) is None:
             h, w = first_frame.shape[2:]
             aspect_ratio = h / w
