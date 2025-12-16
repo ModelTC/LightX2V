@@ -20,16 +20,8 @@ from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_cro
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def resize_image(img, target_height, target_width):
-    if target_height == 480 or target_width == 480:
-        resolution = "480p"
-    elif target_height == 540 or target_width == 540:
-        resolution = "540p"
-    elif target_height == 720 or target_width == 720:
-        resolution = "720p"
-    else:
-        resolution = "480p"
-        logger.warning(f"resolution is not '480p' '540p' '720p', using default 480p: {resolution}")
+def resize_image(img, resolution):
+    assert resolution in ["480p", "540p", "720p"]
     bucket_config = {
         0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
         1.500: np.array([[832, 480], [960, 544], [1280, 720]], dtype=np.int64),
@@ -252,7 +244,7 @@ class DefaultRunner(BaseRunner):
         self.input_info.original_size = img_ori.size
 
         if self.config.get("resize_mode", None) == "adaptive":
-            img, h, w = resize_image(img, self.config["target_height"], self.config["target_width"])
+            img, h, w = resize_image(img, self.config.get("resolution", "480p"))
             logger.info(f"resize_image target_h: {h}, target_w: {w}")
             patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
             patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
