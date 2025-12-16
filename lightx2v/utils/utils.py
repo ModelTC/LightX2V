@@ -10,6 +10,7 @@ import safetensors
 import torch
 import torch.distributed as dist
 import torchvision
+import torchvision.transforms.functional as TF
 from einops import rearrange
 from loguru import logger
 from torchvision.transforms import InterpolationMode
