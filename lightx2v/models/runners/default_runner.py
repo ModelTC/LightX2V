@@ -25,7 +25,7 @@ def resize_image(img, resolution):
     bucket_config = {
         0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
         1.500: np.array([[832, 480], [960, 544], [1280, 720]], dtype=np.int64),
-        1.000: np.array([[480, 480], [576, 576], [960, 960]], dtype=np.int64),
+        1.000: np.array([[480, 480], [576, 576], [720, 720]], dtype=np.int64),
     }
     ori_height = img.shape[-2]
     ori_weight = img.shape[-1]

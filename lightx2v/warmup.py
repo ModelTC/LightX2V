@@ -38,7 +38,8 @@ def get_qkv(seq_len):
 
 
 def time_op(op, *args, warmup=1, iters=3):
-    for _ in range(warmup):
+    for i in range(warmup):
+        print(i, "warm")
         if hasattr(op, "apply"):
             _ = op.apply(*args)
         else:
@@ -47,7 +48,8 @@ def time_op(op, *args, warmup=1, iters=3):
 
     # 正式计时
     start = time.time()
-    for _ in range(iters):
+    for i in range(iters):
+        print(i, "run")
         if hasattr(op, "apply"):
             _ = op.apply(*args)
         else:
@@ -103,23 +105,7 @@ def tune_quant_gemm(test_sizes, quant_type="int8", output_dtype=torch.bfloat16, 
                     op_args = (a_quant, b_quant.t(), a_scales, b_scales, False, output_dtype)
 
             avg_time_ms = time_op(gemm_op, *op_args)
-
-            flops = 2 * M * N * K
-            tflops = flops / (avg_time_ms / 1000) / 1e12  # 转秒，再转TFLOPS
-
-            result = {"size": (M, K, N), "has_bias": has_bias, "quant_type": quant_type, "avg_time_ms": round(avg_time_ms, 4), "tflops": round(tflops, 4), "output_dtype": str(output_dtype)}
-            results.append(result)
-
-            print(f"    平均耗时: {avg_time_ms:.4f} ms | TFLOPS: {tflops:.4f}")
-    print("\n========== 调优汇总 ==========")
-    for res in results:
-        print(f"尺寸{res['size']} | {'带' if res['has_bias'] else '不带'}bias | 耗时{res['avg_time_ms']}ms | TFLOPS{res['tflops']}")
-
-    if save_results:
-        filename = f"{quant_type}_gemm_tune_results.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"\n调优结果已保存到: {filename}")
+            print(avg_time_ms)
 
     return results
 
@@ -166,7 +152,6 @@ def warmup_triton_mm(config):
             (75600, 13824, 5120),
             (75600, 13824, 13824),
             (75600, 5120, 13824),
-            (75600, 13824, 13824),
         ]
 
     test_sizes.extend(test_size)
@@ -180,3 +165,12 @@ def warmup_triton_mm(config):
 def warmup(config):
     warmup_attn(config)
     warmup_triton_mm(config)
+
+if __name__ == "__main__":
+    config = {
+        "resolution": "720p",
+        "resize_mode": "adaptive",
+        "self_attn_1_type": "sage_attn2",
+        "dit_quant_scheme": "int8-triton",
+    }
+    warmup(config)

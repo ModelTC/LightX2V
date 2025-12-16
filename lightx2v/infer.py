@@ -28,7 +28,7 @@ from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 def init_runner(config):
     torch.set_grad_enabled(False)
-    warmup(config)
+    # warmup(config)
     runner = RUNNER_REGISTER[config["model_cls"]](config)
     runner.init_modules()
     return runner

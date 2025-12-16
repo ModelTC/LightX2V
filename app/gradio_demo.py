@@ -1347,8 +1347,8 @@ def run_inference(
     config_graio = {
         "infer_steps": infer_steps,
         "target_video_length": num_frames,
-        "target_width": int(resolution.split("x")[0]),
-        "target_height": int(resolution.split("x")[1]),
+        "resolution": resolution,
+        "resize_mode": "adaptive",
         "self_attn_1_type": attention_type,
         "cross_attn_1_type": attention_type,
         "cross_attn_2_type": attention_type,
@@ -1522,25 +1522,7 @@ def auto_configure(resolution, num_frames=81):
             default_config["quant_op_val"] = dict(quant_op_choices)[op]
             break
 
-    if resolution in [
-        "1280x720",
-        "720x1280",
-        "1280x544",
-        "544x1280",
-        "1104x832",
-        "832x1104",
-        "960x960",
-    ]:
-        res = "720p"
-    elif resolution in [
-        "960x544",
-        "544x960",
-    ]:
-        res = "540p"
-    else:
-        res = "480p"
-
-    if res == "720p":
+    if  resolution in ["540p", "720p"]:
         gpu_rules = [
             (80, {}),
             (40, {"cpu_offload_val": False, "t5_cpu_offload_val": True, "vae_cpu_offload_val": True, "clip_cpu_offload_val": True}),
@@ -2574,27 +2556,10 @@ def main():
                             )
                         with gr.Column():
                             resolution = gr.Dropdown(
-                                choices=[
-                                    # 720p
-                                    ("1280x720 (16:9, 720p)", "1280x720"),
-                                    ("720x1280 (9:16, 720p)", "720x1280"),
-                                    ("1280x544 (21:9, 720p)", "1280x544"),
-                                    ("544x1280 (9:21, 720p)", "544x1280"),
-                                    ("1104x832 (4:3, 720p)", "1104x832"),
-                                    ("832x1104 (3:4, 720p)", "832x1104"),
-                                    ("960x960 (1:1, 720p)", "960x960"),
-                                    # 480p
-                                    ("960x544 (16:9, 540p)", "960x544"),
-                                    ("544x960 (9:16, 540p)", "544x960"),
-                                    ("832x480 (16:9, 480p)", "832x480"),
-                                    ("480x832 (9:16, 480p)", "480x832"),
-                                    ("832x624 (4:3, 480p)", "832x624"),
-                                    ("624x832 (3:4, 480p)", "624x832"),
-                                    ("720x720 (1:1, 480p)", "720x720"),
-                                    ("512x512 (1:1, 480p)", "512x512"),
-                                ],
-                                value="832x480",
+                                choices=["480p", "540p", "720p"],
+                                value="480p",
                                 label="Max Resolution",
+                                info="If you run out of memory (OOM), please lower the resolution",
                             )
 
                         with gr.Column(scale=9):

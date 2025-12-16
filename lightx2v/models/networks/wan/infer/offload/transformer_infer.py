@@ -6,7 +6,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
-
+from loguru import logger
 class WanOffloadTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
@@ -59,6 +59,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
 
     def infer_with_phases_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
+            logger.info(block_idx)
             self.block_idx = block_idx
             if self.lazy_load:
                 next_prefetch = (block_idx + 1) % len(blocks)

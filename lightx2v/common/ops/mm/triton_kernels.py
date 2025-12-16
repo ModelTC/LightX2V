@@ -87,15 +87,6 @@ def get_higher_dtype(a, b):
             return a
 
 
-@autotune(
-    configs=[
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-    ],
-    key=["M", "N", "K"],
-)
 @jit
 def int8_gemm_bias_kernel(
     A,
@@ -243,6 +234,13 @@ def int8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, outpu
         cdiv(M, META["BLOCK_M"]) * cdiv(N, META["BLOCK_N"]),
         META["SPLIT_K"],
     )  # noqa E731
+    # 固定一组块参数，避免 autotune 被移除后缺失 BLOCK_* 传参
+    BLOCK_M = 128
+    BLOCK_N = 128
+    BLOCK_K = 128
+    SPLIT_K = 1
+    even_k = K % BLOCK_K == 0
+
     int8_gemm_bias_kernel[grid](
         a,
         b,
@@ -261,23 +259,16 @@ def int8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, outpu
         c.stride(1),  #
         acc_dtype=acc_dtype,  #
         fuse_gelu=fuse_gelu,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
         GROUP_M=8,
-        EVEN_K=True,
+        SPLIT_K=SPLIT_K,
+        EVEN_K=even_k,
         AB_DTYPE=ab_dtype,
     )
     return c.view(*out_shape)
 
-
-@autotune(
-    configs=[
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 256, "SPLIT_K": 1}, num_stages=3, num_warps=16),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-    ],
-    key=["M", "N", "K"],
-)
 @jit
 def int8_gemm_kernel(
     A,
@@ -422,6 +413,12 @@ def int8_gemm_triton(a, b, a_scales, b_scales, fuse_gelu=False, output_dtype=Non
         cdiv(M, META["BLOCK_M"]) * cdiv(N, META["BLOCK_N"]),
         META["SPLIT_K"],
     )  # noqa E731
+    BLOCK_M = 128
+    BLOCK_N = 128
+    BLOCK_K = 128
+    SPLIT_K = 1
+    even_k = K % BLOCK_K == 0
+
     int8_gemm_kernel[grid](
         a,
         b,
@@ -439,23 +436,18 @@ def int8_gemm_triton(a, b, a_scales, b_scales, fuse_gelu=False, output_dtype=Non
         c.stride(1),  #
         acc_dtype=acc_dtype,  #
         fuse_gelu=fuse_gelu,
-        EVEN_K=True,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
         GROUP_M=8,
+        SPLIT_K=SPLIT_K,
+        EVEN_K=even_k,
         AB_DTYPE=ab_dtype,
     )
     return c.view(*out_shape)
 
 
-@autotune(
-    configs=[
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 256, "SPLIT_K": 1}, num_stages=3, num_warps=16),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-    ],
-    key=["M", "N", "K"],
-)
+
 @jit
 def fp8_gemm_bias_kernel(
     A,
@@ -568,7 +560,11 @@ def fp8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, output
     c = torch.empty((M, N), device=a.device, dtype=output_dtype)
 
     grid = lambda META: (cdiv(M, META["BLOCK_M"]) * cdiv(N, META["BLOCK_N"]), META["SPLIT_K"])  # noqa E731
-    even_k = K % 128 == 0
+    BLOCK_M = 128
+    BLOCK_N = 128
+    BLOCK_K = 128
+    SPLIT_K = 1
+    even_k = K % BLOCK_K == 0
 
     fp8_gemm_bias_kernel[grid](
         a2,
@@ -587,21 +583,16 @@ def fp8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, output
         c.stride(0),
         c.stride(1),
         fuse_gelu=fuse_gelu,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
         GROUP_M=8,
+        SPLIT_K=SPLIT_K,
         EVEN_K=even_k,
     )
     return c.view(*out_shape)
 
 
-@autotune(
-    configs=[
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 128, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=3, num_warps=8),
-        Config({"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1}, num_stages=4, num_warps=8),
-    ],
-    key=["M", "N", "K"],
-)
 @jit
 def fp8_gemm_kernel(
     A,
@@ -723,6 +714,12 @@ def fp8_gemm_triton(a, b, a_scales, b_scales, fuse_gelu=False, output_dtype=None
     )  # noqa E731
     even_k = K % 128 == 0
 
+    BLOCK_M = 128
+    BLOCK_N = 128
+    BLOCK_K = 128
+    SPLIT_K = 1
+    even_k = K % BLOCK_K == 0
+
     fp8_gemm_kernel[grid](
         a2,
         b2,
@@ -739,6 +736,10 @@ def fp8_gemm_triton(a, b, a_scales, b_scales, fuse_gelu=False, output_dtype=None
         c.stride(0),
         c.stride(1),
         fuse_gelu=fuse_gelu,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
+        SPLIT_K=SPLIT_K,
         GROUP_M=8,
         EVEN_K=even_k,
     )
