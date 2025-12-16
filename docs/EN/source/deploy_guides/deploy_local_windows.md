@@ -88,7 +88,7 @@ This guide will instruct you on how to download and use the portable version of 
 
 #### Download the Windows Portable Environment:
 
-- [Baidu Cloud Download](https://pan.baidu.com/s/1FVlicTXjmXJA1tAVvNCrBw?pwd=wfid), extraction code: wfid
+- [Baidu Cloud Download](https://pan.baidu.com/s/1SB6JYySKog-tfO_IZDPvtQ?pwd=yxht)
 
 The portable environment already packages all Python runtime dependencies, including the code and dependencies for ComfyUI and LightX2V. After downloading, simply extract to use.
 
