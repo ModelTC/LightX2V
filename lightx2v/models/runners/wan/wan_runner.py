@@ -337,23 +337,29 @@ class WanRunner(DefaultRunner):
         metrics_labels=["WanRunner"],
     )
     def run_vae_encoder(self, first_frame, last_frame=None):
-        h, w = first_frame.shape[2:]
-        aspect_ratio = h / w
-        max_area = self.config["target_height"] * self.config["target_width"]
+        print(self.config.get("resize_mode", None))
+        if self.config.get("resize_mode", None) is None:
+            h, w = first_frame.shape[2:]
+            aspect_ratio = h / w
+            max_area = self.config["target_height"] * self.config["target_width"]
 
-        # Calculate initial latent dimensions
-        ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
-        ori_latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+            # Calculate initial latent dimensions
+            ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
+            ori_latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
 
-        # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
-        if dist.is_initialized() and dist.get_world_size() > 1:
-            latent_h, latent_w, world_size_h, world_size_w = self._adjust_latent_for_grid_splitting(ori_latent_h, ori_latent_w, dist.get_world_size())
-            logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
+            # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
+            if dist.is_initialized() and dist.get_world_size() > 1:
+                latent_h, latent_w, world_size_h, world_size_w = self._adjust_latent_for_grid_splitting(ori_latent_h, ori_latent_w, dist.get_world_size())
+                logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
+            else:
+                latent_h, latent_w = ori_latent_h, ori_latent_w
+                world_size_h, world_size_w = None, None
+
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)  # Important: latent_shape is used to set the input_info
         else:
-            latent_h, latent_w = ori_latent_h, ori_latent_w
+            latent_shape = self.input_info.latent_shape
+            latent_h, latent_w = self.input_info.latent_shape[-2], self.input_info.latent_shape[-1]
             world_size_h, world_size_w = None, None
-
-        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)  # Important: latent_shape is used to set the input_info
 
         if self.config.get("changing_resolution", False):
             assert last_frame is None

@@ -1,5 +1,6 @@
 import gc
 
+import numpy as np
 import requests
 import torch
 import torch.distributed as dist
@@ -8,16 +9,49 @@ from PIL import Image
 from loguru import logger
 from requests.exceptions import RequestException
 
+from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, vae_to_comfyui_image
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-from .base_runner import BaseRunner
+
+def resize_image(img, target_height, target_width):
+    if target_height == 480 or target_width == 480:
+        resolution = "480p"
+    elif target_height == 540 or target_width == 540:
+        resolution = "540p"
+    elif target_height == 720 or target_width == 720:
+        resolution = "720p"
+    else:
+        resolution = "480p"
+        logger.warning(f"resolution is not '480p' '540p' '720p', using default 480p: {resolution}")
+    bucket_config = {
+        0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
+        1.500: np.array([[832, 480], [960, 544], [1280, 720]], dtype=np.int64),
+        1.000: np.array([[480, 480], [576, 576], [960, 960]], dtype=np.int64),
+    }
+    ori_height = img.shape[-2]
+    ori_weight = img.shape[-1]
+    ori_ratio = ori_height / ori_weight
+
+    aspect_ratios = np.array(np.array(list(bucket_config.keys())))
+    closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
+    closet_ratio = aspect_ratios[closet_aspect_idx]
+    if resolution == "480p":
+        target_h, target_w = bucket_config[closet_ratio][0]
+    elif resolution == "540p":
+        target_h, target_w = bucket_config[closet_ratio][1]
+    elif resolution == "720p":
+        target_h, target_w = bucket_config[closet_ratio][2]
+
+    cropped_img = isotropic_crop_resize(img, (target_h, target_w))
+    logger.info(f"resize_image: {img.shape} -> {cropped_img.shape}, target_h: {target_h}, target_w: {target_w}")
+    return cropped_img, target_h, target_w
 
 
 class DefaultRunner(BaseRunner):
@@ -210,11 +244,33 @@ class DefaultRunner(BaseRunner):
             img_ori = img_path
         else:
             img_ori = Image.open(img_path).convert("RGB")
+
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
         img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
         self.input_info.original_size = img_ori.size
+
+        if self.config.get("resize_mode", None) == "adaptive":
+            img, h, w = resize_image(img, self.config["target_height"], self.config["target_width"])
+            logger.info(f"resize_image target_h: {h}, target_w: {w}")
+            patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
+            patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
+
+            patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
+
+            latent_h = patched_h * self.config["patch_size"][1]
+            latent_w = patched_w * self.config["patch_size"][2]
+
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+            target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
+
+            logger.info(f"target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
+
+            img = torch.nn.functional.interpolate(img, size=(target_shape[0], target_shape[1]), mode="bicubic")
+            self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
+            self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
+
         return img, img_ori
 
     @ProfilingContext4DebugL2("Run Encoders")

@@ -14,8 +14,6 @@ import torchvision.transforms.functional as TF
 from PIL import Image, ImageCms, ImageOps
 from einops import rearrange
 from loguru import logger
-from torchvision.transforms import InterpolationMode
-from torchvision.transforms.functional import resize
 
 from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
@@ -29,74 +27,11 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
+from lightx2v.utils.utils import find_torch_model_path, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, vae_to_comfyui_image_inplace
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
-
-
-def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
-    assert sp_size > 0 and (sp_size & (sp_size - 1)) == 0, "sp_size must be a power of 2"
-
-    h_ratio, w_ratio = 1, 1
-    while sp_size != 1:
-        sp_size //= 2
-        if patched_h % 2 == 0:
-            patched_h //= 2
-            h_ratio *= 2
-        elif patched_w % 2 == 0:
-            patched_w //= 2
-            w_ratio *= 2
-        else:
-            if patched_h > patched_w:
-                patched_h //= 2
-                h_ratio *= 2
-            else:
-                patched_w //= 2
-                w_ratio *= 2
-    return patched_h * h_ratio, patched_w * w_ratio
-
-
-def get_crop_bbox(ori_h, ori_w, tgt_h, tgt_w):
-    tgt_ar = tgt_h / tgt_w
-    ori_ar = ori_h / ori_w
-    if abs(ori_ar - tgt_ar) < 0.01:
-        return 0, ori_h, 0, ori_w
-    if ori_ar > tgt_ar:
-        crop_h = int(tgt_ar * ori_w)
-        y0 = (ori_h - crop_h) // 2
-        y1 = y0 + crop_h
-        return y0, y1, 0, ori_w
-    else:
-        crop_w = int(ori_h / tgt_ar)
-        x0 = (ori_w - crop_w) // 2
-        x1 = x0 + crop_w
-        return 0, ori_h, x0, x1
-
-
-def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
-    """
-    frames: (C, H, W) or (T, C, H, W) or (N, C, H, W)
-    size: (H, W)
-    """
-    original_shape = frames.shape
-
-    if len(frames.shape) == 3:
-        frames = frames.unsqueeze(0)
-    elif len(frames.shape) == 4 and frames.shape[0] > 1:
-        pass
-
-    ori_h, ori_w = frames.shape[2:]
-    h, w = size
-    y0, y1, x0, x1 = get_crop_bbox(ori_h, ori_w, h, w)
-    cropped_frames = frames[:, :, y0:y1, x0:x1]
-    resized_frames = resize(cropped_frames, [h, w], InterpolationMode.BICUBIC, antialias=True)
-
-    if len(original_shape) == 3:
-        resized_frames = resized_frames.squeeze(0)
-
-    return resized_frames
 
 
 def fixed_shape_resize(img, target_height, target_width):

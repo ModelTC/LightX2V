@@ -12,6 +12,8 @@ import torch.distributed as dist
 import torchvision
 from einops import rearrange
 from loguru import logger
+from torchvision.transforms import InterpolationMode
+from torchvision.transforms.functional import resize
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -484,3 +486,87 @@ def best_output_size(w, h, dw, dh, expected_area):
         return ow1, oh1
     else:
         return ow2, oh2
+
+
+def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
+    assert sp_size > 0 and (sp_size & (sp_size - 1)) == 0, "sp_size must be a power of 2"
+
+    h_ratio, w_ratio = 1, 1
+    while sp_size != 1:
+        sp_size //= 2
+        if patched_h % 2 == 0:
+            patched_h //= 2
+            h_ratio *= 2
+        elif patched_w % 2 == 0:
+            patched_w //= 2
+            w_ratio *= 2
+        else:
+            if patched_h > patched_w:
+                patched_h //= 2
+                h_ratio *= 2
+            else:
+                patched_w //= 2
+                w_ratio *= 2
+    return patched_h * h_ratio, patched_w * w_ratio
+
+
+def get_crop_bbox(ori_h, ori_w, tgt_h, tgt_w):
+    tgt_ar = tgt_h / tgt_w
+    ori_ar = ori_h / ori_w
+    if abs(ori_ar - tgt_ar) < 0.01:
+        return 0, ori_h, 0, ori_w
+    if ori_ar > tgt_ar:
+        crop_h = int(tgt_ar * ori_w)
+        y0 = (ori_h - crop_h) // 2
+        y1 = y0 + crop_h
+        return y0, y1, 0, ori_w
+    else:
+        crop_w = int(ori_h / tgt_ar)
+        x0 = (ori_w - crop_w) // 2
+        x1 = x0 + crop_w
+        return 0, ori_h, x0, x1
+
+
+def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
+    """
+    frames: (C, H, W) or (T, C, H, W) or (N, C, H, W)
+    size: (H, W)
+    """
+    original_shape = frames.shape
+
+    if len(frames.shape) == 3:
+        frames = frames.unsqueeze(0)
+    elif len(frames.shape) == 4 and frames.shape[0] > 1:
+        pass
+
+    ori_h, ori_w = frames.shape[2:]
+    h, w = size
+    y0, y1, x0, x1 = get_crop_bbox(ori_h, ori_w, h, w)
+    cropped_frames = frames[:, :, y0:y1, x0:x1]
+    resized_frames = resize(cropped_frames, [h, w], InterpolationMode.BICUBIC, antialias=True)
+
+    if len(original_shape) == 3:
+        resized_frames = resized_frames.squeeze(0)
+
+    return resized_frames
+
+
+def fixed_shape_resize(img, target_height, target_width):
+    orig_height, orig_width = img.shape[-2:]
+
+    target_ratio = target_height / target_width
+    orig_ratio = orig_height / orig_width
+
+    if orig_ratio > target_ratio:
+        crop_width = orig_width
+        crop_height = int(crop_width * target_ratio)
+    else:
+        crop_height = orig_height
+        crop_width = int(crop_height / target_ratio)
+
+    cropped_img = TF.center_crop(img, [crop_height, crop_width])
+
+    resized_img = TF.resize(cropped_img, [target_height, target_width], antialias=True)
+
+    h, w = resized_img.shape[-2:]
+    return resized_img, h, w
