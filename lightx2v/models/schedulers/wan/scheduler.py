@@ -87,12 +87,16 @@ class WanScheduler(BaseScheduler):
             ],
             dim=-1,
         )
+        print(f"cos_sin1 : {cos_sin.shape}, {cos_sin.dtype}")
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
             cos_sin = cos_sin.reshape(seq_len, -1)
             # Extract cos and sin parts separately and concatenate
             cos_half = cos_sin.real.contiguous()
             sin_half = cos_sin.imag.contiguous()
+            print(f"cos_half : {cos_half.shape}, {cos_half.dtype}")
+            print(f"sin_half : {sin_half.shape}, {sin_half.dtype}")
             cos_sin = torch.cat([cos_half, sin_half], dim=-1)
+            print(f"cos_sin2 : {cos_sin.shape}, {cos_sin.dtype}")
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)

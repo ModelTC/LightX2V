@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 
 
 class QwenImagePostInfer:
@@ -11,12 +10,8 @@ class QwenImagePostInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def infer(self, weights, hidden_states, temb):
-        if self.zero_cond_t:
-            temb = temb.chunk(2, dim=0)[0]
-
-        temb1 = F.silu(temb)
-        temb1 = weights.norm_out_linear.apply(temb1)
+    def infer(self, weights, hidden_states, temb_txt_silu):
+        temb1 = weights.norm_out_linear.apply(temb_txt_silu)
         scale, shift = torch.chunk(temb1, 2, dim=1)
         hidden_states = weights.norm_out.apply(hidden_states) * (1 + scale) + shift
         output = weights.proj_out_linear.apply(hidden_states.squeeze(0))

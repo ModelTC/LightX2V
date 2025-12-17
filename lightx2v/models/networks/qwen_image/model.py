@@ -375,7 +375,7 @@ class QwenImageTransformerModel:
             block_weights=self.transformer_weights,
             pre_infer_out=pre_infer_out,
         )
-        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.embed0)
+        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.temb_txt_silu)
 
         if self.config["seq_parallel"]:
             noise_pred = self._seq_parallel_post_process(noise_pred)

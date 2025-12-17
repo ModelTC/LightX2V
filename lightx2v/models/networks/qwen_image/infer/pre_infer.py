@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 from lightx2v.utils.envs import *
 
@@ -10,6 +11,7 @@ class QwenImagePreInfer:
         self.config = config
         self.attention_kwargs = {}
         self.cpu_offload = config.get("cpu_offload", False)
+        self.zero_cond_t = config.get("zero_cond_t", False)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -29,4 +31,11 @@ class QwenImagePreInfer:
         else:
             image_rotary_emb = self.scheduler.negative_image_rotary_emb
 
-        return QwenPreInferModuleOutput(hidden_states=hidden_states.unsqueeze(0), encoder_hidden_states=encoder_hidden_states.unsqueeze(0), embed0=embed0, image_rotary_emb=image_rotary_emb)
+        temb_img_silu = F.silu(embed0)
+        if self.zero_cond_t:
+            temb_txt_silu = F.silu(torch.chunk(embed0, 2, dim=0)[0])
+        else:
+            temb_txt_silu = temb_img_silu
+        return QwenPreInferModuleOutput(
+            hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb_img_silu=temb_img_silu, temb_txt_silu=temb_txt_silu, image_rotary_emb=image_rotary_emb
+        )

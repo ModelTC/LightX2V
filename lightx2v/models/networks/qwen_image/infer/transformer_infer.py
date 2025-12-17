@@ -1,57 +1,13 @@
-from typing import Tuple, Union
-
 import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-
-def apply_rotary_emb_qwen(
-    x: torch.Tensor,
-    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]],
-    use_real: bool = True,
-    use_real_unbind_dim: int = -1,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
-    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
-    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
-    tensors contain rotary embeddings and are returned as real tensors.
-
-    Args:
-        x (`torch.Tensor`):
-            Query or key tensor to apply rotary embeddings. [B, S, H, D] xk (torch.Tensor): Key tensor to apply
-        freqs_cis (`Tuple[torch.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
-    """
-    if use_real:
-        cos, sin = freqs_cis  # [S, D]
-        cos = cos[None, None]
-        sin = sin[None, None]
-        cos, sin = cos.to(x.device), sin.to(x.device)
-
-        if use_real_unbind_dim == -1:
-            # Used for flux, cogvideox, hunyuan-dit
-            x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
-            x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
-        elif use_real_unbind_dim == -2:
-            # Used for Stable Audio, OmniGen, CogView4 and Cosmos
-            x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
-            x_rotated = torch.cat([-x_imag, x_real], dim=-1)
-        else:
-            raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
-
-        out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
-
-        return out
-    else:
-        x_rotated = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-        freqs_cis = freqs_cis.unsqueeze(1)
-        x_out = torch.view_as_real(x_rotated * freqs_cis).flatten(3)
-
-        return x_out.type_as(x)
+from .triton_ops import (
+    fuse_scale_shift_gate_select01_kernel,
+    fuse_scale_shift_kernel,
+)
+from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
 
 def calculate_q_k_len(q, k_lens):
@@ -74,6 +30,19 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         else:
             self.seq_p_group = None
         self.seq_p_fp8_comm = False
+        if self.config.get("modulate_type", "triton") == "triton":
+            self.modulate_func = fuse_scale_shift_kernel
+        else:
+            self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            self.apply_rope_func = apply_wan_rope_with_flashinfer
+        else:
+            self.apply_rope_func = apply_rotary_emb_qwen
+
+        self.img_qkv_len1 = None
+        self.cu_seqlens_qkv1 = None
+        self.img_qkv_len2 = None
+        self.cu_seqlens_qkv2 = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -91,50 +60,51 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             scale_0, scale_1 = scale[:actual_batch], scale[actual_batch:]
             gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
 
-            # index: [b, l] where b is actual batch size
-            # Expand to [b, l, 1] to match feature dimension
-            index_expanded = index.unsqueeze(-1)  # [b, l, 1]
-
-            # Expand chunks to [b, 1, d] then broadcast to [b, l, d]
-            shift_0_exp = shift_0.unsqueeze(1)  # [b, 1, d]
-            shift_1_exp = shift_1.unsqueeze(1)  # [b, 1, d]
-            scale_0_exp = scale_0.unsqueeze(1)
-            scale_1_exp = scale_1.unsqueeze(1)
-            gate_0_exp = gate_0.unsqueeze(1)
-            gate_1_exp = gate_1.unsqueeze(1)
-
-            # Use torch.where to select based on index
-            shift_result = torch.where(index_expanded == 0, shift_0_exp, shift_1_exp)
-            scale_result = torch.where(index_expanded == 0, scale_0_exp, scale_1_exp)
-            gate_result = torch.where(index_expanded == 0, gate_0_exp, gate_1_exp)
+            if self.config.get("modulate_type", "triton") == "triton":
+                x, gate_result = fuse_scale_shift_gate_select01_kernel(
+                    x,
+                    scale0=scale_0,
+                    shift0=shift_0,
+                    gate0=gate_0,
+                    scale1=scale_1,
+                    shift1=shift_1,
+                    gate1=gate_1,
+                    index=index,
+                )
+                return x.squeeze(0), gate_result.squeeze(0)
+            else:
+                mask = (index == 0).unsqueeze(-1)  # [b, l, 1]
+                shift_result = torch.where(mask, shift_0.unsqueeze(1), shift_1.unsqueeze(1))
+                scale_result = torch.where(mask, scale_0.unsqueeze(1), scale_1.unsqueeze(1))
+                gate_result = torch.where(mask, gate_0.unsqueeze(1), gate_1.unsqueeze(1))
+                return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
         else:
-            shift_result = shift.unsqueeze(1)
-            scale_result = scale.unsqueeze(1)
-            gate_result = gate.unsqueeze(1)
+            shift_result = shift.unsqueeze(0)
+            scale_result = scale.unsqueeze(0)
+            gate_result = gate.unsqueeze(0)
+            return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
 
-        return x * (1 + scale_result) + shift_result, gate_result
-
-    def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb, attn_type):
-        seq_txt = encoder_hidden_states.shape[1]
+    def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb):
+        seq_txt = encoder_hidden_states.shape[0]
 
         # Compute QKV for image stream (sample projections)
-        img_query = block_weight.attn.to_q.apply(hidden_states[0])
-        img_key = block_weight.attn.to_k.apply(hidden_states[0])
-        img_value = block_weight.attn.to_v.apply(hidden_states[0])
+        img_query = block_weight.attn.to_q.apply(hidden_states)
+        img_key = block_weight.attn.to_k.apply(hidden_states)
+        img_value = block_weight.attn.to_v.apply(hidden_states)
 
         # Compute QKV for text stream (context projections)
-        txt_query = block_weight.attn.add_q_proj.apply(encoder_hidden_states[0])
-        txt_key = block_weight.attn.add_k_proj.apply(encoder_hidden_states[0])
-        txt_value = block_weight.attn.add_v_proj.apply(encoder_hidden_states[0])
+        txt_query = block_weight.attn.add_q_proj.apply(encoder_hidden_states)
+        txt_key = block_weight.attn.add_k_proj.apply(encoder_hidden_states)
+        txt_value = block_weight.attn.add_v_proj.apply(encoder_hidden_states)
 
         # Reshape for multi-head attention
         img_query = img_query.unflatten(-1, (block_weight.attn.heads, -1))
         img_key = img_key.unflatten(-1, (block_weight.attn.heads, -1))
-        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1)).unsqueeze(0)
+        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1))
 
         txt_query = txt_query.unflatten(-1, (block_weight.attn.heads, -1))
         txt_key = txt_key.unflatten(-1, (block_weight.attn.heads, -1))
-        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1)).unsqueeze(0)
+        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1))
 
         # Apply QK normalization
         if block_weight.attn.norm_q is not None:
@@ -147,56 +117,43 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             txt_key = block_weight.attn.norm_added_k.apply(txt_key)
 
         # Apply RoPE
-        if image_rotary_emb is not None:
-            img_freqs, txt_freqs1 = image_rotary_emb
-            img_query = apply_rotary_emb_qwen(img_query.unsqueeze(0), img_freqs, use_real=False)
-            img_key = apply_rotary_emb_qwen(img_key.unsqueeze(0), img_freqs, use_real=False)
-            txt_query = apply_rotary_emb_qwen(txt_query.unsqueeze(0), txt_freqs1, use_real=False)
-            txt_key = apply_rotary_emb_qwen(txt_key.unsqueeze(0), txt_freqs1, use_real=False)
+        img_freqs, txt_freqs = image_rotary_emb
+        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
 
         # Concatenate for joint attention
         # Order: [text, image]
-        joint_query = torch.cat([txt_query, img_query], dim=1)
-        joint_key = torch.cat([txt_key, img_key], dim=1)
-        joint_value = torch.cat([txt_value, img_value], dim=1)
+        joint_query = torch.cat([txt_query, img_query], dim=0)
+        joint_key = torch.cat([txt_key, img_key], dim=0)
+        joint_value = torch.cat([txt_value, img_value], dim=0)
 
-        # Compute joint attention
-        if attn_type == "torch_sdpa":
-            joint_hidden_states = block_weight.attn.calculate.apply(q=joint_query, k=joint_key, v=joint_value)
+        img_qkv_len = joint_query.shape[0]
+        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
 
+        if self.config["seq_parallel"]:
+            joint_hidden_states = block_weight.attn.calculate_parallel.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                slice_qkv_len=seq_txt,
+                cu_seqlens_qkv=cu_seqlens_qkv,
+                attention_module=block_weight.attn.calculate,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                model_cls=self.config["model_cls"],
+                img_first=False,
+            )
         else:
-            joint_query = joint_query.squeeze(0)
-            joint_key = joint_key.squeeze(0)
-            joint_value = joint_value.squeeze(0)
-
-            k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
-            cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
-
-            txt_qkv_len = txt_query.size(1)
-            if self.config["seq_parallel"]:
-                joint_hidden_states = block_weight.attn.calculate_parallel.apply(
-                    q=joint_query,
-                    k=joint_key,
-                    v=joint_value,
-                    slice_qkv_len=txt_qkv_len,
-                    cu_seqlens_qkv=cu_seqlens_q,
-                    attention_module=block_weight.attn.calculate,
-                    seq_p_group=self.seq_p_group,
-                    use_fp8_comm=self.seq_p_fp8_comm,
-                    model_cls=self.config["model_cls"],
-                    img_first=False,
-                )
-            else:
-                joint_hidden_states = block_weight.attn.calculate.apply(
-                    q=joint_query,
-                    k=joint_key,
-                    v=joint_value,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_kv=cu_seqlens_k,
-                    max_seqlen_q=joint_query.size(0),
-                    max_seqlen_kv=joint_key.size(0),
-                    model_cls="qwen_image",
-                )
+            joint_hidden_states = block_weight.attn.calculate.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                cu_seqlens_q=cu_seqlens_qkv,
+                cu_seqlens_kv=cu_seqlens_qkv,
+                max_seqlen_q=img_qkv_len,
+                max_seqlen_kv=img_qkv_len,
+                model_cls="qwen_image",
+            )
 
         # Split attention outputs back
         txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
@@ -208,12 +165,19 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return img_attn_output, txt_attn_output
 
-    def infer_block(self, block_weight, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index=None):
+    def infer_block(
+        self,
+        block_weight,
+        hidden_states,
+        encoder_hidden_states,
+        temb_img_silu,
+        temb_txt_silu,
+        image_rotary_emb,
+        modulate_index=None,
+    ):
         # Get modulation parameters for both streams
-        img_mod_params = block_weight.img_mod.apply(F.silu(temb))
-        if self.zero_cond_t:
-            temb = torch.chunk(temb, 2, dim=0)[0]
-        txt_mod_params = block_weight.txt_mod.apply(F.silu(temb))
+        img_mod_params = block_weight.img_mod.apply(temb_img_silu)
+        txt_mod_params = block_weight.txt_mod.apply(temb_txt_silu)
 
         # Split modulation parameters for norm1 and norm2
         img_mod1, img_mod2 = img_mod_params.chunk(2, dim=-1)
@@ -238,7 +202,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             hidden_states=img_modulated,  # Image stream (will be processed as "sample")
             encoder_hidden_states=txt_modulated,  # Text stream (will be processed as "context")
             image_rotary_emb=image_rotary_emb,
-            attn_type=self.attn_type,
         )
 
         # QwenAttnProcessor2_0 returns (img_output, txt_output) when encoder_hidden_states is provided
@@ -270,18 +233,24 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return encoder_hidden_states, hidden_states
 
-    def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index):
+    def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, image_rotary_emb, modulate_index):
         for idx in range(len(block_weights.blocks)):
-            block_weight = block_weights.blocks[idx]
             encoder_hidden_states, hidden_states = self.infer_block(
-                block_weight=block_weight, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb, modulate_index=modulate_index
+                block_weight=block_weights.blocks[idx],
+                hidden_states=hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                temb_img_silu=temb_img_silu,
+                temb_txt_silu=temb_txt_silu,
+                image_rotary_emb=image_rotary_emb,
+                modulate_index=modulate_index,
             )
         return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
-        embed0 = pre_infer_out.embed0
+        temb_img_silu = pre_infer_out.temb_img_silu
+        temb_txt_silu = pre_infer_out.temb_txt_silu
         image_rotary_emb = pre_infer_out.image_rotary_emb
-        hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, embed0, image_rotary_emb, self.scheduler.modulate_index)
+        hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, image_rotary_emb, self.scheduler.modulate_index)
         return hidden_states
