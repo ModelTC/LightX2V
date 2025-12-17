@@ -70,15 +70,14 @@ def apply_wan_rope_with_flashinfer(
 
     positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
 
-    if apply_rope_with_cos_sin_cache_inplace:
-        apply_rope_with_cos_sin_cache_inplace(
-            positions=positions,
-            query=query,
-            key=key,
-            head_size=D,
-            cos_sin_cache=cos_sin_cache,
-            is_neox=False,
-        )
+    apply_rope_with_cos_sin_cache_inplace(
+        positions=positions,
+        query=query,
+        key=key,
+        head_size=D,
+        cos_sin_cache=cos_sin_cache,
+        is_neox=False,
+    )
 
     xq_out = query.view(L, H, D)
     xk_out = key.view(L, H, D)

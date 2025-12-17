@@ -1,57 +1,9 @@
-from typing import Tuple, Union
-
 import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-
-def apply_rotary_emb_qwen(
-    x: torch.Tensor,
-    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]],
-    use_real: bool = True,
-    use_real_unbind_dim: int = -1,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
-    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
-    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
-    tensors contain rotary embeddings and are returned as real tensors.
-
-    Args:
-        x (`torch.Tensor`):
-            Query or key tensor to apply rotary embeddings. [B, S, H, D] xk (torch.Tensor): Key tensor to apply
-        freqs_cis (`Tuple[torch.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
-    """
-    if use_real:
-        cos, sin = freqs_cis  # [S, D]
-        cos = cos[None, None]
-        sin = sin[None, None]
-        cos, sin = cos.to(x.device), sin.to(x.device)
-
-        if use_real_unbind_dim == -1:
-            # Used for flux, cogvideox, hunyuan-dit
-            x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
-            x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
-        elif use_real_unbind_dim == -2:
-            # Used for Stable Audio, OmniGen, CogView4 and Cosmos
-            x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
-            x_rotated = torch.cat([-x_imag, x_real], dim=-1)
-        else:
-            raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
-
-        out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
-
-        return out
-    else:
-        x_rotated = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-        freqs_cis = freqs_cis.unsqueeze(1)
-        x_out = torch.view_as_real(x_rotated * freqs_cis).flatten(3)
-
-        return x_out.type_as(x)
+from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
 
 def calculate_q_k_len(q, k_lens):
@@ -147,17 +99,20 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             txt_key = block_weight.attn.norm_added_k.apply(txt_key)
 
         # Apply RoPE
-        if image_rotary_emb is not None:
-            img_freqs, txt_freqs1 = image_rotary_emb
-            img_query = apply_rotary_emb_qwen(img_query.unsqueeze(0), img_freqs, use_real=False)
-            img_key = apply_rotary_emb_qwen(img_key.unsqueeze(0), img_freqs, use_real=False)
-            txt_query = apply_rotary_emb_qwen(txt_query.unsqueeze(0), txt_freqs1, use_real=False)
-            txt_key = apply_rotary_emb_qwen(txt_key.unsqueeze(0), txt_freqs1, use_real=False)
+        img_freqs, txt_freqs = image_rotary_emb
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            img_query, img_key = apply_wan_rope_with_flashinfer(img_query, img_key, img_freqs)
+            txt_query, txt_key = apply_wan_rope_with_flashinfer(txt_query, txt_key, txt_freqs)
+        else:
+            img_query = apply_rotary_emb_qwen(img_query.unsqueeze(0), img_freqs)
+            img_key = apply_rotary_emb_qwen(img_key.unsqueeze(0), img_freqs)
+            txt_query = apply_rotary_emb_qwen(txt_query.unsqueeze(0), txt_freqs)
+            txt_key = apply_rotary_emb_qwen(txt_key.unsqueeze(0), txt_freqs)
 
         # Concatenate for joint attention
         # Order: [text, image]
-        joint_query = torch.cat([txt_query, img_query], dim=1)
-        joint_key = torch.cat([txt_key, img_key], dim=1)
+        joint_query = torch.cat([txt_query, img_query], dim=0).unsqueeze(0)
+        joint_key = torch.cat([txt_key, img_key], dim=0).unsqueeze(0)
         joint_value = torch.cat([txt_value, img_value], dim=1)
 
         # Compute joint attention
