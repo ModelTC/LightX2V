@@ -165,12 +165,19 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return img_attn_output, txt_attn_output
 
-    def infer_block(self, block_weight, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index=None):
+    def infer_block(
+        self,
+        block_weight,
+        hidden_states,
+        encoder_hidden_states,
+        temb_img_silu,
+        temb_txt_silu,
+        image_rotary_emb,
+        modulate_index=None,
+    ):
         # Get modulation parameters for both streams
-        img_mod_params = block_weight.img_mod.apply(F.silu(temb))
-        if self.zero_cond_t:
-            temb = torch.chunk(temb, 2, dim=0)[0]
-        txt_mod_params = block_weight.txt_mod.apply(F.silu(temb))
+        img_mod_params = block_weight.img_mod.apply(temb_img_silu)
+        txt_mod_params = block_weight.txt_mod.apply(temb_txt_silu)
 
         # Split modulation parameters for norm1 and norm2
         img_mod1, img_mod2 = img_mod_params.chunk(2, dim=-1)
@@ -226,19 +233,24 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return encoder_hidden_states, hidden_states
 
-    def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index):
-        encoder_hidden_states, hidden_states = encoder_hidden_states.squeeze(0), hidden_states.squeeze(0)
+    def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, image_rotary_emb, modulate_index):
         for idx in range(len(block_weights.blocks)):
-            block_weight = block_weights.blocks[idx]
             encoder_hidden_states, hidden_states = self.infer_block(
-                block_weight=block_weight, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, image_rotary_emb=image_rotary_emb, modulate_index=modulate_index
+                block_weight=block_weights.blocks[idx],
+                hidden_states=hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                temb_img_silu=temb_img_silu,
+                temb_txt_silu=temb_txt_silu,
+                image_rotary_emb=image_rotary_emb,
+                modulate_index=modulate_index,
             )
         return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
-        embed0 = pre_infer_out.embed0
+        temb_img_silu = pre_infer_out.temb_img_silu
+        temb_txt_silu = pre_infer_out.temb_txt_silu
         image_rotary_emb = pre_infer_out.image_rotary_emb
-        hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, embed0, image_rotary_emb, self.scheduler.modulate_index)
+        hidden_states = self.infer_func(block_weights, hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, image_rotary_emb, self.scheduler.modulate_index)
         return hidden_states

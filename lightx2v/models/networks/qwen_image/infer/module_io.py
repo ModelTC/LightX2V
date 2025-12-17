@@ -7,5 +7,6 @@ import torch
 class QwenPreInferModuleOutput:
     hidden_states: torch.Tensor
     encoder_hidden_states: torch.Tensor
-    embed0: torch.Tensor
+    temb_img_silu: torch.Tensor
+    temb_txt_silu: torch.Tensor
     image_rotary_emb: torch.Tensor
