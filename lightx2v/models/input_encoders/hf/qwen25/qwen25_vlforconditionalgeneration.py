@@ -110,6 +110,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
                 base_img_prompt = ""
                 img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
                 for i, image in enumerate(image_list):
+                    image = image[0]
                     base_img_prompt += img_prompt_template.format(i + 1)
                     condition_image, vae_image, condition_image_info, vae_image_info = self.preprocess_image(image)
                     condition_image_list.append(condition_image)
@@ -119,6 +120,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             else:
                 base_img_prompt = "<|vision_start|><|image_pad|><|vision_end|>"
                 for i, image in enumerate(image_list):
+                    image = image[0]
                     condition_image, vae_image, condition_image_info, vae_image_info = self.preprocess_image(image)
                     condition_image_list.append(condition_image)
                     vae_image_list.append(vae_image)
@@ -145,9 +147,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             )
 
             image_info = {
-                "condition_image_list": condition_image_list,
                 "vae_image_list": vae_image_list,
-                "condition_image_info_list": condition_image_info_list,
                 "vae_image_info_list": vae_image_info_list,
             }
 

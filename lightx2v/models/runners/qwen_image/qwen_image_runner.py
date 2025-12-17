@@ -7,6 +7,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
+from lightx2v.models.input_encoders.hf.qwen25.qwen25_lightllm import Qwen25_LightllmEncoder
 from lightx2v.models.networks.qwen_image.lora_adapter import QwenImageLoraWrapper
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -59,7 +60,10 @@ class QwenImageRunner(DefaultRunner):
         return model
 
     def load_text_encoder(self):
-        text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
+        if not self.config.get("use_lightllm_encoder", False):
+            text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
+        else:
+            text_encoder = Qwen25_LightllmEncoder(self.config)
         text_encoders = [text_encoder]
         return text_encoders
 
@@ -123,7 +127,7 @@ class QwenImageRunner(DefaultRunner):
         images_list = []
         for image_path in image_paths_list:
             _, image = self.read_image_input(image_path)
-            images_list.append(image)
+            images_list.append((image, image_path))
 
         prompt = self.input_info.prompt
         text_encoder_output = self.run_text_encoder(prompt, images_list, neg_prompt=self.input_info.negative_prompt)
