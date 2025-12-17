@@ -123,17 +123,17 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         joint_key = joint_key.squeeze(0)
         joint_value = joint_value.squeeze(0)
 
-        k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
-        cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
+        img_qkv_len = joint_query.shape[0]
+        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
 
-        txt_qkv_len = txt_query.size(1)
         if self.config["seq_parallel"]:
+            txt_qkv_len = txt_query.shape(1)
             joint_hidden_states = block_weight.attn.calculate_parallel.apply(
                 q=joint_query,
                 k=joint_key,
                 v=joint_value,
                 slice_qkv_len=txt_qkv_len,
-                cu_seqlens_qkv=cu_seqlens_q,
+                cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=block_weight.attn.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
@@ -145,10 +145,10 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 q=joint_query,
                 k=joint_key,
                 v=joint_value,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
-                max_seqlen_q=joint_query.size(0),
-                max_seqlen_kv=joint_key.size(0),
+                cu_seqlens_q=cu_seqlens_qkv,
+                cu_seqlens_kv=cu_seqlens_qkv,
+                max_seqlen_q=img_qkv_len,
+                max_seqlen_kv=img_qkv_len,
                 model_cls="qwen_image",
             )
 
