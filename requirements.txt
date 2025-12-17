@@ -39,6 +39,4 @@ decord
 zmq
 jsonschema
 pymongo
-prometheus_client
-gguf
 modelscope
