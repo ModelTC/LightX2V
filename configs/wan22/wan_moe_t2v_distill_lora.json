@@ -24,6 +24,16 @@
         500,
         250
     ],
-    "high_noise_original_ckpt": "Wan2.2-T2V-A14B/distill_models/high_noise_model/distill_model.safetensors",
-    "low_noise_original_ckpt": "Wan2.2-T2V-A14B/distill_models/low_noise_model/distill_model.safetensors"
+    "lora_configs": [
+        {
+            "name": "high_noise_model",
+            "path": "Wan2.2-T2V-A14B/loras/wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors",
+            "strength": 1.0
+        },
+        {
+            "name": "low_noise_model",
+            "path": "Wan2.2-T2V-A14B/loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors",
+            "strength": 1.0
+        }
+    ]
 }
