@@ -131,6 +131,7 @@ class WanRunner(DefaultRunner):
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,
             load_from_rank0=self.config.get("load_from_rank0", False),
+            lazy_load=self.config.get("t5_lazy_load", False),
         )
         text_encoders = [text_encoder]
         return text_encoders

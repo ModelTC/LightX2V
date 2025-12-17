@@ -1025,6 +1025,36 @@ def is_sm_greater_than_90():
     return (major, minor) > (9, 0)
 
 
+def get_gpu_generation():
+    """Detect GPU generation, returns '40' for 40-series, '30' for 30-series, None for others"""
+    if not torch.cuda.is_available():
+        return None
+    try:
+        import re
+
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_name_lower = gpu_name.lower()
+
+        # Detect 40-series GPUs (RTX 40xx, RTX 4060, RTX 4070, RTX 4080, RTX 4090, etc.)
+        if any(keyword in gpu_name_lower for keyword in ["rtx 40", "rtx40", "geforce rtx 40"]):
+            # Further check if it's a 40xx series
+            match = re.search(r"rtx\s*40\d+|40\d+", gpu_name_lower)
+            if match:
+                return "40"
+
+        # Detect 30-series GPUs (RTX 30xx, RTX 3060, RTX 3070, RTX 3080, RTX 3090, etc.)
+        if any(keyword in gpu_name_lower for keyword in ["rtx 30", "rtx30", "geforce rtx 30"]):
+            # Further check if it's a 30xx series
+            match = re.search(r"rtx\s*30\d+|30\d+", gpu_name_lower)
+            if match:
+                return "30"
+
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to detect GPU generation: {e}")
+        return None
+
+
 def get_quantization_options(model_path):
     """Dynamically get quantization options based on model_path"""
     import os
@@ -1347,8 +1377,8 @@ def run_inference(
     config_graio = {
         "infer_steps": infer_steps,
         "target_video_length": num_frames,
-        "target_width": int(resolution.split("x")[0]),
-        "target_height": int(resolution.split("x")[1]),
+        "resolution": resolution,
+        "resize_mode": "adaptive",
         "self_attn_1_type": attention_type,
         "cross_attn_1_type": attention_type,
         "cross_attn_2_type": attention_type,
@@ -1510,7 +1540,17 @@ def auto_configure(resolution, num_frames=81):
                 if "sage_attn3" not in attn_priority:
                     attn_priority.insert(0, "sage_attn3")
 
-    quant_op_priority = ["triton", "q8f", "vllm", "sgl", "torch"]
+    # Adjust quant_op priority based on GPU generation
+    gpu_gen = get_gpu_generation()
+    if gpu_gen == "40":
+        # 40-series GPUs: q8f first
+        quant_op_priority = ["q8f", "triton", "vllm", "sgl", "torch"]
+    elif gpu_gen == "30":
+        # 30-series GPUs: vllm first
+        quant_op_priority = ["vllm", "triton", "q8f", "sgl", "torch"]
+    else:
+        # Other cases: keep original order
+        quant_op_priority = ["triton", "q8f", "vllm", "sgl", "torch"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -1522,25 +1562,7 @@ def auto_configure(resolution, num_frames=81):
             default_config["quant_op_val"] = dict(quant_op_choices)[op]
             break
 
-    if resolution in [
-        "1280x720",
-        "720x1280",
-        "1280x544",
-        "544x1280",
-        "1104x832",
-        "832x1104",
-        "960x960",
-    ]:
-        res = "720p"
-    elif resolution in [
-        "960x544",
-        "544x960",
-    ]:
-        res = "540p"
-    else:
-        res = "480p"
-
-    if res == "720p":
+    if resolution in ["540p", "720p"]:
         gpu_rules = [
             (80, {}),
             (40, {"cpu_offload_val": False, "t5_cpu_offload_val": True, "vae_cpu_offload_val": True, "clip_cpu_offload_val": True}),
@@ -1570,6 +1592,20 @@ def auto_configure(resolution, num_frames=81):
             ),
             (
                 8,
+                {
+                    "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
+                    "rope_chunk_val": True,
+                    "rope_chunk_size_val": 100,
+                    "clean_cuda_cache_val": True,
+                },
+            ),
+            (
+                -1,
                 {
                     "cpu_offload_val": True,
                     "t5_cpu_offload_val": True,
@@ -1621,6 +1657,17 @@ def auto_configure(resolution, num_frames=81):
                     "offload_granularity_val": "phase",
                 },
             ),
+            (
+                -1,
+                {
+                    "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
+                },
+            ),
         ]
 
     cpu_rules = [
@@ -1628,8 +1675,16 @@ def auto_configure(resolution, num_frames=81):
         (64, {}),
         (32, {"unload_modules_val": True}),
         (
-            8,
+            16,
             {
+                "lazy_load_val": True,
+                "unload_modules_val": True,
+            },
+        ),
+        (
+            -1,
+            {
+                "t5_lazy_load": True,
                 "lazy_load_val": True,
                 "unload_modules_val": True,
             },
@@ -2541,27 +2596,10 @@ def main():
                             )
                         with gr.Column():
                             resolution = gr.Dropdown(
-                                choices=[
-                                    # 720p
-                                    ("1280x720 (16:9, 720p)", "1280x720"),
-                                    ("720x1280 (9:16, 720p)", "720x1280"),
-                                    ("1280x544 (21:9, 720p)", "1280x544"),
-                                    ("544x1280 (9:21, 720p)", "544x1280"),
-                                    ("1104x832 (4:3, 720p)", "1104x832"),
-                                    ("832x1104 (3:4, 720p)", "832x1104"),
-                                    ("960x960 (1:1, 720p)", "960x960"),
-                                    # 480p
-                                    ("960x544 (16:9, 540p)", "960x544"),
-                                    ("544x960 (9:16, 540p)", "544x960"),
-                                    ("832x480 (16:9, 480p)", "832x480"),
-                                    ("480x832 (9:16, 480p)", "480x832"),
-                                    ("832x624 (4:3, 480p)", "832x624"),
-                                    ("624x832 (3:4, 480p)", "624x832"),
-                                    ("720x720 (1:1, 480p)", "720x720"),
-                                    ("512x512 (1:1, 480p)", "512x512"),
-                                ],
-                                value="832x480",
+                                choices=["480p", "540p", "720p"],
+                                value="480p",
                                 label="Max Resolution",
+                                info="If you run out of memory (OOM), please lower the resolution",
                             )
 
                         with gr.Column(scale=9):

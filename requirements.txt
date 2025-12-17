@@ -39,3 +39,4 @@ decord
 zmq
 jsonschema
 pymongo
+modelscope

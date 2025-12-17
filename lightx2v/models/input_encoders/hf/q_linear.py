@@ -413,7 +413,10 @@ class Q8FQuantLinearInt8(nn.Module):
             self.register_buffer("bias", None)
 
     def act_quant_func(self, x):
-        input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
+        if ops is not None:
+            input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
+        else:
+            input_tensor_quant, input_tensor_scale = int8_quantize_triton(x)
         return input_tensor_quant, input_tensor_scale
 
     def forward(self, x):
@@ -459,7 +462,10 @@ class Q8FQuantLinearFp8(nn.Module):
             self.register_buffer("bias", None)
 
     def act_quant_func(self, x):
-        input_tensor_quant, input_tensor_scale = ops.scaled_fp8_quant(x.squeeze(0), None, scale_ub=None, use_per_token_if_dynamic=True)
+        if ops is not None:
+            input_tensor_quant, input_tensor_scale = ops.scaled_fp8_quant(x.squeeze(0), None, scale_ub=None, use_per_token_if_dynamic=True)
+        else:
+            input_tensor_quant, input_tensor_scale = fp8_quantize_triton(x)
         return input_tensor_quant, input_tensor_scale
 
     def forward(self, x):

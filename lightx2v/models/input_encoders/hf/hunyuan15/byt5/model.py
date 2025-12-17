@@ -6,7 +6,12 @@ import re
 import torch
 import torch.nn as nn
 from safetensors import safe_open
-from transformers import AutoTokenizer, T5ForConditionalGeneration
+from transformers import AutoTokenizer
+
+try:
+    from transformers import T5ForConditionalGeneration
+except ImportError:
+    T5ForConditionalGeneration = None
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
