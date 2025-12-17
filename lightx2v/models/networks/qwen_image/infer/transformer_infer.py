@@ -36,6 +36,11 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         else:
             self.apply_rope_func = apply_rotary_emb_qwen
 
+        self.img_qkv_len1 = None
+        self.cu_seqlens_qkv1 = None
+        self.img_qkv_len2 = None
+        self.cu_seqlens_qkv2 = None
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
@@ -73,29 +78,29 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             scale_result = scale.unsqueeze(1)
             gate_result = gate.unsqueeze(1)
 
-        return self.modulate_func(x, scale_result, shift_result), gate_result
+        return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
 
     def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb):
-        seq_txt = encoder_hidden_states.shape[1]
+        seq_txt = encoder_hidden_states.shape[0]
 
         # Compute QKV for image stream (sample projections)
-        img_query = block_weight.attn.to_q.apply(hidden_states[0])
-        img_key = block_weight.attn.to_k.apply(hidden_states[0])
-        img_value = block_weight.attn.to_v.apply(hidden_states[0])
+        img_query = block_weight.attn.to_q.apply(hidden_states)
+        img_key = block_weight.attn.to_k.apply(hidden_states)
+        img_value = block_weight.attn.to_v.apply(hidden_states)
 
         # Compute QKV for text stream (context projections)
-        txt_query = block_weight.attn.add_q_proj.apply(encoder_hidden_states[0])
-        txt_key = block_weight.attn.add_k_proj.apply(encoder_hidden_states[0])
-        txt_value = block_weight.attn.add_v_proj.apply(encoder_hidden_states[0])
+        txt_query = block_weight.attn.add_q_proj.apply(encoder_hidden_states)
+        txt_key = block_weight.attn.add_k_proj.apply(encoder_hidden_states)
+        txt_value = block_weight.attn.add_v_proj.apply(encoder_hidden_states)
 
         # Reshape for multi-head attention
         img_query = img_query.unflatten(-1, (block_weight.attn.heads, -1))
         img_key = img_key.unflatten(-1, (block_weight.attn.heads, -1))
-        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1)).unsqueeze(0)
+        img_value = img_value.unflatten(-1, (block_weight.attn.heads, -1))
 
         txt_query = txt_query.unflatten(-1, (block_weight.attn.heads, -1))
         txt_key = txt_key.unflatten(-1, (block_weight.attn.heads, -1))
-        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1)).unsqueeze(0)
+        txt_value = txt_value.unflatten(-1, (block_weight.attn.heads, -1))
 
         # Apply QK normalization
         if block_weight.attn.norm_q is not None:
@@ -114,25 +119,19 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         # Concatenate for joint attention
         # Order: [text, image]
-        joint_query = torch.cat([txt_query, img_query], dim=0).unsqueeze(0)
-        joint_key = torch.cat([txt_key, img_key], dim=0).unsqueeze(0)
-        joint_value = torch.cat([txt_value, img_value], dim=1)
-
-        # Compute joint attention
-        joint_query = joint_query.squeeze(0)
-        joint_key = joint_key.squeeze(0)
-        joint_value = joint_value.squeeze(0)
+        joint_query = torch.cat([txt_query, img_query], dim=0)
+        joint_key = torch.cat([txt_key, img_key], dim=0)
+        joint_value = torch.cat([txt_value, img_value], dim=0)
 
         img_qkv_len = joint_query.shape[0]
         cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
 
         if self.config["seq_parallel"]:
-            txt_qkv_len = txt_query.shape(1)
             joint_hidden_states = block_weight.attn.calculate_parallel.apply(
                 q=joint_query,
                 k=joint_key,
                 v=joint_value,
-                slice_qkv_len=txt_qkv_len,
+                slice_qkv_len=seq_txt,
                 cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=block_weight.attn.calculate,
                 seq_p_group=self.seq_p_group,
@@ -174,11 +173,11 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         txt_mod1, txt_mod2 = txt_mod_params.chunk(2, dim=-1)
 
         # Process image stream - norm1 + modulation
-        img_normed = block_weight.img_norm1.apply(hidden_states.squeeze(0))
+        img_normed = block_weight.img_norm1.apply(hidden_states)
         img_modulated, img_gate1 = self._modulate(img_normed, img_mod1, modulate_index)
 
         # Process text stream - norm1 + modulation
-        txt_normed = block_weight.txt_norm1.apply(encoder_hidden_states.view(-1, encoder_hidden_states.shape[-1]))
+        txt_normed = block_weight.txt_norm1.apply(encoder_hidden_states)
         txt_modulated, txt_gate1 = self._modulate(txt_normed, txt_mod1)
 
         # Use QwenAttnProcessor2_0 for joint attention computation
@@ -202,14 +201,14 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states = encoder_hidden_states + txt_gate1 * txt_attn_output
 
         # Process image stream - norm2 + MLP
-        img_normed2 = block_weight.img_norm2.apply(hidden_states.squeeze(0))
+        img_normed2 = block_weight.img_norm2.apply(hidden_states)
         img_modulated2, img_gate2 = self._modulate(img_normed2, img_mod2, modulate_index)
         img_mlp_output = F.gelu(block_weight.img_mlp.mlp_0.apply(img_modulated2.squeeze(0)), approximate="tanh")
         img_mlp_output = block_weight.img_mlp.mlp_2.apply(img_mlp_output)
         hidden_states = hidden_states + img_gate2 * img_mlp_output
 
         # Process text stream - norm2 + MLP
-        txt_normed2 = block_weight.txt_norm2.apply(encoder_hidden_states.squeeze(0))
+        txt_normed2 = block_weight.txt_norm2.apply(encoder_hidden_states)
         txt_modulated2, txt_gate2 = self._modulate(txt_normed2, txt_mod2)
         txt_mlp_output = F.gelu(block_weight.txt_mlp.mlp_0.apply(txt_modulated2.squeeze(0)), approximate="tanh")
         txt_mlp_output = block_weight.txt_mlp.mlp_2.apply(txt_mlp_output)
@@ -224,6 +223,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         return encoder_hidden_states, hidden_states
 
     def infer_calculating(self, block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index):
+        encoder_hidden_states, hidden_states = encoder_hidden_states.squeeze(0), hidden_states.squeeze(0)
         for idx in range(len(block_weights.blocks)):
             block_weight = block_weights.blocks[idx]
             encoder_hidden_states, hidden_states = self.infer_block(
