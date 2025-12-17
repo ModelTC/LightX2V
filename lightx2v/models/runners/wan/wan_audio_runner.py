@@ -832,7 +832,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         torch.manual_seed(self.input_info.seed)
 
         if self.config.get("f2v_process", False):
-            self.input_info.overlap_frame = self.ref_img.unsqueeze(2)
+            if self.input_info.overlap_frame is None:
+                self.input_info.overlap_frame = self.ref_img.unsqueeze(2)
 
         # 处理音频输入
         audio_clip = self.input_info.audio_clip

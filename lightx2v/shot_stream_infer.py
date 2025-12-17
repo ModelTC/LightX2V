@@ -308,8 +308,7 @@ class ShotStreamPipeline:
             audio_clip = audio_reader.next_frame(overlap=overlap)
             if audio_clip is None:
                 break
-            # for i in range(7):
-            # 选择当前 pipe
+
             if i % 2 == 0:
                 pipe = s2v
                 inputs = self.clip_inputs["s2v_clip"]
@@ -328,9 +327,8 @@ class ShotStreamPipeline:
             gen_clip_video, audio_clip = pipe.run_clip_pipeline(inputs)
 
             aligned_len = gen_clip_video.shape[2] - overlap
-            logger.info(f"gen_clip_video shape:{gen_clip_video.shape} aligned_len:{aligned_len}")
             gen_video_list.append(gen_clip_video[:, :, :aligned_len])
-            cut_audio_list.append(audio_clip)
+            cut_audio_list.append(audio_clip[: aligned_len * audio_reader.audio_per_frame])
 
             overlap = pipe.prev_frame_length
             self.global_tail_video = gen_clip_video[:, :, -self.max_tail_len :]
