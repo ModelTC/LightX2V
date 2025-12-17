@@ -44,6 +44,8 @@ After extraction, ensure the directory structure is as follows:
 └── models/                     # Model storage directory
 ```
 
+**⚠️ Note for RTX 50 Series GPU Users**: We provide a dedicated runtime environment. Please download from [Quark Cloud](https://pan.quark.cn/s/4028867091b8), extract and replace the `env/` directory in the software package.
+
 **📥 Model Download**:
 
 You can directly download from the Gradio frontend, with two download sources provided: HuggingFace and ModelScope. You can choose according to your situation, or refer to the [Model Structure Documentation](../getting_started/model_structure.md) to manually download.
