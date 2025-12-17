@@ -42,7 +42,7 @@ Install according to the project homepage tutorials for each operator as needed.
 
 ### 📥 Model Download
 
-Refer to the [Model Structure Documentation](../getting_started/model_structure.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
+Models can be downloaded with one click through the frontend interface, with two download sources provided: HuggingFace and ModelScope. You can choose according to your situation. You can also refer to the [Model Structure Documentation](../getting_started/model_structure.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
 
 #### wan2.1 Model Directory Structure
 
