@@ -3,7 +3,10 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .triton_ops import fuse_scale_shift_kernel, fuse_scale_shift_select01_kernel
+from .triton_ops import (
+    fuse_scale_shift_gate_select01_kernel,
+    fuse_scale_shift_kernel,
+)
 from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
 
@@ -57,19 +60,20 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             scale_0, scale_1 = scale[:actual_batch], scale[actual_batch:]
             gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
 
-            mask = (index == 0).unsqueeze(-1)  # [b, l, 1]
             if self.config.get("modulate_type", "triton") == "triton":
-                x = fuse_scale_shift_select01_kernel(
+                x, gate_result = fuse_scale_shift_gate_select01_kernel(
                     x,
                     scale0=scale_0,
                     shift0=shift_0,
+                    gate0=gate_0,
                     scale1=scale_1,
                     shift1=shift_1,
+                    gate1=gate_1,
                     index=index,
                 )
-                gate_result = torch.where(mask, gate_0.unsqueeze(1), gate_1.unsqueeze(1))
                 return x.squeeze(0), gate_result.squeeze(0)
             else:
+                mask = (index == 0).unsqueeze(-1)  # [b, l, 1]
                 shift_result = torch.where(mask, shift_0.unsqueeze(1), shift_1.unsqueeze(1))
                 scale_result = torch.where(mask, scale_0.unsqueeze(1), scale_1.unsqueeze(1))
                 gate_result = torch.where(mask, gate_0.unsqueeze(1), gate_1.unsqueeze(1))
