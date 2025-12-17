@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .triton_ops import fuse_scale_shift_kernel
+from .triton_ops import fuse_scale_shift_kernel, fuse_scale_shift_select01_kernel
 from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
 
@@ -57,28 +57,28 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             scale_0, scale_1 = scale[:actual_batch], scale[actual_batch:]
             gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
 
-            # index: [b, l] where b is actual batch size
-            # Expand to [b, l, 1] to match feature dimension
-            index_expanded = index.unsqueeze(-1)  # [b, l, 1]
-
-            # Expand chunks to [b, 1, d] then broadcast to [b, l, d]
-            shift_0_exp = shift_0.unsqueeze(1)  # [b, 1, d]
-            shift_1_exp = shift_1.unsqueeze(1)  # [b, 1, d]
-            scale_0_exp = scale_0.unsqueeze(1)
-            scale_1_exp = scale_1.unsqueeze(1)
-            gate_0_exp = gate_0.unsqueeze(1)
-            gate_1_exp = gate_1.unsqueeze(1)
-
-            # Use torch.where to select based on index
-            shift_result = torch.where(index_expanded == 0, shift_0_exp, shift_1_exp)
-            scale_result = torch.where(index_expanded == 0, scale_0_exp, scale_1_exp)
-            gate_result = torch.where(index_expanded == 0, gate_0_exp, gate_1_exp)
+            mask = (index == 0).unsqueeze(-1)  # [b, l, 1]
+            if self.config.get("modulate_type", "triton") == "triton":
+                x = fuse_scale_shift_select01_kernel(
+                    x,
+                    scale0=scale_0,
+                    shift0=shift_0,
+                    scale1=scale_1,
+                    shift1=shift_1,
+                    index=index,
+                )
+                gate_result = torch.where(mask, gate_0.unsqueeze(1), gate_1.unsqueeze(1))
+                return x.squeeze(0), gate_result.squeeze(0)
+            else:
+                shift_result = torch.where(mask, shift_0.unsqueeze(1), shift_1.unsqueeze(1))
+                scale_result = torch.where(mask, scale_0.unsqueeze(1), scale_1.unsqueeze(1))
+                gate_result = torch.where(mask, gate_0.unsqueeze(1), gate_1.unsqueeze(1))
+                return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
         else:
-            shift_result = shift.unsqueeze(1)
-            scale_result = scale.unsqueeze(1)
-            gate_result = gate.unsqueeze(1)
-
-        return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
+            shift_result = shift.unsqueeze(0)
+            scale_result = scale.unsqueeze(0)
+            gate_result = gate.unsqueeze(0)
+            return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
 
     def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb):
         seq_txt = encoder_hidden_states.shape[0]
