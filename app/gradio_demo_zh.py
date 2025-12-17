@@ -1025,6 +1025,36 @@ def is_sm_greater_than_90():
     return (major, minor) > (9, 0)
 
 
+def get_gpu_generation():
+    """检测GPU系列，返回 '40' 表示40系，'30' 表示30系，None 表示其他"""
+    if not torch.cuda.is_available():
+        return None
+    try:
+        import re
+
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_name_lower = gpu_name.lower()
+
+        # 检测40系显卡 (RTX 40xx, RTX 4060, RTX 4070, RTX 4080, RTX 4090等)
+        if any(keyword in gpu_name_lower for keyword in ["rtx 40", "rtx40", "geforce rtx 40"]):
+            # 进一步检查是40xx系列
+            match = re.search(r"rtx\s*40\d+|40\d+", gpu_name_lower)
+            if match:
+                return "40"
+
+        # 检测30系显卡 (RTX 30xx, RTX 3060, RTX 3070, RTX 3080, RTX 3090等)
+        if any(keyword in gpu_name_lower for keyword in ["rtx 30", "rtx30", "geforce rtx 30"]):
+            # 进一步检查是30xx系列
+            match = re.search(r"rtx\s*30\d+|30\d+", gpu_name_lower)
+            if match:
+                return "30"
+
+        return None
+    except Exception as e:
+        logger.warning(f"无法检测GPU系列: {e}")
+        return None
+
+
 def get_quantization_options(model_path):
     """根据model_path动态获取量化选项"""
     import os
@@ -1509,7 +1539,17 @@ def auto_configure(resolution, num_frames=81):
                 if "sage_attn3" not in attn_priority:
                     attn_priority.insert(0, "sage_attn3")
 
-    quant_op_priority = ["triton", "q8f", "vllm", "sgl", "torch"]
+    # 根据GPU系列调整quant_op优先级
+    gpu_gen = get_gpu_generation()
+    if gpu_gen == "40":
+        # 40系显卡：q8f在前
+        quant_op_priority = ["q8f", "triton", "vllm", "sgl", "torch"]
+    elif gpu_gen == "30":
+        # 30系显卡：vllm在前
+        quant_op_priority = ["vllm", "triton", "q8f", "sgl", "torch"]
+    else:
+        # 其他情况：保持原顺序
+        quant_op_priority = ["triton", "q8f", "vllm", "sgl", "torch"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -1521,7 +1561,7 @@ def auto_configure(resolution, num_frames=81):
             default_config["quant_op_val"] = dict(quant_op_choices)[op]
             break
 
-    if  resolution in ["540p", "720p"]:
+    if resolution in ["540p", "720p"]:
         gpu_rules = [
             (80, {}),
             (40, {"cpu_offload_val": False, "t5_cpu_offload_val": True, "vae_cpu_offload_val": True, "clip_cpu_offload_val": True}),
