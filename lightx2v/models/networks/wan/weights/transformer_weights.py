@@ -19,6 +19,7 @@ class WanTransformerWeights(WeightModule):
             assert config.get("dit_quantized") is True
         if config.get("do_mm_calib", False):
             self.mm_type = "Calib"
+            assert not config["cpu_offload"]
         self.lazy_load = self.config.get("lazy_load", False)
         self.blocks = WeightModuleList(
             [
