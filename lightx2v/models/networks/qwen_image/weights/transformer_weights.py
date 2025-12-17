@@ -39,6 +39,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
         self.config = config
         self.quant_method = config.get("quant_method", None)
         self.sparge = config.get("sparge", False)
+        self.ln_type = config.get("ln_type", "Triton")
 
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
@@ -61,7 +62,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
         )
         self.add_module(
             "img_norm1",
-            LN_WEIGHT_REGISTER["Default"](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
+            LN_WEIGHT_REGISTER[self.ln_type](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
         )
         self.attn = QwenImageCrossAttention(
             block_index=block_index,
@@ -78,7 +79,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
 
         self.add_module(
             "img_norm2",
-            LN_WEIGHT_REGISTER["Default"](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
+            LN_WEIGHT_REGISTER[self.ln_type](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
         )
         img_mlp = QwenImageFFN(
             block_index=block_index,
@@ -108,13 +109,13 @@ class QwenImageTransformerAttentionBlock(WeightModule):
         )
         self.add_module(
             "txt_norm1",
-            LN_WEIGHT_REGISTER["Default"](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
+            LN_WEIGHT_REGISTER[self.ln_type](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
         )
 
         # Text doesn't need separate attention - it's handled by img_attn joint computation
         self.add_module(
             "txt_norm2",
-            LN_WEIGHT_REGISTER["Default"](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
+            LN_WEIGHT_REGISTER[self.ln_type](create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer, eps=1e-6),
         )
         txt_mlp = QwenImageFFN(
             block_index=block_index,

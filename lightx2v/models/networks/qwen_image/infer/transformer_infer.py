@@ -174,11 +174,11 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         txt_mod1, txt_mod2 = txt_mod_params.chunk(2, dim=-1)
 
         # Process image stream - norm1 + modulation
-        img_normed = block_weight.img_norm1.apply(hidden_states)
+        img_normed = block_weight.img_norm1.apply(hidden_states.squeeze(0))
         img_modulated, img_gate1 = self._modulate(img_normed, img_mod1, modulate_index)
 
         # Process text stream - norm1 + modulation
-        txt_normed = block_weight.txt_norm1.apply(encoder_hidden_states)
+        txt_normed = block_weight.txt_norm1.apply(encoder_hidden_states.view(-1, encoder_hidden_states.shape[-1]))
         txt_modulated, txt_gate1 = self._modulate(txt_normed, txt_mod1)
 
         # Use QwenAttnProcessor2_0 for joint attention computation
@@ -202,14 +202,14 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states = encoder_hidden_states + txt_gate1 * txt_attn_output
 
         # Process image stream - norm2 + MLP
-        img_normed2 = block_weight.img_norm2.apply(hidden_states)
+        img_normed2 = block_weight.img_norm2.apply(hidden_states.squeeze(0))
         img_modulated2, img_gate2 = self._modulate(img_normed2, img_mod2, modulate_index)
         img_mlp_output = F.gelu(block_weight.img_mlp.mlp_0.apply(img_modulated2.squeeze(0)), approximate="tanh")
         img_mlp_output = block_weight.img_mlp.mlp_2.apply(img_mlp_output)
         hidden_states = hidden_states + img_gate2 * img_mlp_output
 
         # Process text stream - norm2 + MLP
-        txt_normed2 = block_weight.txt_norm2.apply(encoder_hidden_states)
+        txt_normed2 = block_weight.txt_norm2.apply(encoder_hidden_states.squeeze(0))
         txt_modulated2, txt_gate2 = self._modulate(txt_normed2, txt_mod2)
         txt_mlp_output = F.gelu(block_weight.txt_mlp.mlp_0.apply(txt_modulated2.squeeze(0)), approximate="tanh")
         txt_mlp_output = block_weight.txt_mlp.mlp_2.apply(txt_mlp_output)
