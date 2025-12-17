@@ -42,7 +42,8 @@ LightX2V/app/
 
 ### 📥 模型下载
 
-可参考[模型结构文档](../getting_started/model_structure.md)下载完整模型（包含量化和非量化版本）或仅下载量化/非量化版本。
+可通过前端界面一键下载模型，提供了两个下载源，huggingface和modelscope，可根据自己情况选择
+也可参考[模型结构文档](../getting_started/model_structure.md)下载完整模型（包含量化和非量化版本）或仅下载量化/非量化版本。
 
 #### wan2.1 模型目录结构
 

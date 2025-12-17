@@ -28,7 +28,7 @@
 #### 一键启动Gradio（推荐）
 
 **📦 下载软件包**
-- [夸克网盘](https://pan.quark.cn/s/8af1162d7a15)
+- [夸克网盘](https://pan.quark.cn/s/f44023dcf8c8)
 
 **📁 目录结构**
 解压后，确保目录结构如下：
@@ -45,7 +45,7 @@
 
 **📥 下载模型**:
 
-可参考[模型结构文档](../getting_started/model_structure.md)或者[gradio部署文档](./deploy_gradio.md)下载完整模型（包含量化和非量化版本）或仅下载量化/非量化版本。
+可直接从gradio前端下载，提供了两个下载源，huggingface和modelscope，可根据自己情况选择，或参考[模型结构文档](../getting_started/model_structure.md)手动下载
 
 
 **📋 配置参数**

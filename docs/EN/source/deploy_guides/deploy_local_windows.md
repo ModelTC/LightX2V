@@ -29,7 +29,7 @@ Refer to [Quick Start Guide](../getting_started/quickstart.md) to install enviro
 #### One-Click Gradio Startup (Recommended)
 
 **📦 Download Software Package**
-- [Quark Cloud](https://pan.quark.cn/s/8af1162d7a15)
+- [Quark Cloud](https://pan.quark.cn/s/f44023dcf8c8)
 
 **📁 Directory Structure**
 After extraction, ensure the directory structure is as follows:
@@ -46,7 +46,7 @@ After extraction, ensure the directory structure is as follows:
 
 **📥 Model Download**:
 
-Refer to [Model Structure Documentation](../getting_started/model_structure.md) or [Gradio Deployment Guide](./deploy_gradio.md) to download complete models (including quantized and non-quantized versions) or download only quantized/non-quantized versions.
+You can directly download from the Gradio frontend, with two download sources provided: HuggingFace and ModelScope. You can choose according to your situation, or refer to the [Model Structure Documentation](../getting_started/model_structure.md) to manually download.
 
 
 **📋 Configuration Parameters**
