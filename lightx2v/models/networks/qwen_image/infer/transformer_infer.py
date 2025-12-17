@@ -3,6 +3,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
+from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
 
@@ -26,6 +27,14 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         else:
             self.seq_p_group = None
         self.seq_p_fp8_comm = False
+        if self.config.get("modulate_type", "triton") == "triton":
+            self.modulate_func = fuse_scale_shift_kernel
+        else:
+            self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            self.apply_rope_func = apply_wan_rope_with_flashinfer
+        else:
+            self.apply_rope_func = apply_rotary_emb_qwen
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -64,9 +73,9 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             scale_result = scale.unsqueeze(1)
             gate_result = gate.unsqueeze(1)
 
-        return x * (1 + scale_result) + shift_result, gate_result
+        return self.modulate_func(x, scale_result, shift_result), gate_result
 
-    def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb, attn_type):
+    def apply_attn(self, block_weight, hidden_states, encoder_hidden_states, image_rotary_emb):
         seq_txt = encoder_hidden_states.shape[1]
 
         # Compute QKV for image stream (sample projections)
@@ -100,14 +109,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         # Apply RoPE
         img_freqs, txt_freqs = image_rotary_emb
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            img_query, img_key = apply_wan_rope_with_flashinfer(img_query, img_key, img_freqs)
-            txt_query, txt_key = apply_wan_rope_with_flashinfer(txt_query, txt_key, txt_freqs)
-        else:
-            img_query = apply_rotary_emb_qwen(img_query.unsqueeze(0), img_freqs)
-            img_key = apply_rotary_emb_qwen(img_key.unsqueeze(0), img_freqs)
-            txt_query = apply_rotary_emb_qwen(txt_query.unsqueeze(0), txt_freqs)
-            txt_key = apply_rotary_emb_qwen(txt_key.unsqueeze(0), txt_freqs)
+        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
 
         # Concatenate for joint attention
         # Order: [text, image]
@@ -116,42 +119,38 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         joint_value = torch.cat([txt_value, img_value], dim=1)
 
         # Compute joint attention
-        if attn_type == "torch_sdpa":
-            joint_hidden_states = block_weight.attn.calculate.apply(q=joint_query, k=joint_key, v=joint_value)
+        joint_query = joint_query.squeeze(0)
+        joint_key = joint_key.squeeze(0)
+        joint_value = joint_value.squeeze(0)
 
+        k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
+        cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
+
+        txt_qkv_len = txt_query.size(1)
+        if self.config["seq_parallel"]:
+            joint_hidden_states = block_weight.attn.calculate_parallel.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                slice_qkv_len=txt_qkv_len,
+                cu_seqlens_qkv=cu_seqlens_q,
+                attention_module=block_weight.attn.calculate,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                model_cls=self.config["model_cls"],
+                img_first=False,
+            )
         else:
-            joint_query = joint_query.squeeze(0)
-            joint_key = joint_key.squeeze(0)
-            joint_value = joint_value.squeeze(0)
-
-            k_lens = torch.tensor([joint_key.size(0)], dtype=torch.int32, device=joint_key.device)
-            cu_seqlens_q, cu_seqlens_k = calculate_q_k_len(joint_query, k_lens=k_lens)
-
-            txt_qkv_len = txt_query.size(1)
-            if self.config["seq_parallel"]:
-                joint_hidden_states = block_weight.attn.calculate_parallel.apply(
-                    q=joint_query,
-                    k=joint_key,
-                    v=joint_value,
-                    slice_qkv_len=txt_qkv_len,
-                    cu_seqlens_qkv=cu_seqlens_q,
-                    attention_module=block_weight.attn.calculate,
-                    seq_p_group=self.seq_p_group,
-                    use_fp8_comm=self.seq_p_fp8_comm,
-                    model_cls=self.config["model_cls"],
-                    img_first=False,
-                )
-            else:
-                joint_hidden_states = block_weight.attn.calculate.apply(
-                    q=joint_query,
-                    k=joint_key,
-                    v=joint_value,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_kv=cu_seqlens_k,
-                    max_seqlen_q=joint_query.size(0),
-                    max_seqlen_kv=joint_key.size(0),
-                    model_cls="qwen_image",
-                )
+            joint_hidden_states = block_weight.attn.calculate.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_k,
+                max_seqlen_q=joint_query.size(0),
+                max_seqlen_kv=joint_key.size(0),
+                model_cls="qwen_image",
+            )
 
         # Split attention outputs back
         txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
@@ -193,7 +192,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             hidden_states=img_modulated,  # Image stream (will be processed as "sample")
             encoder_hidden_states=txt_modulated,  # Text stream (will be processed as "context")
             image_rotary_emb=image_rotary_emb,
-            attn_type=self.attn_type,
         )
 
         # QwenAttnProcessor2_0 returns (img_output, txt_output) when encoder_hidden_states is provided

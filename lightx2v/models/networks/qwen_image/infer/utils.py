@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Tuple
 
 import torch
 
@@ -35,10 +35,13 @@ def apply_wan_rope_with_flashinfer(
 
 
 def apply_rotary_emb_qwen(
-    x: torch.Tensor,
-    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]],
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    x_rotated = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2)).squeeze(0)
-    freqs_cis = freqs_cis.unsqueeze(1)
-    x_out = torch.view_as_real(x_rotated * freqs_cis).flatten(-2)
-    return x_out.type_as(x)
+    xq_rotated = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2)).squeeze(0)
+    xk_rotated = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2)).squeeze(0)
+    freqs_cis = cos_sin_cache.unsqueeze(1)
+    xq_out = torch.view_as_real(xq_rotated * freqs_cis).flatten(-2)
+    xk_out = torch.view_as_real(xk_rotated * freqs_cis).flatten(-2)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
