@@ -142,6 +142,7 @@ class QwenImageCrossAttention(WeightModule):
         self.sparge = config.get("sparge", False)
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.heads = config["attention_out_dim"] // config["attention_dim_head"]
+        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
@@ -149,12 +150,12 @@ class QwenImageCrossAttention(WeightModule):
         # norm_q
         self.add_module(
             "norm_q",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"{block_prefix}.{block_index}.attn.norm_q.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](f"{block_prefix}.{block_index}.attn.norm_q.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
         )
         # norm_k
         self.add_module(
             "norm_k",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"{block_prefix}.{block_index}.attn.norm_k.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](f"{block_prefix}.{block_index}.attn.norm_k.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
         )
         # to_q
         self.add_module(
@@ -255,12 +256,12 @@ class QwenImageCrossAttention(WeightModule):
         # norm_added_q
         self.add_module(
             "norm_added_q",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"{block_prefix}.{block_index}.attn.norm_added_q.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](f"{block_prefix}.{block_index}.attn.norm_added_q.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
         )
         # norm_added_k
         self.add_module(
             "norm_added_k",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"{block_prefix}.{block_index}.attn.norm_added_k.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](f"{block_prefix}.{block_index}.attn.norm_added_k.weight", create_cuda_buffer=create_cuda_buffer, create_cpu_buffer=create_cpu_buffer),
         )
         # attn
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
