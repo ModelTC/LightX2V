@@ -11,7 +11,6 @@ imageio
 imageio-ffmpeg
 einops
 loguru
-qtorch
 ftfy
 gradio
 aiohttp
