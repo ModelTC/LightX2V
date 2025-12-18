@@ -92,7 +92,7 @@ class BaseWorker:
         if not self.is_animate_model():
             return
         init_tools_preprocess()
-        from preprocess.preprocess_data import get_preprocess_parser, process_input_video
+        from preprocess_data import get_preprocess_parser, process_input_video
 
         result_paths = {}
         if self.rank == 0:

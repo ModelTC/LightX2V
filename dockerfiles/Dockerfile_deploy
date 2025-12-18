@@ -12,7 +12,7 @@ WORKDIR /workspace/LightX2V
 ENV PYTHONPATH=/workspace/LightX2V
 
 # for multi-person & animate
-RUN pip install ultralytics moviepy pydub pyannote.audio onnxruntime decord peft onnxruntime pandas matplotlib loguru sentencepiece
+RUN pip install ultralytics moviepy pydub pyannote.audio decord peft onnxruntime-gpu pandas matplotlib loguru sentencepiece
 
 RUN export COMMIT=0e78a118995e66bb27d78518c4bd9a3e95b4e266 \
     && export TORCH_CUDA_ARCH_LIST="9.0" \
