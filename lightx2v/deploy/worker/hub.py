@@ -61,6 +61,7 @@ class BaseWorker:
             logger.info(f"set {k} to {v}")
             setattr(self.input_info, k, v)
         self.input_info.last_frame_path = params.get("last_frame_path", "")
+        self.input_info.stream_config = params.get("stream_config", {})
 
     async def prepare_input_image(self, params, inputs, tmp_dir, data_manager):
         input_image_path = inputs.get("input_image", "")

@@ -26,8 +26,10 @@ class VARecorder:
         sample_rate: int = 16000,
         slice_frame: int = 1,
         prev_frame: int = 1,
+        stream_config: dict = {},
     ):
         self.livestream_url = livestream_url
+        self.stream_config = stream_config
         self.fps = fps
         self.sample_rate = sample_rate
         self.audio_port = pseudo_random(32000, 40000)

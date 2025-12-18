@@ -94,9 +94,11 @@ class ChatAdapter:
         seg_duration: float,
         model_runner,
         huoshan_tts_voice_type,
+        stream_config: dict,
     ):
         assert os.path.exists(omni_work_dir), f"OMNI work directory {omni_work_dir} does not exist"
         self.omni_work_dir = omni_work_dir
+        self.stream_config = stream_config
         self.context = zmq.Context()
         self.w2f_socket = self.context.socket(zmq.PULL)
         self.w2f_url = ChatAdapter.select_and_bind(self.w2f_socket)
@@ -280,6 +282,7 @@ class OmniVAReader:
         target_rank: int = 0,
         model_runner=None,
         huoshan_tts_voice_type=None,
+        stream_config: dict = {},
     ):
         self.rank = rank
         self.world_size = world_size
@@ -301,6 +304,7 @@ class OmniVAReader:
         self.chat_adapter = None
         self.model_runner = model_runner
         self.huoshan_tts_voice_type = huoshan_tts_voice_type
+        self.stream_config = stream_config
 
         assert self.audio_channels == 1, "Only mono audio is supported for OmniVAReader"
         logger.info(f"VAReader initialized for stream: {stream_url} target_rank: {self.target_rank}")
@@ -332,6 +336,7 @@ class OmniVAReader:
                 seg_duration=self.segment_duration,
                 model_runner=self.model_runner,
                 huoshan_tts_voice_type=self.huoshan_tts_voice_type,
+                stream_config=self.stream_config,
             )
             self.chat_adapter.start()
             logger.info(f"OmniVAReader {self.rank}/{self.world_size} started successfully")
