@@ -79,6 +79,7 @@ class S2VInputInfo:
     with_mask: bool = field(default_factory=lambda: False)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
+    stream_config: dict = field(default_factory=dict)
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
