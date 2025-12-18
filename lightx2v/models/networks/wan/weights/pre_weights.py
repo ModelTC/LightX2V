@@ -68,6 +68,16 @@ class WanPreWeights(WeightModule):
                 MM_WEIGHT_REGISTER["Default"]("guidance_embedding.linear_2.weight", "guidance_embedding.linear_2.bias"),
             )
 
+        if config["model_cls"] == "wan2.1_mean_flow_distill":
+            self.add_module(
+                "time_embedding_r_0",
+                MM_WEIGHT_REGISTER["Default"]("time_embedding_r.0.weight", "time_embedding_r.0.bias"),
+            )
+            self.add_module(
+                "time_embedding_r_2",
+                MM_WEIGHT_REGISTER["Default"]("time_embedding_r.2.weight", "time_embedding_r.2.bias"),
+            )
+
         if config["task"] == "flf2v" and config.get("use_image_encoder", True):
             self.add_module(
                 "emb_pos",

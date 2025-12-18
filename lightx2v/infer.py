@@ -42,6 +42,7 @@ def main():
         choices=[
             "wan2.1",
             "wan2.1_distill",
+            "wan2.1_mean_flow_distill",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",

@@ -6,7 +6,7 @@ from lightx2v.models.networks.wan.distill_model import WanDistillModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner
-from lightx2v.models.schedulers.wan.step_distill.scheduler import Wan22StepDistillScheduler, WanStepDistillScheduler
+from lightx2v.models.schedulers.wan.step_distill.scheduler import Wan21MeanFlowStepDistillScheduler, Wan22StepDistillScheduler, WanStepDistillScheduler
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -37,6 +37,18 @@ class WanDistillRunner(WanRunner):
     def init_scheduler(self):
         if self.config["feature_caching"] == "NoCaching":
             self.scheduler = WanStepDistillScheduler(self.config)
+        else:
+            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
+
+
+@RUNNER_REGISTER("wan2.1_mean_flow_distill")
+class Wan21MeanFlowDistillRunner(WanDistillRunner):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def init_scheduler(self):
+        if self.config["feature_caching"] == "NoCaching":
+            self.scheduler = Wan21MeanFlowStepDistillScheduler(self.config)
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 

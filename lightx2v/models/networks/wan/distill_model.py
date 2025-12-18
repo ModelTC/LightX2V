@@ -33,3 +33,8 @@ class WanDistillModel(WanModel):
             }
             return weight_dict
         return super()._load_ckpt(unified_dtype, sensitive_layer)
+
+
+class WanMeanFlowDistillModel(WanDistillModel):
+    def __init__(self, model_path, config, device):
+        super().__init__(model_path, config, device)
