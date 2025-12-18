@@ -36,7 +36,7 @@ class VAController:
     def init_base(self, config, input_info, has_vfi_model, has_vsr_model):
         if "stream_config" in input_info.__dataclass_fields__:
             self.stream_config = input_info.stream_config
-        logger.info(f"VAController init base with stream config: {self.stream_config}")
+            logger.info(f"VAController init base with stream config: {self.stream_config}")
         self.audio_path = input_info.audio_path
         self.output_video_path = input_info.save_result_path
         if isinstance(self.output_video_path, dict):
