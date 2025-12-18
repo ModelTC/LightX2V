@@ -27,6 +27,9 @@ class WanPreInfer:
         x = self.scheduler.latents
         t = self.scheduler.timestep_input
 
+        if self.config["model_cls"] == "wan2.1_mean_flow_distill":
+            t_r = self.scheduler.timestep_input_r
+
         if self.scheduler.infer_condition:
             context = inputs["text_encoder_output"]["context"]
         else:
@@ -77,6 +80,17 @@ class WanPreInfer:
         embed = torch.nn.functional.silu(embed)
         embed = weights.time_embedding_2.apply(embed)
         embed0 = torch.nn.functional.silu(embed)
+
+        if self.config["model_cls"] == "wan2.1_mean_flow_distill":
+            embed_r = sinusoidal_embedding_1d(self.freq_dim, t_r.flatten())
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                embed_r = weights.time_embedding_r_0.apply(embed_r.to(self.sensitive_layer_dtype))
+            else:
+                embed_r = weights.time_embedding_r_0.apply(embed_r)
+            embed_r = torch.nn.functional.silu(embed_r)
+            embed_r = weights.time_embedding_r_2.apply(embed_r)
+            embed0_r = torch.nn.functional.silu(embed_r)
+            embed0 = embed0 + embed0_r
 
         embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
 

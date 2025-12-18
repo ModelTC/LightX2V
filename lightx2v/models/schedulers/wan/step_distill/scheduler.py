@@ -50,6 +50,20 @@ class WanStepDistillScheduler(WanScheduler):
         self.latents = noisy_image_or_video.to(self.latents.dtype)
 
 
+class Wan21MeanFlowStepDistillScheduler(WanStepDistillScheduler):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def step_pre(self, step_index):
+        super().step_pre(step_index)
+        self.timestep_input = torch.stack([self.timesteps[self.step_index]])
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+            self.timestep_input = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
+        if self.config["model_cls"] == "wan2.1_mean_flow_distill":
+            t_next = self.timesteps[self.step_index + 1] if self.step_index < self.infer_steps - 1 else torch.zeros_like(self.timestep_input)
+            self.timestep_input_r = torch.stack([t_next])
+
+
 class Wan22StepDistillScheduler(WanStepDistillScheduler):
     def __init__(self, config):
         super().__init__(config)
