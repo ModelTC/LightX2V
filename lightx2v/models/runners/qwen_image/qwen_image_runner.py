@@ -264,6 +264,7 @@ class QwenImageRunner(DefaultRunner):
 
         image = images[0]
         image.save(f"{input_info.save_result_path}")
+        logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()
