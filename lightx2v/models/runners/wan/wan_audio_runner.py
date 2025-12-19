@@ -278,7 +278,11 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 class WanAudioRunner(WanRunner):  # type:ignore
     def __init__(self, config):
         super().__init__(config)
+        self.name = self.config.get("name", "WanAudioRunner")
+        self.task = self.config.get("task", "i2v")
         self.prev_frame_length = self.config.get("prev_frame_length", 5)
+        self.video_duration = self.config.get("video_duration", 5)
+
         self.frame_preprocessor = FramePreprocessorTorchVersion()
 
     def init_scheduler(self):
@@ -304,14 +308,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             audio_array = self._audio_processor.load_multi_person_audio(audio_files)
 
-        video_duration = self.config.get("video_duration", 5)
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_audio_len.observe(audio_len)
 
-        expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
-        if expected_frames < int(video_duration * target_fps):
-            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={video_duration}")
+        expected_frames = min(max(1, int(self.video_duration * target_fps)), audio_len)
+        if expected_frames < int(self.video_duration * target_fps):
+            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
@@ -790,6 +793,48 @@ class WanAudioRunner(WanRunner):  # type:ignore
             latent_w,
         ]
         return latent_shape
+
+    def run_clip(self):
+        infer_steps = self.model.scheduler.infer_steps
+
+        for step_index in range(infer_steps):
+            self.model.scheduler.step_pre(step_index=step_index)
+            self.model.infer(self.inputs)
+            self.model.scheduler.step_post()
+
+        return self.model.scheduler.latents
+
+    def run_clip_main(self):
+        self.scheduler.set_audio_adapter(self.audio_adapter)
+        self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+            self.inputs["image_encoder_output"]["vae_encoder_out"] = None
+
+        self.input_info.seed = self.input_info.seed
+        torch.manual_seed(self.input_info.seed)
+
+        if self.config.get("f2v_process", False):
+            if self.input_info.overlap_frame is None:
+                self.input_info.overlap_frame = self.ref_img.unsqueeze(2)
+
+        # 处理音频输入
+        audio_clip = self.input_info.audio_clip
+        audio_features = self.audio_encoder.infer(audio_clip)
+        audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
+        self.inputs["audio_encoder_output"] = audio_features
+        # 处理前一帧图像输入
+        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
+        # 执行dit推理
+        latents = self.run_clip()
+        # 运行vae decoder
+        gen_video = self.run_vae_decoder(latents)
+
+        return gen_video, audio_clip
+
+    def run_clip_pipeline(self, input_info):
+        self.input_info = input_info
+        self.inputs = self.run_input_encoder()
+        return self.run_clip_main()
 
 
 @RUNNER_REGISTER("wan2.2_audio")
