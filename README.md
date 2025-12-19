@@ -20,6 +20,8 @@
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
 
+> 👋 **Join us on [WeChat](https://light-ai.top/community.html).**
+
 ## :fire: Latest News
 
 - **December 15, 2025:** 🚀 Supported deployment on Hygon DCU.
