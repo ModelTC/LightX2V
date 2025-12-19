@@ -34,8 +34,6 @@ class SlidingWindowReader:
         self.audio_per_frame = sr // fps  # samples / frame
         self.pos = 0  # 单位：视频帧
 
-        print(f"samples len: {self.samples.numel()}")
-
     def next_frame(self, overlap: int):
         assert 0 <= overlap < self.frame_len
 
@@ -43,8 +41,6 @@ class SlidingWindowReader:
 
         start_sample = self.pos * self.audio_per_frame
         end_sample = start_sample + self.frame_len * self.audio_per_frame
-
-        print(f"start_sample:{start_sample}, end_sample:{end_sample}")
 
         if end_sample > self.samples.numel():
             return None
