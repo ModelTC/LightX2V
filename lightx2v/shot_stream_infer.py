@@ -70,7 +70,7 @@ def array_to_video(
         height, width = image_array.shape[1], image_array.shape[2]
     if lossless:
         command = [
-            "/usr/bin/ffmpeg",
+            "ffmpeg",
             "-y",  # (optional) overwrite output file if it exists
             "-f",
             "rawvideo",
@@ -95,7 +95,7 @@ def array_to_video(
         ]
     else:
         command = [
-            "/usr/bin/ffmpeg",
+            "ffmpeg",
             "-y",  # (optional) overwrite output file if it exists
             "-f",
             "rawvideo",
@@ -209,7 +209,7 @@ def save_audio(
     if os.path.exists(out_video):
         os.remove(out_video)
 
-    subprocess.call(["/usr/bin/ffmpeg", "-y", "-i", video_name, "-i", audio_name, out_video])
+    subprocess.call(["ffmpeg", "-y", "-i", video_name, "-i", audio_name, out_video])
 
     return out_video
 

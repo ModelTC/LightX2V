@@ -1,7 +1,7 @@
 {
     "model_cls": "seko_talk",
     "task": "s2v",
-    "model_path":"/mnt/afs1/wangshankun/HF_Cache/Wan2.1-i2V1202-Audio-14B-720P/",
+    "model_path":"Wan2.1-i2V1202-Audio-14B-720P/",
     "infer_steps": 4,
     "target_fps": 16,
     "audio_sr": 16000,
@@ -28,7 +28,7 @@
     "audio_adapter_cpu_offload": false,
     "lora_configs": [
         {
-        "path": "/mnt/afs1/wangshankun/LightX2V/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "path": "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
     ]
