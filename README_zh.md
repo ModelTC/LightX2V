@@ -20,6 +20,8 @@
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
+> 👋 **加入[微信交流群](https://light-ai.top/community.html)。**
+
 ## :fire: 最新动态
 
 - **2025年12月15日:** 🚀 支持 海光DCU 硬件上的部署。
