@@ -1,27 +1,25 @@
-import os
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["DTYPE"] = "BF16"
-os.environ["SENSITIVE_LAYER_DTYPE"] = "None"
-os.environ["PROFILING_DEBUG_LEVEL"] = "2"
-
+import argparse
 import json
+import os
 import subprocess
 from argparse import Namespace
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torchaudio as ta
 from einops import rearrange
 from loguru import logger
 
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config
+from lightx2v.utils.utils import seed_all
 
 
 class SlidingWindowReader:
@@ -216,6 +214,18 @@ def save_audio(
     return out_video
 
 
+def load_clip_configs(main_json_path: str):
+    with open(main_json_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    lightx2v_path = cfg["lightx2v_path"]
+    clip_configs_raw = cfg["clip_configs"]
+
+    clip_configs = [ClipConfig(name=item["name"], config_json=str(Path(lightx2v_path) / item["path"])) for item in clip_configs_raw]
+
+    return clip_configs
+
+
 @dataclass
 class ClipConfig:
     name: str
@@ -339,3 +349,43 @@ class ShotStreamPipeline:
         save_audio(merge_audio, audio_file, out_path, output_path="./output_lightx2v_seko_talk.mp4")
         os.remove(out_path)
         os.remove(audio_file)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
+    parser.add_argument("--config_json", type=str, required=True)
+    parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
+    parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
+    parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
+    parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
+    args = parser.parse_args()
+
+    seed_all(args.seed)
+
+    clip_configs = load_clip_configs(args.config_json)
+
+    shot_cfg = ShotConfig(
+        seed=args.seed,
+        image_path=args.image_path,
+        audio_path=args.audio_path,
+        prompt=args.prompt,
+        negative_prompt=args.negative_prompt,
+        save_result_path=args.save_result_path,
+        clip_configs=clip_configs,
+    )
+
+    with ProfilingContext4DebugL1("Total Cost"):
+        shot_stream_pipe = ShotStreamPipeline(shot_cfg)
+        shot_stream_pipe.generate()
+
+    # Clean up distributed process group
+    if dist.is_initialized():
+        dist.destroy_process_group()
+        logger.info("Distributed process group cleaned up")
+
+
+if __name__ == "__main__":
+    main()
