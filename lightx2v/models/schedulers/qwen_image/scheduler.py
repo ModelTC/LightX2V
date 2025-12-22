@@ -297,7 +297,7 @@ class QwenImageScheduler(BaseScheduler):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(config["axes_dims_rope"]), scale_rope=True)
+        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=[16, 56, 56], scale_rope=True)
 
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels_latents, height, width):
@@ -340,8 +340,8 @@ class QwenImageScheduler(BaseScheduler):
         width, height = shape[-1], shape[-2]
 
         latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
-        latents = self._pack_latents(latents, self.config["batchsize"], self.config["num_channels_latents"], height, width)
-        latent_image_ids = self._prepare_latent_image_ids(self.config["batchsize"], height // 2, width // 2, AI_DEVICE, self.dtype)
+        latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width)
+        latent_image_ids = self._prepare_latent_image_ids(1, height // 2, width // 2, AI_DEVICE, self.dtype)
 
         self.latents = latents
         self.latent_image_ids = latent_image_ids

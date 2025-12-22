@@ -97,6 +97,28 @@ class LightX2VPipeline:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
 
+        if model_cls in ["qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
+            self.zero_cond_t = False
+            self.CONDITION_IMAGE_SIZE = 147456
+            self.USE_IMAGE_ID_IN_PROMPT = True
+            if model_cls == "qwen-image-edit":
+                self.CONDITION_IMAGE_SIZE = 1048576
+                self.USE_IMAGE_ID_IN_PROMPT = False
+            elif model_cls == "qwen-image-edit-2511":
+                self.zero_cond_t = True
+            self.model_cls = "qwen_image"
+            self.num_layers = 60
+            self.attention_out_dim = 3072
+            self.attention_dim_head = 128
+            self.transformer_in_channels = 64
+            self.vae_scale_factor = 8
+            if self.task in ["i2i"]:
+                self.prompt_template_encode = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
+                self.prompt_template_encode_start_idx = 64
+            elif self.task in ["t2i"]:
+                self.prompt_template_encode = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
+                self.prompt_template_encode_start_idx = 34
+
     def create_generator(
         self,
         attn_mode="flash_attn2",
@@ -113,7 +135,11 @@ class LightX2VPipeline:
         denoising_step_list=[1000, 750, 500, 250],
         config_json=None,
         rope_type="torch",
+        auto_resize=False,
     ):
+        if self.model_cls in ["qwen_image"]:
+            self._auto_resize = auto_resize
+
         if config_json is not None:
             self.set_infer_config_json(config_json)
         else:
@@ -192,6 +218,7 @@ class LightX2VPipeline:
         vae_path=None,
         tae_path=None,
     ):
+        assert self.model_cls != "qwen_image"
         self.use_lightvae = use_lightvae
         self.use_tae = use_tae
         self.vae_path = vae_path
@@ -261,6 +288,8 @@ class LightX2VPipeline:
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload
+        elif self.model_cls == "qwen_image":
+            self.qwen25vl_cpu_offload = text_encoder_offload
 
     def enable_compile(
         self,
@@ -332,7 +361,6 @@ class LightX2VPipeline:
     ):
         # Run inference (following LightX2V pattern)
         self.seed = seed
-
         self.image_path = image_path
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path

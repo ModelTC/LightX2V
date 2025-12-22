@@ -205,12 +205,12 @@ class QwenImageRunner(DefaultRunner):
         height = 2 * (int(height) // (self.vae.vae_scale_factor * 2))
         width = 2 * (int(width) // (self.vae.vae_scale_factor * 2))
         num_channels_latents = self.model.in_channels // 4
-        self.input_info.target_shape = (self.config["batchsize"], 1, num_channels_latents, height, width)
+        self.input_info.target_shape = (1, 1, num_channels_latents, height, width)
 
     def set_img_shapes(self):
         if self.config["task"] == "t2i":
             width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
-            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * self.config["batchsize"]
+            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * 1
         elif self.config["task"] == "i2i":
             image_shapes = [[(1, self.input_info.auto_hight // self.config["vae_scale_factor"] // 2, self.input_info.auto_width // self.config["vae_scale_factor"] // 2)]]
             for image_height, image_width in self.inputs["text_encoder_output"]["image_info"]["vae_image_info_list"]:
