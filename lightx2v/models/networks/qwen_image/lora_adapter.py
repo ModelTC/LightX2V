@@ -5,22 +5,15 @@ from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.utils.envs import *
+from lightx2v.utils.lora_loader import LoRALoader
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-
-def fuse_lora_weights(original_weight, lora_down, lora_up, alpha):
-    rank = lora_down.shape[0]
-    lora_delta = torch.mm(lora_up, lora_down)  # W_up × W_down
-    scaling = alpha / rank
-    lora_delta = lora_delta * scaling
-    fused_weight = original_weight + lora_delta
-    return fused_weight
 
 
 class QwenImageLoraWrapper:
     def __init__(self, qwenimage_model):
         self.model = qwenimage_model
         self.lora_metadata = {}
+        self.lora_loader = LoRALoader()
         self.device = torch.device(AI_DEVICE) if not self.model.config.get("cpu_offload", False) else torch.device("cpu")
 
     def load_lora(self, lora_path, lora_name=None):
@@ -52,39 +45,14 @@ class QwenImageLoraWrapper:
         lora_weights = self._load_lora_file(self.lora_metadata[lora_name]["path"])
 
         weight_dict = self.model.original_weight_dict
-
-        weight_dict = self._apply_lora_weights(weight_dict, lora_weights, alpha)
-
+        self.lora_loader.apply_lora(
+            weight_dict=weight_dict,
+            lora_weights=lora_weights,
+            alpha=alpha,
+            strength=alpha,
+        )
         self.model._apply_weights(weight_dict)
 
         logger.info(f"Applied LoRA: {lora_name} with alpha={alpha}")
         del lora_weights
         return True
-
-    @torch.no_grad()
-    def _apply_lora_weights(self, weight_dict, lora_weights, alpha):
-        lora_prefixs = [
-            "attn.add_k_proj",
-            "attn.add_q_proj",
-            "attn.add_v_proj",
-            "attn.to_add_out",
-            "attn.to_k",
-            "attn.to_q",
-            "attn.to_v",
-            "attn.to_add_out",
-            "attn.to_out.0",
-            "img_mlp.net.0.proj",
-            "txt_mlp.net.0.proj",
-            "txt_mlp.net.2",
-        ]
-
-        for prefix in lora_prefixs:
-            for idx in range(self.model.config["num_layers"]):
-                prefix_name = f"transformer_blocks.{idx}.{prefix}"
-                lora_up = lora_weights[f"{prefix_name}.lora_up.weight"]
-                lora_down = lora_weights[f"{prefix_name}.lora_down.weight"]
-                lora_alpha = lora_weights[f"{prefix_name}.alpha"]
-                origin = weight_dict[f"{prefix_name}.weight"]
-                weight_dict[f"{prefix_name}.weight"] = fuse_lora_weights(origin, lora_down, lora_up, lora_alpha)
-
-        return weight_dict
