@@ -66,7 +66,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         self.USE_IMAGE_ID_IN_PROMPT = config.get("USE_IMAGE_ID_IN_PROMPT", True)
         self.VAE_IMAGE_SIZE = 1024 * 1024
 
-        self.cpu_offload = config.get("cpu_offload", False)
+        self.cpu_offload = config.get("qwen25vl_cpu_offload", config.get("cpu_offload", False))
         self.dtype = torch.bfloat16
         self.load()
 
@@ -177,10 +177,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds_mask = encoder_attention_mask
 
         _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, self.config["num_images_per_prompt"], 1)
-        prompt_embeds = prompt_embeds.view(self.config["batchsize"] * self.config["num_images_per_prompt"], seq_len, -1)
-        prompt_embeds_mask = prompt_embeds_mask.repeat(1, self.config["num_images_per_prompt"], 1)
-        prompt_embeds_mask = prompt_embeds_mask.view(self.config["batchsize"] * self.config["num_images_per_prompt"], seq_len)
+        prompt_embeds = prompt_embeds.repeat(1, 1, 1)
+        prompt_embeds = prompt_embeds.view(1 * 1, seq_len, -1)
+        prompt_embeds_mask = prompt_embeds_mask.repeat(1, 1, 1)
+        prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
 
         if self.cpu_offload:
             self.text_encoder.to(torch.device("cpu"))

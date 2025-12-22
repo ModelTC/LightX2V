@@ -19,13 +19,15 @@ class AutoencoderKLQwenImageVAE:
     def __init__(self, config):
         self.config = config
 
-        self.cpu_offload = config.get("cpu_offload", False)
+        self.cpu_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
         if self.cpu_offload:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device(AI_DEVICE)
         self.dtype = GET_DTYPE()
-        self.latent_channels = config["vae_z_dim"]
+        self.latent_channels = 16
+        self.vae_latents_mean = [-0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508, 0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921]
+        self.vae_latents_std = [2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743, 3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.916]
         self.load()
 
     def load(self):
@@ -61,8 +63,8 @@ class AutoencoderKLQwenImageVAE:
             width, height = input_info.auto_width, input_info.auto_hight
         latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"])
         latents = latents.to(self.dtype)
-        latents_mean = torch.tensor(self.config["vae_latents_mean"]).view(1, self.config["vae_z_dim"], 1, 1, 1).to(latents.device, latents.dtype)
-        latents_std = 1.0 / torch.tensor(self.config["vae_latents_std"]).view(1, self.config["vae_z_dim"], 1, 1, 1).to(latents.device, latents.dtype)
+        latents_mean = torch.tensor(self.vae_latents_mean).view(1, self.latent_channels, 1, 1, 1).to(latents.device, latents.dtype)
+        latents_std = 1.0 / torch.tensor(self.vae_latents_std).view(1, self.latent_channels, 1, 1, 1).to(latents.device, latents.dtype)
         latents = latents / latents_std + latents_mean
         images = self.model.decode(latents, return_dict=False)[0][:, :, 0]
         images = self.image_processor.postprocess(images, output_type="pil")
@@ -100,17 +102,9 @@ class AutoencoderKLQwenImageVAE:
             image_latents = self._encode_vae_image(image=image)
         else:
             image_latents = image
-        if self.config["batchsize"] > image_latents.shape[0] and self.config["batchsize"] % image_latents.shape[0] == 0:
-            # expand init_latents for batchsize
-            additional_image_per_prompt = self.config["batchsize"] // image_latents.shape[0]
-            image_latents = torch.cat([image_latents] * additional_image_per_prompt, dim=0)
-        elif self.config["batchsize"] > image_latents.shape[0] and self.config["batchsize"] % image_latents.shape[0] != 0:
-            raise ValueError(f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {self.config['batchsize']} text prompts.")
-        else:
-            image_latents = torch.cat([image_latents], dim=0)
-
+        image_latents = torch.cat([image_latents], dim=0)
         image_latent_height, image_latent_width = image_latents.shape[3:]
-        image_latents = self._pack_latents(image_latents, self.config["batchsize"], num_channels_latents, image_latent_height, image_latent_width)
+        image_latents = self._pack_latents(image_latents, 1, num_channels_latents, image_latent_height, image_latent_width)
 
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
