@@ -1,0 +1,40 @@
+# LoRA Merge + Quantization Pipeline
+version: 1.0
+
+source:
+  type: wan_dit
+  path: /path/to/base_model
+  format: safetensors
+
+target:
+  format: lightx2v
+  precision: int8
+  layout: single_file
+
+# LoRA merging
+lora:
+  enabled: true
+  paths:
+    - /path/to/lora1.safetensors
+    - /path/to/lora2.safetensors
+  strengths: [1.0, 0.8]  # Strength for each LoRA
+  alphas: [8.0, 8.0]     # Alpha for each LoRA
+
+# Quantization after LoRA merge
+quantization:
+  method: int8
+  options:
+    target_modules:
+      - self_attn
+      - cross_attn
+      - ffn
+
+output:
+  path: /path/to/output
+  name: merged_and_quantized
+  copy_metadata: true
+
+performance:
+  parallel: true
+  device: cuda:0
+

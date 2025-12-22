@@ -1,0 +1,33 @@
+# Wan DiT FP8 Quantization
+# Works on all platforms with GPU support
+version: 1.0
+
+source:
+  type: wan_dit
+  path: /path/to/Wan2.1-I2V-14B-480P
+  format: safetensors
+
+target:
+  format: lightx2v
+  precision: fp8
+  layout: single_file  # Single file for easier deployment
+
+quantization:
+  method: fp8
+  options:
+    target_modules:
+      - self_attn
+      - cross_attn
+      - ffn
+    per_channel: true
+
+output:
+  path: /path/to/output
+  name: wan_dit_fp8
+  copy_metadata: true
+
+performance:
+  parallel: true
+  device: cuda:0
+  num_workers: 4
+
