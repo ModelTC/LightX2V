@@ -1,379 +1,224 @@
-# Wan DiT Model Converter
+# Wan2.1 模型转换指南
 
-Wan DiT系列模型的转换器，支持I2V和T2V模型。
+本指南介绍如何使用 model_converter 工具对 Wan DiT 模型进行格式转换和量化。
 
-## 支持的模型
+## 模型概述
 
-- **Wan2.1-I2V-14B-480P** - 图像到视频生成
-- **Wan2.1-T2V-14B** - 文本到视频生成
-- **Wan-Animate-DiT** - 带适配器的动画生成模型
+### 支持的模型
 
-## 模型变体
+| 模型名称 | 分辨率 | 参数量 | 模型类型 |
+|---------|--------|--------|---------|
+| Wan2.1-I2V-14B-480P | 480×832 | 14B | wan_dit |
+| Wan2.1-I2V-14B-720P | 720×1280 | 14B | wan_dit |
 
-### 标准 Wan DiT
+### 支持的量化方案
+
+| 量化方案 | 精度 | 压缩比 | 推荐场景 |
+|---------|------|--------|---------|
+| int8 | INT8 | ~50% | NVIDIA GPU / hygon_dcu |
+| fp8 | FP8 E4M3 | ~50% | NVIDIA GPU (H100+) |
+| mxfp4 | MxFP4 | ~75% | 极致压缩 |
+| nvfp4 | NVIDIA FP4 | ~75% | NVIDIA GPU |
+
+---
+
+## 快速开始
+
+### 方式 1: 使用命令行（推荐）
+
+```bash
+python -m tools.model_converter \
+    --config tools/model_converter/configs/templates/wan_dit_int8_dcu.yaml
+```
+
+### 方式 2: 使用原始 converter.py
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/Wan2.1-I2V-14B-480P/ \
+    --output /path/to/output_int8 \
+    --output_name wan2.1_i2v_480p_int8 \
+    --output_ext .safetensors \
+    --model_type wan_dit \
+    --linear_type int8 \
+    --quantized \
+    --single_file
+```
+
+---
+
+## 配置选项
+
+### 核心配置项
+
+#### 1. 模型类型配置
 
 ```yaml
 source:
-  type: wan_dit
-  path: /path/to/Wan2.1-I2V-14B-480P
+  type: wan_dit              # 模型类型（必填）
+  path: /path/to/model       # 模型路径（必填）
+  format: safetensors        # 文件格式
 ```
 
-特点：
-- 标准的self-attention和cross-attention
-- FFN模块
-- 自动忽略音频适配器权重
-
-### Wan Animate DiT
-
-```yaml
-source:
-  type: wan_dit
-  variant: wan_animate_dit  # 可选，会自动检测
-  path: /path/to/Wan-Animate-DiT
+对应命令行参数：
+```bash
+--model_type wan_dit
+--source /path/to/model
 ```
 
-特点：
-- 包含face adapter
-- 额外的adapter keys需要量化
-
-## 格式转换
-
-### LightX2V → Diffusers
-
-```yaml
-source:
-  type: wan_dit
-  path: /path/to/lightx2v_model
-
-target:
-  format: diffusers  # 转换为Diffusers格式
-  layout: chunked    # 分块保存
-```
-
-键映射示例：
-- `blocks.0.self_attn.q` → `blocks.0.attn1.to_q`
-- `blocks.0.cross_attn.k` → `blocks.0.attn2.to_k`
-- `head.head` → `proj_out`
-
-### Diffusers → LightX2V
-
-```yaml
-source:
-  type: wan_dit
-  path: /path/to/diffusers_model
-  format: diffusers
-
-target:
-  format: lightx2v
-  layout: by_block  # 按block保存
-```
-
-## 量化配置
-
-### 默认量化模块
+#### 2. 量化配置
 
 ```yaml
 quantization:
+  method: int8               # 量化方法: int8, fp8, mxfp4, nvfp4
   options:
-    target_modules:
-      - self_attn  # 自注意力
-      - cross_attn # 交叉注意力
-      - ffn        # 前馈网络
+    target_modules:          # 要量化的模块
+      - self_attn            # 自注意力层
+      - cross_attn           # 交叉注意力层
+      - ffn                  # 前馈网络
+    per_channel: true        # 使用 per-channel 量化
+    symmetric: true          # 使用对称量化
 ```
 
-### 忽略的模块
-
-自动忽略：
-- `ca.*` - 音频适配器
-- `audio.*` - 音频相关权重
-
-### INT8 量化示例
-
-```yaml
-source:
-  type: wan_dit
-  path: /path/to/model
-
-target:
-  format: lightx2v
-  layout: by_block
-
-quantization:
-  method: int8
-  backend: dcu
+对应命令行参数：
+```bash
+--linear_type int8
+--quantized
+# target_modules 由 --model_type wan_dit 自动设置
 ```
 
-预期效果：
-- 原始大小：~27GB (FP32)
-- INT8大小：~7GB
-- 压缩率：~74%
+**注意**: 
+- `target_modules` 在原始 converter.py 中通过 `model_type_keys_map` 自动配置
+- Wan DiT 默认量化模块：`["self_attn", "cross_attn", "ffn"]`
+- **不量化**: `norm` 层、`embedding` 层、`head` 层
 
-### FP8 量化示例
-
-```yaml
-quantization:
-  method: fp8
-  backend: nvidia
-```
-
-预期效果：
-- 原始大小：~27GB (FP32)
-- FP8大小：~7GB
-- 性能提升：2-3x (NVIDIA H100)
-
-## LoRA支持
-
-### 合并单个LoRA
+#### 3. 输出配置
 
 ```yaml
-source:
-  type: wan_dit
-  path: /path/to/base_model
-
-lora:
-  enabled: true
-  paths:
-    - /path/to/style_lora.safetensors
-  strengths: [1.0]
-  alphas: [8.0]
-```
-
-### 合并多个LoRA
-
-```yaml
-lora:
-  enabled: true
-  paths:
-    - /path/to/lora1.safetensors
-    - /path/to/lora2.safetensors
-  strengths: [1.0, 0.8]  # 第二个LoRA强度降低
-  alphas: [8.0, 8.0]
-```
-
-### LoRA格式
-
-自动支持以下格式：
-- Standard: `key.lora_up.weight`, `key.lora_down.weight`
-- Diffusers: `key_lora.up.weight`, `key_lora.down.weight`
-- Diffusers V2: `key.lora_B.weight`, `key.lora_A.weight`
-
-## ComfyUI导出
-
-### FP8 ComfyUI格式
-
-```yaml
-source:
-  type: wan_dit
-  path: /path/to/model
-
-target:
-  format: comfyui
-  precision: fp8
-  layout: single_file  # ComfyUI要求单文件
-
-quantization:
-  method: fp8
-  backend: nvidia
-
 output:
-  path: /path/to/comfyui/models
-  name: wan_dit_fp8
+  path: /path/to/output      # 输出目录
+  name: wan_dit_int8         # 输出文件名
+  copy_metadata: true        # 复制配置文件
 ```
-
-特殊处理：
-- 添加 `scaled_fp8` 标记
-- 使用 `.scale_weight` 后缀存储scales
-- 单文件格式
-
-## 性能优化
-
-### 大模型转换
 
 ```yaml
 target:
-  layout: by_block  # 按block保存，减少内存
-
-performance:
-  parallel: true     # 启用并行加速
-  device: cuda:0     # GPU加速量化
-  num_workers: 4
+  format: lightx2v           # 输出格式
+  precision: int8            # 精度标识
+  layout: by_block           # 保存方式: by_block, single_file, chunked
 ```
 
-### DCU优化
+对应命令行参数：
+```bash
+--output /path/to/output
+--output_name wan_dit_int8
+--single_file              # 或 --save_by_block
+--copy_no_weight_files     # 复制元数据
+```
+
+**保存方式对比**:
+- `single_file`: 单个文件，加载快，但需要大内存
+- `by_block`: 按 block 分块，适合大模型
+- `chunked`: 按固定大小分块，灵活性高
+
+#### 4. 性能配置
 
 ```yaml
-quantization:
-  backend: dcu
-
 performance:
-  device: cuda:0  # DCU设备
+  parallel: true             # 并行转换
+  device: cuda:0             # 设备: cuda:0, cpu
+  num_workers: 4             # 并行线程数
 ```
 
-环境变量：
+对应命令行参数：
 ```bash
-export HIP_VISIBLE_DEVICES=0
-export PLATFORM=hygon_dcu
-export PYTHONPATH=/path/to/LightX2V:$PYTHONPATH
+--parallel                 # 启用并行
+--device cuda:0
 ```
 
-## 完整示例
+---
 
-### 示例1: DCU上INT8转换
+## 使用示例
+
+### 示例 1: INT8 量化
 
 ```bash
-# 1. 创建配置
-cat > convert_config.yaml << EOF
+python tools/convert/converter.py \
+    --source /data/models/Wan2.1-I2V-14B-480P/ \
+    --output /data/models/Wan2.1-I2V-14B-480P_int8 \
+    --output_name wan2.1_i2v_480p_int8 \
+    --output_ext .safetensors \
+    --model_type wan_dit \
+    --linear_type int8 \
+    --quantized \
+    --single_file
+```
+
+**量化效果**:
+- 原始大小: ~28 GB (FP16)
+- 量化后: ~14 GB (INT8)
+- 压缩比: ~50%
+
+### 示例 2: FP8 量化（NVIDIA H100）
+
+```bash
+python tools/convert/converter.py \
+    --source /data/models/Wan2.1-I2V-14B-720P/ \
+    --output /data/models/Wan2.1-I2V-14B-720P_fp8 \
+    --output_name wan2.1_i2v_720p_fp8 \
+    --output_ext .safetensors \
+    --model_type wan_dit \
+    --linear_type fp8 \
+    --quantized \
+    --save_by_block
+```
+
+### 示例 3: 批量转换（480P + 720P）
+
+```bash
+#!/bin/bash
+# 批量转换脚本
+
+MODELS=(
+    "Wan2.1-I2V-14B-480P"
+    "Wan2.1-I2V-14B-720P"
+)
+
+for model in "${MODELS[@]}"; do
+    echo "Converting $model..."
+    python tools/convert/converter.py \
+        --source /data/models/$model/ \
+        --output /data/models/${model}_int8 \
+        --output_name ${model,,}_int8 \
+        --model_type wan_dit \
+        --linear_type int8 \
+        --quantized \
+        --single_file
+done
+```
+
+### 示例 4: 使用 YAML 配置
+
+**创建配置文件** `wan_480p_int8.yaml`:
+```yaml
 source:
   type: wan_dit
   path: /data/models/Wan2.1-I2V-14B-480P
 
-target:
-  format: lightx2v
-  layout: by_block
-
 quantization:
   method: int8
-  backend: dcu
-
-output:
-  path: /data/output/wan_int8
-  name: wan_dit_int8_dcu
-
-performance:
-  device: cuda:0
-EOF
-
-# 2. 运行转换
-export HIP_VISIBLE_DEVICES=0
-python -m model_converter convert --config convert_config.yaml
-```
-
-### 示例2: LoRA + FP8 + ComfyUI
-
-```bash
-cat > lora_comfyui.yaml << EOF
-source:
-  type: wan_dit
-  path: /data/models/base_model
-
-lora:
-  enabled: true
-  paths:
-    - /data/loras/style.safetensors
-  strengths: [1.0]
-  alphas: [8.0]
-
-target:
-  format: comfyui
-  layout: single_file
-
-quantization:
-  method: fp8
-  backend: nvidia
-
-output:
-  path: /data/comfyui/models
-  name: wan_style_fp8
-EOF
-
-python -m model_converter convert --config lora_comfyui.yaml
-```
-
-### 示例3: 快速命令行模式
-
-```bash
-# 不使用配置文件，直接命令行
-python -m model_converter convert \
-  --model wan_dit \
-  --source /data/models/Wan2.1-I2V-14B-480P \
-  --target-format lightx2v \
-  --quantization int8 \
-  --backend dcu \
-  --output /data/output/wan_int8 \
-  --layout by_block
-```
-
-## 故障排除
-
-### 问题：键不匹配
-
-**症状**：LoRA应用失败，提示找不到匹配的键
-
-**解决**：
-```yaml
-# 确保LoRA和模型格式匹配
-# 如果模型是Diffusers格式，LoRA也应该是
-source:
-  format: diffusers  # 明确指定格式
-```
-
-### 问题：内存不足
-
-**症状**：OOM错误
-
-**解决**：
-```yaml
-target:
-  layout: by_block  # 使用分块保存
-
-performance:
-  parallel: false   # 禁用并行
-  device: cpu       # 使用CPU量化
-```
-
-### 问题：量化后精度下降
-
-**症状**：量化后模型效果明显下降
-
-**解决**：
-1. 尝试FP8而不是INT8：
-```yaml
-quantization:
-  method: fp8  # 通常比INT8精度更好
-```
-
-2. 调整量化范围：
-```yaml
-quantization:
   options:
     target_modules:
-      - ffn  # 只量化FFN，保留attention精度
+      - self_attn
+      - cross_attn
+      - ffn
+
+output:
+  path: /data/models/Wan2.1-I2V-14B-480P_int8
+  name: wan2.1_i2v_480p_int8
 ```
 
-## 技术细节
-
-### 模型结构
-
+**运行转换**:
+```bash
+python -m tools.model_converter --config wan_480p_int8.yaml
 ```
-Wan DiT
-├── condition_embedder
-│   ├── text_embedder (text_embedding)
-│   ├── time_embedder (time_embedding)
-│   ├── time_proj (time_projection)
-│   └── image_embedder (img_emb)
-├── blocks[0..N]
-│   ├── norm1
-│   ├── attn1 (self_attn)
-│   ├── norm2
-│   ├── attn2 (cross_attn)
-│   ├── norm3
-│   ├── ffn
-│   └── scale_shift_table (modulation)
-└── proj_out (head)
-```
-
-### 键映射规则数量
-
-- 总计：33条映射规则
-- Attention：16条
-- FFN：2条
-- Embeddings：9条
-- Norms：4条
-- Other：2条
-
-## 相关资源
-
-- [配置模板](../../configs/templates/)
-- [主文档](../../README.md)
-- [迁移指南](../../MIGRATION.md)
-
