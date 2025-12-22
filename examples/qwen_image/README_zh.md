@@ -7,7 +7,7 @@
 Dit部分的推理耗时对比(不包含预热时间):
 
 <div align="center">
-  <img src="../../assets/figs/qwen/qwen.png" alt="Qwen-Image-Edit-2511" width="60%">
+  <img src="../../assets/figs/qwen/qwen-image-edit-2511.png" alt="Qwen-Image-Edit-2511" width="60%">
 </div>
 
 ## 安装
