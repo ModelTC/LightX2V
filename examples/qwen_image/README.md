@@ -2,6 +2,14 @@
 
 This directory contains usage examples for the Qwen Image Edit 2511 model, providing two different inference approaches.
 
+## Benchmark
+
+DiT latency of Qwen-Image-Edit-2511 on H100 (excluding warm-up):
+
+<div align="center">
+  <img src="../../assets/figs/qwen/qwen.png" alt="Qwen-Image-Edit-2511" width="60%">
+</div>
+
 ## Installation
 
 First, clone the repository and install dependencies:
