@@ -1094,8 +1094,8 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
                 weight_global_scale = source.get_tensor(self.weight_global_scale_name).to(AI_DEVICE)
                 alpha = 1.0 / (input_global_scale * weight_global_scale)
             else:
-                input_global_scale = source.get_tensor(self.input_global_scale_name).to(AI_DEVICE)
-                alpha = source.get_tensor(self.alpha_name)
+                input_global_scale = source.get_tensor(self.input_global_scale_name).to(torch.float32).to(AI_DEVICE)
+                alpha = source.get_tensor(self.alpha_name).to(torch.float32).to(AI_DEVICE)
             weight = source.get_tensor(self.weight_name).to(AI_DEVICE)
             scale = source.get_tensor(self.weight_scale_name).to(AI_DEVICE)
         else:
@@ -1105,8 +1105,8 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
                 weight_global_scale = source[self.weight_global_scale_name].to(AI_DEVICE)
                 alpha = 1.0 / (input_global_scale * weight_global_scale)
             else:
-                input_global_scale = source[self.input_global_scale_name].to(AI_DEVICE)
-                alpha = source[self.alpha_name]
+                input_global_scale = source[self.input_global_scale_name].to(torch.float32).to(AI_DEVICE)
+                alpha = source[self.alpha_name].to(torch.float32).to(AI_DEVICE)
 
             weight = source[self.weight_name].to(AI_DEVICE)
             scale = source[self.weight_scale_name].to(AI_DEVICE)
@@ -1156,7 +1156,7 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
                     alpha = 1.0 / (input_global_scale * weight_global_scale)
                 else:
                     input_global_scale = source.get_tensor(self.input_global_scale_name).to(torch.float32)
-                    alpha = source.get_tensor(self.alpha_name)
+                    alpha = source.get_tensor(self.alpha_name).to(torch.float32)
                 pin_weight = self._create_pin_tensor(weight_tensor)
                 pin_scale = self._create_pin_tensor(scale_tensor)
                 pin_input_global_scale = self._create_pin_tensor(input_global_scale)
@@ -1171,7 +1171,7 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
                 alpha = 1.0 / (input_global_scale * weight_global_scale)
             else:
                 input_global_scale = source[self.input_global_scale_name].to(torch.float32)
-                alpha = source[self.alpha_name]
+                alpha = source[self.alpha_name].to(torch.float32)
             pin_weight = self._create_pin_tensor(weight_tensor)
             pin_scale = self._create_pin_tensor(scale_tensor)
             pin_input_global_scale = self._create_pin_tensor(input_global_scale)
@@ -1248,8 +1248,8 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
                 weight_global_scale = source[self.weight_global_scale_name]
                 alpha = 1.0 / (input_global_scale * weight_global_scale)
             else:
-                input_global_scale = source[self.input_global_scale_name]
-                alpha = source[self.alpha_name]
+                input_global_scale = source[self.input_global_scale_name].to(torch.float32).to(AI_DEVICE)
+                alpha = source[self.alpha_name].to(torch.float32).to(AI_DEVICE)
             return (
                 source[self.weight_name],
                 source[self.weight_scale_name],
