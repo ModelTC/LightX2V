@@ -5,7 +5,7 @@ This example demonstrates how to use LightX2V with Wan2.1 model for I2V generati
 
 from lightx2v import LightX2VPipeline
 
-# Initialize pipeline for Wan2.2 I2V task
+# Initialize pipeline for Wan2.1 I2V task
 # For wan2.1, use model_cls="wan2.1"
 pipe = LightX2VPipeline(
     model_path="/path/to/Wan2.1-I2V-14B-480P",
