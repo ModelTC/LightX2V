@@ -294,7 +294,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
             siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload"))
             if siglip_offload:
                 siglip_device = torch.device("cpu")
