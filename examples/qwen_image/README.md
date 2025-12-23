@@ -4,7 +4,7 @@ This directory contains usage examples for the Qwen Image Edit 2511 model, provi
 
 ## Benchmark
 
-DiT latency of Qwen-Image-Edit-2511 on H100 (excluding warm-up):
+DiT latency of Qwen-Image-Edit-2511 on H100 (excluding warm-up, updated on 2025.12.23):
 
 <div align="center">
   <img src="../../assets/figs/qwen/qwen-image-edit-2511.png" alt="Qwen-Image-Edit-2511" width="60%">
