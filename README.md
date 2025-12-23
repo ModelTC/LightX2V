@@ -25,6 +25,8 @@
 ## :fire: Latest News
 - **December 22, 2025:** 🚀 We support the [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) image editing model since Day 0. On a single H100 GPU, LightX2V delivers approximately 1.4× speedup. We support for CFG parallelism, Ulysses parallelism, and efficient offloading technologies. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) has been updated with CFG / step-distilled LoRA and FP8 weights. Usage examples can be found in the [Python scripts](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image). Combined with LightX2V, 4-step CFG / step distillation, and the FP8 model, the maximum acceleration can reach up to approximately 42×. Feel free to try [LightX2V Online Service](https://x2v.light-ai.top/login) with *Image to Image* and *Qwen-Image-Edit-2511* model.
 
+- **December 23, 2025:** 🚀 Added **NVFP4 quantization-aware 4-step distilled models**; weights are available on HuggingFace: [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4).
+
 - **December 15, 2025:** 🚀 Supported deployment on Hygon DCU.
 
 - **December 4, 2025:** 🚀 Supported GGUF format model inference & deployment on Cambricon MLU590/MetaX C500.
@@ -160,6 +162,10 @@ pipe.generate(
     save_result_path=save_result_path,
 )
 ```
+
+**NVFP4 (quantization-aware 4-step) resources**
+- Inference examples: `examples/wan/wan_i2v_nvfp4.py` (I2V) and `examples/wan/wan_t2v_nvfp4.py` (T2V).
+- NVFP4 operator build/install guide: see `lightx2v_kernel/README.md`.
 
 > 💡 **More Examples**: For more usage examples including quantization, offloading, caching, and other advanced configurations, please refer to the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples).
 

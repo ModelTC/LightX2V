@@ -257,7 +257,9 @@ export const locale = i18n.global.locale
             model_cls: '',
             stage: '',
             prompt: '',
-            seed: 42
+            seed: 42,
+            customShape: null,  // [height, width] for video tasks
+            aspectRatio: null  // aspect ratio for video tasks
         });
 
         const i2vForm = ref({
@@ -267,7 +269,8 @@ export const locale = i18n.global.locale
             imageFile: null,
             prompt: '',
             seed: 42,
-            detectedFaces: []  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
+            detectedFaces: [],  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
+            customShape: null  // [height, width] for video tasks
         });
 
         const s2vForm = ref({
@@ -279,7 +282,8 @@ export const locale = i18n.global.locale
             prompt: '',
             seed: 42,
             detectedFaces: [],  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
-            separatedAudios: []  // List of separated audio tracks: [{ speaker_id, audio (base64), roleName, ... }]
+            separatedAudios: [],  // List of separated audio tracks: [{ speaker_id, audio (base64), roleName, ... }]
+            customShape: null  // [height, width] for video tasks
         });
 
         const animateForm = ref({
@@ -290,7 +294,8 @@ export const locale = i18n.global.locale
             videoFile: null,
             prompt: '视频中的人在做动作',
             seed: 42,
-            detectedFaces: []  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
+            detectedFaces: [],  // List of detected faces: [{ index, bbox, face_image, roleName, ... }]
+            customShape: null  // [height, width] for video tasks
         });
 
         const i2iForm = ref({
@@ -301,6 +306,7 @@ export const locale = i18n.global.locale
             imageFiles: [],   // 多图支持
             prompt: 'turn the style of the photo to vintage comic book',
             seed: 42,
+            customShape: null  // [height, width] - 统一使用 customShape，宽高比选择时也会转换为 customShape
         });
 
         const t2iForm = ref({
@@ -308,7 +314,8 @@ export const locale = i18n.global.locale
             model_cls: '',
             stage: '',
             prompt: '',
-            seed: 42
+            seed: 42,
+            customShape: null  // [height, width] - 统一使用 customShape，宽高比选择时也会转换为 customShape
         });
 
         const flf2vForm = ref({
@@ -317,6 +324,7 @@ export const locale = i18n.global.locale
             stage: 'single_stage',
             imageFile: null,
             lastFrameFile: null,
+            customShape: null  // [height, width] for video tasks
         });
 
         // 根据当前选择的任务类型获取对应的表单
@@ -852,7 +860,9 @@ export const locale = i18n.global.locale
         };
 
         const loginWithGitHub = async () => {
+            if (loginLoading.value) return; // 防止重复点击
             try {
+                loginLoading.value = true;
                 console.log('starting GitHub login')
                 const response = await fetch('/auth/login/github');
                 if (!response.ok) {
@@ -860,15 +870,20 @@ export const locale = i18n.global.locale
                 }
                 const data = await response.json();
                 localStorage.setItem('loginSource', 'github');
+                // 添加短暂延迟，让用户看到加载状态
+                await new Promise(resolve => setTimeout(resolve, 300));
                 window.location.href = data.auth_url;
             } catch (error) {
                 console.log('GitHub login error:', error);
                 showAlert(t('getGitHubAuthUrlFailed'), 'danger');
+                loginLoading.value = false;
             }
         };
 
         const loginWithGoogle = async () => {
+            if (loginLoading.value) return; // 防止重复点击
             try {
+                loginLoading.value = true;
                 console.log('starting Google login')
                 const response = await fetch('/auth/login/google');
                 if (!response.ok) {
@@ -876,15 +891,19 @@ export const locale = i18n.global.locale
                 }
                 const data = await response.json();
                 localStorage.setItem('loginSource', 'google');
+                // 添加短暂延迟，让用户看到加载状态
+                await new Promise(resolve => setTimeout(resolve, 300));
                 window.location.href = data.auth_url;
             } catch (error) {
                 console.error('Google login error:', error);
                 showAlert(t('getGoogleAuthUrlFailed'), 'danger');
+                loginLoading.value = false;
             }
         };
 
         // 发送短信验证码
         const sendSmsCode = async () => {
+            if (smsCountdown.value > 0 || loginLoading.value) return; // 防止重复点击
             if (!phoneNumber.value) {
                 showAlert(t('pleaseEnterPhoneNumber'), 'warning');
                 return;
@@ -898,6 +917,7 @@ export const locale = i18n.global.locale
             }
 
             try {
+                loginLoading.value = true;
                 const response = await fetch(`./auth/login/sms?phone_number=${phoneNumber.value}`);
                 const data = await response.json();
 
@@ -910,17 +930,21 @@ export const locale = i18n.global.locale
                 }
             } catch (error) {
                 showAlert(t('sendVerificationCodeFailedRetry'), 'danger');
+            } finally {
+                loginLoading.value = false;
             }
         };
 
         // 短信验证码登录
         const loginWithSms = async () => {
+            if (loginLoading.value) return; // 防止重复点击
             if (!phoneNumber.value || !verifyCode.value) {
                 showAlert(t('pleaseEnterPhoneAndCode'), 'warning');
                 return;
             }
 
             try {
+                loginLoading.value = true;
                 const response = await fetch(`./auth/callback/sms?phone_number=${phoneNumber.value}&verify_code=${verifyCode.value}`);
                 const data = await response.json();
 
@@ -942,9 +966,11 @@ export const locale = i18n.global.locale
                     showAlert(t('loginSuccess'), 'success');
                 } else {
                     showAlert(data.message || t('verificationCodeErrorOrExpired'), 'danger');
+                    loginLoading.value = false;
                 }
             } catch (error) {
                 showAlert(t('loginFailedRetry'), 'danger');
+                loginLoading.value = false;
             }
         };
 
@@ -2209,34 +2235,124 @@ export const locale = i18n.global.locale
         const handleAudioUpload = async (event) => {
             const file = event.target.files[0];
 
-            if (file && (file.type?.startsWith('audio/') || file.type?.startsWith('video/'))) {
-                const allowedVideoTypes = ['video/mp4', 'video/x-m4v', 'video/mpeg'];
-                if (file.type.startsWith('video/') && !allowedVideoTypes.includes(file.type)) {
-                    showAlert(t('unsupportedVideoFormat'), 'warning');
-                    setCurrentAudioPreview(null);
-                    s2vForm.value.separatedAudios = [];
-                    updateUploadedContentStatus();
-                    return;
-                }
-                s2vForm.value.audioFile = file;
+            if (!file) {
+                return;
+            }
 
-                // Read file as data URL for preview
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    const audioDataUrl = e.target.result;
-                    setCurrentAudioPreview(audioDataUrl);
-                    updateUploadedContentStatus();
-                    // 音频分离由统一的 watch 监听器处理，不需要在这里手动调用
-                    console.log('[handleAudioUpload] 音频上传完成，音频分离将由统一的监听器自动处理');
-                };
-                reader.readAsDataURL(file);
+            // 检测文件类型：优先使用 MIME 类型，如果无法识别则使用文件扩展名
+            const mimeType = file.type || '';
+            const fileName = file.name || '';
+            const fileExtension = fileName.toLowerCase().split('.').pop() || '';
+
+            // 视频文件扩展名列表
+            const videoExtensions = ['mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg', 'mpg', '3gp', 'ts', 'mts', 'm2ts'];
+            // 音频文件扩展名列表
+            const audioExtensions = ['mp3', 'wav', 'aac', 'ogg', 'm4a', 'flac', 'wma', 'opus'];
+
+            // 判断是否为视频文件
+            const isVideoByMime = mimeType.startsWith('video/');
+            const isVideoByExt = videoExtensions.includes(fileExtension);
+            const isVideo = isVideoByMime || isVideoByExt;
+
+            // 判断是否为音频文件
+            const isAudioByMime = mimeType.startsWith('audio/');
+            const isAudioByExt = audioExtensions.includes(fileExtension);
+            const isAudio = isAudioByMime || isAudioByExt;
+
+            if (isVideo || isAudio) {
+                // 如果是视频，先提取音频
+                if (isVideo) {
+                    try {
+                        setLoading(true);
+                        showAlert(t('extractingAudioFromVideo') || '正在从视频中提取音频...', 'info');
+
+                        // 读取视频文件为 base64
+                        const videoDataUrl = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => resolve(e.target.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(file);
+                        });
+
+                        // 调用后端 API 提取音频
+                        const response = await apiCall('/api/v1/audio/extract', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                video: videoDataUrl,
+                                output_format: 'wav',
+                                sample_rate: 44100,
+                                channels: 2
+                            })
+                        });
+
+                        if (!response.ok) {
+                            const error = await response.json();
+                            // Extract error message, remove "error: " prefix and "!" suffix if present
+                            let errorMessage = error.message || '音频提取失败';
+                            if (errorMessage.startsWith('error: ')) {
+                                errorMessage = errorMessage.substring(7);
+                            }
+                            if (errorMessage.endsWith('!')) {
+                                errorMessage = errorMessage.slice(0, -1);
+                            }
+                            throw new Error(errorMessage);
+                        }
+
+                        const result = await response.json();
+                        const extractedAudioDataUrl = result.audio; // 已经是 data URL 格式
+
+                        // 创建一个新的音频 File 对象用于后续处理
+                        const audioBlob = await fetch(extractedAudioDataUrl).then(r => r.blob());
+                        const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.wav'), { type: 'audio/wav' });
+
+                        s2vForm.value.audioFile = audioFile;
+                        setCurrentAudioPreview(extractedAudioDataUrl);
+                        updateUploadedContentStatus();
+
+                        showAlert(t('audioExtractedSuccessfully') || '音频提取成功', 'success');
+                        console.log('[handleAudioUpload] 视频音频提取完成，音频分离将由统一的监听器自动处理');
+
+                    } catch (error) {
+                        console.error('[handleAudioUpload] 视频音频提取失败:', error);
+
+                        // 检查是否是"视频无音轨"的错误
+                        let errorMessage = error.message || '';
+                        if (errorMessage.includes('does not contain an audio track') ||
+                            errorMessage.includes('不包含音轨')) {
+                            errorMessage = t('videoNoAudioTrack') || '视频文件不包含音轨，请上传包含音频的视频文件。';
+                        } else if (!errorMessage) {
+                            errorMessage = t('audioExtractionFailed') || '音频提取失败';
+                        }
+
+                        showAlert(errorMessage, 'error');
+                        setCurrentAudioPreview(null);
+                        s2vForm.value.separatedAudios = [];
+                        s2vForm.value.audioFile = null;
+                        updateUploadedContentStatus();
+                    } finally {
+                        setLoading(false);
+                    }
+                } else {
+                    // 直接是音频文件，按原逻辑处理
+                    s2vForm.value.audioFile = file;
+
+                    // Read file as data URL for preview
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const audioDataUrl = e.target.result;
+                        setCurrentAudioPreview(audioDataUrl);
+                        updateUploadedContentStatus();
+                        // 音频分离由统一的 watch 监听器处理，不需要在这里手动调用
+                        console.log('[handleAudioUpload] 音频上传完成，音频分离将由统一的监听器自动处理');
+                    };
+                    reader.readAsDataURL(file);
+                }
             } else {
+                // 既不是视频也不是音频，或者无法识别格式
                 setCurrentAudioPreview(null);
                 s2vForm.value.separatedAudios = [];
                 updateUploadedContentStatus();
-                if (file) {
-                    showAlert(t('unsupportedAudioOrVideo'), 'warning');
-                }
+                showAlert(t('unsupportedAudioOrVideo') || '请选择音频或视频文件', 'warning');
             }
         };
 
@@ -2533,6 +2649,14 @@ export const locale = i18n.global.locale
                     stage: currentForm.stage,
                     seed: currentForm.seed || Math.floor(Math.random() * 1000000)
                 };
+
+                // 添加尺寸参数
+                if (currentForm.customShape) {
+                    formData.custom_shape = currentForm.customShape;
+                }
+                if (currentForm.aspectRatio) {
+                    formData.aspect_ratio = currentForm.aspectRatio;
+                }
 
                 // animate 任务类型使用默认 prompt，其他任务类型需要用户输入
                 if (selectedTaskId.value === 'animate') {

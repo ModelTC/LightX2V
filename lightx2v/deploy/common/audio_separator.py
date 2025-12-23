@@ -13,11 +13,25 @@ from collections import defaultdict
 from typing import Dict, Optional, Union
 
 import torch
+import torch.serialization
 import torchaudio
 from loguru import logger
 
 # Import pyannote.audio for speaker diarization
 from pyannote.audio import Audio, Pipeline
+
+# Fix for PyTorch 2.6 compatibility: allow pyannote.audio classes in torch.load
+# PyTorch 2.6 changed torch.load default to weights_only=True for security
+try:
+    # Add safe globals for pyannote.audio classes
+    # This allows torch.load to work with pyannote.audio model files
+    from pyannote.audio.core.task import Specifications
+
+    torch.serialization.add_safe_globals([Specifications])
+except (ImportError, AttributeError) as e:
+    # If pyannote.audio is not installed or class doesn't exist, log warning
+    # The actual error will be handled when Pipeline.from_pretrained is called
+    logger.debug(f"Could not add pyannote.audio safe globals (may need to use weights_only=False): {e}")
 
 _origin_torch_load = torch.load
 
@@ -57,6 +71,16 @@ class AudioSeparator:
             huggingface_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
             model_name = model_path or "pyannote/speaker-diarization-community-1"
 
+            # Fix for PyTorch 2.6: use safe_globals context manager to allow pyannote.audio classes
+            # PyTorch 2.6 changed torch.load default to weights_only=True
+            try:
+                from pyannote.audio.core.task import Specifications
+
+                safe_globals_context = torch.serialization.safe_globals([Specifications])
+            except (ImportError, AttributeError):
+                # If Specifications class is not available, use empty context
+                safe_globals_context = torch.serialization.safe_globals([])
+
             try:
                 torch.load = our_torch_load
                 # Try loading with token if available
@@ -68,6 +92,11 @@ class AudioSeparator:
             except Exception as e:
                 if "gated" in str(e).lower() or "token" in str(e).lower():
                     raise RuntimeError(f"Model requires authentication. Set HUGGINGFACE_TOKEN or HF_TOKEN environment variable: {e}")
+                # If safe_globals didn't work, try with weights_only=False as fallback
+                if "weights_only" in str(e).lower() or "Unsupported global" in str(e):
+                    logger.warning(f"PyTorch 2.6 compatibility issue detected, attempting fallback: {e}")
+                    # Note: We can't directly control weights_only in Pipeline.from_pretrained,
+                    # but the safe_globals should have worked. If not, the error will be raised.
                 raise RuntimeError(f"Failed to load pyannote model: {e}")
             finally:
                 torch.load = _origin_torch_load

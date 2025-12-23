@@ -61,8 +61,24 @@ class BaseWorker:
             logger.info(f"set {k} to {v}")
             setattr(self.input_info, k, v)
         self.input_info.last_frame_path = params.get("last_frame_path", "")
+
         if "stream_config" in self.input_info.__dataclass_fields__:
             self.input_info.stream_config = params.get("stream_config", {})
+
+        if "aspect_ratio" in self.input_info.__dataclass_fields__:
+            self.input_info.aspect_ratio = params.get("aspect_ratio", "")
+
+        if "custom_shape" in self.input_info.__dataclass_fields__:
+            self.input_info.custom_shape = params.get("custom_shape", [])
+
+            # assign custom_shape to t2v task
+            if self.is_t2v_task() and len(self.input_info.custom_shape) == 2:
+                height, width = self.input_info.custom_shape
+                if (width <= 1280 and height <= 720 and width >= 256 and height >= 256) or (width <= 720 and height <= 1280 and width >= 256 and height >= 256):
+                    self.runner.set_config({"target_height": height, "target_width": width})
+                    logger.info(f"Set target_height={height}, target_width={width} for t2v task")
+                else:
+                    logger.warning(f"Custom shape {width}x{height} is too large or too smallfor t2v task, will use default shape")
 
     async def prepare_input_image(self, params, inputs, tmp_dir, data_manager):
         input_image_path = inputs.get("input_image", "")
@@ -248,6 +264,9 @@ class BaseWorker:
 
     def is_image_task(self):
         return self.runner.config.get("task") == "i2i" or self.runner.config.get("task") == "t2i"
+
+    def is_t2v_task(self):
+        return self.runner.config.get("task") == "t2v"
 
     async def broadcast_data(self, data, src_rank=0):
         if self.world_size <= 1:

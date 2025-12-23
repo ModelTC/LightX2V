@@ -15,6 +15,7 @@ class T2VInputInfo:
     # shape related
     latent_shape: list = field(default_factory=list)
     target_shape: int = field(default_factory=int)
+    custom_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -127,6 +128,8 @@ class T2IInputInfo:
     target_shape: int = field(default_factory=int)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
+    aspect_ratio: str = field(default_factory=str)
+    custom_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +145,8 @@ class I2IInputInfo:
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
     processed_image_size: int = field(default_factory=list)
     original_size: list = field(default_factory=list)
+    aspect_ratio: str = field(default_factory=str)
+    custom_shape: list = field(default_factory=list)
 
 
 def set_input_info(args):

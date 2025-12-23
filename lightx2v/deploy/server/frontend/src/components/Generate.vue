@@ -318,6 +318,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { watch, onMounted, computed, ref, nextTick, onUnmounted } from 'vue'
 import ModelDropdown from './ModelDropdown.vue'
 import TaskCarousel from './TaskCarousel.vue'
+import DropdownMenu from './DropdownMenu.vue'
 
 // Props
 const props = defineProps({
@@ -432,6 +433,24 @@ watch(selectedTaskId, (newTaskId, oldTaskId) => {
         // 重置分离记录
         lastSeparatedFaceCount.value = 0
         lastSeparatedAudioUrl.value = ''
+
+        // 对于 t2v 和 t2i 任务，如果 customShape 为 null，自动设置默认值
+        const form = getCurrentForm()
+        if (form && !form.customShape) {
+            if (newTaskId === 't2v') {
+                // t2v: 使用 720p（横屏）作为默认值
+                const defaultResolution = videoResolutions.find(r => r.label === '720p_landscape')
+                if (defaultResolution) {
+                    form.customShape = defaultResolution.value
+                }
+            } else if (newTaskId === 't2i') {
+                // t2i: 使用 16:9 宽高比作为默认值
+                const ratio16_9 = imageAspectRatios.find(r => r.value === '16:9')
+                if (ratio16_9) {
+                    selectImageAspectRatio(ratio16_9)
+                }
+            }
+        }
     }
 })
 
@@ -2383,6 +2402,234 @@ const onAudioDrop = (event, targetIndex) => {
 }
 
 
+// 尺寸设置相关状态
+const showCustomSize = ref(false)  // 是否显示自定义尺寸输入
+const customWidth = ref('')
+const customHeight = ref('')
+
+// 图片任务宽高比选项
+const imageAspectRatios = [
+    { label: '16:9', value: '16:9', key: 'aspectRatio16_9' },
+    { label: '9:16', value: '9:16', key: 'aspectRatio9_16' },
+    { label: '1:1', value: '1:1', key: 'aspectRatio1_1' },
+    { label: '4:3', value: '4:3', key: 'aspectRatio4_3' },
+    { label: '3:4', value: '3:4', key: 'aspectRatio3_4' }
+]
+
+// 宽高比到尺寸的映射（基于后端 ASPECT_RATIO_MAP）
+// 格式: [width, height] -> 转换为 customShape 格式 [height, width]
+const aspectRatioToSizeMap = {
+    '16:9': [928, 1664],   // [height, width] 对应后端的 [1664, 928]
+    '9:16': [1664, 928],   // [height, width] 对应后端的 [928, 1664]
+    '1:1': [1328, 1328],   // [height, width] 对应后端的 [1328, 1328]
+    '4:3': [1140, 1472],  // [height, width] 对应后端的 [1472, 1140]
+    '3:4': [1024, 768]     // [height, width] 对应后端的 [768, 1024]
+}
+
+// 视频任务预设分辨率选项（仅用于 t2v 任务）
+// value 格式: [height, width]
+const videoResolutions = [
+    { label: '480p_landscape', value: [480, 832], key: 'resolution480pLandscape' }, // 480p（横屏）480×832
+    { label: '480p_portrait', value: [832, 480], key: 'resolution480pPortrait' }, // 480p（竖屏）832×480
+    { label: '720p_landscape', value: [720, 1280], key: 'resolution720pLandscape' }, // 720p（横屏）720×1280
+    { label: '720p_portrait', value: [1280, 720], key: 'resolution720pPortrait' }, // 720p（竖屏）1280×720
+]
+
+
+// 选择视频预设分辨率
+const selectVideoResolution = (resolution) => {
+    const form = getCurrentForm()
+    if (form) {
+        form.customShape = resolution.value
+        showCustomSize.value = false
+        customWidth.value = ''
+        customHeight.value = ''
+    }
+}
+
+// 选择图片宽高比（转换为 custom_shape）
+const selectImageAspectRatio = (aspectRatio) => {
+    const form = getCurrentForm()
+    if (form) {
+        form.aspectRatio = aspectRatio.value
+        // 设置 customShape，格式为 [height, width]
+        if (aspectRatioToSizeMap[aspectRatio.value]) {
+            form.customShape = aspectRatioToSizeMap[aspectRatio.value]
+        }
+        showCustomSize.value = false
+        customWidth.value = ''
+        customHeight.value = ''
+    }
+}
+
+// 使用默认尺寸
+const useDefaultSize = () => {
+    const form = getCurrentForm()
+    if (form) {
+        form.customShape = null
+        form.aspectRatio = null
+        showCustomSize.value = false
+        customWidth.value = ''
+        customHeight.value = ''
+    }
+}
+
+// 应用自定义尺寸（自动应用，无需手动调用）
+const applyCustomSize = () => {
+    const width = parseInt(customWidth.value)
+    const height = parseInt(customHeight.value)
+
+    // 如果输入为空或无效，不应用
+    if (!customWidth.value || !customHeight.value || isNaN(width) || isNaN(height) || width <= 0 || height <= 0) {
+        return
+    }
+
+    const form = getCurrentForm()
+    if (form) {
+        form.customShape = [height, width]
+    }
+}
+
+// 打开自定义尺寸输入
+const openCustomSize = () => {
+    showCustomSize.value = true
+    const form = getCurrentForm()
+    if (form && form.customShape && Array.isArray(form.customShape) && form.customShape.length === 2) {
+        customHeight.value = form.customShape[0].toString()
+        customWidth.value = form.customShape[1].toString()
+    }
+}
+
+// 检查当前 customShape 是否匹配某个预设宽高比
+const getCurrentAspectRatio = () => {
+    const form = getCurrentForm()
+    if (!form || !form.customShape || !Array.isArray(form.customShape) || form.customShape.length !== 2) {
+        return null
+    }
+    const [height, width] = form.customShape
+    // 检查是否匹配某个预设值
+    // customShape 格式是 [height, width]
+    for (const [ratioValue, sizeArray] of Object.entries(aspectRatioToSizeMap)) {
+        const [presetHeight, presetWidth] = sizeArray
+        if (height === presetHeight && width === presetWidth) {
+            return ratioValue  // 返回 '16:9' 等格式
+        }
+    }
+    return null
+}
+
+// 获取当前选中的尺寸值（用于下拉菜单）
+const getCurrentSizeValue = () => {
+    const form = getCurrentForm()
+
+    // t2v 任务：检查是否匹配预设分辨率
+    if (selectedTaskId.value === 't2v') {
+        if (!form || !form.customShape) {
+            return '720p_landscape'  // 默认 720p（横屏）
+        }
+        const [height, width] = form.customShape
+        for (const resolution of videoResolutions) {
+            if (resolution.value[0] === height && resolution.value[1] === width) {
+                return resolution.label
+            }
+        }
+        return '720p_landscape'  // 默认 720p（横屏）
+    }
+
+    // 图片任务：检查是否匹配预设宽高比
+    if (selectedTaskId.value === 't2i' || selectedTaskId.value === 'i2i') {
+        // 如果自定义尺寸输入框已打开，优先显示 "custom"
+        if (showCustomSize.value) {
+            return 'custom'
+        }
+        if (!form || !form.customShape) {
+            return 'default'  // 默认 16:9 横屏
+        }
+        const aspectRatio = getCurrentAspectRatio()
+        if (aspectRatio) {
+            return aspectRatio
+        }
+        return 'custom'
+    }
+
+    // 其他任务：使用输入尺寸
+    return 'default'
+}
+
+// 视频任务尺寸选项（仅用于 t2v 任务）
+const videoSizeOptions = computed(() => {
+    // 只有 t2v 任务才显示尺寸选项
+    if (selectedTaskId.value !== 't2v') {
+        return []
+    }
+
+    const options = []
+
+    videoResolutions.forEach(resolution => {
+        options.push({
+            value: resolution.label,
+            label: t(resolution.key),
+            icon: 'fas fa-video'
+        })
+    })
+
+    return options
+})
+
+// 图片任务尺寸选项
+const imageSizeOptions = computed(() => {
+    const options = []
+
+    // t2i 任务不显示"使用默认尺寸"选项
+    if (selectedTaskId.value !== 't2i') {
+        options.push({
+            value: 'default',
+            label: t('useInputSize'),
+            icon: 'fas fa-undo'
+        })
+    }
+
+    imageAspectRatios.forEach(ratio => {
+        options.push({
+            value: ratio.value,
+            label: t(ratio.key),
+            icon: 'fas fa-image'
+        })
+    })
+
+    options.push({
+        value: 'custom',
+        label: t('custom'),
+        icon: 'fas fa-edit'
+    })
+
+    return options
+})
+
+// 处理尺寸下拉选择
+const handleSizeSelect = (item) => {
+    if (item.value === 'default') {
+        useDefaultSize()
+    } else if (item.value === 'custom') {
+        openCustomSize()
+    } else {
+        // t2v 任务：选择横屏或竖屏
+        if (selectedTaskId.value === 't2v') {
+            const resolution = videoResolutions.find(r => r.label === item.value)
+            if (resolution) {
+                selectVideoResolution(resolution)
+            }
+        }
+        // 图片任务：选择宽高比
+        else if (selectedTaskId.value === 't2i' || selectedTaskId.value === 'i2i') {
+            const ratio = imageAspectRatios.find(r => r.value === item.value)
+            if (ratio) {
+                selectImageAspectRatio(ratio)
+            }
+        }
+    }
+}
+
 // 组件卸载时清理
 onUnmounted(() => {
     if (resizeHandler) {
@@ -3320,6 +3567,59 @@ onUnmounted(() => {
 
                                             </div>
                                         </div>
+
+                                <!-- 尺寸设置区域 - Apple 风格（仅 t2v 和图片任务显示） -->
+                                <div v-if="selectedTaskId === 't2v' || selectedTaskId === 't2i' || selectedTaskId === 'i2i'" class="mt-6">
+                                    <div class="flex justify-between items-center mb-3">
+                                        <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
+                                            {{ t('sizeSetting') }}
+                                        </label>
+                                    </div>
+
+                                    <!-- t2v 任务：横屏/竖屏选择 -->
+                                    <div v-if="selectedTaskId === 't2v'">
+                                        <DropdownMenu
+                                            :items="videoSizeOptions"
+                                            :selected-value="getCurrentSizeValue()"
+                                            :placeholder="t('sizeSettingDescription')"
+                                            @select-item="handleSizeSelect"
+                                            class="flex-1 max-w-50"
+                                        />
+                                    </div>
+
+                                    <!-- 图片任务：下拉选择 -->
+                                    <div v-else-if="selectedTaskId === 't2i' || selectedTaskId === 'i2i'">
+                                        <div class="flex items-center gap-3">
+                                            <DropdownMenu
+                                                :items="imageSizeOptions"
+                                                :selected-value="getCurrentSizeValue()"
+                                                :placeholder="t('sizeSettingDescription')"
+                                                @select-item="handleSizeSelect"
+                                                class="flex-1 max-w-50"
+                                            />
+
+                                            <!-- 自定义尺寸输入 -->
+                                            <div v-if="showCustomSize" class="flex items-center gap-1.5">
+                                                <input
+                                                    v-model="customWidth"
+                                                    type="number"
+                                                    min="1"
+                                                    :placeholder="t('width')"
+                                                    @input="applyCustomSize"
+                                                    class="w-16 h-8 px-2 text-xs bg-white/95 dark:bg-[#1e1e1e]/95 border border-black/8 dark:border-white/8 rounded-lg text-[#1d1d1f] dark:text-[#f5f5f7] focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]/30 dark:focus:ring-[color:var(--brand-primary-light)]/40 focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/50 transition-all duration-200 tracking-tight placeholder:text-[#86868b]/60 dark:placeholder:text-[#98989d]/60">
+                                                <span class="text-[#86868b] dark:text-[#98989d] text-xs font-light">×</span>
+                                                <input
+                                                    v-model="customHeight"
+                                                    type="number"
+                                                    min="1"
+                                                    :placeholder="t('height')"
+                                                    @input="applyCustomSize"
+                                                    class="w-16 h-8 px-2 text-xs bg-white/95 dark:bg-[#1e1e1e]/95 border border-black/8 dark:border-white/8 rounded-lg text-[#1d1d1f] dark:text-[#f5f5f7] focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]/30 dark:focus:ring-[color:var(--brand-primary-light)]/40 focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/50 transition-all duration-200 tracking-tight placeholder:text-[#86868b]/60 dark:placeholder:text-[#98989d]/60">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- 提交按钮 - Apple 极简风格 -->
                                 <div class="flex justify-center mt-8">
                                     <button @click="handleSubmitTask" :disabled="submitting || templateLoading"

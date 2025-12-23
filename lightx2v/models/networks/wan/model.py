@@ -255,10 +255,11 @@ class WanModel(CompiledMethodsMixin):
 
         if self.config.get("dit_quant_scheme", "Default") == "nvfp4":
             calib_path = os.path.join(safetensors_path, "calib.pt")
-            logger.info(f"[CALIB] Loaded calibration data from: {calib_path}")
-            calib_data = torch.load(calib_path, map_location="cpu")
-            for k, v in calib_data["absmax"].items():
-                weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
+            if os.path.exists(calib_path):
+                logger.info(f"[CALIB] Loaded calibration data from: {calib_path}")
+                calib_data = torch.load(calib_path, map_location="cpu")
+                for k, v in calib_data["absmax"].items():
+                    weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
 
         return weight_dict
 

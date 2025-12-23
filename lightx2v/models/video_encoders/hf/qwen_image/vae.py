@@ -57,10 +57,7 @@ class AutoencoderKLQwenImageVAE:
     def decode(self, latents, input_info):
         if self.cpu_offload:
             self.model.to(torch.device("cuda"))
-        if self.config["task"] == "t2i":
-            width, height = self.config["aspect_ratios"][self.config["aspect_ratio"]]
-        elif self.config["task"] == "i2i":
-            width, height = input_info.auto_width, input_info.auto_hight
+        width, height = input_info.auto_width, input_info.auto_height
         latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"])
         latents = latents.to(self.dtype)
         latents_mean = torch.tensor(self.vae_latents_mean).view(1, self.latent_channels, 1, 1, 1).to(latents.device, latents.dtype)

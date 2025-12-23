@@ -56,11 +56,59 @@ const imageMaterialsCache = ref({})
 
 // 获取图片素材（支持多图，逗号分隔）
 const getImageMaterials = computed(() => {
-    if (!modalTask.value?.inputs?.input_image) return []
+    const taskId = modalTask.value?.task_id
+    const taskType = modalTask.value?.task_type
+    const inputs = modalTask.value?.inputs || {}
 
-    const inputImage = modalTask.value.inputs.input_image
-    const taskId = modalTask.value.task_id
-    const inputs = modalTask.value.inputs || {}
+    // flf2v 任务：同时显示首帧和尾帧
+    if (taskType === 'flf2v') {
+        const imageMaterials = []
+
+        // 首帧图片
+        if (inputs.input_image) {
+            const cacheKey = `${taskId}_input_image`
+            let url = getTaskFileUrlSync(taskId, 'input_image')
+            if (!url && imageMaterialsCache.value[cacheKey]) {
+                url = imageMaterialsCache.value[cacheKey]
+            }
+            if (!url) {
+                getTaskFileUrl(taskId, 'input_image').then(loadedUrl => {
+                    if (loadedUrl) {
+                        imageMaterialsCache.value[cacheKey] = loadedUrl
+                    }
+                }).catch(err => {
+                    console.warn(`Failed to load image URL for input_image:`, err)
+                })
+            }
+            imageMaterials.push(['input_image', url, 0, 'firstFrameImage'])
+        }
+
+        // 尾帧图片
+        if (inputs.input_last_frame) {
+            const cacheKey = `${taskId}_input_last_frame`
+            let url = getTaskFileUrlSync(taskId, 'input_last_frame')
+            if (!url && imageMaterialsCache.value[cacheKey]) {
+                url = imageMaterialsCache.value[cacheKey]
+            }
+            if (!url) {
+                getTaskFileUrl(taskId, 'input_last_frame').then(loadedUrl => {
+                    if (loadedUrl) {
+                        imageMaterialsCache.value[cacheKey] = loadedUrl
+                    }
+                }).catch(err => {
+                    console.warn(`Failed to load image URL for input_last_frame:`, err)
+                })
+            }
+            imageMaterials.push(['input_last_frame', url, 1, 'lastFrameImage'])
+        }
+
+        return imageMaterials
+    }
+
+    // 其他任务类型：原有的多图逻辑
+    if (!inputs.input_image) return []
+
+    const inputImage = inputs.input_image
     // multi-images
     const inputImages = Object.keys(inputs).filter(key => key.startsWith("input_image/"));
 
@@ -151,10 +199,47 @@ const handleImageError = async (event, taskId, inputName) => {
 
 // 监听 modalTask 变化，预加载所有图片 URL
 watch(() => modalTask.value?.task_id, async (taskId) => {
-    if (!taskId || !modalTask.value?.inputs?.input_image) return
+    if (!taskId) return
 
-    const inputImage = modalTask.value.inputs.input_image
-    const inputs = modalTask.value.inputs || {}
+    const taskType = modalTask.value?.task_type
+    const inputs = modalTask.value?.inputs || {}
+
+    // flf2v 任务：预加载首帧和尾帧
+    if (taskType === 'flf2v') {
+        // 预加载首帧
+        if (inputs.input_image) {
+            const cacheKey = `${taskId}_input_image`
+            if (!getTaskFileUrlSync(taskId, 'input_image') && !imageMaterialsCache.value[cacheKey]) {
+                getTaskFileUrl(taskId, 'input_image').then(loadedUrl => {
+                    if (loadedUrl) {
+                        imageMaterialsCache.value[cacheKey] = loadedUrl
+                    }
+                }).catch(err => {
+                    console.warn(`Failed to preload image URL for input_image:`, err)
+                })
+            }
+        }
+
+        // 预加载尾帧
+        if (inputs.input_last_frame) {
+            const cacheKey = `${taskId}_input_last_frame`
+            if (!getTaskFileUrlSync(taskId, 'input_last_frame') && !imageMaterialsCache.value[cacheKey]) {
+                getTaskFileUrl(taskId, 'input_last_frame').then(loadedUrl => {
+                    if (loadedUrl) {
+                        imageMaterialsCache.value[cacheKey] = loadedUrl
+                    }
+                }).catch(err => {
+                    console.warn(`Failed to preload image URL for input_last_frame:`, err)
+                })
+            }
+        }
+        return
+    }
+
+    // 其他任务类型：原有的预加载逻辑
+    if (!inputs.input_image) return
+
+    const inputImage = inputs.input_image
     // multi-images
     const inputImages = Object.keys(inputs).filter(key => key.startsWith("input_image/"));
 
@@ -230,6 +315,12 @@ const getVisibleMaterials = computed(() => {
             image: true,
             video: false,
             audio: true,
+            prompt: true
+        },
+        'flf2v': {
+            image: true,  // flf2v 显示首帧和尾帧
+            video: false,
+            audio: false,
             prompt: true
         },
         'animate': {
@@ -741,17 +832,22 @@ watch(audioMaterials, (newMaterials) => {
                                             </div>
                                             <!-- 卡片内容 -->
                                             <div class="p-6 min-h-[200px]">
-                                                <div v-if="getImageMaterials.length > 0">
-                                                    <div v-for="([inputName, url, index]) in getImageMaterials" :key="inputName || index" class="rounded-xl overflow-hidden border border-black/8 dark:border-white/8 mb-3 last:mb-0">
-                                                        <div class="relative">
-                                                            <img :src="url" :alt="inputName || `图片 ${index + 1}`" class="w-full h-auto object-contain">
-                                                            <!-- 多图时显示序号 -->
-                                                            <div v-if="getImageMaterials.length > 1" class="absolute top-2 left-2 px-2 py-1 bg-black/50 dark:bg-black/70 text-white text-xs rounded backdrop-blur-sm">
-                                                                {{ index + 1 }} / {{ getImageMaterials.length }}
-                                                            </div>
+                                            <div v-if="getImageMaterials.length > 0">
+                                                <div v-for="([inputName, url, index, label]) in getImageMaterials" :key="inputName || index" class="rounded-xl overflow-hidden border border-black/8 dark:border-white/8 mb-3 last:mb-0">
+                                                    <div class="relative">
+                                                        <img v-if="url" :src="url" :alt="inputName || label || `图片 ${index + 1}`" class="w-full h-auto object-contain" @error="handleImageError($event, modalTask.task_id, inputName)">
+                                                        <!-- 加载中或错误状态 -->
+                                                        <div v-else class="flex flex-col items-center justify-center h-[150px] bg-[#f5f5f7] dark:bg-[#1c1c1e]">
+                                                            <i class="fas fa-spinner fa-spin text-2xl text-[#86868b]/50 dark:text-[#98989d]/50 mb-2"></i>
+                                                            <p class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('loading') || '加载中...' }}</p>
+                                                        </div>
+                                                        <!-- 标签：flf2v 任务显示"首帧"/"尾帧"，其他多图显示序号 -->
+                                                        <div v-if="url && (label || getImageMaterials.length > 1)" class="absolute top-2 left-2 px-2 py-1 bg-black/50 dark:bg-black/70 text-white text-xs rounded backdrop-blur-sm">
+                                                            {{ label ? t(label) : `${index + 1} / ${getImageMaterials.length}` }}
                                                         </div>
                                                     </div>
                                                 </div>
+                                            </div>
                                                 <div v-else class="flex flex-col items-center justify-center h-[150px]">
                                                     <i class="fas fa-image text-3xl text-[#86868b]/30 dark:text-[#98989d]/30 mb-3"></i>
                                                     <p class="text-sm text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('noImage') }}</p>
