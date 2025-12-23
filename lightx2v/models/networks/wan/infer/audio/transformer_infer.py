@@ -20,8 +20,7 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         super().__init__(config)
         self.has_post_adapter = True
         self.phases_num = 4
-        if "npu" in AI_DEVICE:
-            self.attn_obj = ATTN_WEIGHT_REGISTER.get("npu_flash_attn")()
+        self.attn_obj = ATTN_WEIGHT_REGISTER.get(self.config.get("self_attn_1_type"))()
 
     @torch.no_grad()
     def infer_post_adapter(self, phase, x, pre_infer_out):
@@ -81,24 +80,9 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         q = q.view(q.size(0), self.num_heads, self.head_dim)
         k = k.view(k.size(0), self.num_heads, self.head_dim)
         v = v.view(v.size(0), self.num_heads, self.head_dim)
-        if "npu" in AI_DEVICE:
-            cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
-            cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
-            out = self.attn_obj.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_k, max_seqlen_q=max_seqlen_q, max_seqlen_kv=max_seqlen_k, softmax_scale=1.0)
-        else:
-            out = flash_attn_varlen_func(
-                q=q,
-                k=k,
-                v=v,
-                cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True),
-                cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True),
-                max_seqlen_q=max_seqlen_q,
-                max_seqlen_k=max_seqlen_k,
-                dropout_p=0.0,
-                softmax_scale=None,
-                causal=False,
-                window_size=(-1, -1),
-                deterministic=False,
-            )
+
+        cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
+        cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
+        out = self.attn_obj.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_k, max_seqlen_q=max_seqlen_q, max_seqlen_kv=max_seqlen_k)
         out = out.view(-1, self.num_heads * self.head_dim)
         return phase.to_out.apply(out) * gate

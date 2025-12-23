@@ -10,7 +10,7 @@ except ImportError:
 
 
 @PLATFORM_ATTN_WEIGHT_REGISTER("npu_flash_attn")
-class MluFlashAttnWeight(AttnWeightTemplate):
+class NpuFlashAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
         assert torch_npu is not None, "torch_npu is not installed."
