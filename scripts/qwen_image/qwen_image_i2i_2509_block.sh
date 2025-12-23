@@ -14,8 +14,8 @@ python -m lightx2v.infer \
     --task i2i \
     --model_path $model_path \
     --config_json ${lightx2v_path}/configs/offload/block/qwen_image_i2i_2509_block.json \
-    --prompt "change the style of image2 to image1" \
+    --prompt "Have the two characters swap clothes and stand in front of the castle." \
     --negative_prompt " " \
-    --image_path ${lightx2v_path}/assets/inputs/imgs/girl.png,${lightx2v_path}/assets/inputs/imgs/girl2.png \
+    --image_path 1.jpeg,2.jpeg \
     --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i_2509.png \
     --seed 0

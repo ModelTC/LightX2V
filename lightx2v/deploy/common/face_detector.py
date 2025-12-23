@@ -40,7 +40,7 @@ class FaceDetector:
 
     def __init__(
         self,
-        method: str = "grounding",
+        method: str = "yolo",
         model_path: str = None,
         conf_threshold: float = None,
         device: str = None,
@@ -104,13 +104,13 @@ class FaceDetector:
                     except Exception as e2:
                         logger.warning(f"Failed to load yolov8m-world.pt, trying yolov8l-world.pt: {e2}")
                         self.model = YOLO("yolov8l-world.pt")
+                # Set custom classes for YOLO World
+                # YOLO World can detect any object described in natural language
+                self.model.set_classes(self.custom_classes)
             else:
                 logger.info(f"Loading YOLO World model from {model_path}")
                 self.model = YOLO(model_path)
 
-            # Set custom classes for YOLO World
-            # YOLO World can detect any object described in natural language
-            self.model.set_classes(self.custom_classes)
             logger.info(f"Face detector initialized with YOLO World, custom classes: {self.custom_classes}, confidence threshold: {self.conf_threshold}")
             self.face_cascade = None
 
@@ -150,6 +150,8 @@ class FaceDetector:
 
             # Load Grounding DINO model
             model_id = "IDEA-Research/grounding-dino-base"  # or "grounding-dino-tiny" for faster inference
+            if model_path is not None:
+                model_id = model_path
             logger.info(f"Loading Grounding DINO model: {model_id}")
             try:
                 # Grounding DINO requires trust_remote_code=True
@@ -255,15 +257,15 @@ class FaceDetector:
                         face_type = "face"  # Generic face type (can be human, animal, anime, etc.)
                     elif any(keyword in class_name.lower() for keyword in ["human", "person"]):
                         face_type = "human"
-                    elif any(keyword in class_name.lower() for keyword in ["animal", "cat", "dog", "bird"]):
+                    elif any(keyword in class_name.lower() for keyword in ["animal", "cat", "dog", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"]):
                         face_type = "animal"
                     elif any(keyword in class_name.lower() for keyword in ["anime", "cartoon", "manga"]):
                         face_type = "anime"
                     elif any(keyword in class_name.lower() for keyword in ["sketch", "line", "drawing"]):
                         face_type = "sketch"
                     else:
-                        # Default to the class name itself
-                        face_type = class_name.lower()
+                        logger.debug(f"Dropped unused detected result: {class_name}")
+                        face_type = None
 
                     face_info = {
                         "bbox": bbox,  # [x1, y1, x2, y2] - absolute pixel coordinates
@@ -272,7 +274,8 @@ class FaceDetector:
                         "class_name": class_name,
                         "face_type": face_type,
                     }
-                    faces.append(face_info)
+                    if face_type is not None:
+                        faces.append(face_info)
 
                     # Draw annotations on image if needed
                     if return_image and annotated_img is not None:

@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/mtc/gongruihao/qinxinyi/lightx2v
-model_path=/mtc/gongruihao/qinxinyi/Wan2.2-Animate-14B
-video_path=/mtc/gongruihao/qinxinyi/lightx2v/assets/inputs/videos/girl.mp4
-refer_path=/mtc/gongruihao/qinxinyi/lightx2v/assets/inputs/imgs/girl.png
+lightx2v_path=
+model_path=
+video_path=
+refer_path=
 
 export CUDA_VISIBLE_DEVICES=0
 

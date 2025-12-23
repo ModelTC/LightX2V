@@ -278,19 +278,6 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
-        if hasattr(self.input_info, "custom_shape") and self.input_info.custom_shape:
-            if isinstance(self.input_info.custom_shape, list) and len(self.input_info.custom_shape) == 2:
-                height, width = self.input_info.custom_shape
-                if height in [480, 832]:
-                    resolution = "480p"
-                elif height in [720, 1280]:
-                    resolution = "720p"
-                else:
-                    resolution = "480p" if height <= 600 else "720p"
-
-                self.set_config({"target_height": height, "target_width": width, "resolution": resolution})
-                logger.info(f"Set target_height={height}, target_width={width}, resolution={resolution} from input_info.custom_shape")
-
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
         torch.cuda.empty_cache()
