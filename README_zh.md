@@ -24,6 +24,8 @@
 
 ## :fire: 最新动态
 
+- **2025年12月23日:** 🚀 新增 **NVFP4 量化感知 4 步蒸馏模型** 支持；模型与权重已发布在 HuggingFace： [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4)。
+
 - **2025年12月15日:** 🚀 支持 海光DCU 硬件上的部署。
 
 - **2025年12月4日:** 🚀 支持 GGUF 格式模型推理，以及在寒武纪 MLU590、MetaX C500 硬件上的部署。
@@ -160,6 +162,10 @@ pipe.generate(
 )
 
 ```
+
+**NVFP4（量化感知 4 步）资源**
+- 推理示例：`examples/wan/wan_i2v_nvfp4.py`（I2V），`examples/wan/wan_t2v_nvfp4.py`（T2V）。
+- NVFP4 算子编译/安装指南：参见 `lightx2v_kernel/README.md`。
 
 > 💡 **更多示例**: 更多使用案例，包括量化、卸载、缓存等进阶配置，请参考 [examples 目录](https://github.com/ModelTC/LightX2V/tree/main/examples)。
 

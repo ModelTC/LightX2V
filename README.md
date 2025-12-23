@@ -24,6 +24,8 @@
 
 ## :fire: Latest News
 
+- **December 23, 2025:** 🚀 Added **NVFP4 quantization-aware 4-step distilled models**; weights are available on HuggingFace: [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4).
+
 - **December 15, 2025:** 🚀 Supported deployment on Hygon DCU.
 
 - **December 4, 2025:** 🚀 Supported GGUF format model inference & deployment on Cambricon MLU590/MetaX C500.
@@ -159,6 +161,10 @@ pipe.generate(
     save_result_path=save_result_path,
 )
 ```
+
+**NVFP4 (quantization-aware 4-step) resources**
+- Inference examples: `examples/wan/wan_i2v_nvfp4.py` (I2V) and `examples/wan/wan_t2v_nvfp4.py` (T2V).
+- NVFP4 operator build/install guide: see `lightx2v_kernel/README.md`.
 
 > 💡 **More Examples**: For more usage examples including quantization, offloading, caching, and other advanced configurations, please refer to the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples).
 
