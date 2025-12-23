@@ -20,14 +20,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
-ASPECT_RATIO_MAP = {
-    "16:9": [1664, 928],
-    "9:16": [928, 1664],
-    "1:1": [1328, 1328],
-    "4:3": [1472, 1140],
-    "3:4": [768, 1024],
-}
-
 
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
@@ -196,22 +188,54 @@ class QwenImageRunner(DefaultRunner):
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
-    def set_target_shape(self):
-        if hasattr(self.input_info, "custom_shape") and isinstance(self.input_info.custom_shape, list) and len(self.input_info.custom_shape) == 2:
+    def get_custom_shape(self):
+        default_aspect_ratios = {
+            "16:9": [1664, 928],
+            "9:16": [928, 1664],
+            "1:1": [1328, 1328],
+            "4:3": [1472, 1140],
+            "3:4": [768, 1024],
+        }
+        as_maps = self.config.get("aspect_ratios", {})
+        as_maps.update(default_aspect_ratios)
+        max_size = self.config.get("max_custom_size", 1664)
+        min_size = self.config.get("min_custom_size", 256)
+
+        if len(self.input_info.custom_shape) == 2:
             height, width = self.input_info.custom_shape
-        elif hasattr(self.input_info, "aspect_ratio") and isinstance(self.input_info.aspect_ratio, str):
-            width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.input_info.aspect_ratio]
+            if width > max_size or height > max_size:
+                scale = max_size / max(width, height)
+                width, height = int(width * scale), int(height * scale)
+                logger.warning(f"Custom shape is too large, scaled to {width}x{height}")
+            width, height = max(width, min_size), max(height, min_size)
+            logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
+            return (width, height)
+
+        if self.input_info.aspect_ratio:
+            if self.input_info.aspect_ratio in as_maps:
+                logger.info(f"Qwen Image Runner got aspect ratio: {self.input_info.aspect_ratio}")
+                width, height = as_maps[self.input_info.aspect_ratio]
+                return (width, height)
+            logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
+
+        if self.config["task"] == "t2i" or not self.config["_auto_resize"]:
+            width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
+            return (width, height)
+        return None
+
+    def set_target_shape(self):
+        custom_shape = self.get_custom_shape()
+        if custom_shape is not None:
+            width, height = custom_shape
         else:
-            if self.config["task"] == "t2i":
-                width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.config["aspect_ratio"]]
-            elif self.config["task"] == "i2i":
-                width, height = self.input_info.original_size[-1]
-                calculated_width, calculated_height, _ = calculate_dimensions(1024 * 1024, width / height)
-                multiple_of = self.vae.vae_scale_factor * 2
-                width = calculated_width // multiple_of * multiple_of
-                height = calculated_height // multiple_of * multiple_of
-                self.input_info.auto_width = width
-                self.input_info.auto_hight = height
+            width, height = self.input_info.original_size[-1]
+            calculated_width, calculated_height, _ = calculate_dimensions(1024 * 1024, width / height)
+            multiple_of = self.vae.vae_scale_factor * 2
+            width = calculated_width // multiple_of * multiple_of
+            height = calculated_height // multiple_of * multiple_of
+        logger.info(f"Qwen Image Runner set target shape: {width}x{height}")
+        self.input_info.auto_width = width
+        self.input_info.auto_height = height
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -221,14 +245,9 @@ class QwenImageRunner(DefaultRunner):
         self.input_info.target_shape = (1, 1, num_channels_latents, height, width)
 
     def set_img_shapes(self):
-        if hasattr(self.input_info, "custom_shape") and isinstance(self.input_info.custom_shape, list) and len(self.input_info.custom_shape) == 2:
-            height, width = self.input_info.custom_shape
-        elif hasattr(self.input_info, "aspect_ratio") and isinstance(self.input_info.aspect_ratio, str):
-            width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.input_info.aspect_ratio]
-        else:
-            width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.config["aspect_ratio"]]
+        width, height = self.input_info.auto_width, self.input_info.auto_height
         if self.config["task"] == "t2i":
-            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * self.config["batchsize"]
+            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * 1
         elif self.config["task"] == "i2i":
             image_shapes = [[(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)]]
             for image_height, image_width in self.inputs["text_encoder_output"]["image_info"]["vae_image_info_list"]:

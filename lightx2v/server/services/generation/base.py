@@ -38,34 +38,8 @@ class BaseGenerationService(ABC):
             downloaded_path = await self.file_service.download_image(image_path)
             task_data["image_path"] = str(downloaded_path)
         elif is_base64_image(image_path):
-            # Check if this is multiple base64 images separated by comma (for i2i tasks)
-            # Base64 data typically doesn't contain commas unless it's multiple images
-            # We check if splitting by comma results in multiple valid base64 images
-            if "," in image_path:
-                # Try to split and check if each part is a valid base64 image
-                parts = image_path.split(",")
-                base64_parts = []
-                for part in parts:
-                    part = part.strip()
-                    if part and is_base64_image(part):
-                        base64_parts.append(part)
-
-                # If we have multiple valid base64 images, save them separately
-                if len(base64_parts) > 1:
-                    saved_paths = []
-                    for base64_data in base64_parts:
-                        saved_path = save_base64_image(base64_data, str(self.file_service.input_image_dir))
-                        saved_paths.append(saved_path)
-                    task_data["image_path"] = ",".join(saved_paths)
-                    logger.info(f"Saved {len(saved_paths)} images for multi-image i2i task")
-                else:
-                    # Only one valid base64 image, treat as single image
-                    saved_path = save_base64_image(image_path, str(self.file_service.input_image_dir))
-                    task_data["image_path"] = str(saved_path)
-            else:
-                # Single base64 image
-                saved_path = save_base64_image(image_path, str(self.file_service.input_image_dir))
-                task_data["image_path"] = str(saved_path)
+            saved_path = save_base64_image(image_path, str(self.file_service.input_image_dir))
+            task_data["image_path"] = str(saved_path)
         else:
             task_data["image_path"] = image_path
 

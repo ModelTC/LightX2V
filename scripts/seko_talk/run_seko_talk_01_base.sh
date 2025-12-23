@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/mtc/gongruihao/qinxinyi/lightx2v
-model_path=/mtc/liuliang1/models/SekoTalk-Distill
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=0
 
