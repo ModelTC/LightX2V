@@ -1,6 +1,6 @@
 """
 Wan2.1 image-to-video generation example.
-This example demonstrates how to use LightX2V with Wan2. model for I2V generation.
+This example demonstrates how to use LightX2V with Wan2.1 model for I2V generation.
 """
 
 from lightx2v import LightX2VPipeline
