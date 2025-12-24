@@ -14,6 +14,10 @@ class CudaDevice:
     name = "cuda"
 
     @staticmethod
+    def init_device_env():
+        pass
+
+    @staticmethod
     def is_available() -> bool:
         try:
             import torch
