@@ -67,7 +67,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         cu_seqlens_qkv[1] = s1  # 设置累积序列长度
         if txt_mask_len:
             s2 = txt_mask_len + global_img_seqlen  # 文本掩码的结束位置
-            cu_seqlens_qkv = torch.cat(cu_seqlens_qkv, s2)
+            cu_seqlens_qkv = torch.cat((cu_seqlens_qkv, torch.tensor([s2], dtype=torch.int32, device=AI_DEVICE)))
         max_seqlen_qkv = global_img_seqlen + txt_qkv_len  # 最大序列长度
 
         # 分割图像和文本的查询、键和值
