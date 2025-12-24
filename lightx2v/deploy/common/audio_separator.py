@@ -107,7 +107,6 @@ class AudioSeparator:
 
             # Initialize Audio helper for waveform loading
             self.pyannote_audio = Audio()
-            self.pyannote_audio = Audio()
 
             logger.info("Initialized pyannote.audio speaker diarization pipeline")
         except Exception as e:

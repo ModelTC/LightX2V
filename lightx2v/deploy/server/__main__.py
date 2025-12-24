@@ -27,7 +27,7 @@ from lightx2v.deploy.common.face_detector import FaceDetector
 from lightx2v.deploy.common.pipeline import Pipeline
 from lightx2v.deploy.common.podcasts import VolcEnginePodcastClient
 from lightx2v.deploy.common.sensetime_voice_clone import SenseTimeTTSClient
-from lightx2v.deploy.common.utils import check_params, data_name, extract_audio_from_video, fetch_resource, format_audio_data, format_image_data, load_inputs
+from lightx2v.deploy.common.utils import check_params, data_name, fetch_resource, format_audio_data, format_image_data, load_inputs, media_to_audio
 from lightx2v.deploy.common.volcengine_asr import VolcEngineASRClient
 from lightx2v.deploy.common.volcengine_tts import VolcEngineTTSClient
 from lightx2v.deploy.data_manager import LocalDataManager, S3DataManager
@@ -1605,6 +1605,16 @@ async def api_v1_audio_separate(request: AudioSeparateRequest, user=Depends(veri
 async def api_v1_audio_extract(request: AudioExtractRequest, user=Depends(verify_user_access)):
     """Extract audio from video file"""
     try:
+        # Validate request parameters
+        output_formats = ["wav", "mp3"]
+        sample_rates = [8000, 16000, 24000, 32000, 44100, 48000]
+        channels = [1, 2]
+        if request.output_format not in output_formats or request.sample_rate not in sample_rates or request.channels not in channels:
+            return error_response(
+                f"Unsupported request parameters: output_format={request.output_format}, sample_rate={request.sample_rate}, channels={request.channels}. Supported formats: {output_formats}, sample rates: {sample_rates}, channels: {channels}",
+                400,
+            )
+
         video_bytes = None
         try:
             encoded = request.video
@@ -1618,15 +1628,12 @@ async def api_v1_audio_extract(request: AudioExtractRequest, user=Depends(verify
             logger.error(f"Failed to decode base64 video {request.video[:100]}..., error: {str(e)}")
             return error_response(f"Invalid base64 video data", 400)
 
-        # Validate output format
-        if request.output_format not in ["wav", "mp3"]:
-            return error_response(f"Unsupported output format: {request.output_format}. Supported formats: wav, mp3", 400)
-
         # Extract audio from video
-        audio_bytes = await asyncio.to_thread(extract_audio_from_video, video_bytes, output_format=request.output_format, sample_rate=request.sample_rate, channels=request.channels)
+        audio_bytes = await asyncio.to_thread(media_to_audio, video_bytes, None, request.sample_rate, request.channels, request.output_format)
 
         # Convert audio bytes to base64
-        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+        audio_base64 = await asyncio.to_thread(base64.b64encode, audio_bytes)
+        audio_base64 = audio_base64.decode("utf-8")
 
         # Determine MIME type based on output format
         mime_type = "audio/wav" if request.output_format == "wav" else "audio/mpeg"
@@ -1641,17 +1648,13 @@ async def api_v1_audio_extract(request: AudioExtractRequest, user=Depends(verify
             "size": len(audio_bytes),
         }
 
-    except ValueError as e:
-        # Handle specific errors like "no audio track"
-        error_msg = str(e)
-        logger.error(f"Audio extraction error: {error_msg}")
-        # Return 400 for user input errors (like no audio track)
-        if "does not contain an audio track" in error_msg:
-            return error_response(error_msg, 400)
-        return error_response(f"Audio extraction failed: {error_msg}", 500)
     except Exception as e:
         logger.error(f"Audio extraction error: {traceback.format_exc()}")
-        return error_response(f"Audio extraction failed: {str(e)}", 500)
+        error_msg = str(e).lower()
+        code = 500
+        if "does not contain an audio track" in error_msg or "no audio track" in error_msg:
+            code = 400
+        return error_response(f"Audio extraction failed: {error_msg}", code)
 
 
 # =========================
@@ -1698,6 +1701,7 @@ if __name__ == "__main__":
     parser.add_argument("--ip", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--face_detector_model_path", type=str, default=None)
+    parser.add_argument("--face_detector_method", type=str, default="yolo")
     parser.add_argument("--audio_separator_model_path", type=str, default="")
     args = parser.parse_args()
     logger.info(f"args: {args}")
@@ -1707,7 +1711,7 @@ if __name__ == "__main__":
     volcengine_asr_client = VolcEngineASRClient()
     sensetime_voice_clone_client = SenseTimeTTSClient()
     volcengine_podcast_client = VolcEnginePodcastClient()
-    face_detector = FaceDetector(model_path=args.face_detector_model_path)
+    face_detector = FaceDetector(method=args.face_detector_method, model_path=args.face_detector_model_path)
     try:
         audio_separator = AudioSeparator(model_path=args.audio_separator_model_path)
     except Exception as e:

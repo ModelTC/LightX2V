@@ -293,17 +293,19 @@ class HunyuanVideo15Runner(DefaultRunner):
         return text_encoder_output
 
     def load_image_encoder(self):
-        siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload"))
-        if siglip_offload:
-            siglip_device = torch.device("cpu")
-        else:
-            siglip_device = torch.device(AI_DEVICE)
-        image_encoder = SiglipVisionEncoder(
-            config=self.config,
-            device=siglip_device,
-            checkpoint_path=self.config["model_path"],
-            cpu_offload=siglip_offload,
-        )
+        image_encoder = None
+        if self.config["task"] in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
+            siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload"))
+            if siglip_offload:
+                siglip_device = torch.device("cpu")
+            else:
+                siglip_device = torch.device(AI_DEVICE)
+            image_encoder = SiglipVisionEncoder(
+                config=self.config,
+                device=siglip_device,
+                checkpoint_path=self.config["model_path"],
+                cpu_offload=siglip_offload,
+            )
         return image_encoder
 
     def load_vae_encoder(self):

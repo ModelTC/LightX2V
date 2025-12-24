@@ -2,6 +2,14 @@
 
 本目录包含 Qwen Image Edit 2511 模型的使用示例，提供了两种不同的推理方式。
 
+## 测速结果
+
+Dit部分的推理耗时对比(不包含预热时间，数据更新于2025.12.23):
+
+<div align="center">
+  <img src="../../assets/figs/qwen/qwen-image-edit-2511.png" alt="Qwen-Image-Edit-2511" width="60%">
+</div>
+
 ## 安装
 
 首先克隆仓库并安装依赖：

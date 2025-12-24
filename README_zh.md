@@ -23,6 +23,9 @@
 > 👋 **加入[微信交流群](https://light-ai.top/community.html)。**
 
 ## :fire: 最新动态
+- **2025年12月23日:** 🚀 我们Day0支持了[Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)的图像编辑模型，H100单卡，LightX2V可带来约1.4倍的速度提升，支持CFG并行/Ulysses并行，高效Offload等技术。我们的[HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)已经更新了CFG/步数蒸馏lora和FP8权重。使用方式可以参考[Python脚本](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。结合LightX2V，4步CFG/步数蒸馏，FP8模型，最高可以加速约42倍。可以在[LightX2V 在线服务](https://x2v.light-ai.top/login)的图生图的Qwen-Image-Edit-2511进行体验。
+
+- **2025年12月22日:** 🚀 新增 **Wan2.1 NVFP4 量化感知 4 步蒸馏模型** 支持；模型与权重已发布在 HuggingFace： [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4)。
 
 - **2025年12月15日:** 🚀 支持 海光DCU 硬件上的部署。
 
@@ -161,6 +164,10 @@ pipe.generate(
 
 ```
 
+**NVFP4（量化感知 4 步）资源**
+- 推理示例：`examples/wan/wan_i2v_nvfp4.py`（I2V），`examples/wan/wan_t2v_nvfp4.py`（T2V）。
+- NVFP4 算子编译/安装指南：参见 `lightx2v_kernel/README.md`。
+
 > 💡 **更多示例**: 更多使用案例，包括量化、卸载、缓存等进阶配置，请参考 [examples 目录](https://github.com/ModelTC/LightX2V/tree/main/examples)。
 
 ## 🤖 支持的模型生态
@@ -171,12 +178,15 @@ pipe.generate(
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)
+- ✅ [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
 
 ### 量化模型和蒸馏模型/Lora (**🚀 推荐：4步推理**)
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
 - ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
 - ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
 - ✅ [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
+- ✅ [Wan2.1-Distill-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4)
+- ✅ [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)
 
 ### 轻量级自编码器模型(**🚀 推荐：推理快速 + 内存占用低**)
 - ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
