@@ -29,23 +29,24 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
             else:
                 assert NotImplementedError
 
-    def infer_with_blocks_offload(self, block_weights, hidden_states, encoder_hidden_states, temb, image_rotary_emb, modulate_index):
+    def infer_with_blocks_offload(self, block_weights, hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, image_rotary_emb, modulate_index):
         for block_idx in range(self.num_blocks):
             self.block_idx = block_idx
-            if self.offload_manager.need_init_first_buffer:
+            if block_idx == 0:
                 self.offload_manager.init_first_buffer(block_weights.blocks)
-
-            self.offload_manager.prefetch_weights((block_idx + 1) % self.num_blocks, block_weights.blocks)
+            if block_idx + 1 < self.num_blocks:
+                self.offload_manager.prefetch_weights(block_idx + 1, block_weights.blocks)
             with torch_device_module.stream(self.offload_manager.compute_stream):
                 encoder_hidden_states, hidden_states = self.infer_block(
                     block_weight=self.offload_manager.cuda_buffers[0],
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
-                    temb=temb,
+                    temb_img_silu=temb_img_silu,
+                    temb_txt_silu=temb_txt_silu,
                     image_rotary_emb=image_rotary_emb,
                     modulate_index=modulate_index,
                 )
 
             self.offload_manager.swap_blocks()
 
-        return encoder_hidden_states, hidden_states
+        return hidden_states
