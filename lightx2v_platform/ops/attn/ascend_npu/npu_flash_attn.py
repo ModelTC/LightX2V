@@ -33,7 +33,9 @@ class NpuFlashAttnWeight(AttnWeightTemplate):
             keep_prob = 1.0 - kwds.get("dropout")
         head_num = q.shape[1]
         x = torch_npu.npu_fusion_attention(
-            q, k, v,
+            q,
+            k,
+            v,
             head_num,
             pse=None,
             atten_mask=None,
@@ -41,7 +43,7 @@ class NpuFlashAttnWeight(AttnWeightTemplate):
             keep_prob=keep_prob,
             input_layout="TND",
             actual_seq_qlen=tuple(cu_seqlens_q[1:].cpu().numpy().tolist()),
-            actual_seq_kvlen=tuple(cu_seqlens_kv[1:].cpu().numpy().tolist())
+            actual_seq_kvlen=tuple(cu_seqlens_kv[1:].cpu().numpy().tolist()),
         )
         x = x[0]
         x = x.reshape(bs * max_seqlen_q, -1)

@@ -28,7 +28,9 @@ class NpuQuantLinearInt8(nn.Module):
     def forward(self, input_tensor):
         dtype = input_tensor.dtype
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = torch_npu.npu_quant_matmul(input_tensor_quant, self.weight.t(), self.weight_scale.reshape(-1), offset=None, bias=self.bias, pertoken_scale=input_tensor_scale.reshape(-1), output_dtype=dtype)
+        output_tensor = torch_npu.npu_quant_matmul(
+            input_tensor_quant, self.weight.t(), self.weight_scale.reshape(-1), offset=None, bias=self.bias, pertoken_scale=input_tensor_scale.reshape(-1), output_dtype=dtype
+        )
         if len(output_tensor.shape) == 2:
             return output_tensor.unsqueeze(0)
         elif len(output_tensor.shape) == 3:

@@ -31,5 +31,7 @@ class MMWeightWint8channelAint8channeldynamicNpu(MMWeightQuantTemplate):
     def apply(self, input_tensor):
         dtype = input_tensor.dtype
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = torch_npu.npu_quant_matmul(input_tensor_quant, self.weight, self.weight_scale.reshape(-1), offset=None, bias=self.bias, pertoken_scale=input_tensor_scale.reshape(-1), output_dtype=dtype)
+        output_tensor = torch_npu.npu_quant_matmul(
+            input_tensor_quant, self.weight, self.weight_scale.reshape(-1), offset=None, bias=self.bias, pertoken_scale=input_tensor_scale.reshape(-1), output_dtype=dtype
+        )
         return output_tensor
