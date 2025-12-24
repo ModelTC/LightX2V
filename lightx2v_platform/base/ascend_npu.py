@@ -13,6 +13,8 @@ class NpuDevice:
         try:
             import torch_npu
 
+            assert torch_npu
+
             return torch.npu.is_available()
         except ImportError:
             return False
