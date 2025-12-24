@@ -16,6 +16,10 @@ class HygonDcuDevice:
     name = "hygon_dcu"
 
     @staticmethod
+    def init_device_env():
+        pass
+
+    @staticmethod
     def is_available() -> bool:
         """
         Check if Hygon DCU is available.
