@@ -42,10 +42,10 @@
 
 - `--quantized`: 启用量化
 - `--bits`: 量化位宽，当前仅支持 8 位
-- `--linear_dtype`: 线性层量化类型
-  - `torch.int8`: INT8 量化
-  - `torch.float8_e4m3fn`: FP8 量化
-- `--non_linear_dtype`: 非线性层数据类型
+- `--linear_type`: 线性层量化类型
+  - `int8`: INT8 量化
+  - `fp8`: FP8 量化
+- `--non_linear_type`: 非线性层数据类型
   - `torch.bfloat16`: BF16
   - `torch.float16`: FP16
   - `torch.float32`: FP32（默认）
@@ -105,7 +105,7 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name wan_int8 \
-    --linear_dtype torch.int8 \
+    --linear_type int8 \
     --model_type wan_dit \
     --quantized \
     --save_by_block
@@ -118,7 +118,7 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name wan2.1_i2v_480p_int8_lightx2v \
-    --linear_dtype torch.int8 \
+    --linear_type int8 \
     --model_type wan_dit \
     --quantized \
     --single_file
@@ -133,8 +133,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name wan_fp8 \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.bfloat16 \
+    --linear_type fp8 \
+    --non_linear_type torch.bfloat16 \
     --model_type wan_dit \
     --quantized \
     --save_by_block
@@ -147,8 +147,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.bfloat16 \
+    --linear_type fp8 \
+    --non_linear_type torch.bfloat16 \
     --model_type wan_dit \
     --quantized \
     --single_file
@@ -161,8 +161,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_comfyui \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.bfloat16 \
+    --linear_type fp8 \
+    --non_linear_type torch.bfloat16 \
     --model_type wan_dit \
     --quantized \
     --single_file \
@@ -176,8 +176,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_comfyui \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.bfloat16 \
+    --linear_type fp8 \
+    --non_linear_type torch.bfloat16 \
     --model_type wan_dit \
     --quantized \
     --single_file \
@@ -196,8 +196,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .pth \
     --output_name models_t5_umt5-xxl-enc-int8 \
-    --linear_dtype torch.int8 \
-    --non_linear_dtype torch.bfloat16 \
+    --linear_type int8 \
+    --non_linear_type torch.bfloat16 \
     --model_type wan_t5 \
     --quantized
 ```
@@ -209,8 +209,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .pth \
     --output_name models_t5_umt5-xxl-enc-fp8 \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.bfloat16 \
+    --linear_type fp8 \
+    --non_linear_type torch.bfloat16 \
     --model_type wan_t5 \
     --quantized
 ```
@@ -224,8 +224,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .pth \
     --output_name models_clip_open-clip-xlm-roberta-large-vit-huge-14-int8 \
-    --linear_dtype torch.int8 \
-    --non_linear_dtype torch.float16 \
+    --linear_type int8 \
+    --non_linear_type torch.float16 \
     --model_type wan_clip \
     --quantized
 ```
@@ -237,8 +237,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .pth \
     --output_name models_clip_open-clip-xlm-roberta-large-vit-huge-14-fp8 \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.float16 \
+    --linear_type fp8 \
+    --non_linear_type torch.float16 \
     --model_type wan_clip \
     --quantized
 ```
@@ -252,8 +252,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name qwen25vl-llm-int8 \
-    --linear_dtype torch.int8 \
-    --non_linear_dtype torch.float16 \
+    --linear_type int8 \
+    --non_linear_type torch.float16 \
     --model_type qwen25vl_llm \
     --quantized \
     --single_file
@@ -266,8 +266,8 @@ python converter.py \
     --output /path/to/output \
     --output_ext .safetensors \
     --output_name qwen25vl-llm-fp8 \
-    --linear_dtype torch.float8_e4m3fn \
-    --non_linear_dtype torch.float16 \
+    --linear_type fp8 \
+    --non_linear_type torch.float16 \
     --model_type qwen25vl_llm \
     --quantized \
     --single_file
@@ -316,7 +316,7 @@ python converter.py \
     --lora_path /path/to/lora.safetensors \
     --lora_strength 1.0 \
     --quantized \
-    --linear_dtype torch.float8_e4m3fn \
+    --linear_type fp8 \
     --single_file
 ```
 
@@ -331,7 +331,7 @@ python converter.py \
     --lora_path /path/to/lora.safetensors \
     --lora_strength 1.0 \
     --quantized \
-    --linear_dtype torch.float8_e4m3fn \
+    --linear_type fp8 \
     --single_file \
     --comfyui_mode
 ```
@@ -347,7 +347,7 @@ python converter.py \
     --lora_path /path/to/lora.safetensors \
     --lora_strength 1.0 \
     --quantized \
-    --linear_dtype torch.float8_e4m3fn \
+    --linear_type fp8 \
     --single_file \
     --comfyui_mode \
     --full_quantized
