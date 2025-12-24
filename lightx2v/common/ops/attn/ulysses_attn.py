@@ -7,7 +7,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .template import AttnWeightTemplate
-from .utils.all2all import all2all_head2seq, all2all_seq2head
+from .utils.all2all import all2all_head2seq
 
 
 @ATTN_WEIGHT_REGISTER("ulysses")
@@ -15,7 +15,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, img_first=True):
+    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False, img_first=True):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 
@@ -58,6 +58,17 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         _, heads, hidden_dims = q.shape
         shard_heads = heads // world_size  # 每个进程处理的头数
         shard_seqlen = img_qkv_len  # 每个进程处理的序列长度
+        global_img_seqlen = shard_seqlen * world_size  # 全局序列长度
+
+        # 初始化累积序列长度张量
+        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device=AI_DEVICE)
+        s = txt_qkv_len + global_img_seqlen  # 计算文本和图像的总长度
+        s1 = s  # 当前样本的结束位置
+        cu_seqlens_qkv[1] = s1  # 设置累积序列长度
+        if txt_mask_len:
+            s2 = txt_mask_len + global_img_seqlen  # 文本掩码的结束位置
+            cu_seqlens_qkv = torch.cat(cu_seqlens_qkv, s2)
+        max_seqlen_qkv = global_img_seqlen + txt_qkv_len  # 最大序列长度
 
         # 分割图像和文本的查询、键和值
         if img_first:
@@ -67,68 +78,119 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             txt_q, txt_k, txt_v = q[:txt_qkv_len, :, :].contiguous(), k[:txt_qkv_len, :, :].contiguous(), v[:txt_qkv_len, :, :].contiguous()
             img_q, img_k, img_v = q[txt_qkv_len:, :, :].contiguous(), k[txt_qkv_len:, :, :].contiguous(), v[txt_qkv_len:, :, :].contiguous()
 
-        # 将图像的查询、键和值转换为头的格式
-        if use_fp8_comm:
-            original_dtype = img_q.dtype
-            original_shape = img_q.shape
-            img_q_fp8, q_scale = quant_fp8_vllm(img_q.reshape(-1, original_shape[-1]))
-            img_k_fp8, k_scale = quant_fp8_vllm(img_k.reshape(-1, original_shape[-1]))
-            img_v_fp8, v_scale = quant_fp8_vllm(img_v.reshape(-1, original_shape[-1]))
-            img_q_fp8 = all2all_seq2head(img_q_fp8.reshape(original_shape), group=seq_p_group)
-            img_k_fp8 = all2all_seq2head(img_k_fp8.reshape(original_shape), group=seq_p_group)
-            img_v_fp8 = all2all_seq2head(img_v_fp8.reshape(original_shape), group=seq_p_group)
-            q_scale = all2all_seq2head(q_scale.reshape(original_shape[0], original_shape[1], 1), group=seq_p_group)
-            k_scale = all2all_seq2head(k_scale.reshape(original_shape[0], original_shape[1], 1), group=seq_p_group)
-            v_scale = all2all_seq2head(v_scale.reshape(original_shape[0], original_shape[1], 1), group=seq_p_group)
-            img_q = dequant_fp8_vllm(img_q_fp8, q_scale, original_dtype)
-            img_k = dequant_fp8_vllm(img_k_fp8, k_scale, original_dtype)
-            img_v = dequant_fp8_vllm(img_v_fp8, v_scale, original_dtype)
+        img_qkv = torch.stack([img_q, img_k, img_v], dim=0).reshape(3, img_qkv_len, world_size, shard_heads, hidden_dims)
+        original_dtype = img_qkv.dtype
+
+        if enable_head_parallel:
+            img_qkv = img_qkv.permute(3, 2, 1, 0, 4).contiguous()  # (shard_heads, world_size, img_qkv_len, 3, hidden_dims)
+            output_qkv = torch.empty_like(img_qkv)
+
+            # 通信图像的查询、键和值
+            if use_fp8_comm:
+                img_qkv_fp8, img_qkv_scale = quant_fp8_vllm(img_qkv.reshape(-1, hidden_dims))
+                img_qkv_fp8 = img_qkv_fp8.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims)
+                img_qkv_scale = img_qkv_scale.reshape(shard_heads, world_size, img_qkv_len, 3, 1)
+                output_qkv_fp8 = torch.empty_like(img_qkv_fp8)
+                output_qkv_scale = torch.empty_like(img_qkv_scale)
+                comm_fp8_works = []
+                comm_scale_works = []
+                for h in range(shard_heads):
+                    work_fp8 = dist.all_to_all_single(output_qkv_fp8[h], img_qkv_fp8[h], group=seq_p_group, async_op=True)
+                    work_scale = dist.all_to_all_single(output_qkv_scale[h], img_qkv_scale[h], group=seq_p_group, async_op=True)
+                    comm_fp8_works.append(work_fp8)
+                    comm_scale_works.append(work_scale)
+            else:
+                comm_works = []
+                for h in range(shard_heads):
+                    work = dist.all_to_all_single(output_qkv[h], img_qkv[h], group=seq_p_group, async_op=True)
+                    comm_works.append(work)
+
+            # 逐个head完成Attention计算
+            single_head = 1
+            head_attns = []
+            for h in range(shard_heads):
+                if use_fp8_comm:
+                    comm_fp8_works[h].wait()
+                    comm_scale_works[h].wait()
+                    output_qkv[h] = dequant_fp8_vllm(output_qkv_fp8[h], output_qkv_scale[h], original_dtype)
+                else:
+                    comm_works[h].wait()
+
+                qkv = output_qkv[h].reshape(global_img_seqlen, 3, single_head, hidden_dims).transpose(0, 1)
+                shard_img_q = qkv[0]  # (global_img_seqlen, single_head, hidden_dims)
+                shard_img_k = qkv[1]
+                shard_img_v = qkv[2]
+
+                # 处理文本的查询、键和值，选择当前进程的当前头
+                shard_txt_q = txt_q[:, (cur_rank * shard_heads + h) : (cur_rank * shard_heads + h + 1), :]
+                shard_txt_k = txt_k[:, (cur_rank * shard_heads + h) : (cur_rank * shard_heads + h + 1), :]
+                shard_txt_v = txt_v[:, (cur_rank * shard_heads + h) : (cur_rank * shard_heads + h + 1), :]
+
+                # 合并图像和文本的查询、键和值
+                q = torch.cat((shard_img_q, shard_txt_q), dim=0)
+                k = torch.cat((shard_img_k, shard_txt_k), dim=0)
+                v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+
+                # 调用注意力函数计算注意力结果
+                head_attn = attention_module.apply(
+                    q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls
+                ).reshape(-1, single_head, hidden_dims)
+                head_attns.append(head_attn)
+
+            # 合并当前进程的所有head的attn
+            attn = torch.cat(head_attns, dim=1)
+
         else:
-            img_q = all2all_seq2head(img_q, group=seq_p_group)
-            img_k = all2all_seq2head(img_k, group=seq_p_group)
-            img_v = all2all_seq2head(img_v, group=seq_p_group)
+            img_qkv = img_qkv.permute(2, 1, 0, 3, 4).contiguous()  # (world_size, img_qkv_len, 3, shard_heads, hidden_dims)
 
-        # 处理文本的查询、键和值，选择当前进程的头
-        txt_q = txt_q[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
-        txt_k = txt_k[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
-        txt_v = txt_v[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
+            # 通信图像的查询、键和值
+            if use_fp8_comm:
+                img_qkv_fp8, img_qkv_scale = quant_fp8_vllm(img_qkv.reshape(-1, hidden_dims))
+                img_qkv_fp8 = img_qkv_fp8.reshape(world_size, img_qkv_len, shard_heads, 3, hidden_dims)
+                img_qkv_scale = img_qkv_scale.reshape(world_size, img_qkv_len, shard_heads, 3, 1)
+                output_qkv_fp8 = torch.empty_like(img_qkv_fp8)
+                output_qkv_scale = torch.empty_like(img_qkv_scale)
+                dist.all_to_all_single(output_qkv_fp8, img_qkv_fp8, group=seq_p_group)
+                dist.all_to_all_single(output_qkv_scale, img_qkv_scale, group=seq_p_group)
+                output_qkv = dequant_fp8_vllm(output_qkv_fp8, output_qkv_scale, original_dtype)
+            else:
+                output_qkv = torch.empty_like(img_qkv)
+                dist.all_to_all_single(output_qkv, img_qkv, group=seq_p_group)
 
-        # 合并图像和文本的查询、键和值
-        if img_first:
-            q = torch.cat((img_q, txt_q), dim=0)
-            k = torch.cat((img_k, txt_k), dim=0)
-            v = torch.cat((img_v, txt_v), dim=0)
-        else:
-            q = torch.cat((txt_q, img_q), dim=0)
-            k = torch.cat((txt_k, img_k), dim=0)
-            v = torch.cat((txt_v, img_v), dim=0)
+            # 完成Attention计算
+            qkv = output_qkv.reshape(global_img_seqlen, 3, shard_heads, hidden_dims).transpose(0, 1)
+            shard_img_q = qkv[0]  # (global_img_seqlen, shard_head, hidden_dims)
+            shard_img_k = qkv[1]
+            shard_img_v = qkv[2]
 
-        # 初始化累积序列长度张量
-        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device=AI_DEVICE)
-        s = txt_qkv_len + img_q.shape[0]  # 计算文本和图像的总长度
-        s1 = s  # 当前样本的结束位置
-        cu_seqlens_qkv[1] = s1  # 设置累积序列长度
-        if txt_mask_len:
-            s2 = txt_mask_len + img_q.shape[0]  # 文本掩码的结束位置
-            cu_seqlens_qkv = torch.cat(cu_seqlens_qkv, s2)
-        max_seqlen_qkv = img_q.shape[0] + txt_q.shape[0]  # 最大序列长度
+            # 处理文本的查询、键和值，选择当前进程的当前头
+            shard_txt_q = txt_q[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
+            shard_txt_k = txt_k[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
+            shard_txt_v = txt_v[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
 
-        # 调用注意力函数计算注意力结果
-        # attn = attention(attention_type=attention_type, q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv)
-        attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls)
+            # 合并图像和文本的查询、键和值
+            q = torch.cat((shard_img_q, shard_txt_q), dim=0)
+            k = torch.cat((shard_img_k, shard_txt_k), dim=0)
+            v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+
+            # 调用注意力函数计算注意力结果
+            attn = attention_module.apply(
+                q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls
+            ).reshape(-1, shard_heads, hidden_dims)
 
         # 分割图像和文本的注意力结果
+        attn = attn.reshape(attn.shape[0], -1)
         if img_first:
-            img_attn, txt_attn = attn[: img_q.shape[0], :], attn[img_q.shape[0] :,]
+            img_attn, txt_attn = attn[:global_img_seqlen, :], attn[global_img_seqlen:]
         else:
-            txt_attn, img_attn = attn[: txt_q.shape[0], :], attn[txt_q.shape[0] :,]
+            txt_attn, img_attn = attn[:txt_qkv_len, :], attn[txt_qkv_len:]
+
+        # 通信所有进程的图像注意力结果
+        img_attn = self._reshape_img_attn(img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group, use_fp8_comm)
 
         # 收集所有进程的文本注意力结果
         gathered_txt_attn = [torch.empty_like(txt_attn) for _ in range(world_size)]
         dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)
-
-        img_attn = self._reshape_img_attn(img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group, use_fp8_comm)
-
         txt_attn = torch.cat(gathered_txt_attn, dim=1)  # 合并所有进程的文本注意力结果
 
         # 合并图像和文本的注意力结果
@@ -247,7 +309,7 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         return gathered_shards
 
-    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, img_first=True):
+    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False, img_first=True):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 
@@ -262,6 +324,8 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        assert not enable_head_parallel, "Ulysses-4090 can't support head parallel mode."
+
         if len(self.rounds) == 0:
             self.generate_round_robin_pairs(seq_p_group)
 

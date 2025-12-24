@@ -104,9 +104,11 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
+            self.enable_head_parallel = False
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -234,6 +236,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
+                enable_head_parallel=self.enable_head_parallel,
                 model_cls=self.config["model_cls"],
             )
         else:
