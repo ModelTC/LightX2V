@@ -14,6 +14,8 @@ except ImportError:
     AutoencoderKLQwenImage = None
     VaeImageProcessor = None
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class AutoencoderKLQwenImageVAE:
     def __init__(self, config):
@@ -56,7 +58,7 @@ class AutoencoderKLQwenImageVAE:
     @torch.no_grad()
     def decode(self, latents, input_info):
         if self.cpu_offload:
-            self.model.to(torch.device("cuda"))
+            self.model.to(self.device)
         width, height = input_info.auto_width, input_info.auto_height
         latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"])
         latents = latents.to(self.dtype)
@@ -67,7 +69,7 @@ class AutoencoderKLQwenImageVAE:
         images = self.image_processor.postprocess(images, output_type="pil")
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         return images
 
@@ -90,7 +92,7 @@ class AutoencoderKLQwenImageVAE:
     @torch.no_grad()
     def encode_vae_image(self, image):
         if self.cpu_offload:
-            self.model.to(torch.device("cuda"))
+            self.model.to(self.device)
 
         num_channels_latents = self.config["transformer_in_channels"] // 4
         image = image.to(self.model.device)
