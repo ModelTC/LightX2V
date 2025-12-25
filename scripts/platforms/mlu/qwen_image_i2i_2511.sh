@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# System management interface: cnmon
+
 # set path and first
 lightx2v_path=
 model_path=

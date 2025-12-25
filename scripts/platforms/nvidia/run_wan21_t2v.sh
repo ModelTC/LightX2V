@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# System management interface: nvidia-smi
+
 # set path and first
 lightx2v_path=
 model_path=
