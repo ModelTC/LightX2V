@@ -11,6 +11,8 @@ except ImportError:
 
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask, calculate_n_query_tokens, get_qk_lens_audio_range
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanAudioTransformerInfer(WanOffloadTransformerInfer):
@@ -87,19 +89,24 @@ class WanAudioTransformerInfer(WanOffloadTransformerInfer):
         k = k.view(k.size(0), self.num_heads, self.head_dim)
         v = v.view(v.size(0), self.num_heads, self.head_dim)
 
-        out = flash_attn_varlen_func(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=self.perceiver_attn_cu_seqlens_q,
-            cu_seqlens_k=self.perceiver_attn_cu_seqlens_k,
-            max_seqlen_q=self.max_seqlen_q,
-            max_seqlen_k=self.max_seqlen_k,
-            dropout_p=0.0,
-            softmax_scale=None,
-            causal=False,
-            window_size=(-1, -1),
-            deterministic=False,
-        )
+        if "npu" in AI_DEVICE:
+            out = ATTN_WEIGHT_REGISTER.get("npu_flash_attn")().apply(
+                q=q, k=k, v=v, cu_seqlens_q=self.perceiver_attn_cu_seqlens_q, cu_seqlens_kv=self.perceiver_attn_cu_seqlens_k, max_seqlen_q=self.max_seqlen_q, max_seqlen_kv=self.max_seqlen_k
+            )
+        else:
+            out = flash_attn_varlen_func(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=self.perceiver_attn_cu_seqlens_q,
+                cu_seqlens_k=self.perceiver_attn_cu_seqlens_k,
+                max_seqlen_q=self.max_seqlen_q,
+                max_seqlen_k=self.max_seqlen_k,
+                dropout_p=0.0,
+                softmax_scale=None,
+                causal=False,
+                window_size=(-1, -1),
+                deterministic=False,
+            )
         out = out.view(-1, self.num_heads * self.head_dim)
         return phase.to_out.apply(out) * gate

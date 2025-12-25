@@ -192,6 +192,7 @@ class AudioProjection(nn.Module):
             in_dim = out_dim
         self.mlp = nn.Sequential(*mlp)
         self.norm = nn.LayerNorm(mlp_dims[-1] // num_tokens)
+        self.device = torch.device(AI_DEVICE)
         self.num_tokens = num_tokens
         if transformer_layers > 0:
             decoder_layer = nn.TransformerDecoderLayer(d_model=audio_feature_dim, nhead=audio_feature_dim // 64, dim_feedforward=4 * audio_feature_dim, dropout=0.0, batch_first=True)
@@ -208,7 +209,13 @@ class AudioProjection(nn.Module):
         audio_feature = linear_interpolation(audio_feature_ori, video_frame)
         if self.transformer_decoder is not None:
             audio_feature = self.transformer_decoder(audio_feature, audio_feature_ori)
-        audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
+        if "npu" in str(self.device):
+            dtype = audio_feature.dtype
+            audio_feature = audio_feature.type(torch.float16)
+            audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
+            audio_feature.type(dtype)
+        else:
+            audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
         audio_feature = audio_feature.unfold(dimension=1, size=self.audio_frames, step=1)
         audio_feature = rearrange(audio_feature, "B T C W -> B T (W C)")
         audio_feature = self.mlp(audio_feature)  # (B, video_frame, C)
