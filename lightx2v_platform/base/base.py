@@ -12,6 +12,7 @@ def init_ai_device(platform="cuda"):
         available_platforms = list(PLATFORM_DEVICE_REGISTER.keys())
         raise RuntimeError(f"Unsupported platform: {platform}. Available platforms: {available_platforms}")
     global_var.AI_DEVICE = platform_device.get_device()
+    platform_device.init_device_env()
     logger.info(f"Initialized AI_DEVICE: {global_var.AI_DEVICE}")
     return global_var.AI_DEVICE
 
