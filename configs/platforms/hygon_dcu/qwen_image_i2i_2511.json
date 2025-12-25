@@ -14,8 +14,6 @@
     "CONDITION_IMAGE_SIZE": 147456,
     "USE_IMAGE_ID_IN_PROMPT": true,
     "zero_cond_t": true,
-    "cpu_offload": true,
-    "offload_granularity": "model",
     "modulate_type": "torch",
     "rope_type": "torch",
     "ln_type": "Default",
