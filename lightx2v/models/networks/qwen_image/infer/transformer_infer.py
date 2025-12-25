@@ -27,9 +27,12 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.zero_cond_t = config.get("zero_cond_t", False)
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
-        self.seq_p_fp8_comm = False
+            self.seq_p_fp8_comm = False
+            self.enable_head_parallel = False
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
         else:
@@ -140,6 +143,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 attention_module=block_weight.attn.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
+                enable_head_parallel=self.enable_head_parallel,
                 model_cls=self.config["model_cls"],
                 img_first=False,
             )

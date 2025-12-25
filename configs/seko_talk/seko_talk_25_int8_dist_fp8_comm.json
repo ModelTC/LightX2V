@@ -4,9 +4,9 @@
     "video_duration": 5,
     "audio_sr": 16000,
     "target_video_length": 81,
-    "self_attn_1_type": "sage_attn2",
-    "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
+    "self_attn_1_type": "sage_attn3",
+    "cross_attn_1_type": "sage_attn3",
+    "cross_attn_2_type": "sage_attn3",
     "sample_guide_scale": 1,
     "sample_shift": 5,
     "enable_cfg": false,
@@ -35,6 +35,7 @@
     "parallel": {
         "seq_p_size": 8,
         "seq_p_fp8_comm": true,
-        "seq_p_attn_type": "ulysses-4090"
+        "seq_p_head_parallel": true,
+        "seq_p_attn_type": "ulysses"
     }
 }

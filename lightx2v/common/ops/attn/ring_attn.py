@@ -41,7 +41,7 @@ class RingAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(self, q, k, v, img_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False):
+    def apply(self, q, k, v, img_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False):
         """
         执行 Ring 注意力机制，结合图像和文本的查询、键和值。
 
@@ -57,6 +57,7 @@ class RingAttnWeight(AttnWeightTemplate):
             torch.Tensor: 计算得到的注意力结果
         """
         assert not use_fp8_comm, "RingAttn can't support fp8 comm now."
+        assert not enable_head_parallel, "RingAttn can't support head parallel mode."
 
         # 获取当前进程的排名和全局进程数
         cur_rank = dist.get_rank(seq_p_group)
