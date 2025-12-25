@@ -1,5 +1,7 @@
 # lightx2v_platform
 
+**\[ [English](README.md) | 中文 \]**
+
 `lightx2v_platform`是独立于`lightx2v`的一个功能平台，用于对齐非nvidia的芯片后端的推理接口。支持新的芯片后端，仅需关注`lightx2v_platform`里面的实现即可。
 
 目前已经支持的后端有：
