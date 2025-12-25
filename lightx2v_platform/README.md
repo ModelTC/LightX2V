@@ -11,6 +11,6 @@ Currently supported backends include:
 - Ascend 910B
 - AMD ROCm
 
-For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/dockerfiles/platforms
+For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 
-For the corresponding usage scripts, see: https://github.com/ModelTC/LightX2V/scripts/platforms
+For the corresponding usage scripts, see: https://github.com/ModelTC/LightX2V/tree/main/scripts/platforms
