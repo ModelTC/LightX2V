@@ -4,13 +4,27 @@ Provides significantly faster attention computation on AMD GPUs (2.5x-6x speedup
 Internally uses FA3 (fmha_v3) when conditions are met.
 """
 
+import torch
 from loguru import logger
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from lightx2v_platform.base.amd_rocm import AITER_INSTALL_CMD, IS_AMD_ROCM
+from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
-from .template import AttnWeightTemplate
+# Detect AMD ROCm platform
+IS_AMD_ROCM = hasattr(torch.version, "hip") and torch.version.hip is not None
 
+# aiter installation info
+AITER_REPO = "https://github.com/ROCm/aiter.git"
+AITER_COMMIT = "a7d3bf8cd47afbaf6a6133c1f12e3b01d2c27b0e"
+AITER_INSTALL_CMD = f"""
+# One-line install command for aiter (AMD ROCm optimized kernels):
+git clone {AITER_REPO} /tmp/aiter && \\
+cd /tmp/aiter && \\
+git checkout {AITER_COMMIT} && \\
+pip install -e .
+"""
+
+# Try to import aiter (AMD ROCm optimized)
 aiter_flash_attn_varlen_func = None
 AITER_AVAILABLE = False
 AITER_IMPORT_ERROR = None
@@ -28,10 +42,10 @@ except ImportError as e:
             f"For optimal performance, please install aiter:\n{AITER_INSTALL_CMD}"
         )
     else:
-        logger.info("aiter not found (only available on AMD ROCm platform)")
+        logger.debug("aiter not found (only available on AMD ROCm platform)")
 
 
-@ATTN_WEIGHT_REGISTER("aiter_attn")
+@PLATFORM_ATTN_WEIGHT_REGISTER("aiter_attn")
 class AiterAttnWeight(AttnWeightTemplate):
     """
     AMD ROCm optimized attention using aiter library.

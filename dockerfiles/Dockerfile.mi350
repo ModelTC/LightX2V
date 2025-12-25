@@ -25,15 +25,15 @@ RUN git clone https://github.com/ROCm/aiter.git /tmp/aiter && \
     pip install --no-cache-dir -e . && \
     rm -rf /tmp/aiter/.git
 
-# Install flash-attn for ROCm (if not already in base image)
-RUN pip install --no-cache-dir flash-attn --no-build-isolation 2>/dev/null || true
+# Install flash-attn for ROCm
+RUN pip install --no-cache-dir flash-attn --no-build-isolation
 
 # Copy LightX2V source
 COPY . /workspace/LightX2V
 
 # Install LightX2V dependencies
 WORKDIR /workspace/LightX2V
-RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Install LightX2V
 RUN pip install --no-cache-dir -e .

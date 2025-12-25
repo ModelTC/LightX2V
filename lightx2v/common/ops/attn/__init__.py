@@ -8,8 +8,3 @@ from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
 from .ulysses_attn import Ulysses4090AttnWeight, UlyssesAttnWeight
-
-try:
-    from .aiter_attn import AiterAttnWeight
-except ImportError as e:
-    print(f"Failed to import AiterAttnWeight: {e}")

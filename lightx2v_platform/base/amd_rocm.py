@@ -98,33 +98,6 @@ def _get_aiter_sgl_kernel():
         )
 
 
-def init_amd_rocm():
-    """
-    Initialize AMD ROCm optimizations.
-    
-    This function should be called early in the import process to:
-    1. Disable cudnn for faster VAE convolution
-    2. Inject aiter as sgl_kernel compatibility layer (REQUIRED on AMD)
-    """
-    if not IS_AMD_ROCM:
-        return
-    
-    logger.info("AMD ROCm platform detected, initializing optimizations...")
-    
-    # Disable cudnn for faster VAE conv computation
-    torch.backends.cudnn.enabled = False
-    logger.info("  - cudnn disabled for faster VAE convolution")
-    
-    # Inject aiter as sgl_kernel compatibility layer (REQUIRED)
-    sgl_kernel = _get_aiter_sgl_kernel()
-    sys.modules["sgl_kernel"] = sgl_kernel
-    # Update any module that already imported sgl_kernel
-    for mod_name, mod in list(sys.modules.items()):
-        if mod is not None and hasattr(mod, 'sgl_kernel'):
-            setattr(mod, 'sgl_kernel', sgl_kernel)
-    logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
-
-
 @PLATFORM_DEVICE_REGISTER("amd_rocm")
 class AmdRocmDevice:
     """
@@ -135,6 +108,30 @@ class AmdRocmDevice:
     """
 
     name = "amd_rocm"
+
+    @staticmethod
+    def init_device_env():
+        """
+        Initialize AMD ROCm optimizations.
+        
+        This is called from lightx2v_platform.set_ai_device when platform is amd_rocm.
+        1. Disable cudnn for faster VAE convolution
+        2. Inject aiter as sgl_kernel compatibility layer (REQUIRED on AMD)
+        """
+        logger.info("AMD ROCm platform detected, initializing optimizations...")
+        
+        # Disable cudnn for faster VAE conv computation
+        torch.backends.cudnn.enabled = False
+        logger.info("  - cudnn disabled for faster VAE convolution")
+        
+        # Inject aiter as sgl_kernel compatibility layer (REQUIRED)
+        sgl_kernel = _get_aiter_sgl_kernel()
+        sys.modules["sgl_kernel"] = sgl_kernel
+        # Update any module that already imported sgl_kernel
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is not None and hasattr(mod, 'sgl_kernel'):
+                setattr(mod, 'sgl_kernel', sgl_kernel)
+        logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
 
     @staticmethod
     def is_available() -> bool:
@@ -160,6 +157,5 @@ __all__ = [
     "AITER_COMMIT",
     "AITER_INSTALL_CMD",
     "AiterSglKernelCompat",
-    "init_amd_rocm",
     "AmdRocmDevice",
 ]
