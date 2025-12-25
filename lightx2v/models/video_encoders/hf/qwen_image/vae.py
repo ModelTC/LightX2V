@@ -58,7 +58,7 @@ class AutoencoderKLQwenImageVAE:
     @torch.no_grad()
     def decode(self, latents, input_info):
         if self.cpu_offload:
-            self.model.to(self.device)
+            self.model.to(AI_DEVICE)
         width, height = input_info.auto_width, input_info.auto_height
         latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"])
         latents = latents.to(self.dtype)
@@ -92,7 +92,7 @@ class AutoencoderKLQwenImageVAE:
     @torch.no_grad()
     def encode_vae_image(self, image):
         if self.cpu_offload:
-            self.model.to(self.device)
+            self.model.to(AI_DEVICE)
 
         num_channels_latents = self.config["transformer_in_channels"] // 4
         image = image.to(self.model.device)
