@@ -4,6 +4,7 @@
 lightx2v_path=
 model_path=
 
+export PLATFORM=metax
 export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
