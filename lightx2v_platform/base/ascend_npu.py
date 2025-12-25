@@ -9,6 +9,10 @@ class NpuDevice:
     name = "ascend_npu"
 
     @staticmethod
+    def init_device_env():
+        pass
+
+    @staticmethod
     def is_available() -> bool:
         try:
             import torch_npu
