@@ -18,6 +18,9 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.task = config["task"]
         self.attention_type = config.get("attention_type", "flash_attn2")
+        self.self_attn_1_type = config.get("self_attn_1_type", "flash_attn2")
+        self.cross_attn_1_type = config.get("cross_attn_1_type", "flash_attn2")
+        self.cross_attn_2_type = config.get("cross_attn_2_type", "flash_attn2")
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
         self.has_post_adapter = False
@@ -174,7 +177,10 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
-            self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
+            if self.self_attn_1_type == "flash_attn2" or self.self_attn_1_type == "flash_attn3":
+                self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
+            else:
+                self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
 
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
@@ -188,6 +194,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 slice_qkv_len=img_qkv_len,
                 cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
+                attention_type=self.self_attn_1_type,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 enable_head_parallel=self.enable_head_parallel,
@@ -238,9 +245,15 @@ class WanTransformerInfer(BaseTransformerInfer):
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
 
         if self.cross_attn_cu_seqlens_q is None:
-            self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
+            if self.cross_attn_1_type == "flash_attn2" or self.cross_attn_1_type == "flash_attn3":
+                self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
+            else:
+                self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
         if self.cross_attn_cu_seqlens_kv is None:
-            self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
+            if self.cross_attn_1_type == "flash_attn2" or self.cross_attn_1_type == "flash_attn3":
+                self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32).to(k.device, non_blocking=True)
+            else:
+                self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
@@ -257,7 +270,10 @@ class WanTransformerInfer(BaseTransformerInfer):
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 
             if self.cross_attn_cu_seqlens_kv_img is None:
-                self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
+                if self.cross_attn_2_type == "flash_attn2" or self.cross_attn_2_type == "flash_attn3":
+                    self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32).to(k_img.device, non_blocking=True)
+                else:
+                    self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
 
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,

@@ -4,6 +4,7 @@ from loguru import logger
 
 from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq
@@ -14,7 +15,21 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False, img_first=True):
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        slice_qkv_len,
+        cu_seqlens_qkv,
+        attention_module=None,
+        attention_type="flash_attn2",
+        seq_p_group=None,
+        model_cls=None,
+        use_fp8_comm=False,
+        enable_head_parallel=False,
+        img_first=True,
+    ):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 
@@ -67,6 +82,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         if txt_mask_len:
             s2 = txt_mask_len + global_img_seqlen  # 文本掩码的结束位置
             cu_seqlens_qkv = torch.cat((cu_seqlens_qkv, torch.tensor([s2], dtype=torch.int32)))
+        if attention_type == "flash_attn2" or attention_type == "flash_attn3":
+            cu_seqlens_qkv = cu_seqlens_qkv.to(AI_DEVICE, non_blocking=True)
         max_seqlen_qkv = global_img_seqlen + txt_qkv_len  # 最大序列长度
 
         # 分割图像和文本的查询、键和值
@@ -305,7 +322,21 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         return gathered_shards
 
-    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False, img_first=True):
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        slice_qkv_len,
+        cu_seqlens_qkv,
+        attention_module=None,
+        attention_type="flash_attn2",
+        seq_p_group=None,
+        model_cls=None,
+        use_fp8_comm=False,
+        enable_head_parallel=False,
+        img_first=True,
+    ):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 
