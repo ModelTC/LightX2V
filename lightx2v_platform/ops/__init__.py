@@ -6,6 +6,8 @@ if AI_DEVICE == "mlu":
     from .attn.cambricon_mlu import *
     from .mm.cambricon_mlu import *
 elif AI_DEVICE == "cuda":
-    # Check if running on Hygon DCU platform
-    if os.getenv("PLATFORM") == "hygon_dcu":
+    platform = os.getenv("PLATFORM")
+    if platform == "hygon_dcu":
         from .attn.hygon_dcu import *
+    elif platform == "amd_rocm":
+        from .attn.amd_rocm import *
