@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/path/to/lightX2V
-model_path=/path/to/model
+lightx2v_path=
+model_path=
 
-export ASCEND_RT_VISIBLE_DEVICES=1
-export PLATFORM=ascend_npu
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
