@@ -5,7 +5,7 @@ lightx2v_path=/path/to/lightX2V
 model_path=/path/to/model
 
 export ASCEND_RT_VISIBLE_DEVICES=1
-export PLATFORM='npu'
+export PLATFORM=ascend_npu
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

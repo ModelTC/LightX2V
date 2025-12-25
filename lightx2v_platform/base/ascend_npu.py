@@ -4,9 +4,9 @@ import torch.distributed as dist
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-@PLATFORM_DEVICE_REGISTER("npu")
+@PLATFORM_DEVICE_REGISTER("ascend_npu")
 class NpuDevice:
-    name = "npu"
+    name = "ascend_npu"
 
     @staticmethod
     def is_available() -> bool:

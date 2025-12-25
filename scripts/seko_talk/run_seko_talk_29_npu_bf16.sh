@@ -4,7 +4,7 @@ lightx2v_path=/data/wq/proj/sd/code/LightX2V
 model_path=/root/SekoTalk-Distill
 
 export ASCEND_RT_VISIBLE_DEVICES=0
-export PLATFORM="npu"
+export PLATFORM=ascend_npu
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

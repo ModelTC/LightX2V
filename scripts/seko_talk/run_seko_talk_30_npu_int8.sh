@@ -3,7 +3,7 @@
 lightx2v_path=/data/wq/proj/sd/code/LightX2V
 model_path=/root/SekoTalk-Distill-int8
 export ASCEND_RT_VISIBLE_DEVICES=4
-export PLATFORM="npu"
+export PLATFORM=ascend_npu
 export DTYPE="BF16"
 
 # set environment variables

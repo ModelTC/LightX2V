@@ -10,6 +10,6 @@ elif PLATFORM == "hygon_dcu":
     from .attn.hygon_dcu import *
 elif PLATFORM == "amd_rocm":
     from .attn.amd_rocm import *
-elif PLATFORM == "npu":
+elif PLATFORM == "ascend_npu":
     from .attn.ascend_npu import *
     from .mm.ascend_npu import *
