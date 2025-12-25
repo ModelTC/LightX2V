@@ -481,7 +481,7 @@ class CLIPModel:
         videos = torch.cat([F.interpolate(u, size=size, mode="bicubic", align_corners=False) for u in videos])
         videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
         # forward
-        with torch.amp.autocast("cuda", dtype=self.dtype):
+        with torch.amp.autocast(str(AI_DEVICE), dtype=self.dtype):
             out = self.model.visual(videos, use_31_block=self.use_31_block)
 
         if self.cpu_offload:

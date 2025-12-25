@@ -89,6 +89,7 @@ class WanModel(CompiledMethodsMixin):
                 "gguf-Q4_1",
                 "gguf-Q3_K_S",
                 "gguf-Q3_K_M",
+                "int8-npu",
             ]
         self.device = device
         self._init_infer_class()

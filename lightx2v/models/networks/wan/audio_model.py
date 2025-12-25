@@ -31,7 +31,7 @@ class WanAudioModel(WanModel):
             if self.config.get("adapter_quantized", False):
                 if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl", "fp8-torchao", "fp8-triton"]:
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
-                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-triton", "int8-tmo"]:
+                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-triton", "int8-tmo", "int8-npu"]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
                 elif self.config.get("adapter_quant_scheme", None) in ["mxfp4"]:
                     adapter_model_name = "audio_adapter_model_mxfp4.safetensors"

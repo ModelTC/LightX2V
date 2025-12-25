@@ -1,0 +1,14 @@
+# lightx2v_platform
+
+`lightx2v_platform` is a functional platform that is independent of `lightx2v`. It is used to align inference interfaces for non-NVIDIA chip backends. To support a new chip backend, you only need to focus on the implementation inside `lightx2v_platform`.
+
+Currently supported backends include:
+- Cambricon MLU590
+- MetaX C500
+- Hygon DCU
+- Huawei Ascend 910B
+- AMD ROCm
+
+For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/dockerfiles/platforms
+
+For the corresponding usage scripts, see: https://github.com/ModelTC/LightX2V/scripts/platforms

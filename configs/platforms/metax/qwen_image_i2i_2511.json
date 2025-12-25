@@ -1,0 +1,21 @@
+{
+    "vae_scale_factor": 8,
+    "infer_steps": 40,
+    "transformer_in_channels": 64,
+    "prompt_template_encode": "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 64,
+    "_auto_resize": true,
+    "num_layers": 60,
+    "attention_out_dim": 3072,
+    "attention_dim_head": 128,
+    "attn_type": "flash_attn2",
+    "enable_cfg": true,
+    "sample_guide_scale": 4.0,
+    "CONDITION_IMAGE_SIZE": 147456,
+    "USE_IMAGE_ID_IN_PROMPT": true,
+    "zero_cond_t": true,
+    "modulate_type": "torch",
+    "rope_type": "torch",
+    "ln_type": "Default",
+    "rms_type": "Default"
+}
