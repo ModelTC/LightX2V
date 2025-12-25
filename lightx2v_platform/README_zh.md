@@ -12,6 +12,6 @@
 - 华为Ascend 910B
 - AMD ROCm
 
-相关的docker环境可以参考：https://github.com/ModelTC/LightX2V/dockerfiles/platforms
+相关的docker环境可以参考：https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 
-相关的使用脚本可以参考：https://github.com/ModelTC/LightX2V/scripts/platforms
+相关的使用脚本可以参考：https://github.com/ModelTC/LightX2V/tree/main/scripts/platforms
