@@ -55,18 +55,21 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         self.cos_sin = None
 
-    def _calculate_q_k_len(self, q, k_lens):
-        q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
-        cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
-        cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
-        return cu_seqlens_q, cu_seqlens_k
-
     def get_scheduler_values(self):
         self.cos_sin = self.scheduler.cos_sin
+
+    def reset_infer_states(self):
+        self.self_attn_cu_seqlens_qkv = None
+        self.cross_attn_cu_seqlens_q = None
+        self.cross_attn_cu_seqlens_kv = None
+        self.cross_attn_cu_seqlens_kv_img = None
+        if self.has_post_adapter:
+            self.reset_post_adapter_states()
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.get_scheduler_values()
+        self.reset_infer_states()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
@@ -170,7 +173,8 @@ class WanTransformerInfer(BaseTransformerInfer):
         q, k = self.apply_rope_func(q, k, cos_sin)
 
         img_qkv_len = q.shape[0]
-        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
+        if self.self_attn_cu_seqlens_qkv is None:
+            self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
 
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
@@ -182,7 +186,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 k=k,
                 v=v,
                 slice_qkv_len=img_qkv_len,
-                cu_seqlens_qkv=cu_seqlens_qkv,
+                cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
@@ -194,8 +198,8 @@ class WanTransformerInfer(BaseTransformerInfer):
                 q=q,
                 k=k,
                 v=v,
-                cu_seqlens_q=cu_seqlens_qkv,
-                cu_seqlens_kv=cu_seqlens_qkv,
+                cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
                 max_seqlen_q=img_qkv_len,
                 max_seqlen_kv=img_qkv_len,
                 model_cls=self.config["model_cls"],
@@ -232,16 +236,17 @@ class WanTransformerInfer(BaseTransformerInfer):
         q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
         k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-            q,
-            k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
-        )
+
+        if self.cross_attn_cu_seqlens_q is None:
+            self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
+        if self.cross_attn_cu_seqlens_kv is None:
+            self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
             v=v,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_kv=cu_seqlens_k,
+            cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+            cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
             model_cls=self.config["model_cls"],
@@ -251,16 +256,15 @@ class WanTransformerInfer(BaseTransformerInfer):
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 
-            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-                q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
-            )
+            if self.cross_attn_cu_seqlens_kv_img is None:
+                self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
+
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,
                 k=k_img,
                 v=v_img,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
+                cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+                cu_seqlens_kv=self.cross_attn_cu_seqlens_kv_img,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
                 model_cls=self.config["model_cls"],
