@@ -37,10 +37,7 @@ try:
 except ImportError as e:
     AITER_IMPORT_ERROR = str(e)
     if IS_AMD_ROCM:
-        logger.warning(
-            f"aiter not found on AMD ROCm platform. "
-            f"For optimal performance, please install aiter:\n{AITER_INSTALL_CMD}"
-        )
+        logger.warning(f"aiter not found on AMD ROCm platform. For optimal performance, please install aiter:\n{AITER_INSTALL_CMD}")
     else:
         logger.debug("aiter not found (only available on AMD ROCm platform)")
 
@@ -61,7 +58,7 @@ class AiterAttnWeight(AttnWeightTemplate):
 
     def __init__(self):
         self.config = {}
-        
+
         # Check platform first
         if not IS_AMD_ROCM:
             raise RuntimeError(
@@ -69,14 +66,10 @@ class AiterAttnWeight(AttnWeightTemplate):
                 "Current platform is not AMD ROCm (torch.version.hip is not set).\n"
                 "For NVIDIA GPUs, please use 'flash_attn2' or 'flash_attn3' instead."
             )
-        
+
         # Check aiter availability
         if not AITER_AVAILABLE:
-            raise ImportError(
-                f"aiter is not installed on AMD ROCm platform.\n"
-                f"Import error: {AITER_IMPORT_ERROR}\n"
-                f"Please install aiter for optimal performance:\n{AITER_INSTALL_CMD}"
-            )
+            raise ImportError(f"aiter is not installed on AMD ROCm platform.\nImport error: {AITER_IMPORT_ERROR}\nPlease install aiter for optimal performance:\n{AITER_INSTALL_CMD}")
 
     def apply(
         self,
@@ -107,4 +100,3 @@ class AiterAttnWeight(AttnWeightTemplate):
             max_seqlen_kv,
         ).reshape(bs * max_seqlen_q, -1)
         return x
-

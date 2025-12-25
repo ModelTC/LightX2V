@@ -8,9 +8,9 @@ This module handles AMD-specific optimizations including:
 """
 
 import sys
+
 import torch
 import torch.distributed as dist
-
 from loguru import logger
 
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -33,14 +33,14 @@ pip install -e .
 class AiterSglKernelCompat:
     """
     Compatibility layer to use aiter with sgl_kernel interface.
-    
+
     This class wraps aiter functions to match sgl_kernel's API,
     allowing existing code to work seamlessly on AMD GPUs.
-    
+
     Note: This is REQUIRED on AMD ROCm as the original sgl_kernel
     does not support AMD GPUs.
     """
-    
+
     def __init__(self, aiter_module):
         self._aiter = aiter_module
         self._gemm_a8w8 = aiter_module.gemm_a8w8_CK
@@ -48,25 +48,25 @@ class AiterSglKernelCompat:
         self._dtypes = aiter_module.dtypes
         self._rms_norm = aiter_module.rms_norm
         logger.info("Using aiter as sgl_kernel backend (AMD ROCm optimized)")
-    
+
     def rmsnorm(self, input, weight, eps):
         """RMSNorm compatible with sgl_kernel.rmsnorm(input, weight, eps)"""
         return self._rms_norm(input, weight, eps)
-    
+
     def fp8_scaled_mm(self, input_quant, weight, input_scale, weight_scale, dtype, bias=None):
         """FP8 GEMM compatible with sgl_kernel.fp8_scaled_mm"""
         return self._gemm_a8w8(input_quant, weight, input_scale, weight_scale, bias, dtype)
-    
+
     def int8_scaled_mm(self, input_quant, weight, input_scale, weight_scale, dtype, bias=None):
         """INT8 GEMM compatible with sgl_kernel.int8_scaled_mm"""
         return self._gemm_a8w8(input_quant, weight, input_scale, weight_scale, bias, dtype)
-    
+
     def sgl_per_token_quant_fp8(self, x, out, scale):
         """Per-token FP8 quantization compatible with sgl_kernel.sgl_per_token_quant_fp8"""
         q, s = self._pertoken_quant(x, quant_dtype=self._dtypes.fp8)
         out.copy_(q)
         scale.copy_(s)
-    
+
     def sgl_per_token_group_quant_fp8(self, x, out, scale, group_size=128, eps=1e-10, fp8_min=-448.0, fp8_max=448.0):
         """Per-token per-group FP8 quantization compatible with sgl_kernel.sgl_per_token_group_quant_fp8"""
         m, k = x.shape
@@ -82,20 +82,13 @@ def _get_aiter_sgl_kernel():
     """Get aiter-based sgl_kernel compatibility layer."""
     try:
         import aiter
+
         return AiterSglKernelCompat(aiter)
     except ImportError:
         logger.error(
-            f"\n{'='*60}\n"
-            f"ERROR: AMD ROCm detected but aiter is not installed.\n"
-            f"aiter is REQUIRED for LightX2V to work on AMD GPUs.\n"
-            f"\nPlease install aiter:\n"
-            f"{AITER_INSTALL_CMD}\n"
-            f"{'='*60}\n"
+            f"\n{'=' * 60}\nERROR: AMD ROCm detected but aiter is not installed.\naiter is REQUIRED for LightX2V to work on AMD GPUs.\n\nPlease install aiter:\n{AITER_INSTALL_CMD}\n{'=' * 60}\n"
         )
-        raise ImportError(
-            "aiter is required for AMD ROCm support. "
-            f"Please install: pip install git+{AITER_REPO}@{AITER_COMMIT}"
-        )
+        raise ImportError(f"aiter is required for AMD ROCm support. Please install: pip install git+{AITER_REPO}@{AITER_COMMIT}")
 
 
 @PLATFORM_DEVICE_REGISTER("amd_rocm")
@@ -113,24 +106,24 @@ class AmdRocmDevice:
     def init_device_env():
         """
         Initialize AMD ROCm optimizations.
-        
+
         This is called from lightx2v_platform.set_ai_device when platform is amd_rocm.
         1. Disable cudnn for faster VAE convolution
         2. Inject aiter as sgl_kernel compatibility layer (REQUIRED on AMD)
         """
         logger.info("AMD ROCm platform detected, initializing optimizations...")
-        
+
         # Disable cudnn for faster VAE conv computation
         torch.backends.cudnn.enabled = False
         logger.info("  - cudnn disabled for faster VAE convolution")
-        
+
         # Inject aiter as sgl_kernel compatibility layer (REQUIRED)
         sgl_kernel = _get_aiter_sgl_kernel()
         sys.modules["sgl_kernel"] = sgl_kernel
         # Update any module that already imported sgl_kernel
         for mod_name, mod in list(sys.modules.items()):
-            if mod is not None and hasattr(mod, 'sgl_kernel'):
-                setattr(mod, 'sgl_kernel', sgl_kernel)
+            if mod is not None and hasattr(mod, "sgl_kernel"):
+                setattr(mod, "sgl_kernel", sgl_kernel)
         logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
 
     @staticmethod
@@ -153,7 +146,7 @@ class AmdRocmDevice:
 # Export constants
 __all__ = [
     "IS_AMD_ROCM",
-    "AITER_REPO", 
+    "AITER_REPO",
     "AITER_COMMIT",
     "AITER_INSTALL_CMD",
     "AiterSglKernelCompat",

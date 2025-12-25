@@ -45,4 +45,3 @@ ENV HSA_FORCE_FINE_GRAIN_PCIE=1
 
 # Default command
 CMD ["python", "-c", "from lightx2v import LightX2VPipeline; print('LightX2V AMD ROCm ready!')"]
-
