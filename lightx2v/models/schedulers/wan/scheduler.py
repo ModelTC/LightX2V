@@ -29,6 +29,7 @@ class WanScheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
+        self.padding_multiple = self.config.get("padding_multiple", 1)
         self.freqs = torch.cat(
             [
                 self.rope_params(1024, self.head_size - 4 * (self.head_size // 6)),
@@ -97,7 +98,8 @@ class WanScheduler(BaseScheduler):
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
                 seqlen = cos_sin.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
+                multiple = world_size * self.padding_multiple
+                padding_size = (multiple - (seqlen % multiple)) % multiple
                 if padding_size > 0:
                     cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
                 cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
@@ -107,7 +109,8 @@ class WanScheduler(BaseScheduler):
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
                 seqlen = cos_sin.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
+                multiple = world_size * self.padding_multiple
+                padding_size = (multiple - (seqlen % multiple)) % multiple
                 if padding_size > 0:
                     cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
                 cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
