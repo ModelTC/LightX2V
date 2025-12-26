@@ -201,16 +201,30 @@ class WanTransformerInfer(BaseTransformerInfer):
                 model_cls=self.config["model_cls"],
             )
         else:
-            attn_out = phase.self_attn_1.apply(
-                q=q,
-                k=k,
-                v=v,
-                cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
-                cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
-                max_seqlen_q=img_qkv_len,
-                max_seqlen_kv=img_qkv_len,
-                model_cls=self.config["model_cls"],
-            )
+            if self.config["self_attn_1_type"] == "draft_attn":
+                attn_out = phase.self_attn_1.apply(
+                    q=q,
+                    k=k,
+                    v=v,
+                    cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                    cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                    max_seqlen_q=img_qkv_len,
+                    max_seqlen_kv=img_qkv_len,
+                    frame_h=self.scheduler.latents.shape[2]//self.scheduler.patch_size[1],
+                    frame_w=self.scheduler.latents.shape[3]//self.scheduler.patch_size[2],
+                    block_idx=self.block_idx,
+                )
+            else:
+                attn_out = phase.self_attn_1.apply(
+                    q=q,
+                    k=k,
+                    v=v,
+                    cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                    cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                    max_seqlen_q=img_qkv_len,
+                    max_seqlen_kv=img_qkv_len,
+                    model_cls=self.config["model_cls"],
+                )
 
         y = phase.self_attn_o.apply(attn_out)
 
