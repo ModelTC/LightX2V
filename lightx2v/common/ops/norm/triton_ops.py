@@ -927,7 +927,7 @@ def _rms_norm_tiled_onepass(
     x = tl.load(x_blk, mask=mask, other=0.0).to(tl.float32)
     mean_square = tl.sum(x * x, axis=1, keep_dims=True) / DIM
     rstd = tl.math.rsqrt(mean_square + EPS)
-    w = tl.load(w_ptr + d_offset, mask=mask)
+    w = tl.load(w_ptr + d_offset, mask=d_mask)
     tl.store(y_blk, x * rstd * w, mask=mask)
 
 
@@ -940,12 +940,10 @@ def rms_norm_kernel(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-6):
     S, D = x_view.shape
 
     BLOCK_SIZE_SEQ = min(16, triton.next_power_of_2(max(1, S // 512)))
-    grid = triton.cdiv(S, BLOCK_SIZE_SEQ),
+    grid = (triton.cdiv(S, BLOCK_SIZE_SEQ),)
 
     with torch.cuda.device(x.device):
-        torch.library.wrap_triton(
-            _rms_norm_tiled_onepass
-        )[grid](
+        torch.library.wrap_triton(_rms_norm_tiled_onepass)[grid](
             y_view,
             x_view,
             w,
