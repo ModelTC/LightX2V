@@ -1274,9 +1274,9 @@ def run_inference(
 
     save_result_path = generate_unique_filename(output_dir)
 
-    is_dit_quant = dit_quant_detected != "bf16"
-    is_t5_quant = t5_quant_detected != "bf16"
-    is_clip_quant = clip_quant_detected != "fp16"
+    is_dit_quant = dit_quant_detected in ["fp8", "int8"]
+    is_t5_quant = t5_quant_detected in ["fp8", "int8"]
+    is_clip_quant = clip_quant_detected in ["fp8", "int8"]
 
     dit_quantized_ckpt = None
     dit_original_ckpt = None
