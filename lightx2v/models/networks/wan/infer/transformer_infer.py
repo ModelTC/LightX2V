@@ -177,7 +177,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
-            if self.self_attn_1_type == "flash_attn2" or self.self_attn_1_type == "flash_attn3":
+            if self.self_attn_1_type in ["flash_attn2", "flash_attn3", "draft_attn"]:
                 self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
             else:
                 self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
