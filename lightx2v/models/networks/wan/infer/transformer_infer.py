@@ -61,6 +61,10 @@ class WanTransformerInfer(BaseTransformerInfer):
     def get_scheduler_values(self):
         self.cos_sin = self.scheduler.cos_sin
 
+    @torch.no_grad()
+    def reset_post_adapter_states(self):
+        pass
+
     def reset_infer_states(self):
         self.self_attn_cu_seqlens_qkv = None
         self.cross_attn_cu_seqlens_q = None
