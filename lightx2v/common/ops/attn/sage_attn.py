@@ -1,5 +1,3 @@
-import sys
-
 import torch
 from loguru import logger
 
