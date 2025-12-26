@@ -143,7 +143,7 @@ class QwenImageCrossAttention(WeightModule):
         self.sparge = config.get("sparge", False)
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.heads = config["attention_out_dim"] // config["attention_dim_head"]
-        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
+        self.rms_norm_type = config.get("rms_norm_type", "one-pass")
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
