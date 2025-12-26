@@ -6,10 +6,10 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
 
 try:
     import sgl_kernel
