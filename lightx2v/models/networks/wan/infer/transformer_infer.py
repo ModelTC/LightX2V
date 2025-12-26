@@ -210,8 +210,8 @@ class WanTransformerInfer(BaseTransformerInfer):
                     cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
                     max_seqlen_q=img_qkv_len,
                     max_seqlen_kv=img_qkv_len,
-                    frame_h=self.scheduler.latents.shape[2]//self.scheduler.patch_size[1],
-                    frame_w=self.scheduler.latents.shape[3]//self.scheduler.patch_size[2],
+                    frame_h=self.scheduler.latents.shape[2] // self.scheduler.patch_size[1],
+                    frame_w=self.scheduler.latents.shape[3] // self.scheduler.patch_size[2],
                     block_idx=self.block_idx,
                 )
             else:

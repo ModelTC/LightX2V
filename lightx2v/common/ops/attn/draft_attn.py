@@ -1,7 +1,7 @@
-import torch
-import torch.nn.functional as F
 import math
 
+import torch
+import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -17,6 +17,7 @@ except ImportError:
 flash_attn_varlen_func = None
 try:
     from flash_attn.flash_attn_interface import flash_attn_varlen_func as _func
+
     flash_attn_varlen_func = _func
 except ImportError:
     logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
@@ -24,6 +25,7 @@ except ImportError:
 
 try:
     from flash_attn_interface import flash_attn_varlen_func as _func
+
     flash_attn_varlen_func = _func
 except ImportError:
     logger.info("flash_attn_varlen_func_v3 not found, please install flash_attn3 first")
@@ -31,7 +33,6 @@ except ImportError:
 
 @ATTN_WEIGHT_REGISTER("draft_attn")
 class DraftAttnWeight(AttnWeightTemplate):
-
     sparsity_ratio = 0.75
     reorg_idx_dict = {}
     restore_idx_dict = {}
@@ -41,9 +42,7 @@ class DraftAttnWeight(AttnWeightTemplate):
         self.config = {}
 
     @staticmethod
-    def build_grid_gather_index_and_bucket_fast(
-        H, W, pool_h, pool_w, seqlen
-    ):
+    def build_grid_gather_index_and_bucket_fast(H, W, pool_h, pool_w, seqlen):
         Gh = (H + pool_h - 1) // pool_h
         Gw = (W + pool_w - 1) // pool_w
 
@@ -89,7 +88,6 @@ class DraftAttnWeight(AttnWeightTemplate):
 
         return gather_index, bucket_sizes, bucket_offsets
 
-
     @classmethod
     @torch.compiler.disable
     def prepare_reorg_idx_and_bucket_offset(cls, seqlen, frame_h, frame_w):
@@ -105,9 +103,7 @@ class DraftAttnWeight(AttnWeightTemplate):
         )
         reorg_idx = torch.tensor(reorg_idx, dtype=torch.long, device="cuda")
         restore_idx = torch.empty_like(reorg_idx)
-        restore_idx[reorg_idx] = torch.arange(
-            reorg_idx.numel(), device=reorg_idx.device
-        )
+        restore_idx[reorg_idx] = torch.arange(reorg_idx.numel(), device=reorg_idx.device)
         cls.reorg_idx_dict[(seqlen, frame_h, frame_w)] = reorg_idx
         cls.restore_idx_dict[(seqlen, frame_h, frame_w)] = restore_idx
         cls.bucket_offsets_dict[(seqlen, frame_h, frame_w)] = torch.tensor(bucket_offsets, dtype=torch.int32, device="cuda")
@@ -115,7 +111,6 @@ class DraftAttnWeight(AttnWeightTemplate):
         logger.info(f"DraftAttnWeight: bucket_sizes: {bucket_sizes}")
         logger.info(f"DraftAttnWeight: bucket_offsets: {bucket_offsets}")
         logger.info(f"DraftAttnWeight: using sparsity ratio {cls.sparsity_ratio}")
-        
 
     def sample_qk_attention_2d(
         self,
@@ -138,23 +133,13 @@ class DraftAttnWeight(AttnWeightTemplate):
 
         # 2) Permute & merge (num_frames, H*D) into channel dim:
         #    → [num_frames, H*D, frame_h, frame_w]
-        q_vid = q_vid.permute(0, 3, 4, 1, 2).reshape(
-            num_frames, H * D, frame_h, frame_w
-        )
-        k_vid = k_vid.permute(0, 3, 4, 1, 2).reshape(
-            num_frames, H * D, frame_h, frame_w
-        )
+        q_vid = q_vid.permute(0, 3, 4, 1, 2).reshape(num_frames, H * D, frame_h, frame_w)
+        k_vid = k_vid.permute(0, 3, 4, 1, 2).reshape(num_frames, H * D, frame_h, frame_w)
 
         # 3) 2D max‐pool each frame (ceil_mode ensures we cover the edges):
         #    → [num_frames, H*D, S_h, S_w]
-        q_pooled = F.avg_pool2d(
-            q_vid, kernel_size=(pool_h, pool_w),
-            stride=(pool_h, pool_w), ceil_mode=True
-        )
-        k_pooled = F.avg_pool2d(
-            k_vid, kernel_size=(pool_h, pool_w),
-            stride=(pool_h, pool_w), ceil_mode=True
-        )
+        q_pooled = F.avg_pool2d(q_vid, kernel_size=(pool_h, pool_w), stride=(pool_h, pool_w), ceil_mode=True)
+        k_pooled = F.avg_pool2d(k_vid, kernel_size=(pool_h, pool_w), stride=(pool_h, pool_w), ceil_mode=True)
 
         S_h, S_w = q_pooled.shape[-2:]
         S = num_frames * S_h * S_w
@@ -204,7 +189,7 @@ class DraftAttnWeight(AttnWeightTemplate):
         # 每个 head 独立计算阈值
         thresholds = torch.kthvalue(flat, k, dim=1).values  # [H]
         mask = attn_map >= thresholds[:, None, None]  # broadcasting
-        
+
         return mask
 
     def apply(
@@ -255,17 +240,17 @@ class DraftAttnWeight(AttnWeightTemplate):
 
         mask = self.attention_percentile_mask_headwise(attn, 1 - self.sparsity_ratio)
 
-        h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True) # [N, 3] -> [head, i, j]
+        h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True)  # [N, 3] -> [head, i, j]
         bucket_offsets = self.bucket_offsets_dict[(seqlen, frame_h, frame_w)]
         mask_size_pre_frame = mask.shape[1] // num_frames
 
         base_offset = h_indices * seqlen
-        
+
         q_frame_base = (i_indices // mask_size_pre_frame) * block_size
         q_bucket_idx = i_indices % mask_size_pre_frame
         q_start = base_offset + q_frame_base + bucket_offsets[q_bucket_idx]
         q_end = base_offset + q_frame_base + bucket_offsets[q_bucket_idx + 1]
-        
+
         k_frame_base = (j_indices // mask_size_pre_frame) * block_size
         k_bucket_idx = j_indices % mask_size_pre_frame
         k_start = base_offset + k_frame_base + bucket_offsets[k_bucket_idx]
@@ -300,4 +285,3 @@ class DraftAttnWeight(AttnWeightTemplate):
         out = out[restore_idx]
 
         return out.reshape(out.shape[0], -1)
-        
