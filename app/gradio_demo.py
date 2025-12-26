@@ -1436,6 +1436,7 @@ def run_inference(
         "boundary": 0.900,
         "use_image_encoder": False if "wan2.2" in model_cls else True,
         "rope_type": "flashinfer" if apply_rope_with_cos_sin_cache_inplace else "torch",
+        "t5_lazy_load": True,
     }
 
     args = argparse.Namespace(
