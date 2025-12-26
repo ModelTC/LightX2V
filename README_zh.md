@@ -16,11 +16,25 @@
 
 --------------------------------------------------------------------------------
 
-**LightX2V** 是一个先进的轻量级视频生成推理框架，专为提供高效、高性能的视频合成解决方案而设计。该统一平台集成了多种前沿的视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视频输出(V)**。
+**LightX2V** 是一个先进的轻量级图像视频生成推理框架，专为提供高效、高性能的图像视频生成解决方案而设计。该统一平台集成了多种前沿的图像视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)，文本生图片(T2I)，图像编辑(I2I)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视觉输出(Vision)**。
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
 > 👋 **加入[微信交流群](https://light-ai.top/community.html)。**
+
+## 🧾 社区代码贡献指南
+
+在提交之前，请确保代码格式符合项目规范。可以使用如下执行命令，确保项目代码格式的一致性。
+
+```bash
+pip install ruff pre-commit
+pre-commit run --all-files
+```
+
+除了LightX2V团队的贡献，我们也收到一些社区开发者的贡献，包括但不限于：
+
+- [triple-Mu](https://github.com/triple-Mu)
+- [vivienfanghuagood](https://github.com/vivienfanghuagood)
 
 ## :fire: 最新动态
 
@@ -258,28 +272,24 @@ pipe.generate(
 - [服务化部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html) - 生产级API服务部署
 - [Lora模型部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/lora_deploy.html) - Lora灵活部署
 
-## 🧾 代码贡献指南
-
-我们通过自动化的预提交钩子来保证代码质量，确保项目代码格式的一致性。
-
-> [!TIP]
-> **安装说明：**
->
-> 1. 安装必要的依赖：
-> ```shell
-> pip install ruff pre-commit
-> ```
->
-> 2. 提交前运行：
-> ```shell
-> pre-commit run --all-files
-> ```
-
-感谢您为LightX2V的改进做出贡献！
 
 ## 🤝 致谢
 
-我们向所有启发和促进LightX2V开发的模型仓库和研究社区表示诚挚的感谢。此框架基于开源社区的集体努力而构建。
+我们向所有启发和促进LightX2V开发的模型仓库和研究社区表示诚挚的感谢。此框架基于开源社区的集体努力而构建。包括但不限于：
+
+- [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
+- [Wan-Video](https://github.com/Wan-Video)
+- [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
+- [LightLLM](https://github.com/ModelTC/LightLLM)
+- [sglang](https://github.com/sgl-project/sglang)
+- [vllm](https://github.com/vllm-project/vllm)
+- [flash-attention](https://github.com/Dao-AILab/flash-attention)
+- [SageAttention](https://github.com/thu-ml/SageAttention)
+- [flashinfer](https://github.com/flashinfer-ai/flashinfer)
+- [MagiAttention](https://github.com/SandAI-org/MagiAttention)
+- [radial-attention](https://github.com/mit-han-lab/radial-attention)
+- [xDiT](https://github.com/xdit-project/xDiT)
+- [FastVideo](https://github.com/hao-ai-lab/FastVideo)
 
 ## 🌟 Star 历史
 
