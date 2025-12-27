@@ -35,8 +35,11 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
+- [yeahdongcn](https://github.com/yeahdongcn)
 
 ## :fire: Latest News
+
+- **December 27, 2025:** 🚀 Supported deployment on MThreads MUSA.
 
 - **December 25, 2025:** 🚀 Supported deployment on AMD ROCm and Ascend 910B.
 
