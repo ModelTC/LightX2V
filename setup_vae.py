@@ -51,7 +51,7 @@ full_dependencies = [
     "uvicorn",
     "requests",
     "decord",
-    "torchada",
+    "torchada>=0.1.10",
 ]
 
 setup(
