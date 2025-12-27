@@ -35,8 +35,11 @@ pre-commit run --all-files
 
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
+- [yeahdongcn](https://github.com/yeahdongcn)
 
 ## :fire: 最新动态
+
+- **2025年12月27日:** 🚀 支持摩尔线程 MUSA 的部署。
 
 - **2025年12月25日:** 🚀 支持 AMD ROCm 和 Ascend 910B 的部署。
 
