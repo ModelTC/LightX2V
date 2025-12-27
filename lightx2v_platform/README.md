@@ -10,6 +10,7 @@ Currently supported backends include:
 - Hygon DCU
 - Ascend 910B
 - AMD ROCm
+- MThreads MUSA
 
 For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 
