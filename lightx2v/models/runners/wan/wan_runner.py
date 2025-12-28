@@ -255,7 +255,7 @@ class WanRunner(DefaultRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
 
         return text_encoder_output
@@ -275,7 +275,7 @@ class WanRunner(DefaultRunner):
             clip_encoder_out = self.image_encoder.visual([first_frame, last_frame]).squeeze(0).to(GET_DTYPE())
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.image_encoder
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         return clip_encoder_out
 
@@ -430,7 +430,7 @@ class WanRunner(DefaultRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         vae_encoder_out = torch.concat([msk, vae_encoder_out]).to(GET_DTYPE())
         return vae_encoder_out

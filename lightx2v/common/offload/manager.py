@@ -50,7 +50,10 @@ class WeightAsyncStreamManager(object):
     def init_first_buffer(self, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.init_stream):
             if hasattr(self, "cpu_buffers"):
-                self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0][0].state_dict(), 0, adapter_block_idx)
+                if self.offload_granularity == "block":
+                    self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0].state_dict(), 0, adapter_block_idx)
+                else:
+                    self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0][0].state_dict(), 0, adapter_block_idx)
             else:
                 if self.offload_granularity == "block":
                     self.cuda_buffers[0].load_state_dict(blocks[0].state_dict(), 0, adapter_block_idx)
@@ -62,8 +65,7 @@ class WeightAsyncStreamManager(object):
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
             if hasattr(self, "cpu_buffers"):
-                self.cpu_buffers[1].load_state_dict_from_disk(block_idx, adapter_block_idx)
-                self.cuda_buffers[1].load_state_dict(self.cpu_buffers[1].state_dict(), block_idx, adapter_block_idx)
+                self.cuda_buffers[1].load_state_dict(self.cpu_buffers[0].state_dict(), block_idx, adapter_block_idx)
             else:
                 self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
 
@@ -110,12 +112,17 @@ class WeightAsyncStreamManager(object):
     def start_prefetch_block(self, block_idx, adapter_block_idx=None):
         self.prefetch_block_idx = block_idx
         self.prefetch_futures = []
-        for phase in self.cpu_buffers[1]:
-            future = self.executor.submit(phase.load_state_dict_from_disk, block_idx, adapter_block_idx)
+        if self.offload_granularity == "block":
+            future = self.executor.submit(self.cpu_buffers[1].load_state_dict_from_disk, block_idx, adapter_block_idx)
             self.prefetch_futures.append(future)
+        else:
+            for phase in self.cpu_buffers[1]:
+                future = self.executor.submit(phase.load_state_dict_from_disk, block_idx, adapter_block_idx)
+                self.prefetch_futures.append(future)
 
     def swap_cpu_buffers(self):
-        #  wait_start = time.time()
+        # import time
+        # wait_start = time.time()
         # already_done = all(f.done() for f in self.prefetch_futures)
         for f in self.prefetch_futures:
             f.result()
