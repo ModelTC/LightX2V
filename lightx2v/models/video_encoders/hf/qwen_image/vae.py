@@ -36,6 +36,8 @@ class AutoencoderKLQwenImageVAE:
         with open(os.path.join(self.config["model_path"], "vae", "config.json"), "r") as f:
             vae_config = json.load(f)
             self.vae_scale_factor = 2 ** len(vae_config["temperal_downsample"]) if "temperal_downsample" in vae_config else 8
+        if self.config.get("use_tiling_vae", False):
+            self.model.enable_tiling()
 
     @staticmethod
     def _unpack_latents(latents, height, width, vae_scale_factor):
