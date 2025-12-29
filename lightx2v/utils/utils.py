@@ -623,7 +623,8 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
         path_value = getattr(args, path_arg, "")
 
         # Check if path is provided
-        if not path_value: raise ValueError(f"{requirements['description']}: --{path_arg} cannot be empty")
+        if not path_value:
+            raise ValueError(f"{requirements['description']}: --{path_arg} cannot be empty")
 
         # For comma-separated paths (like i2i with multiple images)
         if "," in path_value:
