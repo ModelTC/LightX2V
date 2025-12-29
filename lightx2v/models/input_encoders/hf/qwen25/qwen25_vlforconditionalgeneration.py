@@ -76,8 +76,6 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             if self.config["cpu_offload"]:
                 self.device_map = {
                     "lm_head": AI_DEVICE,
-                    "model.embed_tokens": AI_DEVICE,
-                    "model.norm": AI_DEVICE,
                     "model.visual": "cpu",
                     "model.language_model": "cpu",
                 }
