@@ -575,19 +575,20 @@ def fixed_shape_resize(img, target_height, target_width):
 
 def check_path_exists(path: str) -> None:
     """
-    Check if a file path exists and assert if it doesn't.
+    Check if a file path exists and raise an error if it doesn't.
 
     Args:
         path: The file path to check
 
     Raises:
-        AssertionError: If the path is not empty and the file does not exist
+        FileNotFoundError: If the path is not empty and the file does not exist
     """
     if path and not path.startswith(("http://", "https://", "data:")):
-        assert os.path.exists(path), f"File does not exist: {path}"
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File does not exist: {path}")
 
 
-def validate_task_arguments(args) -> None:
+def validate_task_arguments(args: "argparse.Namespace") -> None:
     """
     Validate arguments based on the task type.
 
@@ -622,7 +623,7 @@ def validate_task_arguments(args) -> None:
         path_value = getattr(args, path_arg, "")
 
         # Check if path is provided
-        assert path_value, f"{requirements['description']}: --{path_arg} cannot be empty"
+        if not path_value: raise ValueError(f"{requirements['description']}: --{path_arg} cannot be empty")
 
         # For comma-separated paths (like i2i with multiple images)
         if "," in path_value:
