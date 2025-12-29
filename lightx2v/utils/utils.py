@@ -6,7 +6,6 @@ from typing import Optional
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
-import safetensors
 import torch
 import torch.distributed as dist
 import torchvision
@@ -16,6 +15,7 @@ from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
+import safetensors
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -601,38 +601,14 @@ def validate_task_arguments(args) -> None:
 
     # Define required file paths for each task
     task_requirements = {
-        "i2i": {
-            "required_paths": ["image_path"],
-            "description": "Image-to-Image task requires --image_path"
-        },
-        "i2v": {
-            "required_paths": ["image_path"],
-            "description": "Image-to-Video task requires --image_path"
-        },
-        "flf2v": {
-            "required_paths": ["image_path", "last_frame_path"],
-            "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"
-        },
-        "s2v": {
-            "required_paths": ["image_path", "audio_path"],
-            "description": "Speech-to-Video task requires --image_path and --audio_path"
-        },
-        "vace": {
-            "required_paths": ["src_video"],
-            "description": "Video Appearance Change Editing task requires --src_video"
-        },
-        "animate": {
-            "required_paths": ["image_path"],
-            "description": "Animate task requires --image_path"
-        },
-        "t2v": {
-            "required_paths": [],
-            "description": "Text-to-Video task"
-        },
-        "t2i": {
-            "required_paths": [],
-            "description": "Text-to-Image task"
-        }
+        "i2i": {"required_paths": ["image_path"], "description": "Image-to-Image task requires --image_path"},
+        "i2v": {"required_paths": ["image_path"], "description": "Image-to-Video task requires --image_path"},
+        "flf2v": {"required_paths": ["image_path", "last_frame_path"], "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"},
+        "s2v": {"required_paths": ["image_path", "audio_path"], "description": "Speech-to-Video task requires --image_path and --audio_path"},
+        "vace": {"required_paths": ["src_video"], "description": "Video Appearance Change Editing task requires --src_video"},
+        "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
+        "t2v": {"required_paths": [], "description": "Text-to-Video task"},
+        "t2i": {"required_paths": [], "description": "Text-to-Image task"},
     }
 
     if task not in task_requirements:
