@@ -6,6 +6,7 @@ from typing import Optional
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
+import safetensors
 import torch
 import torch.distributed as dist
 import torchvision
@@ -15,7 +16,6 @@ from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
-import safetensors
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
