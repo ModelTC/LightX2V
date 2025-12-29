@@ -11,5 +11,8 @@
     "sample_shift": 8,
     "enable_cfg": true,
     "cpu_offload": false,
-    "rope_type": "torch"
+    "modulate_type": "torch",
+    "rope_type": "torch",
+    "ln_type": "Default",
+    "rms_type": "Default"
 }
