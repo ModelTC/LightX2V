@@ -571,3 +571,89 @@ def fixed_shape_resize(img, target_height, target_width):
 
     h, w = resized_img.shape[-2:]
     return resized_img, h, w
+
+
+def check_path_exists(path: str) -> None:
+    """
+    Check if a file path exists and assert if it doesn't.
+
+    Args:
+        path: The file path to check
+
+    Raises:
+        AssertionError: If the path is not empty and the file does not exist
+    """
+    if path and not path.startswith(("http://", "https://", "data:")):
+        assert os.path.exists(path), f"File does not exist: {path}"
+
+
+def validate_task_arguments(args) -> None:
+    """
+    Validate arguments based on the task type.
+
+    Args:
+        args: Parsed arguments from argparse
+
+    Raises:
+        AssertionError: If required arguments are missing or invalid for the task
+    """
+    task = args.task
+
+    # Define required file paths for each task
+    task_requirements = {
+        "i2i": {
+            "required_paths": ["image_path"],
+            "description": "Image-to-Image task requires --image_path"
+        },
+        "i2v": {
+            "required_paths": ["image_path"],
+            "description": "Image-to-Video task requires --image_path"
+        },
+        "flf2v": {
+            "required_paths": ["image_path", "last_frame_path"],
+            "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"
+        },
+        "s2v": {
+            "required_paths": ["image_path", "audio_path"],
+            "description": "Speech-to-Video task requires --image_path and --audio_path"
+        },
+        "vace": {
+            "required_paths": ["src_video"],
+            "description": "Video Appearance Change Editing task requires --src_video"
+        },
+        "animate": {
+            "required_paths": ["image_path"],
+            "description": "Animate task requires --image_path"
+        },
+        "t2v": {
+            "required_paths": [],
+            "description": "Text-to-Video task"
+        },
+        "t2i": {
+            "required_paths": [],
+            "description": "Text-to-Image task"
+        }
+    }
+
+    if task not in task_requirements:
+        logger.warning(f"Unknown task type: {task}, skipping validation")
+        return
+
+    requirements = task_requirements[task]
+
+    # Check required paths
+    for path_arg in requirements["required_paths"]:
+        path_value = getattr(args, path_arg, "")
+
+        # Check if path is provided
+        assert path_value, f"{requirements['description']}: --{path_arg} cannot be empty"
+
+        # For comma-separated paths (like i2i with multiple images)
+        if "," in path_value:
+            paths = [p.strip() for p in path_value.split(",")]
+            for path in paths:
+                check_path_exists(path)
+        else:
+            check_path_exists(path_value)
+
+    logger.info(f"✓ Task '{task}' arguments validated successfully")
