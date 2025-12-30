@@ -88,11 +88,11 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
-        qwen25vl_tokenizer_path = self.config.get("tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
+        qwen25vl_tokenizer_path = self.config.get("qwen25vl_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen25vl_tokenizer_path)
         if self.config["task"] == "i2i":
             self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
-            qwen25vl_processor_path = self.config.get("processor_path", os.path.join(self.config["model_path"], "processor"))
+            qwen25vl_processor_path = self.config.get("qwen25vl_processor_path", os.path.join(self.config["model_path"], "processor"))
             self.processor = Qwen2VLProcessor.from_pretrained(qwen25vl_processor_path)
 
     def _extract_masked_hidden(self, hidden_states: torch.Tensor, mask: torch.Tensor):
