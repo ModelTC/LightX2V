@@ -254,7 +254,7 @@ class QwenImageRunner(DefaultRunner):
         return None
 
     def set_target_shape(self):
-        vae_scale_factor = self.vae.vae_scale_factor if hasattr(self, "vae") else self.vae_scale_factor
+        vae_scale_factor = self.config["vae_scale_factor"]
         custom_shape = self.get_custom_shape()
         if custom_shape is not None:
             width, height = custom_shape
