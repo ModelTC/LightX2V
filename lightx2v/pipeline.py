@@ -11,16 +11,16 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-# from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
-
-# from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.input_info import set_input_info
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
@@ -119,6 +119,13 @@ class LightX2VPipeline:
             elif self.task in ["t2i"]:
                 self.prompt_template_encode = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
                 self.prompt_template_encode_start_idx = 34
+        elif self.model_cls in ["z_image"]:
+            self.model_cls = "z_image"
+            self.num_layers = 30
+            self.attention_out_dim = 3840
+            self.attention_dim_head = 128
+            self.transformer_in_channels = 64
+            self.vae_scale_factor = 8
 
     def create_generator(
         self,

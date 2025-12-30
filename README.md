@@ -16,13 +16,33 @@
 
 --------------------------------------------------------------------------------
 
-**LightX2V** is an advanced lightweight video generation inference framework engineered to deliver efficient, high-performance video synthesis solutions. This unified platform integrates multiple state-of-the-art video generation techniques, supporting diverse generation tasks including text-to-video (T2V) and image-to-video (I2V). **X2V represents the transformation of different input modalities (X, such as text or images) into video output (V)**.
+**LightX2V** is an advanced lightweight image/video generation inference framework engineered to deliver efficient, high-performance image/video synthesis solutions. This unified platform integrates multiple state-of-the-art image/video generation techniques, supporting diverse generation tasks including text-to-video (T2V), image-to-video (I2V), text-to-image (T2I), image-editing (I2I). **X2V represents the transformation of different input modalities (X, such as text or images) into vision output (Vision)**.
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
 
 > 👋 **Join us on [WeChat](https://light-ai.top/community.html).**
 
+## 🧾 Community Code Contribution Guidelines
+
+Before submitting, please ensure that the code format conforms to the project standard. You can use the following execution command to ensure the consistency of project code format.
+
+```bash
+pip install ruff pre-commit
+pre-commit run --all-files
+```
+
+Besides the contributions from the LightX2V team, we have received contributions from some community developers, including but not limited to:
+
+- [triple-Mu](https://github.com/triple-Mu)
+- [vivienfanghuagood](https://github.com/vivienfanghuagood)
+- [yeahdongcn](https://github.com/yeahdongcn)
+
 ## :fire: Latest News
+
+- **December 27, 2025:** 🚀 Supported deployment on MThreads MUSA.
+
+- **December 25, 2025:** 🚀 Supported deployment on AMD ROCm and Ascend 910B.
+
 - **December 23, 2025:** 🚀 We support the [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) image editing model since Day 0. On a single H100 GPU, LightX2V delivers approximately 1.4× speedup. We support for CFG parallelism, Ulysses parallelism, and efficient offloading technologies. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) has been updated with CFG / step-distilled LoRA and FP8 weights. Usage examples can be found in the [Python scripts](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image). Combined with LightX2V, 4-step CFG / step distillation, and the FP8 model, the maximum acceleration can reach up to approximately 42×. Feel free to try [LightX2V Online Service](https://x2v.light-ai.top/login) with *Image to Image* and *Qwen-Image-Edit-2511* model.
 
 - **December 22, 2025:** 🚀 Added **Wan2.1 NVFP4 quantization-aware 4-step distilled models**; weights are available on HuggingFace: [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4).
@@ -256,28 +276,23 @@ We provide multiple frontend interface deployment options:
 - [Service Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html) - Production API service deployment
 - [Lora Model Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/lora_deploy.html) - Flexible Lora deployment
 
-## 🧾 Contributing Guidelines
-
-We maintain code quality through automated pre-commit hooks to ensure consistent formatting across the project.
-
-> [!TIP]
-> **Setup Instructions:**
->
-> 1. Install required dependencies:
-> ```shell
-> pip install ruff pre-commit
-> ```
->
-> 2. Run before committing:
-> ```shell
-> pre-commit run --all-files
-> ```
-
-We appreciate your contributions to making LightX2V better!
-
 ## 🤝 Acknowledgments
 
-We extend our gratitude to all the model repositories and research communities that inspired and contributed to the development of LightX2V. This framework builds upon the collective efforts of the open-source community.
+We sincerely thank all the model repositories and research communities that inspired and promoted the development of LightX2V. This framework is built on the collective efforts of the open-source community. It includes but is not limited to:
+
+- [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
+- [Wan-Video](https://github.com/Wan-Video)
+- [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
+- [LightLLM](https://github.com/ModelTC/LightLLM)
+- [sglang](https://github.com/sgl-project/sglang)
+- [vllm](https://github.com/vllm-project/vllm)
+- [flash-attention](https://github.com/Dao-AILab/flash-attention)
+- [SageAttention](https://github.com/thu-ml/SageAttention)
+- [flashinfer](https://github.com/flashinfer-ai/flashinfer)
+- [MagiAttention](https://github.com/SandAI-org/MagiAttention)
+- [radial-attention](https://github.com/mit-han-lab/radial-attention)
+- [xDiT](https://github.com/xdit-project/xDiT)
+- [FastVideo](https://github.com/hao-ai-lab/FastVideo)
 
 ## 🌟 Star History
 

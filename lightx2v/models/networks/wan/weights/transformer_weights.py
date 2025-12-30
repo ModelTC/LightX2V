@@ -336,6 +336,11 @@ class WanSelfAttention(WeightModule):
                     attention_weights_cls.coefficient = self.config["nbhd_attn_setting"]["coefficient"]
                 if "min_width" in self.config["nbhd_attn_setting"]:
                     attention_weights_cls.min_width = self.config["nbhd_attn_setting"]["min_width"]
+
+        # draft_attn setting
+        if self.config["self_attn_1_type"] == "draft_attn":
+            attention_weights_cls.sparsity_ratio = self.config.get("draft_attn_sparsity_ratio", 0.75)
+
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:

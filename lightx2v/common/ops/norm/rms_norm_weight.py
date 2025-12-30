@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -202,3 +203,21 @@ class RMSWeightSF(RMSWeight):
 
     def apply(self, x):
         return self._norm(x.float()).type_as(x) * self.weight
+
+
+@RMS_WEIGHT_REGISTER("one-pass")
+class RMSWeightOnePass(RMSWeight):
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+    ):
+        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+
+    def apply(self, input_tensor):
+        return rms_norm_kernel(input_tensor, self.weight, self.eps)

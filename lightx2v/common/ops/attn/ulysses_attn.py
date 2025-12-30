@@ -15,7 +15,21 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False, img_first=True):
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        slice_qkv_len,
+        cu_seqlens_qkv,
+        attention_module=None,
+        attention_type="flash_attn2",
+        seq_p_group=None,
+        model_cls=None,
+        use_fp8_comm=False,
+        enable_head_parallel=False,
+        img_first=True,
+    ):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 
@@ -61,13 +75,15 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         global_img_seqlen = shard_seqlen * world_size  # 全局序列长度
 
         # 初始化累积序列长度张量
-        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32, device=AI_DEVICE)
+        cu_seqlens_qkv = torch.zeros([2], dtype=torch.int32)
         s = txt_qkv_len + global_img_seqlen  # 计算文本和图像的总长度
         s1 = s  # 当前样本的结束位置
         cu_seqlens_qkv[1] = s1  # 设置累积序列长度
         if txt_mask_len:
             s2 = txt_mask_len + global_img_seqlen  # 文本掩码的结束位置
-            cu_seqlens_qkv = torch.cat((cu_seqlens_qkv, torch.tensor([s2], dtype=torch.int32, device=AI_DEVICE)))
+            cu_seqlens_qkv = torch.cat((cu_seqlens_qkv, torch.tensor([s2], dtype=torch.int32)))
+        if attention_type == "flash_attn2" or attention_type == "flash_attn3":
+            cu_seqlens_qkv = cu_seqlens_qkv.to(AI_DEVICE, non_blocking=True)
         max_seqlen_qkv = global_img_seqlen + txt_qkv_len  # 最大序列长度
 
         # 分割图像和文本的查询、键和值
@@ -134,7 +150,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 # 调用注意力函数计算注意力结果
                 head_attn = attention_module.apply(
                     q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls
-                ).reshape(-1, single_head, hidden_dims)
+                )
                 head_attns.append(head_attn)
 
             # 合并当前进程的所有head的attn
@@ -174,12 +190,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             v = torch.cat((shard_img_v, shard_txt_v), dim=0)
 
             # 调用注意力函数计算注意力结果
-            attn = attention_module.apply(
-                q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls
-            ).reshape(-1, shard_heads, hidden_dims)
+            attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls)
 
         # 分割图像和文本的注意力结果
-        attn = attn.reshape(attn.shape[0], -1)
         if img_first:
             img_attn, txt_attn = attn[:global_img_seqlen, :], attn[global_img_seqlen:]
         else:
@@ -309,7 +322,21 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         return gathered_shards
 
-    def apply(self, q, k, v, slice_qkv_len, cu_seqlens_qkv, attention_module=None, seq_p_group=None, model_cls=None, use_fp8_comm=False, enable_head_parallel=False, img_first=True):
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        slice_qkv_len,
+        cu_seqlens_qkv,
+        attention_module=None,
+        attention_type="flash_attn2",
+        seq_p_group=None,
+        model_cls=None,
+        use_fp8_comm=False,
+        enable_head_parallel=False,
+        img_first=True,
+    ):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
 

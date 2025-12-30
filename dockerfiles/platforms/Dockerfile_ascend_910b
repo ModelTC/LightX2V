@@ -1,0 +1,31 @@
+
+FROM quay.io/ascend/vllm-ascend:v0.11.0rc3
+
+# Set envs
+ENV PYTHONPATH=/workspace/LightX2V
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/Ascend/ascend-toolkit/latest/lib64:/usr/local/Ascend/driver/lib64/driver/:/usr/local/python3.11.13/lib/python3.11/site-packages/torch_npu/lib/:/usr/local/python3.11.13/lib/python3.11/site-packages/torch/lib
+ENV PATH=${PATH}:/usr/local/go/bin:/usr/local/python3.11.13/bin/
+
+# Install deps
+RUN apt-get update && apt-get install ffmpeg -y && \
+    pip install --no-cache-dir \
+        imageio \
+        imageio-ffmpeg \
+        ftfy \
+        aiohttp \
+        gguf \
+        loguru \
+        accelerate \
+        diffusers && \
+    pip install --no-cache-dir torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+
+# Copy files
+COPY app app
+COPY assets assets
+COPY configs configs
+COPY lightx2v lightx2v
+COPY lightx2v_kernel lightx2v_kernel
+COPY lightx2v_platform lightx2v_platform
+COPY scripts scripts
+COPY test_cases test_cases
+COPY tools tools
