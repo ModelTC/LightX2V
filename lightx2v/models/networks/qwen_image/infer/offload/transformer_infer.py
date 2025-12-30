@@ -13,7 +13,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         self.num_blocks = config["num_layers"]
-        self.phases_num = 5
+        self.phases_num = 4
         if self.config.get("cpu_offload", False):
             if "offload_ratio" in self.config:
                 self.offload_ratio = self.config["offload_ratio"]
@@ -61,19 +61,21 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 self.offload_manager.prefetch_phase(next_block_idx, next_phase_idx, blocks)
                 with torch_device_module.stream(self.offload_manager.compute_stream):
                     if phase_idx == 0:
-                        img_modulated, txt_modulated, img_gate1, txt_gate1, img_mod2, txt_mod2 = self.infer_modulate(
-                            mod_phase=self.offload_manager.cuda_buffers[phase_idx],
+                        img_query, img_key, img_value, img_gate1, img_mod2 = self.infer_img_qkv(
+                            img_attn_phase=self.offload_manager.cuda_buffers[phase_idx],
                             hidden_states=hidden_states,
-                            encoder_hidden_states=encoder_hidden_states,
                             temb_img_silu=temb_img_silu,
-                            temb_txt_silu=temb_txt_silu,
+                            img_freqs=image_rotary_emb[0],
                             modulate_index=modulate_index,
                         )
                     elif phase_idx == 1:
-                        img_query, img_key, img_value = self.infer_img_qkv(img_attn_phase=self.offload_manager.cuda_buffers[phase_idx], hidden_states=img_modulated)
+                        txt_query, txt_key, txt_value, seq_txt, txt_gate1, txt_mod2 = self.infer_txt_qkv(
+                            txt_attn_phase=self.offload_manager.cuda_buffers[phase_idx],
+                            encoder_hidden_states=encoder_hidden_states,
+                            temb_txt_silu=temb_txt_silu,
+                            txt_freqs=image_rotary_emb[1],
+                        )
                     elif phase_idx == 2:
-                        txt_query, txt_key, txt_value, seq_txt = self.infer_txt_qkv(txt_attn_phase=self.offload_manager.cuda_buffers[phase_idx], encoder_hidden_states=txt_modulated)
-                    elif phase_idx == 3:
                         hidden_states, encoder_hidden_states = self.infer_cross_attn(
                             cross_attn_phase=self.offload_manager.cuda_buffers[phase_idx],
                             seq_txt=seq_txt,
@@ -87,9 +89,9 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                             txt_gate1=txt_gate1,
                             hidden_states=hidden_states,
                             encoder_hidden_states=encoder_hidden_states,
-                            image_rotary_emb=image_rotary_emb,
                         )
-                    elif phase_idx == 4:
+
+                    elif phase_idx == 3:
                         encoder_hidden_states, hidden_states = self.infer_ffn(
                             ffn_phase=self.offload_manager.cuda_buffers[phase_idx],
                             hidden_states=hidden_states,
@@ -98,7 +100,6 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                             txt_mod2=txt_mod2,
                             modulate_index=modulate_index,
                         )
-
                 self.offload_manager.swap_phases()
 
         return hidden_states

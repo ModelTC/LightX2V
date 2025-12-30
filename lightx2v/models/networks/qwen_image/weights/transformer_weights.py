@@ -138,17 +138,6 @@ class QwenImageTransformerAttentionBlock(WeightModule):
 
         self.compute_phases = WeightModuleList(
             [
-                QwenImageModulate(
-                    block_index=block_index,
-                    block_prefix=block_prefix,
-                    task=config["task"],
-                    mm_type=mm_type,
-                    config=config,
-                    create_cuda_buffer=create_cuda_buffer,
-                    create_cpu_buffer=create_cpu_buffer,
-                    lazy_load=self.lazy_load,
-                    lazy_load_file=self.lazy_load_file,
-                ),
                 QwenImageImgAttention(
                     block_index=block_index,
                     block_prefix=block_prefix,
@@ -198,107 +187,8 @@ class QwenImageTransformerAttentionBlock(WeightModule):
 
         self.add_module("compute_phases", self.compute_phases)
 
-        # Image processing modules
-        # self.add_module(
-        #     "img_mod",
-        #     MM_WEIGHT_REGISTER[self.mm_type](
-        #         f"{block_prefix}.{self.block_index}.img_mod.1.weight",
-        #         f"{block_prefix}.{self.block_index}.img_mod.1.bias",
-        #         create_cuda_buffer,
-        #         create_cpu_buffer,
-        #         self.lazy_load,
-        #         self.lazy_load_file,
-        #     ),
-        # )
-        # self.add_module(
-        #     "img_norm1",
-        #     LN_WEIGHT_REGISTER[self.ln_type](
-        #         create_cuda_buffer=create_cuda_buffer,
-        #         create_cpu_buffer=create_cpu_buffer,
-        #         eps=1e-6,
-        #     ),
-        # )
 
-        # self.attn = QwenImageCrossAttention(
-        #     block_index=block_index,
-        #     block_prefix="transformer_blocks",
-        #     task=config["task"],
-        #     mm_type=mm_type,
-        #     config=config,
-        #     create_cuda_buffer=create_cuda_buffer,
-        #     create_cpu_buffer=create_cpu_buffer,
-        #     lazy_load=self.lazy_load,
-        #     lazy_load_file=self.lazy_load_file,
-        # )
-        # self.add_module("attn", self.attn)
-
-        # self.add_module(
-        #     "img_norm2",
-        #     LN_WEIGHT_REGISTER[self.ln_type](
-        #         create_cuda_buffer=create_cuda_buffer,
-        #         create_cpu_buffer=create_cpu_buffer,
-        #         eps=1e-6,
-        #     ),
-        # )
-        # mlp = QwenImageFFN(
-        #     block_index=block_index,
-        #     block_prefix="transformer_blocks",
-        #     task=config["task"],
-        #     mm_type=mm_type,
-        #     config=config,
-        #     create_cuda_buffer=create_cuda_buffer,
-        #     create_cpu_buffer=create_cpu_buffer,
-        #     lazy_load=self.lazy_load,
-        #     lazy_load_file=self.lazy_load_file,
-        # )
-        # self.add_module("mlp", mlp)
-
-        # Text processing modules
-        # self.add_module(
-        #     "txt_mod",
-        #     MM_WEIGHT_REGISTER[self.mm_type](
-        #         f"{block_prefix}.{self.block_index}.txt_mod.1.weight",
-        #         f"{block_prefix}.{self.block_index}.txt_mod.1.bias",
-        #         create_cuda_buffer,
-        #         create_cpu_buffer,
-        #         self.lazy_load,
-        #         self.lazy_load_file,
-        #     ),
-        # )
-        # self.add_module(
-        #     "txt_norm1",
-        #     LN_WEIGHT_REGISTER[self.ln_type](
-        #         create_cuda_buffer=create_cuda_buffer,
-        #         create_cpu_buffer=create_cpu_buffer,
-        #         eps=1e-6,
-        #     ),
-        # )
-
-        # Text doesn't need separate attention - it's handled by img_attn joint computation
-        # self.add_module(
-        #     "txt_norm2",
-        #     LN_WEIGHT_REGISTER[self.ln_type](
-        #         create_cuda_buffer=create_cuda_buffer,
-        #         create_cpu_buffer=create_cpu_buffer,
-        #         eps=1e-6,
-        #     ),
-        # )
-        # txt_mlp = QwenImageFFN(
-        #     block_index=block_index,
-        #     block_prefix="transformer_blocks",
-        #     ffn_prefix="txt_mlp",
-        #     task=config["task"],
-        #     mm_type=mm_type,
-        #     config=config,
-        #     create_cuda_buffer=create_cuda_buffer,
-        #     create_cpu_buffer=create_cpu_buffer,
-        #     lazy_load=self.lazy_load,
-        #     lazy_load_file=self.lazy_load_file,
-        # )
-        # self.add_module("txt_mlp", txt_mlp)
-
-
-class QwenImageModulate(WeightModule):
+class QwenImageImgAttention(WeightModule):
     def __init__(
         self,
         block_index,
@@ -316,6 +206,8 @@ class QwenImageModulate(WeightModule):
         self.mm_type = mm_type
         self.task = task
         self.config = config
+        self.heads = config["attention_out_dim"] // config["attention_dim_head"]
+        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
         self.ln_type = config.get("ln_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
@@ -339,49 +231,6 @@ class QwenImageModulate(WeightModule):
                 eps=1e-6,
             ),
         )
-
-        self.add_module(
-            "txt_mod",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.txt_mod.1.weight",
-                f"{block_prefix}.{self.block_index}.txt_mod.1.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
-            ),
-        )
-        self.add_module(
-            "txt_norm1",
-            LN_WEIGHT_REGISTER[self.ln_type](
-                create_cuda_buffer=create_cuda_buffer,
-                create_cpu_buffer=create_cpu_buffer,
-                eps=1e-6,
-            ),
-        )
-
-
-class QwenImageImgAttention(WeightModule):
-    def __init__(
-        self,
-        block_index,
-        block_prefix,
-        task,
-        mm_type,
-        config,
-        create_cuda_buffer,
-        create_cpu_buffer,
-        lazy_load,
-        lazy_load_file,
-    ):
-        super().__init__()
-        self.block_index = block_index
-        self.mm_type = mm_type
-        self.task = task
-        self.config = config
-        self.heads = config["attention_out_dim"] // config["attention_dim_head"]
-        self.lazy_load = lazy_load
-        self.lazy_load_file = lazy_load_file
 
         self.add_module(
             "to_q",
@@ -419,11 +268,28 @@ class QwenImageImgAttention(WeightModule):
             ),
         )
 
-        if self.config["seq_parallel"]:
-            self.add_module(
-                "calculate_parallel",
-                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
-            )
+        # norm_q
+        self.add_module(
+            "norm_q",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{block_prefix}.{block_index}.attn.norm_q.weight",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            ),
+        )
+        # norm_k
+        self.add_module(
+            "norm_k",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{block_prefix}.{block_index}.attn.norm_k.weight",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            ),
+        )
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
@@ -455,8 +321,30 @@ class QwenImageTxtAttention(WeightModule):
         self.task = task
         self.config = config
         self.heads = config["attention_out_dim"] // config["attention_dim_head"]
+        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
+        self.ln_type = config.get("ln_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
+
+        self.add_module(
+            "txt_mod",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{block_prefix}.{self.block_index}.txt_mod.1.weight",
+                f"{block_prefix}.{self.block_index}.txt_mod.1.bias",
+                create_cuda_buffer,
+                create_cpu_buffer,
+                self.lazy_load,
+                self.lazy_load_file,
+            ),
+        )
+        self.add_module(
+            "txt_norm1",
+            LN_WEIGHT_REGISTER[self.ln_type](
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                eps=1e-6,
+            ),
+        )
         # add_q_proj
         self.add_module(
             "add_q_proj",
@@ -494,6 +382,29 @@ class QwenImageTxtAttention(WeightModule):
             ),
         )
 
+        # norm_added_q
+        self.add_module(
+            "norm_added_q",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{block_prefix}.{block_index}.attn.norm_added_q.weight",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            ),
+        )
+        # norm_added_k
+        self.add_module(
+            "norm_added_k",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{block_prefix}.{block_index}.attn.norm_added_k.weight",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            ),
+        )
+
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cpu"):
@@ -524,55 +435,8 @@ class QwenImageCrossAttention(WeightModule):
         self.task = task
         self.config = config
         self.attn_type = config.get("attn_type", "flash_attn3")
-        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
-
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-
-        # norm_q
-        self.add_module(
-            "norm_q",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{block_prefix}.{block_index}.attn.norm_q.weight",
-                create_cuda_buffer=create_cuda_buffer,
-                create_cpu_buffer=create_cpu_buffer,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
-        # norm_k
-        self.add_module(
-            "norm_k",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{block_prefix}.{block_index}.attn.norm_k.weight",
-                create_cuda_buffer=create_cuda_buffer,
-                create_cpu_buffer=create_cpu_buffer,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
-        # norm_added_q
-        self.add_module(
-            "norm_added_q",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{block_prefix}.{block_index}.attn.norm_added_q.weight",
-                create_cuda_buffer=create_cuda_buffer,
-                create_cpu_buffer=create_cpu_buffer,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
-        # norm_added_k
-        self.add_module(
-            "norm_added_k",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{block_prefix}.{block_index}.attn.norm_added_k.weight",
-                create_cuda_buffer=create_cuda_buffer,
-                create_cpu_buffer=create_cpu_buffer,
-                lazy_load=self.lazy_load,
-                lazy_load_file=self.lazy_load_file,
-            ),
-        )
 
         # to_out
         self.add_module(
