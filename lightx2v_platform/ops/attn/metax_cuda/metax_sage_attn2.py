@@ -32,10 +32,14 @@ class MetaxSageAttn2Weight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        x = sageattn(
-            q,
-            k,
-            v,
-            tensor_layout="NHD",
-        )[0].view(bs * max_seqlen_q, -1).type(q.dtype)
+        x = (
+            sageattn(
+                q,
+                k,
+                v,
+                tensor_layout="NHD",
+            )[0]
+            .view(bs * max_seqlen_q, -1)
+            .type(q.dtype)
+        )
         return x
