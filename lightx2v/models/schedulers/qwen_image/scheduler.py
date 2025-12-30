@@ -478,7 +478,7 @@ class QwenImageScheduler(BaseScheduler):
     def set_timesteps(self):
         sigmas = np.linspace(1.0, 1 / self.config["infer_steps"], self.config["infer_steps"])
         image_seq_len = self.latents.shape[1]
-        if self.layers:
+        if self.is_layered:
             base_seqlen = 256 * 256 / 16 / 16
             image_seq_len = self.latents.shape[1] // 5
             mu = (image_seq_len / base_seqlen) ** 0.5

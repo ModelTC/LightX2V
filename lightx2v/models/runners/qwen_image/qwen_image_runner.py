@@ -331,7 +331,7 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if len(images[0]) > 1:
+        if isinstance(images[0], list) and len(images[0]) > 1:
             image_prefix = f"{input_info.save_result_path}".split(".")[0]
             for idx, image in enumerate(images[0]):
                 image.save(f"{image_prefix}_{idx}.png")
