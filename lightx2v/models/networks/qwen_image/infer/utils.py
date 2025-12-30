@@ -55,26 +55,18 @@ def apply_rotary_emb_qwen_naive(
     cos = cos_sin_cache.real.unsqueeze(1)
     sin = cos_sin_cache.imag.unsqueeze(1)
 
-    # Q
-    xq_even = xq[..., 0::2]
-    xq_odd = xq[..., 1::2]
+    def _rotate(x: torch.Tensor) -> torch.Tensor:
+        x_even = x[..., 0::2]
+        x_odd = x[..., 1::2]
 
-    xq_rot_even = xq_even * cos - xq_odd * sin
-    xq_rot_odd = xq_even * sin + xq_odd * cos
+        x_rot_even = x_even * cos - x_odd * sin
+        x_rot_odd = x_even * sin + x_odd * cos
 
-    xq_out = torch.empty_like(xq)
-    xq_out[..., 0::2] = xq_rot_even
-    xq_out[..., 1::2] = xq_rot_odd
+        x_out = torch.empty_like(x)
+        x_out[..., 0::2] = x_rot_even
+        x_out[..., 1::2] = x_rot_odd
+        return x_out
 
-    # K
-    xk_even = xk[..., 0::2]
-    xk_odd = xk[..., 1::2]
-
-    xk_rot_even = xk_even * cos - xk_odd * sin
-    xk_rot_odd = xk_even * sin + xk_odd * cos
-
-    xk_out = torch.empty_like(xk)
-    xk_out[..., 0::2] = xk_rot_even
-    xk_out[..., 1::2] = xk_rot_odd
-
+    xq_out = _rotate(xq)
+    xk_out = _rotate(xk)
     return xq_out, xk_out

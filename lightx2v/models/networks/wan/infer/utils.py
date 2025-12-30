@@ -40,27 +40,23 @@ def apply_wan_rope_with_torch_naive(
     cos = cos_sin_cache.real.expand(-1, n, -1)
     sin = cos_sin_cache.imag.expand(-1, n, -1)
 
+    def _rotate_part(x_part: torch.Tensor):
+        x_even = x_part[..., 0::2]
+        x_odd = x_part[..., 1::2]
+
+        x_rot_even = x_even * cos - x_odd * sin
+        x_rot_odd = x_even * sin + x_odd * cos
+
+        x_part[..., 0::2] = x_rot_even
+        x_part[..., 1::2] = x_rot_odd
+
     # Q
     xq_part = xq[:seq_len]
-    xq_even = xq_part[..., 0::2]
-    xq_odd = xq_part[..., 1::2]
-
-    xq_rot_even = xq_even * cos - xq_odd * sin
-    xq_rot_odd = xq_even * sin + xq_odd * cos
-
-    xq_part[..., 0::2] = xq_rot_even
-    xq_part[..., 1::2] = xq_rot_odd
+    _rotate_part(xq_part)
 
     # K
     xk_part = xk[:seq_len]
-    xk_even = xk_part[..., 0::2]
-    xk_odd = xk_part[..., 1::2]
-
-    xk_rot_even = xk_even * cos - xk_odd * sin
-    xk_rot_odd = xk_even * sin + xk_odd * cos
-
-    xk_part[..., 0::2] = xk_rot_even
-    xk_part[..., 1::2] = xk_rot_odd
+    _rotate_part(xk_part)
 
     if seq_len < total_len:
         xq_out = torch.cat([xq_part, xq[seq_len:]], dim=0)
