@@ -87,87 +87,150 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             gate_result = gate.unsqueeze(0)
             return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
 
-    def apply_attn(self, attn_phase, hidden_states, encoder_hidden_states, image_rotary_emb):
-        seq_txt = encoder_hidden_states.shape[0]
+    # def apply_attn(self, attn_phase, hidden_states, encoder_hidden_states, image_rotary_emb):
+    #     seq_txt = encoder_hidden_states.shape[0]
 
-        # Compute QKV for image stream (sample projections)
-        img_query = attn_phase.to_q.apply(hidden_states)
-        img_key = attn_phase.to_k.apply(hidden_states)
-        img_value = attn_phase.to_v.apply(hidden_states)
+    #     # Compute QKV for image stream (sample projections)
+    #     img_query = attn_phase.to_q.apply(hidden_states)
+    #     img_key = attn_phase.to_k.apply(hidden_states)
+    #     img_value = attn_phase.to_v.apply(hidden_states)
 
-        # Compute QKV for text stream (context projections)
-        txt_query = attn_phase.add_q_proj.apply(encoder_hidden_states)
-        txt_key = attn_phase.add_k_proj.apply(encoder_hidden_states)
-        txt_value = attn_phase.add_v_proj.apply(encoder_hidden_states)
+    #     # Compute QKV for text stream (context projections)
+    #     txt_query = attn_phase.add_q_proj.apply(encoder_hidden_states)
+    #     txt_key = attn_phase.add_k_proj.apply(encoder_hidden_states)
+    #     txt_value = attn_phase.add_v_proj.apply(encoder_hidden_states)
 
-        # Reshape for multi-head attention
-        img_query = img_query.unflatten(-1, (attn_phase.heads, -1))
-        img_key = img_key.unflatten(-1, (attn_phase.heads, -1))
-        img_value = img_value.unflatten(-1, (attn_phase.heads, -1))
+    #     # Reshape for multi-head attention
+    #     img_query = img_query.unflatten(-1, (attn_phase.heads, -1))
+    #     img_key = img_key.unflatten(-1, (attn_phase.heads, -1))
+    #     img_value = img_value.unflatten(-1, (attn_phase.heads, -1))
 
-        txt_query = txt_query.unflatten(-1, (attn_phase.heads, -1))
-        txt_key = txt_key.unflatten(-1, (attn_phase.heads, -1))
-        txt_value = txt_value.unflatten(-1, (attn_phase.heads, -1))
+    #     txt_query = txt_query.unflatten(-1, (attn_phase.heads, -1))
+    #     txt_key = txt_key.unflatten(-1, (attn_phase.heads, -1))
+    #     txt_value = txt_value.unflatten(-1, (attn_phase.heads, -1))
 
-        # Apply QK normalization
-        if attn_phase.norm_q is not None:
-            img_query = attn_phase.norm_q.apply(img_query)
-        if attn_phase.norm_k is not None:
-            img_key = attn_phase.norm_k.apply(img_key)
-        if attn_phase.norm_added_q is not None:
-            txt_query = attn_phase.norm_added_q.apply(txt_query)
-        if attn_phase.norm_added_k is not None:
-            txt_key = attn_phase.norm_added_k.apply(txt_key)
+    #     # Apply QK normalization
+    #     if attn_phase.norm_q is not None:
+    #         img_query = attn_phase.norm_q.apply(img_query)
+    #     if attn_phase.norm_k is not None:
+    #         img_key = attn_phase.norm_k.apply(img_key)
+    #     if attn_phase.norm_added_q is not None:
+    #         txt_query = attn_phase.norm_added_q.apply(txt_query)
+    #     if attn_phase.norm_added_k is not None:
+    #         txt_key = attn_phase.norm_added_k.apply(txt_key)
 
-        # Apply RoPE
-        img_freqs, txt_freqs = image_rotary_emb
-        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
-        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
+    #     # Apply RoPE
+    #     img_freqs, txt_freqs = image_rotary_emb
+    #     img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+    #     txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
 
-        # Concatenate for joint attention
-        # Order: [text, image]
-        joint_query = torch.cat([txt_query, img_query], dim=0)
-        joint_key = torch.cat([txt_key, img_key], dim=0)
-        joint_value = torch.cat([txt_value, img_value], dim=0)
+    #     # Concatenate for joint attention
+    #     # Order: [text, image]
+    #     joint_query = torch.cat([txt_query, img_query], dim=0)
+    #     joint_key = torch.cat([txt_key, img_key], dim=0)
+    #     joint_value = torch.cat([txt_value, img_value], dim=0)
 
-        img_qkv_len = joint_query.shape[0]
-        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
+    #     img_qkv_len = joint_query.shape[0]
+    #     cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
 
-        if self.config["seq_parallel"]:
-            joint_hidden_states = attn_phase.calculate_parallel.apply(
-                q=joint_query,
-                k=joint_key,
-                v=joint_value,
-                slice_qkv_len=seq_txt,
-                cu_seqlens_qkv=cu_seqlens_qkv,
-                attention_module=attn_phase.calculate,
-                seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                enable_head_parallel=self.enable_head_parallel,
-                model_cls=self.config["model_cls"],
-                img_first=False,
-            )
-        else:
-            joint_hidden_states = attn_phase.calculate.apply(
-                q=joint_query,
-                k=joint_key,
-                v=joint_value,
-                cu_seqlens_q=cu_seqlens_qkv,
-                cu_seqlens_kv=cu_seqlens_qkv,
-                max_seqlen_q=img_qkv_len,
-                max_seqlen_kv=img_qkv_len,
-                model_cls="qwen_image",
-            )
+    #     if self.config["seq_parallel"]:
+    #         joint_hidden_states = attn_phase.calculate_parallel.apply(
+    #             q=joint_query,
+    #             k=joint_key,
+    #             v=joint_value,
+    #             slice_qkv_len=seq_txt,
+    #             cu_seqlens_qkv=cu_seqlens_qkv,
+    #             attention_module=attn_phase.calculate,
+    #             seq_p_group=self.seq_p_group,
+    #             use_fp8_comm=self.seq_p_fp8_comm,
+    #             enable_head_parallel=self.enable_head_parallel,
+    #             model_cls=self.config["model_cls"],
+    #             img_first=False,
+    #         )
+    #     else:
+    #         joint_hidden_states = attn_phase.calculate.apply(
+    #             q=joint_query,
+    #             k=joint_key,
+    #             v=joint_value,
+    #             cu_seqlens_q=cu_seqlens_qkv,
+    #             cu_seqlens_kv=cu_seqlens_qkv,
+    #             max_seqlen_q=img_qkv_len,
+    #             max_seqlen_kv=img_qkv_len,
+    #             model_cls="qwen_image",
+    #         )
 
-        # Split attention outputs back
-        txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
-        img_attn_output = joint_hidden_states[seq_txt:, :]  # Image part
+    #     # Split attention outputs back
+    #     txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
+    #     img_attn_output = joint_hidden_states[seq_txt:, :]  # Image part
 
-        # Apply output projections
-        img_attn_output = attn_phase.to_out.apply(img_attn_output)
-        txt_attn_output = attn_phase.to_add_out.apply(txt_attn_output)
+    #     # Apply output projections
+    #     img_attn_output = attn_phase.to_out.apply(img_attn_output)
+    #     txt_attn_output = attn_phase.to_add_out.apply(txt_attn_output)
 
-        return img_attn_output, txt_attn_output
+    #     return img_attn_output, txt_attn_output
+
+    # def apply_attn(self, cross_attn_phase, seq_txt, img_query, img_key, img_value, txt_query, txt_key, txt_value, image_rotary_emb):
+    #     """Apply joint attention to both streams (including QK norm, RoPE, concat, attention and output projection)"""
+
+    #     # Step 3: Apply QK normalization
+    #     if cross_attn_phase.norm_q is not None:
+    #         img_query = cross_attn_phase.norm_q.apply(img_query)
+    #     if cross_attn_phase.norm_k is not None:
+    #         img_key = cross_attn_phase.norm_k.apply(img_key)
+    #     if cross_attn_phase.norm_added_q is not None:
+    #         txt_query = cross_attn_phase.norm_added_q.apply(txt_query)
+    #     if cross_attn_phase.norm_added_k is not None:
+    #         txt_key = cross_attn_phase.norm_added_k.apply(txt_key)
+
+    #     # Apply RoPE
+    #     img_freqs, txt_freqs = image_rotary_emb
+    #     img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+    #     txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
+
+    #     # Concatenate for joint attention
+    #     # Order: [text, image]
+    #     joint_query = torch.cat([txt_query, img_query], dim=0)
+    #     joint_key = torch.cat([txt_key, img_key], dim=0)
+    #     joint_value = torch.cat([txt_value, img_value], dim=0)
+
+    #     img_qkv_len = joint_query.shape[0]
+    #     cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
+
+    #     if self.config["seq_parallel"]:
+    #         joint_hidden_states = cross_attn_phase.calculate_parallel.apply(
+    #             q=joint_query,
+    #             k=joint_key,
+    #             v=joint_value,
+    #             slice_qkv_len=seq_txt,
+    #             cu_seqlens_qkv=cu_seqlens_qkv,
+    #             attention_module=cross_attn_phase.calculate,
+    #             seq_p_group=self.seq_p_group,
+    #             use_fp8_comm=self.seq_p_fp8_comm,
+    #             enable_head_parallel=self.enable_head_parallel,
+    #             model_cls=self.config["model_cls"],
+    #             img_first=False,
+    #         )
+    #     else:
+    #         joint_hidden_states = cross_attn_phase.calculate.apply(
+    #             q=joint_query,
+    #             k=joint_key,
+    #             v=joint_value,
+    #             cu_seqlens_q=cu_seqlens_qkv,
+    #             cu_seqlens_kv=cu_seqlens_qkv,
+    #             max_seqlen_q=img_qkv_len,
+    #             max_seqlen_kv=img_qkv_len,
+    #             model_cls="qwen_image",
+    #         )
+
+    #     # Split attention outputs back
+    #     txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
+    #     img_attn_output = joint_hidden_states[seq_txt:, :]  # Image part
+
+    #     # Apply output projections
+    #     img_attn_output = cross_attn_phase.to_out.apply(img_attn_output)
+    #     txt_attn_output = cross_attn_phase.to_add_out.apply(txt_attn_output)
+
+    #     return img_attn_output, txt_attn_output
 
     def infer_modulate(self, mod_phase, hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, modulate_index=None):
         """Apply first modulation to both image and text streams (compute_phases[0])"""
@@ -189,18 +252,96 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return img_modulated, txt_modulated, img_gate1, txt_gate1, img_mod2, txt_mod2
 
-    def infer_attn(self, attn_phase, img_modulated, txt_modulated, img_gate1, txt_gate1, hidden_states, encoder_hidden_states, image_rotary_emb):
-        """Apply joint attention to modulated features (compute_phases[1])"""
-        # Use QwenAttnProcessor2_0 for joint attention computation
-        attn_output = self.apply_attn(
-            attn_phase=attn_phase,
-            hidden_states=img_modulated,  # Image stream (will be processed as "sample")
-            encoder_hidden_states=txt_modulated,  # Text stream (will be processed as "context")
-            image_rotary_emb=image_rotary_emb,
-        )
+    def infer_img_qkv(self, img_attn_phase, hidden_states):
+        """Compute QKV for image stream (without norm and RoPE) - compute_phases[1]"""
+        # Compute QKV for image stream (sample projections)
+        img_query = img_attn_phase.to_q.apply(hidden_states)
+        img_key = img_attn_phase.to_k.apply(hidden_states)
+        img_value = img_attn_phase.to_v.apply(hidden_states)
 
-        # QwenAttnProcessor2_0 returns (img_output, txt_output) when encoder_hidden_states is provided
-        img_attn_output, txt_attn_output = attn_output
+        # Reshape for multi-head attention
+        img_query = img_query.unflatten(-1, (img_attn_phase.heads, -1))
+        img_key = img_key.unflatten(-1, (img_attn_phase.heads, -1))
+        img_value = img_value.unflatten(-1, (img_attn_phase.heads, -1))
+
+        return img_query, img_key, img_value
+
+    def infer_txt_qkv(self, txt_attn_phase, encoder_hidden_states):
+        """Compute QKV for text stream (without norm and RoPE) - compute_phases[2]"""
+        # Get sequence length from text hidden states
+        seq_txt = encoder_hidden_states.shape[0]
+
+        # Compute QKV for text stream (context projections)
+        txt_query = txt_attn_phase.add_q_proj.apply(encoder_hidden_states)
+        txt_key = txt_attn_phase.add_k_proj.apply(encoder_hidden_states)
+        txt_value = txt_attn_phase.add_v_proj.apply(encoder_hidden_states)
+
+        # Reshape for multi-head attention
+        txt_query = txt_query.unflatten(-1, (txt_attn_phase.heads, -1))
+        txt_key = txt_key.unflatten(-1, (txt_attn_phase.heads, -1))
+        txt_value = txt_value.unflatten(-1, (txt_attn_phase.heads, -1))
+
+        return txt_query, txt_key, txt_value, seq_txt
+
+    def infer_cross_attn(self, cross_attn_phase, seq_txt, img_query, img_key, img_value, txt_query, txt_key, txt_value, img_gate1, txt_gate1, hidden_states, encoder_hidden_states, image_rotary_emb):
+        """Apply joint attention to both streams (compute_phases[3])"""
+        # Apply QK normalization
+        if cross_attn_phase.norm_q is not None:
+            img_query = cross_attn_phase.norm_q.apply(img_query)
+        if cross_attn_phase.norm_k is not None:
+            img_key = cross_attn_phase.norm_k.apply(img_key)
+        if cross_attn_phase.norm_added_q is not None:
+            txt_query = cross_attn_phase.norm_added_q.apply(txt_query)
+        if cross_attn_phase.norm_added_k is not None:
+            txt_key = cross_attn_phase.norm_added_k.apply(txt_key)
+
+        # Apply RoPE
+        img_freqs, txt_freqs = image_rotary_emb
+        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
+
+        # Concatenate for joint attention
+        # Order: [text, image]
+        joint_query = torch.cat([txt_query, img_query], dim=0)
+        joint_key = torch.cat([txt_key, img_key], dim=0)
+        joint_value = torch.cat([txt_value, img_value], dim=0)
+
+        img_qkv_len = joint_query.shape[0]
+        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
+
+        if self.config["seq_parallel"]:
+            joint_hidden_states = cross_attn_phase.calculate_parallel.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                slice_qkv_len=seq_txt,
+                cu_seqlens_qkv=cu_seqlens_qkv,
+                attention_module=cross_attn_phase.calculate,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                enable_head_parallel=self.enable_head_parallel,
+                model_cls=self.config["model_cls"],
+                img_first=False,
+            )
+        else:
+            joint_hidden_states = cross_attn_phase.calculate.apply(
+                q=joint_query,
+                k=joint_key,
+                v=joint_value,
+                cu_seqlens_q=cu_seqlens_qkv,
+                cu_seqlens_kv=cu_seqlens_qkv,
+                max_seqlen_q=img_qkv_len,
+                max_seqlen_kv=img_qkv_len,
+                model_cls="qwen_image",
+            )
+
+        # Split attention outputs back
+        txt_attn_output = joint_hidden_states[:seq_txt, :]  # Text part
+        img_attn_output = joint_hidden_states[seq_txt:, :]  # Image part
+
+        # Apply output projections
+        img_attn_output = cross_attn_phase.to_out.apply(img_attn_output)
+        txt_attn_output = cross_attn_phase.to_add_out.apply(txt_attn_output)
 
         # Apply attention gates and add residual (like in Megatron)
         hidden_states = hidden_states + img_gate1 * img_attn_output
@@ -209,7 +350,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         return hidden_states, encoder_hidden_states
 
     def infer_ffn(self, ffn_phase, hidden_states, encoder_hidden_states, img_mod2, txt_mod2, modulate_index=None):
-        """Apply second modulation and FFN to both streams (compute_phases[2])"""
+        """Apply second modulation and FFN to both streams (compute_phases[4])"""
         # Process image stream - norm2 + MLP
         img_normed2 = ffn_phase.img_norm2.apply(hidden_states)
         img_modulated2, img_gate2 = self._modulate(img_normed2, img_mod2, modulate_index)
@@ -250,18 +391,29 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             temb_txt_silu=temb_txt_silu,
             modulate_index=modulate_index,
         )
-        hidden_states, encoder_hidden_states = self.infer_attn(
-            attn_phase=block.compute_phases[1],
-            img_modulated=img_modulated,
-            txt_modulated=txt_modulated,
+
+        img_query, img_key, img_value = self.infer_img_qkv(img_attn_phase=block.compute_phases[1], hidden_states=img_modulated)
+
+        txt_query, txt_key, txt_value, seq_txt = self.infer_txt_qkv(txt_attn_phase=block.compute_phases[2], encoder_hidden_states=txt_modulated)
+
+        hidden_states, encoder_hidden_states = self.infer_cross_attn(
+            cross_attn_phase=block.compute_phases[3],
+            seq_txt=seq_txt,
+            img_query=img_query,
+            img_key=img_key,
+            img_value=img_value,
+            txt_query=txt_query,
+            txt_key=txt_key,
+            txt_value=txt_value,
             img_gate1=img_gate1,
             txt_gate1=txt_gate1,
             hidden_states=hidden_states,
             encoder_hidden_states=encoder_hidden_states,
             image_rotary_emb=image_rotary_emb,
         )
+
         encoder_hidden_states, hidden_states = self.infer_ffn(
-            ffn_phase=block.compute_phases[2], hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, img_mod2=img_mod2, txt_mod2=txt_mod2, modulate_index=modulate_index
+            ffn_phase=block.compute_phases[4], hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, img_mod2=img_mod2, txt_mod2=txt_mod2, modulate_index=modulate_index
         )
 
         return encoder_hidden_states, hidden_states
