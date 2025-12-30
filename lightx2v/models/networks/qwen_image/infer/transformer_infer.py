@@ -40,6 +40,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         rope_funcs = {
             "flashinfer": apply_wan_rope_with_flashinfer,
             "torch_naive": apply_rotary_emb_qwen_naive,
+            "torch": apply_rotary_emb_qwen,
         }
         rope_type = config.get("rope_type", "flashinfer")
         self.apply_rope_func = rope_funcs.get(rope_type, apply_rotary_emb_qwen)

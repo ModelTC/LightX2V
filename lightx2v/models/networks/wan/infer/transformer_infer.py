@@ -35,6 +35,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         rope_funcs = {
             "flashinfer": apply_wan_rope_with_flashinfer,
             "torch_naive": apply_wan_rope_with_torch_naive,
+            "torch": apply_wan_rope_with_torch,
         }
         rope_type = self.config.get("rope_type", "flashinfer")
         rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
