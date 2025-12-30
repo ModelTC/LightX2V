@@ -33,7 +33,8 @@ class AutoencoderKLQwenImageVAE:
         self.load()
 
     def load(self):
-        self.model = AutoencoderKLQwenImage.from_pretrained(os.path.join(self.config["model_path"], "vae")).to(self.device).to(self.dtype)
+        vae_path = self.config.get("vae_path", os.path.join(self.config["model_path"], "vae"))
+        self.model = AutoencoderKLQwenImage.from_pretrained(vae_path).to(self.device).to(self.dtype)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
         with open(os.path.join(self.config["model_path"], "vae", "config.json"), "r") as f:
             vae_config = json.load(f)
