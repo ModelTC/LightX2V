@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-from lightx2v.utils.profiler import *
 
 from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
@@ -91,7 +90,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             gate_result = gate.unsqueeze(0)
             return self.modulate_func(x, scale_result, shift_result).squeeze(0), gate_result.squeeze(0)
 
-    @ProfilingContext4DebugL2("infer_modulate")
     def infer_modulate(
         self,
         mod_phase,
@@ -101,7 +99,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         temb_txt_silu,
         modulate_index=None,
     ):
-        """Apply first modulation to both image and text streams (compute_phases[0])"""
         # Get modulation parameters for both streams
         img_mod_params = mod_phase.img_mod.apply(temb_img_silu)
 
@@ -122,7 +119,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return img_modulated, txt_modulated, img_gate1, txt_gate1, img_mod2, txt_mod2
 
-    # @ProfilingContext4DebugL2("infer_img_qkv")
     def infer_img_qkv(
         self,
         img_attn_phase,
@@ -154,9 +150,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return img_query, img_key, img_value, img_gate1, img_mod2
 
-    #  @ProfilingContext4DebugL2("infer_txt_qkv")
     def infer_txt_qkv(self, txt_attn_phase, encoder_hidden_states, temb_txt_silu, txt_freqs):
-        """Compute QKV for text stream (without norm and RoPE) - compute_phases[2]"""
         # Get sequence length from text hidden states
         seq_txt = encoder_hidden_states.shape[0]
 
@@ -184,7 +178,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return txt_query, txt_key, txt_value, seq_txt, txt_gate1, txt_mod2
 
-    # @ProfilingContext4DebugL2("infer_cross_attn")
     def infer_cross_attn(
         self,
         cross_attn_phase,
@@ -249,7 +242,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         return hidden_states, encoder_hidden_states
 
-    # @ProfilingContext4DebugL2("infer_ffn")
     def infer_ffn(
         self,
         ffn_phase,
