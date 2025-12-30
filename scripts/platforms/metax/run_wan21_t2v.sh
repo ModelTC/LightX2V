@@ -1,13 +1,12 @@
 #!/bin/bash
 
-# System management interface: mx-smi
-
 # set path and first
-lightx2v_path=
-model_path=
+lightx2v_path=/path/to/LightX2v
+model_path=/path/to/model
 
-export PLATFORM=metax
-export CUDA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=5
+export PLATFORM="metax_cuda"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

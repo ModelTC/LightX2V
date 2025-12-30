@@ -13,3 +13,5 @@ elif PLATFORM == "amd_rocm":
 elif PLATFORM == "ascend_npu":
     from .attn.ascend_npu import *
     from .mm.ascend_npu import *
+elif PLATFORM == "metax_cuda":
+    from .attn.metax_cuda import *
