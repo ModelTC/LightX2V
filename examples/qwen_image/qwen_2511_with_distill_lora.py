@@ -22,7 +22,7 @@ pipe = LightX2VPipeline(
 # Suitable for RTX 30/40/50 consumer GPUs
 # pipe.enable_offload(
 #     cpu_offload=True,
-#     offload_granularity="block",
+#     offload_granularity="block", #["block", "phase"]
 #     text_encoder_offload=True,
 #     vae_offload=False,
 # )
