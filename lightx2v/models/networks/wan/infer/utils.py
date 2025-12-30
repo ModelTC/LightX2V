@@ -28,6 +28,50 @@ def apply_wan_rope_with_torch(
     return xq.to(GET_DTYPE()), xk.to(GET_DTYPE())
 
 
+def apply_wan_rope_with_torch_naive(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+):
+    n = xq.size(1)
+    seq_len = cos_sin_cache.size(0)
+    total_len = xq.size(0)
+
+    cos = cos_sin_cache.real.expand(-1, n, -1)
+    sin = cos_sin_cache.imag.expand(-1, n, -1)
+
+    # Q
+    xq_part = xq[:seq_len]
+    xq_even = xq_part[..., 0::2]
+    xq_odd = xq_part[..., 1::2]
+
+    xq_rot_even = xq_even * cos - xq_odd * sin
+    xq_rot_odd = xq_even * sin + xq_odd * cos
+
+    xq_part[..., 0::2] = xq_rot_even
+    xq_part[..., 1::2] = xq_rot_odd
+
+    # K
+    xk_part = xk[:seq_len]
+    xk_even = xk_part[..., 0::2]
+    xk_odd = xk_part[..., 1::2]
+
+    xk_rot_even = xk_even * cos - xk_odd * sin
+    xk_rot_odd = xk_even * sin + xk_odd * cos
+
+    xk_part[..., 0::2] = xk_rot_even
+    xk_part[..., 1::2] = xk_rot_odd
+
+    if seq_len < total_len:
+        xq_out = torch.cat([xq_part, xq[seq_len:]], dim=0)
+        xk_out = torch.cat([xk_part, xk[seq_len:]], dim=0)
+    else:
+        xq_out = xq_part
+        xk_out = xk_part
+
+    return xq_out.to(GET_DTYPE()), xk_out.to(GET_DTYPE())
+
+
 def apply_wan_rope_with_chunk(
     xq: torch.Tensor,
     xk: torch.Tensor,
