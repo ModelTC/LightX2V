@@ -8,7 +8,7 @@ except ImportError:
     apply_rope_with_cos_sin_cache_inplace = None
 
 
-def apply_wan_rope_with_flashinfer(
+def apply_qwen_rope_with_flashinfer(
     xq: torch.Tensor,
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
@@ -34,7 +34,7 @@ def apply_wan_rope_with_flashinfer(
     return xq_out, xk_out
 
 
-def apply_rotary_emb_qwen(
+def apply_qwen_rope_with_torch(
     xq: torch.Tensor,
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
@@ -47,7 +47,7 @@ def apply_rotary_emb_qwen(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
-def apply_rotary_emb_qwen_naive(
+def apply_qwen_rope_with_torch_naive(
     xq: torch.Tensor,
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
