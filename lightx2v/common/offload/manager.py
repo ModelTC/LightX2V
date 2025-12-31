@@ -121,13 +121,13 @@ class WeightAsyncStreamManager(object):
                 self.prefetch_futures.append(future)
 
     def swap_cpu_buffers(self):
-        # import time
-        # wait_start = time.time()
-        # already_done = all(f.done() for f in self.prefetch_futures)
+        import time
+        wait_start = time.time()
+        already_done = all(f.done() for f in self.prefetch_futures)
         for f in self.prefetch_futures:
             f.result()
-        # wait_time = time.time() - wait_start
-        # logger.debug(f"[Prefetch] block {self.prefetch_block_idx}: wait={wait_time:.3f}s, already_done={already_done}")
+        wait_time = time.time() - wait_start
+        logger.debug(f"[Prefetch] block {self.prefetch_block_idx}: wait={wait_time:.10f}s, already_done={already_done}")
         self.cpu_buffers = [self.cpu_buffers[1], self.cpu_buffers[0]]
 
     def __del__(self):

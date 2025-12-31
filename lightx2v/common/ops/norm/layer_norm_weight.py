@@ -59,7 +59,12 @@ class LNWeightTemplate(metaclass=ABCMeta):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{name.split('.')[1]}.safetensors")
+                # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{name.split('.')[1]}.safetensors")
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{name.split('.')[1]}",
+                    f"{'.'.join(name.split('.')[:3])}.safetensors",
+                )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 tensor = lazy_load_file.get_tensor(name)
                 if use_infer_dtype:
@@ -159,15 +164,19 @@ class LNWeightTemplate(metaclass=ABCMeta):
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
         if self.weight_name is not None:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
             if self.is_post_adapter:
                 self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
             else:
                 self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
+                )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
                 self.pin_weight = self.pin_weight.copy_(weight_tensor)
@@ -177,7 +186,12 @@ class LNWeightTemplate(metaclass=ABCMeta):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+                # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{self.bias_name.split('.')[1]}",
+                    f"{'.'.join(self.bias_name.split('.')[:3])}.safetensors",
+                )
             if self.is_post_adapter:
                 assert adapter_block_index is not None
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)

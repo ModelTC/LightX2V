@@ -29,7 +29,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
 
             self.lazy_load = self.config.get("lazy_load", False)
             if self.lazy_load:
-                self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
+                self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 1))
 
     def infer_with_phases_offload(
         self,

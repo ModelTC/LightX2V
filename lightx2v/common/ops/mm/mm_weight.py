@@ -181,9 +181,14 @@ class MMWeight(MMWeightTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{source_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{source_name.split('.')[1]}.safetensors",
+                    f"block_{source_name.split('.')[1]}",
+                    f"{'.'.join(source_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 return lazy_load_file.get_tensor(source_name)
@@ -207,9 +212,14 @@ class MMWeight(MMWeightTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name)
@@ -278,7 +288,13 @@ class MMWeight(MMWeightTemplate):
         if Path(self.lazy_load_file).is_file():
             lazy_load_file_path = self.lazy_load_file
         else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            lazy_load_file_path = os.path.join(
+                self.lazy_load_file,
+                f"block_{self.weight_name.split('.')[1]}",
+                f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
+            )
+
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
             self.pin_weight = self.pin_weight.copy_(weight_tensor)
@@ -403,9 +419,14 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
@@ -449,9 +470,14 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 weight_tensor = source.get_tensor(self.weight_name)
@@ -474,9 +500,14 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 bias_tensor = source.get_tensor(self.bias_name)
@@ -737,7 +768,12 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         if Path(self.lazy_load_file).is_file():
             lazy_load_file_path = self.lazy_load_file
         else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            lazy_load_file_path = os.path.join(
+                self.lazy_load_file,
+                f"block_{self.weight_name.split('.')[1]}",
+                f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
+            )
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             if self.weight_need_transpose:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
@@ -1064,9 +1100,14 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 (
@@ -1142,9 +1183,14 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 weight_tensor = source.get_tensor(self.weight_name)
@@ -1186,9 +1232,14 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
+                # lazy_load_file_path = os.path.join(
+                #     self.lazy_load_file,
+                #     f"block_{self.weight_name.split('.')[1]}.safetensors",
+                # )
                 lazy_load_file_path = os.path.join(
                     self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 bias_tensor = source.get_tensor(self.bias_name)
@@ -1416,7 +1467,12 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         if Path(self.lazy_load_file).is_file():
             lazy_load_file_path = self.lazy_load_file
         else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            lazy_load_file_path = os.path.join(
+                self.lazy_load_file,
+                f"block_{self.weight_name.split('.')[1]}",
+                f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
+            )
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             if self.weight_need_transpose:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()

@@ -53,7 +53,12 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             if Path(self.lazy_load_file).is_file():
                 lazy_load_file_path = self.lazy_load_file
             else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+                # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{self.weight_name.split('.')[1]}",
+                    f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
+                )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 tensor = lazy_load_file.get_tensor(self.weight_name)
                 if use_infer_dtype:
@@ -119,7 +124,12 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         if Path(self.lazy_load_file).is_file():
             lazy_load_file_path = self.lazy_load_file
         else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            # lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            lazy_load_file_path = os.path.join(
+                self.lazy_load_file,
+                f"block_{self.weight_name.split('.')[1]}",
+                f"{'.'.join(self.weight_name.split('.')[:3])}.safetensors",
+            )
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
             self.pin_weight = self.pin_weight.copy_(weight_tensor)
