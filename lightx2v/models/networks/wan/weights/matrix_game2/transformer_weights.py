@@ -97,7 +97,7 @@ class WanActionModule(WeightModule):
         self.config = config
         self.quant_method = config.get("quant_method", None)
 
-        self.attn_rms_type = "self_forcing"
+        self.attn_rms_type = self.config.get("rms_type", "self_forcing")
 
         self.add_module(
             "keyboard_embed_0",
@@ -190,9 +190,9 @@ class WanActionCrossAttention(WeightModule):
         self.config = config
 
         if self.config.get("sf_config", False):
-            self.attn_rms_type = "self_forcing"
+            self.attn_rms_type = self.config.get("rms_type", "self_forcing")
         else:
-            self.attn_rms_type = "sgl-kernel"
+            self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
 
         self.add_module(
             "norm3",
