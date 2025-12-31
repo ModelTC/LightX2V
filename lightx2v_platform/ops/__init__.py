@@ -3,9 +3,10 @@ import os
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 PLATFORM = os.getenv("PLATFORM")
-if PLATFORM == "mlu":
+if PLATFORM == "cambricon_mlu":
     from .attn.cambricon_mlu import *
     from .mm.cambricon_mlu import *
+    from .norm.cambricon_mlu import *
 elif PLATFORM == "hygon_dcu":
     from .attn.hygon_dcu import *
 elif PLATFORM == "amd_rocm":

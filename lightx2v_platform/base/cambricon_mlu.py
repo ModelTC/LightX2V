@@ -4,7 +4,7 @@ import torch.distributed as dist
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-@PLATFORM_DEVICE_REGISTER("mlu")
+@PLATFORM_DEVICE_REGISTER("cambricon_mlu")
 class MluDevice:
     name = "mlu"
 

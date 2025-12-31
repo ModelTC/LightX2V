@@ -14,5 +14,5 @@
     "modulate_type": "torch",
     "rope_type": "torch",
     "ln_type": "Default",
-    "rms_type": "Default"
+    "rms_type": "mlu_rms_norm"
 }
