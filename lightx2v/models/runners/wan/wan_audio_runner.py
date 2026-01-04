@@ -682,8 +682,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             while True:
                 with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
                     control = self.va_controller.next_control()
-                    if control.action == "immediate":
+                    if control.action == "switch":
                         self.prev_video = control.data
+                    elif control.action == "image":
+                        self.prev_video = None
+                        self.input_info.image_path = control.data
+                        self.inputs = self.run_input_encoder()
                     elif control.action == "wait":
                         time.sleep(0.01)
                         continue
