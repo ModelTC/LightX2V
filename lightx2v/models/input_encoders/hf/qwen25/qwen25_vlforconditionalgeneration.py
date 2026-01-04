@@ -71,14 +71,29 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         self.load()
 
     def load(self):
-        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config["model_path"], "text_encoder"), torch_dtype=torch.bfloat16)
+        if self.config.get("qwen25vl_quantized", False):
+            assert self.config["qwen25vl_quant_scheme"] == "int4"
+            if self.config["cpu_offload"]:
+                self.device_map = {
+                    "lm_head": AI_DEVICE,
+                    "model.visual": "cpu",
+                    "model.language_model": "cpu",
+                }
+            else:
+                self.device_map = "auto"
+            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(self.config["qwen25vl_quantized_ckpt"], dtype=torch.bfloat16, device_map=self.device_map, low_cpu_mem_usage=True)
+        else:
+            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config["model_path"], "text_encoder"), torch_dtype=torch.bfloat16)
+
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
-        self.tokenizer = Qwen2Tokenizer.from_pretrained(os.path.join(self.config["model_path"], "tokenizer"))
+        qwen25vl_tokenizer_path = self.config.get("qwen25vl_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
+        self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen25vl_tokenizer_path)
         if self.config["task"] == "i2i":
             self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
-            self.processor = Qwen2VLProcessor.from_pretrained(os.path.join(self.config["model_path"], "processor"))
+            qwen25vl_processor_path = self.config.get("qwen25vl_processor_path", os.path.join(self.config["model_path"], "processor"))
+            self.processor = Qwen2VLProcessor.from_pretrained(qwen25vl_processor_path)
 
     def _extract_masked_hidden(self, hidden_states: torch.Tensor, mask: torch.Tensor):
         bool_mask = mask.bool()
@@ -99,7 +114,8 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
     @torch.no_grad()
     def infer(self, text, image_list=None):
         if self.cpu_offload:
-            self.text_encoder.to(AI_DEVICE)
+            if not hasattr(self, "device_map") or self.device_map == "auto":
+                self.text_encoder.to(AI_DEVICE)
 
         if image_list is not None:
             condition_image_list = []
@@ -143,7 +159,6 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
                 image_grid_thw=model_inputs.image_grid_thw,
                 output_hidden_states=True,
             )
-
             image_info = {
                 "condition_image_list": condition_image_list,
                 "vae_image_list": vae_image_list,
@@ -183,7 +198,8 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
 
         if self.cpu_offload:
-            self.text_encoder.to(torch.device("cpu"))
+            if not hasattr(self, "device_map") or self.device_map == "auto":
+                self.text_encoder.to(torch.device("cpu"))
             torch_device_module.empty_cache()
             gc.collect()
 

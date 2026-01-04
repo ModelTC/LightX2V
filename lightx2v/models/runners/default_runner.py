@@ -19,6 +19,8 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, vae_to_comfyui_image
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 def resize_image(img, resolution):
     assert resolution in ["480p", "540p", "720p"]
@@ -192,7 +194,7 @@ class DefaultRunner(BaseRunner):
 
         if segment_idx is not None and segment_idx == self.video_segment_num - 1:
             del self.inputs
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
 
         return self.model.scheduler.latents
 
@@ -215,20 +217,20 @@ class DefaultRunner(BaseRunner):
                 for model in self.model.model:
                     if hasattr(model.transformer_infer, "offload_manager"):
                         del model.transformer_infer.offload_manager
-                        torch.cuda.empty_cache()
+                        torch_device_module.empty_cache()
                         gc.collect()
                     del model
             else:
                 if hasattr(self.model.transformer_infer, "offload_manager"):
                     del self.model.transformer_infer.offload_manager
-                    torch.cuda.empty_cache()
+                    torch_device_module.empty_cache()
                     gc.collect()
                 del self.model
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
             torch.save(CALIB, calib_path)
             logger.info(f"[CALIB] Saved calibration data successfully to: {calib_path}")
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
 
     def read_image_input(self, img_path):
@@ -272,7 +274,7 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
 
@@ -280,7 +282,7 @@ class DefaultRunner(BaseRunner):
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -295,7 +297,7 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(first_frame, last_frame)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output)
 
@@ -315,14 +317,14 @@ class DefaultRunner(BaseRunner):
         vae_encoder_out, latent_shape = self.run_vae_encoder(src_video, src_ref_images, src_mask)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(None, vae_encoder_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Text Encoder")
     def _run_input_encoder_local_animate(self):
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
         return self.get_encoder_output_i2v(None, None, text_encoder_output, None)
 
@@ -388,7 +390,7 @@ class DefaultRunner(BaseRunner):
         images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         return images
 
@@ -402,7 +404,7 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
 
     def post_prompt_enhancer(self):
@@ -477,5 +479,5 @@ class DefaultRunner(BaseRunner):
             del self.vae_encoder
         if hasattr(self, "vae_decoder"):
             del self.vae_decoder
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()

@@ -1,0 +1,42 @@
+{
+    "aspect_ratios": {
+        "1:1": [
+            1328,
+            1328
+        ],
+        "16:9": [
+            1664,
+            928
+        ],
+        "9:16": [
+            928,
+            1664
+        ],
+        "4:3": [
+            1472,
+            1140
+        ],
+        "3:4": [
+            142,
+            184
+        ]
+    },
+    "aspect_ratio": "16:9",
+    "vae_scale_factor": 8,
+    "infer_steps": 4,
+    "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 34,
+    "_auto_resize": false,
+    "num_layers": 60,
+    "attention_out_dim": 3072,
+    "attention_dim_head": 128,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 4.0,
+    "lora_configs": [
+        {
+          "path": "lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+          "strength": 1.0
+        }
+      ]
+}

@@ -1,6 +1,5 @@
 import gc
 import glob
-import json
 import os
 
 import torch
@@ -32,11 +31,12 @@ class QwenImageTransformerModel:
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
 
-        with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
-            transformer_config = json.load(f)
-            self.in_channels = transformer_config["in_channels"]
+        self.in_channels = self.config["in_channels"]
         self.attention_kwargs = {}
-
+        self.remove_keys = []
+        self.lazy_load = self.config.get("lazy_load", False)
+        if self.lazy_load:
+            self.remove_keys.extend(["blocks."])
         self.dit_quantized = self.config.get("dit_quantized", False)
 
         if self.config["seq_parallel"]:
@@ -75,10 +75,7 @@ class QwenImageTransformerModel:
                     weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
                 else:
                     # Load quantized weights
-                    if not self.config.get("lazy_load", False):
-                        weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
-                    else:
-                        weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
+                    weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
 
             if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
                 weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
@@ -89,7 +86,10 @@ class QwenImageTransformerModel:
 
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
-        self.transformer_weights = self.transformer_weight_class(self.config)
+        if self.lazy_load:
+            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path)
+        else:
+            self.transformer_weights = self.transformer_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
         if not self._should_init_empty_model():
             self._apply_weights()
@@ -150,8 +150,18 @@ class QwenImageTransformerModel:
             safetensors_path = self.model_path
 
         if os.path.isdir(safetensors_path):
-            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+                non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+                if os.path.exists(non_block_file):
+                    safetensors_files = [non_block_file]
+                else:
+                    raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
+            else:
+                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
             safetensors_files = [safetensors_path]
 
         weight_dict = {}
@@ -171,8 +181,18 @@ class QwenImageTransformerModel:
             safetensors_path = self.model_path
 
         if os.path.isdir(safetensors_path):
-            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+                non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+                if os.path.exists(non_block_file):
+                    safetensors_files = [non_block_file]
+                else:
+                    raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
+            else:
+                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
             safetensors_files = [safetensors_path]
             safetensors_path = os.path.dirname(safetensors_path)
 
@@ -203,28 +223,6 @@ class QwenImageTransformerModel:
                 weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
 
         return weight_dict
-
-    def _load_quant_split_ckpt(self, unified_dtype, sensitive_layer):  # Need rewrite
-        lazy_load_model_path = self.dit_quantized_ckpt
-        logger.info(f"Loading splited quant model from {lazy_load_model_path}")
-        pre_post_weight_dict = {}
-
-        safetensor_path = os.path.join(lazy_load_model_path, "non_block.safetensors")
-        with safe_open(safetensor_path, framework="pt", device="cpu") as f:
-            for k in f.keys():
-                if f.get_tensor(k).dtype in [
-                    torch.float16,
-                    torch.bfloat16,
-                    torch.float,
-                ]:
-                    if unified_dtype or all(s not in k for s in sensitive_layer):
-                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
-                    else:
-                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
-                else:
-                    pre_post_weight_dict[k] = f.get_tensor(k).to(self.device)
-
-        return pre_post_weight_dict
 
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
         logger.info("Loading distributed weights")
@@ -291,6 +289,8 @@ class QwenImageTransformerModel:
         self.post_infer = self.post_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
             self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
+            if self.lazy_load:
+                self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
 
     def to_cpu(self):
         self.pre_weight.to_cpu()

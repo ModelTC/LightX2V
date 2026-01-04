@@ -6,7 +6,7 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 from lightx2v.utils.envs import *
 
 from .triton_ops import fuse_scale_shift_kernel
-from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
+from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
 
 
 def modulate(x, scale, shift):
@@ -32,16 +32,17 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            if self.config.get("rope_chunk", False):
-                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_flashinfer)
-            else:
-                self.apply_rope_func = apply_wan_rope_with_flashinfer
+        rope_funcs = {
+            "flashinfer": apply_wan_rope_with_flashinfer,
+            "torch": apply_wan_rope_with_torch,
+            "torch_naive": apply_wan_rope_with_torch_naive,
+        }
+        rope_type = self.config.get("rope_type", "flashinfer")
+        rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
+        if self.config.get("rope_chunk", False):
+            self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=rope_func)
         else:
-            if self.config.get("rope_chunk", False):
-                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_torch)
-            else:
-                self.apply_rope_func = apply_wan_rope_with_torch
+            self.apply_rope_func = rope_func
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
@@ -60,6 +61,10 @@ class WanTransformerInfer(BaseTransformerInfer):
 
     def get_scheduler_values(self):
         self.cos_sin = self.scheduler.cos_sin
+
+    @torch.no_grad()
+    def reset_post_adapter_states(self):
+        pass
 
     def reset_infer_states(self):
         self.self_attn_cu_seqlens_qkv = None
@@ -177,7 +182,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
-            if self.self_attn_1_type == "flash_attn2" or self.self_attn_1_type == "flash_attn3":
+            if self.self_attn_1_type in ["flash_attn2", "flash_attn3", "draft_attn"]:
                 self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
             else:
                 self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
@@ -201,16 +206,30 @@ class WanTransformerInfer(BaseTransformerInfer):
                 model_cls=self.config["model_cls"],
             )
         else:
-            attn_out = phase.self_attn_1.apply(
-                q=q,
-                k=k,
-                v=v,
-                cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
-                cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
-                max_seqlen_q=img_qkv_len,
-                max_seqlen_kv=img_qkv_len,
-                model_cls=self.config["model_cls"],
-            )
+            if self.config["self_attn_1_type"] == "draft_attn":
+                attn_out = phase.self_attn_1.apply(
+                    q=q,
+                    k=k,
+                    v=v,
+                    cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                    cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                    max_seqlen_q=img_qkv_len,
+                    max_seqlen_kv=img_qkv_len,
+                    frame_h=self.scheduler.latents.shape[2] // self.scheduler.patch_size[1],
+                    frame_w=self.scheduler.latents.shape[3] // self.scheduler.patch_size[2],
+                    block_idx=self.block_idx,
+                )
+            else:
+                attn_out = phase.self_attn_1.apply(
+                    q=q,
+                    k=k,
+                    v=v,
+                    cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                    cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                    max_seqlen_q=img_qkv_len,
+                    max_seqlen_kv=img_qkv_len,
+                    model_cls=self.config["model_cls"],
+                )
 
         y = phase.self_attn_o.apply(attn_out)
 

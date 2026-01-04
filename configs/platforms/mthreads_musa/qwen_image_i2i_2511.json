@@ -8,12 +8,14 @@
     "num_layers": 60,
     "attention_out_dim": 3072,
     "attention_dim_head": 128,
-    "attn_type": "flash_attn3",
+    "attn_type": "torch_sdpa",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
     "CONDITION_IMAGE_SIZE": 147456,
     "USE_IMAGE_ID_IN_PROMPT": true,
-    "dit_quantized": true,
-    "dit_quantized_ckpt": "/path/to/qwen_2509_fp8.safetensors",
-    "dit_quant_scheme": "fp8-sgl"
+    "zero_cond_t": true,
+    "modulate_type": "torch",
+    "rope_type": "torch_naive",
+    "ln_type": "Default",
+    "rms_type": "Default"
 }

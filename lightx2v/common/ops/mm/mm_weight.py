@@ -1531,7 +1531,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         if ops is not None:
             self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         else:
-            self.act_quant_func = self.fp8_quantize_triton
+            self.act_quant_func = fp8_quantize_triton
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
@@ -1539,7 +1539,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
             input_tensor_quant,
             self.weight,
             self.bias.float() if self.bias is not None else None,
-            input_tensor_scale,
+            input_tensor_scale.float(),
             self.weight_scale,
             out_dtype=self.infer_dtype,
         )
@@ -1582,7 +1582,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         if ops is not None:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
         else:
-            self.act_quant_func = self.int8_quantize_triton
+            self.act_quant_func = int8_quantize_triton
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
@@ -1590,7 +1590,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
             input_tensor_quant,
             self.weight,
             self.bias.float() if self.bias is not None else None,
-            input_tensor_scale,
+            input_tensor_scale.float(),
             self.weight_scale,
             fuse_gelu=False,
             out_dtype=self.infer_dtype,

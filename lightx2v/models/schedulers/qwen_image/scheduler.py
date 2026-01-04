@@ -287,7 +287,8 @@ class QwenImageScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config["model_path"], "scheduler"))
+        scheduler_path = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
+        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(scheduler_path)
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
         self.dtype = torch.bfloat16

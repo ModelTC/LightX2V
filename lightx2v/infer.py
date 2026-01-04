@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import torch
 import torch.distributed as dist
@@ -15,13 +16,13 @@ from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import set_input_info
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
-from lightx2v.utils.utils import seed_all
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v.utils.utils import seed_all, validate_task_arguments
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
@@ -56,6 +57,7 @@ def main():
             "wan2.2_animate",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
+            "z_image",
         ],
         default="wan2.1",
     )
@@ -118,7 +120,24 @@ def main():
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
+
+    # Aspect ratio and custom shape for image tasks (t2i, i2i)
+    parser.add_argument(
+        "--aspect_ratio",
+        type=str,
+        default="16:9",
+        choices=["16:9", "9:16", "1:1", "4:3", "3:4"],
+        help="Aspect ratio for image generation. Only used for t2i and i2i tasks.",
+    )
+    parser.add_argument(
+        "--custom_shape",
+        type=str,
+        default=None,
+        help="Custom shape for image generation in format 'height,width' (e.g., '928,1664'). Only used for t2i and i2i tasks. Takes precedence over aspect_ratio.",
+    )
+    parser.add_argument("--strength", type=float, default=0.6, help="The strength for image-to-image generation")
     args = parser.parse_args()
+    validate_task_arguments(args)
 
     seed_all(args.seed)
 
@@ -126,7 +145,7 @@ def main():
     config = set_config(args)
 
     if config["parallel"]:
-        platform_device = PLATFORM_DEVICE_REGISTER.get(AI_DEVICE, None)
+        platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
         platform_device.init_parallel_env()
         set_parallel_config(config)
 
