@@ -22,13 +22,18 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def resize_image(img, resolution):
+def resize_image(img, resolution, bucket_shape=None):
     assert resolution in ["480p", "540p", "720p"]
-    bucket_config = {
-        0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
-        1.500: np.array([[832, 480], [960, 544], [1280, 720]], dtype=np.int64),
-        1.000: np.array([[480, 480], [576, 576], [720, 720]], dtype=np.int64),
-    }
+    if bucket_shape is None:
+        bucket_config = {
+            0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
+            1.500: np.array([[832, 480], [960, 544], [1280, 720]], dtype=np.int64),
+            1.000: np.array([[480, 480], [576, 576], [960, 960]], dtype=np.int64),
+        }
+    else:
+        bucket_config = {}
+        for ratio, resolutions in bucket_shape.items():
+            bucket_config[float(ratio)] = np.array(resolutions, dtype=np.int64)
     ori_height = img.shape[-2]
     ori_weight = img.shape[-1]
     ori_ratio = ori_height / ori_weight
@@ -246,7 +251,7 @@ class DefaultRunner(BaseRunner):
         self.input_info.original_size = img_ori.size
 
         if self.config.get("resize_mode", None) == "adaptive":
-            img, h, w = resize_image(img, self.config.get("resolution", "480p"))
+            img, h, w = resize_image(img, self.config.get("resolution", "480p"), self.config.get("bucket_shape", None))
             logger.info(f"resize_image target_h: {h}, target_w: {w}")
             patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
             patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]

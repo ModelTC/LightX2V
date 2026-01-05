@@ -52,7 +52,6 @@ class QwenImageRunner(DefaultRunner):
     def load_transformer(self):
         model = QwenImageTransformerModel(self.config)
         if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False)
             lora_wrapper = QwenImageLoraWrapper(model)
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]
@@ -255,7 +254,7 @@ class QwenImageRunner(DefaultRunner):
                 return (width, height)
             logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
 
-        if self.config["task"] == "t2i" or not self.config["_auto_resize"]:
+        if self.config["task"] == "t2i" or not self.config.get("resize_mode", None) == "adaptive":
             width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
             return (width, height)
         return None
