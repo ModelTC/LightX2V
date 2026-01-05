@@ -139,7 +139,6 @@ class I2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
-    strength: float = field(default_factory=lambda: 0.6)  # Control transformation strength (0.0-1.0)
     # shape related
     target_shape: int = field(default_factory=int)
     image_shapes: list = field(default_factory=list)
