@@ -1636,7 +1636,6 @@ def run_inference(
 
         # Set zero_cond_t to true (2511 feature)
         qwen_image_config["zero_cond_t"] = True
-        qwen_image_config["_auto_resize"] = True
         qwen_image_config["attn_type"] = attention_type
 
     config_graio = {

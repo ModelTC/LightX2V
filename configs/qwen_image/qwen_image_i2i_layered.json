@@ -4,7 +4,7 @@
     "transformer_in_channels": 64,
     "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
     "prompt_template_encode_start_idx": 34,
-    "_auto_resize": true,
+    "resize_mode": "adaptive",
     "num_layers": 60,
     "attention_out_dim": 3072,
     "attention_dim_head": 128,
