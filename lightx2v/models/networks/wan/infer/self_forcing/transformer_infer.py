@@ -50,6 +50,12 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         self.infer_func = self.infer_with_kvcache
 
+    def _calculate_q_k_len(self, q, k_lens):
+        q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
+        cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
+        cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
+        return cu_seqlens_q, cu_seqlens_k
+
     def get_scheduler_values(self):
         pass
 
@@ -91,7 +97,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         self.crossattn_cache = self.crossattn_cache_default
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-            x = self.infer_block_witch_kvcache(blocks[block_idx], x, pre_infer_out)
+            x = self.infer_block_with_kvcache(blocks[block_idx], x, pre_infer_out)
         return x
 
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
@@ -297,7 +303,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             torch.cuda.empty_cache()
         return x
 
-    def infer_block_witch_kvcache(self, block, x, pre_infer_out):
+    def infer_block_with_kvcache(self, block, x, pre_infer_out):
         if hasattr(block.compute_phases[0], "before_proj"):
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
 
