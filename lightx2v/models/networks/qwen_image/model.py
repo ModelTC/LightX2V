@@ -1,6 +1,5 @@
 import gc
 import glob
-import json
 import os
 
 import torch
@@ -32,9 +31,7 @@ class QwenImageTransformerModel:
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
 
-        with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
-            transformer_config = json.load(f)
-            self.in_channels = transformer_config["in_channels"]
+        self.in_channels = self.config["in_channels"]
         self.attention_kwargs = {}
         self.remove_keys = []
         self.lazy_load = self.config.get("lazy_load", False)

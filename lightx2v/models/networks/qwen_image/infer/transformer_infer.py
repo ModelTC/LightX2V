@@ -7,7 +7,7 @@ from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
     fuse_scale_shift_kernel,
 )
-from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
+from .utils import apply_qwen_rope_with_flashinfer, apply_qwen_rope_with_torch, apply_qwen_rope_with_torch_naive
 
 
 def calculate_q_k_len(q, k_lens):
@@ -37,10 +37,13 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            self.apply_rope_func = apply_wan_rope_with_flashinfer
-        else:
-            self.apply_rope_func = apply_rotary_emb_qwen
+        rope_funcs = {
+            "flashinfer": apply_qwen_rope_with_flashinfer,
+            "torch": apply_qwen_rope_with_torch,
+            "torch_naive": apply_qwen_rope_with_torch_naive,
+        }
+        rope_type = config.get("rope_type", "flashinfer")
+        self.apply_rope_func = rope_funcs.get(rope_type, apply_qwen_rope_with_torch)
 
         self.img_qkv_len1 = None
         self.cu_seqlens_qkv1 = None

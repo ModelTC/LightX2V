@@ -7,10 +7,10 @@ import logging
 import os
 import warnings
 
-# Suppress network retry warnings during Hugging Face downloads (these are normal retry behaviors)
+# Suppress network retry warnings during Hugging Face downloads (normal retry behavior)
 warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub")
 warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub.utils")
-# Suppress reqwest retry warnings (these are JSON log outputs, not actual errors)
+# Suppress reqwest retry warnings (JSON log outputs, not real errors)
 logging.getLogger("httpx").setLevel(logging.ERROR)
 logging.getLogger("httpcore").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
@@ -69,21 +69,37 @@ MODEL_CONFIG = {
         "num_layers": 40,
         "out_dim": 16,
         "text_len": 512,
-    }
+    },
+    "Qwen_Image_Edit_2511": {
+        "_class_name": "QwenImageTransformer2DModel",
+        "_diffusers_version": "0.36.0.dev0",
+        "attention_head_dim": 128,
+        "axes_dims_rope": [16, 56, 56],
+        "guidance_embeds": False,
+        "in_channels": 64,
+        "joint_attention_dim": 3584,
+        "num_attention_heads": 24,
+        "num_layers": 60,
+        "out_channels": 16,
+        "patch_size": 2,
+        "zero_cond_t": True,
+    },
 }
 # Model list cache (avoid fetching from HF every time)
 HF_MODELS_CACHE = {
-    "lightx2v/Wan2.1-Distill-Models": [],
-    "lightx2v/Wan2.1-Official-Models": [],
-    "lightx2v/Wan2.2-Distill-Models": [],
-    "lightx2v/Wan2.2-Official-Models": [],
+    "lightx2v/wan2.1-Distill-Models": [],
+    "lightx2v/wan2.1-Official-Models": [],
+    "lightx2v/wan2.2-Distill-Models": [],
+    "lightx2v/wan2.2-Official-Models": [],
     "lightx2v/Encoders": [],
     "lightx2v/Autoencoders": [],
+    "lightx2v/Qwen-Image-Edit-2511-Lightning": [],
+    "Qwen/Qwen-Image-Edit-2511": [],
 }
 
 
 def scan_model_path_contents(model_path):
-    """Scan model_path directory and return available files and subdirectories"""
+    """Scan model_path directory, return available files and subdirectories"""
     if not model_path or not os.path.exists(model_path):
         return {"dirs": [], "files": [], "safetensors_dirs": [], "pth_files": []}
 
@@ -112,13 +128,17 @@ def scan_model_path_contents(model_path):
 
 
 def load_hf_models_cache():
-    """Load model list from Hugging Face and cache, if HF times out or fails, try using ModelScope"""
+    """Load model list from Hugging Face and cache, if HF times out or fails, try ModelScope"""
     import concurrent.futures
 
-    def process_files(files):
-        """Process file list and extract model names"""
+    def process_files(files, repo_id=None):
+        """Process file list, extract model names"""
         model_names = []
         seen_dirs = set()
+
+        # For Qwen/Qwen-Image-Edit-2511 repository, keep vae and scheduler directories
+        is_qwen_image_repo = repo_id == "Qwen/Qwen-Image-Edit-2511"
+
         for file in files:
             # Exclude files containing comfyui
             if "comfyui" in file.lower():
@@ -134,44 +154,47 @@ def load_hf_models_cache():
                 top_dir = file.split("/")[0]
                 if top_dir not in seen_dirs:
                     seen_dirs.add(top_dir)
+                    # For Qwen repository, keep vae and scheduler directories
+                    if is_qwen_image_repo and top_dir.lower() in ["vae", "scheduler"]:
+                        model_names.append(top_dir)
                     # Support safetensors file directories and _split block storage directories
-                    if "_split" in top_dir or any(f.startswith(f"{top_dir}/") and f.endswith(".safetensors") for f in files):
+                    elif "_split" in top_dir or any(f.startswith(f"{top_dir}/") and f.endswith(".safetensors") for f in files):
                         model_names.append(top_dir)
         return sorted(set(model_names))
 
-    # Timeout duration (seconds)
+    # Timeout (seconds)
     HF_TIMEOUT = 30
 
     for repo_id in HF_MODELS_CACHE.keys():
         files = None
         source = None
 
-        # First try to get from Hugging Face (with timeout)
+        # First try to get from ModelScope
         try:
-            if HF_AVAILABLE:
-                logger.info(f"Loading models from Hugging Face {repo_id}...")
-                api = HfApi()
-
-                # Use thread pool executor to set timeout
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(list_repo_files, repo_id=repo_id, repo_type="model")
-                    files = future.result(timeout=HF_TIMEOUT)
-                    source = "Hugging Face"
-                    logger.info(f"Successfully loaded models from Hugging Face {repo_id}")
-        except:  # noqa 722
-            # If HF fails, try to get from ModelScope
-            if files is None and MS_AVAILABLE:
+            if MS_AVAILABLE:
                 logger.info(f"Loading models from ModelScope {repo_id}...")
                 api = HubApi()
-                # ModelScope API to get file list
+                # ModelScope API get file list
                 model_files = api.get_model_files(model_id=repo_id, recursive=True)
                 # Extract file paths
                 files = [file["Path"] for file in model_files if file.get("Type") == "blob"]
                 source = "ModelScope"
+                logger.info(f"Successfully loaded models from ModelScope {repo_id}")
+        except:  # noqa E722
+            # If ModelScope fails, try to get from Hugging Face (with timeout)
+            if files is None and HF_AVAILABLE:
+                logger.info(f"Loading models from Hugging Face {repo_id}...")
+                api = HfApi()
+
+                # Use thread pool executor with timeout
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(list_repo_files, repo_id=repo_id, repo_type="model")
+                    files = future.result(timeout=HF_TIMEOUT)
+                    source = "Hugging Face"
 
         # Process file list
         if files:
-            model_names = process_files(files)
+            model_names = process_files(files, repo_id)
             HF_MODELS_CACHE[repo_id] = model_names
             logger.info(f"Loaded {len(HF_MODELS_CACHE[repo_id])} models from {source} {repo_id}")
         else:
@@ -180,7 +203,7 @@ def load_hf_models_cache():
 
 
 def get_hf_models(repo_id, prefix_filter=None, keyword_filter=None):
-    """Get models from cached model list (no longer fetch from HF in real-time)"""
+    """Get models from cached model list (no longer fetching from HF in real-time)"""
     if repo_id not in HF_MODELS_CACHE:
         return []
 
@@ -196,7 +219,7 @@ def get_hf_models(repo_id, prefix_filter=None, keyword_filter=None):
 
 
 def check_model_exists(model_path, model_name):
-    """Check if model has been downloaded"""
+    """Check if model is already downloaded"""
     if not model_path or not os.path.exists(model_path):
         return False
 
@@ -223,7 +246,7 @@ def extract_model_name(formatted_name):
     """Extract original model name from formatted option name"""
     if not formatted_name:
         return ""
-    # Remove leading emoji and spaces
+    # Remove leading emoji and space
     if formatted_name.startswith("✅ ") or formatted_name.startswith("❌ "):
         return formatted_name[2:].strip()
     return formatted_name.strip()
@@ -241,29 +264,29 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     excluded_keywords = ["vae", "tae", "clip", "t5", "high_noise", "low_noise"]
     fp8_supported = is_fp8_supported_gpu()
 
-    # Select repository based on model type and whether it's distill
+    # Select repository based on model type and whether distill
     if model_type == "wan2.1":
         if is_distill is True:
-            repo_id = "lightx2v/Wan2.1-Distill-Models"
+            repo_id = "lightx2v/wan2.1-Distill-Models"
         elif is_distill is False:
-            repo_id = "lightx2v/Wan2.1-Official-Models"
+            repo_id = "lightx2v/wan2.1-Official-Models"
         else:
             # Get models from both repositories
-            repo_id_distill = "lightx2v/Wan2.1-Distill-Models"
-            repo_id_official = "lightx2v/Wan2.1-Official-Models"
+            repo_id_distill = "lightx2v/wan2.1-Distill-Models"
+            repo_id_official = "lightx2v/wan2.1-Official-Models"
             hf_models_distill = get_hf_models(repo_id_distill, prefix_filter="wan2.1") if HF_AVAILABLE else []
             hf_models_official = get_hf_models(repo_id_official, prefix_filter="wan2.1") if HF_AVAILABLE else []
             hf_models = list(set(hf_models_distill + hf_models_official))
             repo_id = None  # Mark as already fetched
     else:  # wan2.2
         if is_distill is True:
-            repo_id = "lightx2v/Wan2.2-Distill-Models"
+            repo_id = "lightx2v/wan2.2-Distill-Models"
         elif is_distill is False:
-            repo_id = "lightx2v/Wan2.2-Official-Models"
+            repo_id = "lightx2v/wan2.2-Official-Models"
         else:
             # Get models from both repositories
-            repo_id_distill = "lightx2v/Wan2.2-Distill-Models"
-            repo_id_official = "lightx2v/Wan2.2-Official-Models"
+            repo_id_distill = "lightx2v/wan2.2-Distill-Models"
+            repo_id_official = "lightx2v/wan2.2-Official-Models"
             hf_models_distill = get_hf_models(repo_id_distill, prefix_filter="wan2.2") if HF_AVAILABLE else []
             hf_models_official = get_hf_models(repo_id_official, prefix_filter="wan2.2") if HF_AVAILABLE else []
             hf_models = list(set(hf_models_distill + hf_models_official))
@@ -272,7 +295,7 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     if repo_id:
         hf_models = get_hf_models(repo_id, prefix_filter=model_type) if HF_AVAILABLE else []
 
-    # Filter models that meet the conditions
+    # Filter models that meet criteria
     def is_valid(name):
         name_lower = name.lower()
         # Filter out files containing comfyui
@@ -298,18 +321,18 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     for m in hf_models:
         if not is_valid(m):
             continue
-        # If it's a safetensors file or a directory containing _split, keep it
+        # Keep if it's a safetensors file or contains _split directory
         if m.endswith(".safetensors") or "_split" in m.lower():
             valid_hf_models.append(m)
 
-    # Check locally existing models (only retrieve safetensors files and directories, including _split directories)
+    # Check locally existing models (only search safetensors files and directories, including _split directories)
     contents = scan_model_path_contents(model_path)
     dir_choices = [d for d in contents["dirs"] if is_valid(d) and ("_split" in d.lower() or d in contents["safetensors_dirs"])]
     safetensors_choices = [f for f in contents["files"] if f.endswith(".safetensors") and is_valid(f)]
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # Merge HF and local models, remove duplicates
+    # Merge HF and local models, deduplicate
     all_models = sorted(set(valid_hf_models + local_models))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
@@ -323,21 +346,21 @@ def get_high_noise_choices(model_path, model_type="wan2.2", task_type=None, is_d
 
     Args:
         model_path: Local model path
-        model_type: "wan2.2" (high noise models are only for wan2.2)
+        model_type: "wan2.2" (high noise model only for wan2.2)
         task_type: "i2v" or "t2v", None means no task type filtering
         is_distill: Whether it's a distill model, None means get both distill and non-distill
     """
     fp8_supported = is_fp8_supported_gpu()
 
-    # Select repository based on whether it's distill
+    # Select repository based on whether distill
     if is_distill is True:
-        repo_id = "lightx2v/Wan2.2-Distill-Models"
+        repo_id = "lightx2v/wan2.2-Distill-Models"
     elif is_distill is False:
-        repo_id = "lightx2v/Wan2.2-Official-Models"
+        repo_id = "lightx2v/wan2.2-Official-Models"
     else:
         # Get models from both repositories
-        repo_id_distill = "lightx2v/Wan2.2-Distill-Models"
-        repo_id_official = "lightx2v/Wan2.2-Official-Models"
+        repo_id_distill = "lightx2v/wan2.2-Distill-Models"
+        repo_id_official = "lightx2v/wan2.2-Official-Models"
         hf_models_distill = get_hf_models(repo_id_distill, keyword_filter="high_noise") if HF_AVAILABLE else []
         hf_models_official = get_hf_models(repo_id_official, keyword_filter="high_noise") if HF_AVAILABLE else []
         hf_models = list(set(hf_models_distill + hf_models_official))
@@ -367,18 +390,18 @@ def get_high_noise_choices(model_path, model_type="wan2.2", task_type=None, is_d
     for m in hf_models:
         if not is_valid(m):
             continue
-        # If it's a safetensors file or a directory containing _split, keep it
+        # Keep if it's a safetensors file or contains _split directory
         if m.endswith(".safetensors") or "_split" in m.lower():
             valid_hf_models.append(m)
 
-    # Check locally existing models (only retrieve safetensors files and directories, including _split directories)
+    # Check locally existing models (only search safetensors files and directories, including _split directories)
     contents = scan_model_path_contents(model_path)
     dir_choices = [d for d in contents["dirs"] if is_valid(d) and ("_split" in d.lower() or d in contents["safetensors_dirs"])]
     safetensors_choices = [f for f in contents["files"] if f.endswith(".safetensors") and is_valid(f)]
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # Merge HF and local models, remove duplicates
+    # Merge HF and local models, deduplicate
     all_models = sorted(set(valid_hf_models + local_models))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
@@ -392,21 +415,21 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
 
     Args:
         model_path: Local model path
-        model_type: "wan2.2" (low noise models are only for wan2.2)
+        model_type: "wan2.2" (low noise model only for wan2.2)
         task_type: "i2v" or "t2v", None means no task type filtering
         is_distill: Whether it's a distill model, None means get both distill and non-distill
     """
     fp8_supported = is_fp8_supported_gpu()
 
-    # Select repository based on whether it's distill
+    # Select repository based on whether distill
     if is_distill is True:
-        repo_id = "lightx2v/Wan2.2-Distill-Models"
+        repo_id = "lightx2v/wan2.2-Distill-Models"
     elif is_distill is False:
-        repo_id = "lightx2v/Wan2.2-Official-Models"
+        repo_id = "lightx2v/wan2.2-Official-Models"
     else:
         # Get models from both repositories
-        repo_id_distill = "lightx2v/Wan2.2-Distill-Models"
-        repo_id_official = "lightx2v/Wan2.2-Official-Models"
+        repo_id_distill = "lightx2v/wan2.2-Distill-Models"
+        repo_id_official = "lightx2v/wan2.2-Official-Models"
         hf_models_distill = get_hf_models(repo_id_distill, keyword_filter="low_noise") if HF_AVAILABLE else []
         hf_models_official = get_hf_models(repo_id_official, keyword_filter="low_noise") if HF_AVAILABLE else []
         hf_models = list(set(hf_models_distill + hf_models_official))
@@ -436,18 +459,18 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
     for m in hf_models:
         if not is_valid(m):
             continue
-        # If it's a safetensors file or a directory containing _split, keep it
+        # Keep if it's a safetensors file or contains _split directory
         if m.endswith(".safetensors") or "_split" in m.lower():
             valid_hf_models.append(m)
 
-    # Check locally existing models (only retrieve safetensors files and directories, including _split directories)
+    # Check locally existing models (only search safetensors files and directories, including _split directories)
     contents = scan_model_path_contents(model_path)
     dir_choices = [d for d in contents["dirs"] if is_valid(d) and ("_split" in d.lower() or d in contents["safetensors_dirs"])]
     safetensors_choices = [f for f in contents["files"] if f.endswith(".safetensors") and is_valid(f)]
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # Merge HF and local models, remove duplicates
+    # Merge HF and local models, deduplicate
     all_models = sorted(set(valid_hf_models + local_models))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
@@ -457,14 +480,14 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
 
 
 def get_t5_model_choices(model_path):
-    """Get T5 model options (from Hugging Face Encoders repository and local, containing t5 keyword, only show safetensors, exclude google)"""
+    """Get T5 model options (from Hugging Face Encoders repository and local, containing t5 keyword, only safetensors, excluding google)"""
     fp8_supported = is_fp8_supported_gpu()
 
     # Get from Hugging Face Encoders repository
     repo_id = "lightx2v/Encoders"
     hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
 
-    # Filter files containing t5, only show safetensors, exclude google
+    # Filter files containing t5, only safetensors, excluding google
     def is_valid_hf(name):
         name_lower = name.lower()
         # Filter out files containing comfyui and google directory
@@ -495,7 +518,7 @@ def get_t5_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # Merge HF and local models, remove duplicates
+    # Merge HF and local models, deduplicate
     all_models = sorted(set(valid_hf_models + local_models))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
@@ -522,14 +545,14 @@ def get_t5_tokenizer_choices(model_path):
 
 
 def get_clip_model_choices(model_path):
-    """Get CLIP model options (from Hugging Face Encoders repository and local, containing clip keyword, only show safetensors, exclude xlm-roberta-large)"""
+    """Get CLIP model options (from Hugging Face Encoders repository and local, containing clip keyword, only safetensors, excluding xlm-roberta-large)"""
     fp8_supported = is_fp8_supported_gpu()
 
     # Get from Hugging Face Encoders repository
     repo_id = "lightx2v/Encoders"
     hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
 
-    # Filter files containing clip, only show safetensors, exclude xlm-roberta-large
+    # Filter files containing clip, only safetensors, excluding xlm-roberta-large
     def is_valid_hf(name):
         name_lower = name.lower()
         # Filter out files containing comfyui and xlm-roberta-large directory
@@ -560,7 +583,7 @@ def get_clip_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # Merge HF and local models, remove duplicates
+    # Merge HF and local models, deduplicate
     all_models = sorted(set(valid_hf_models + local_models))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
@@ -587,8 +610,8 @@ def get_clip_tokenizer_choices(model_path):
 
 
 def get_vae_encoder_choices(model_path):
-    """Get VAE encoder options, only return Wan2.1_VAE.safetensors"""
-    encoder_name = "Wan2.1_VAE.safetensors"
+    """Get VAE encoder options, only return wan2.1_VAE.safetensors"""
+    encoder_name = "wan2.1_VAE.safetensors"
 
     # Get from Hugging Face Autoencoders repository
     repo_id = "lightx2v/Autoencoders"
@@ -600,7 +623,7 @@ def get_vae_encoder_choices(model_path):
     # Check if it exists locally
     local_has = check_model_exists(model_path, encoder_name)
 
-    # If it exists in HF or locally, return it
+    # If HF or local has it, return
     if hf_has or local_has:
         return [format_model_choice(encoder_name, model_path)]
     else:
@@ -608,14 +631,14 @@ def get_vae_encoder_choices(model_path):
 
 
 def get_vae_decoder_choices(model_path):
-    """Get VAE decoder options (from Hugging Face Autoencoders repository and local, containing vae/VAE/tae keywords, only show safetensors)"""
+    """Get VAE decoder options (from Hugging Face Autoencoders repository and local, containing vae/VAE/tae keyword, only safetensors)"""
     fp8_supported = is_fp8_supported_gpu()
 
     # Get from Hugging Face Autoencoders repository
     repo_id = "lightx2v/Autoencoders"
     hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
 
-    # Filter files containing vae or tae, only show safetensors files or _split directories
+    # Filter files containing vae or tae, only safetensors files or _split directories
     def is_valid_hf(name):
         name_lower = name.lower()
         # Filter out files containing comfyui
@@ -655,7 +678,7 @@ def get_vae_decoder_choices(model_path):
 
     local_models = safetensors_choices + dir_choices
 
-    # Merge HF and local models, remove duplicates
+    # Merge HF and local models, deduplicate
     all_models = sorted(set(valid_hf_models + local_models))
 
     # For VAE decoder, only show options containing "2_1" or "2.1"
@@ -667,11 +690,134 @@ def get_vae_decoder_choices(model_path):
     return formatted_choices if formatted_choices else [""]
 
 
+def get_qwen_image_dit_choices(model_path):
+    """Get Qwen Image Edit Diffusion model options
+    From lightx2v/Qwen-Image-Edit-2511-Lightning repository
+    Only list models containing qwen_image_edit_2511 and ending with lightning.safetensors or lightning_split
+    """
+    fp8_supported = is_fp8_supported_gpu()
+
+    # Get from Hugging Face repository
+    repo_id = "lightx2v/Qwen-Image-Edit-2511-Lightning"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    def is_valid(name):
+        name_lower = name.lower()
+        # Filter out files containing comfyui
+        if "comfyui" in name_lower:
+            return False
+        if not fp8_supported and "fp8" in name_lower:
+            return False
+        # Must contain qwen_image_edit_2511
+        if "qwen_image_edit_2511" not in name_lower:
+            return False
+        # Only keep those ending with lightning.safetensors or lightning_split
+        return name.endswith("lightning.safetensors") or name.endswith("_split") or "lightning_split" in name_lower
+
+    # Filter HF models
+    valid_hf_models = [m for m in hf_models if is_valid(m)]
+
+    # Check locally existing models
+    contents = scan_model_path_contents(model_path)
+    local_models = []
+    for item in contents["dirs"] + contents["files"]:
+        if is_valid(item):
+            local_models.append(item)
+
+    # Merge HF and local models, deduplicate
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # Format options, add download status
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices if formatted_choices else [""]
+
+
+def get_qwen_image_vae_choices(model_path):
+    """Get Qwen Image Edit VAE options
+    Get vae directory from Qwen/Qwen-Image-Edit-2511 repository
+    """
+    # Get from Hugging Face repository
+    repo_id = "Qwen/Qwen-Image-Edit-2511"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    # Only keep vae directory
+    valid_hf_models = [m for m in hf_models if m.lower() == "vae"]
+
+    # Check locally existing models
+    contents = scan_model_path_contents(model_path)
+    local_models = [d for d in contents["dirs"] if d.lower() == "vae"]
+
+    # Merge HF and local models, deduplicate
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # If not found, add default value "vae"
+    if not all_models:
+        all_models = ["vae"]
+
+    # Format options, add download status
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices
+
+
+def get_qwen_image_scheduler_choices(model_path):
+    """Get Qwen Image Edit Scheduler options
+    Get scheduler directory from Qwen/Qwen-Image-Edit-2511 repository
+    """
+    # Get from Hugging Face repository
+    repo_id = "Qwen/Qwen-Image-Edit-2511"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    # Only keep scheduler directory
+    valid_hf_models = [m for m in hf_models if m.lower() == "scheduler"]
+
+    # Check locally existing models
+    contents = scan_model_path_contents(model_path)
+    local_models = [d for d in contents["dirs"] if d.lower() == "scheduler"]
+
+    # Merge HF and local models, deduplicate
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # If not found, add default value "scheduler"
+    if not all_models:
+        all_models = ["scheduler"]
+
+    # Format options, add download status
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices
+
+
+def get_qwen25vl_encoder_choices(model_path):
+    """Get Qwen25-VL encoder options
+    From lightx2v/Encoders repository, only need Qwen25-VL-4bit-GPTQ
+    """
+    # Get from Hugging Face Encoders repository
+    repo_id = "lightx2v/Encoders"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    # Only keep Qwen25-VL-4bit-GPTQ
+    valid_hf_models = [m for m in hf_models if "qwen25-vl-4bit-gptq" in m.lower() or "qwen25_vl_4bit_gptq" in m.lower()]
+
+    # Check locally existing models
+    contents = scan_model_path_contents(model_path)
+    local_models = [d for d in contents["dirs"] if "qwen25-vl-4bit-gptq" in d.lower() or "qwen25_vl_4bit_gptq" in d.lower()]
+
+    # Merge HF and local models, deduplicate
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # Format options, add download status
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices if formatted_choices else [""]
+
+
 def detect_quant_scheme(model_name):
     """Automatically detect quantization precision based on model name
     - If model name contains "int8" → "int8"
     - If model name contains "fp8" and device supports it → "fp8"
-    - Otherwise return None (means no quantization)
+    - Otherwise return None (no quantization)
     """
     if not model_name:
         return None
@@ -690,16 +836,16 @@ def detect_quant_scheme(model_name):
 def download_model_from_hf(repo_id, model_name, model_path, progress=gr.Progress()):
     """Download model from Hugging Face (supports files and directories)"""
     if not HF_AVAILABLE:
-        return f"❌ huggingface_hub is not installed, cannot download model"
+        return f"❌ huggingface_hub not installed, cannot download model"
 
-    progress(0, desc=f"Starting download from Hugging Face {model_name}...")
-    logger.info(f"Starting download from Hugging Face {repo_id} {model_name} to {model_path}")
+    progress(0, desc=f"Starting to download {model_name} from Hugging Face...")
+    logger.info(f"Starting to download {model_name} from Hugging Face {repo_id} to {model_path}")
 
     target_path = os.path.join(model_path, model_name)
     os.makedirs(model_path, exist_ok=True)
     import shutil
 
-    # Determine if it's a file or directory: if name doesn't end with .safetensors or .pth, it's a directory, otherwise it's a single file
+    # Determine if it's a file or directory: if name doesn't end with .safetensors or .pth, it's a directory
     is_directory = not (model_name.endswith(".safetensors") or model_name.endswith(".pth"))
 
     if is_directory:
@@ -733,7 +879,7 @@ def download_model_from_hf(repo_id, model_name, model_path, progress=gr.Progress
             if os.path.exists(source_dir) and source_dir != target_path:
                 shutil.move(source_dir, target_path)
 
-        logger.info(f"Directory {model_name} download completed, moved to {target_path}")
+        logger.info(f"Directory {model_name} download complete, moved to {target_path}")
     else:
         # Download file
         progress(0.1, desc=f"Downloading file {model_name}...")
@@ -751,25 +897,25 @@ def download_model_from_hf(repo_id, model_name, model_path, progress=gr.Progress
                 local_dir_use_symlinks=False,
                 repo_type="model",
             )
-        logger.info(f"File {model_name} download completed, saved to {downloaded_path}")
+        logger.info(f"File {model_name} download complete, saved to {downloaded_path}")
 
-    progress(1.0, desc=f"✅ {model_name} download completed")
-    return f"✅ {model_name} download completed"
+    progress(1.0, desc=f"✅ {model_name} download complete")
+    return f"✅ {model_name} download complete"
 
 
 def download_model_from_ms(repo_id, model_name, model_path, progress=gr.Progress()):
     """Download model from ModelScope (supports files and directories)"""
     if not MS_AVAILABLE:
-        return f"❌ modelscope is not installed, cannot download model"
+        return f"❌ modelscope not installed, cannot download model"
 
-    progress(0, desc=f"Starting download from ModelScope {model_name}...")
-    logger.info(f"Starting download from ModelScope {repo_id} {model_name} to {model_path}")
+    progress(0, desc=f"Starting to download {model_name} from ModelScope...")
+    logger.info(f"Starting to download {model_name} from ModelScope {repo_id} to {model_path}")
 
     target_path = os.path.join(model_path, model_name)
     os.makedirs(model_path, exist_ok=True)
     import shutil
 
-    # Determine if it's a file or directory: if name doesn't end with .safetensors or .pth, it's a directory, otherwise it's a single file
+    # Determine if it's a file or directory: if name doesn't end with .safetensors or .pth, it's a directory
     is_directory = not (model_name.endswith(".safetensors") or model_name.endswith(".pth"))
     is_file = not is_directory
 
@@ -814,7 +960,7 @@ def download_model_from_ms(repo_id, model_name, model_path, progress=gr.Progress
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
-        logger.info(f"Directory {model_name} download completed, saved to {target_path}")
+        logger.info(f"Directory {model_name} download complete, saved to {target_path}")
     # Handle file download
     elif is_file:
         progress(0.1, desc=f"Downloading file {model_name}...")
@@ -849,16 +995,16 @@ def download_model_from_ms(repo_id, model_name, model_path, progress=gr.Progress
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
-        logger.info(f"File {model_name} download completed, saved to {target_path}")
+        logger.info(f"File {model_name} download complete, saved to {target_path}")
     else:
         return f"❌ Cannot find {model_name}: neither a file nor a directory"
 
-    progress(1.0, desc=f"✅ {model_name} download completed")
-    return f"✅ {model_name} download completed"
+    progress(1.0, desc=f"✅ {model_name} download complete")
+    return f"✅ {model_name} download complete"
 
 
 def download_model(repo_id, model_name, model_path, download_source="huggingface", progress=gr.Progress()):
-    """Unified download function, select Hugging Face or ModelScope based on download source"""
+    """Unified download function, choose Hugging Face or ModelScope based on download source"""
     if download_source == "modelscope":
         return download_model_from_ms(repo_id, model_name, model_path, progress)
     else:
@@ -871,7 +1017,7 @@ def get_model_status(model_path, model_name, repo_id):
     if exists:
         return "✅ Downloaded", gr.update(visible=False)
     else:
-        return "❌ Not downloaded", gr.update(visible=True)
+        return "❌ Not Downloaded", gr.update(visible=True)
 
 
 def update_model_path_options(model_path, model_type="wan2.1", task_type=None):
@@ -935,7 +1081,7 @@ def get_available_quant_ops():
     else:
         available_ops.append(("q8f", False))
 
-    # Detect torch option: need both hasattr(torch, "_scaled_mm") and torchao installed
+    # Detect torch option: requires both hasattr(torch, "_scaled_mm") and torchao installed
     torch_available = hasattr(torch, "_scaled_mm") and is_module_installed("torchao")
     if torch_available:
         available_ops.append(("torch", True))
@@ -1002,10 +1148,11 @@ def cleanup_memory():
         torch.cuda.synchronize()
 
 
-def generate_unique_filename(output_dir):
+def generate_unique_filename(output_dir, is_image=False):
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(output_dir, f"{timestamp}.mp4")
+    ext = ".png" if is_image else ".mp4"
+    return os.path.join(output_dir, f"{timestamp}{ext}")
 
 
 def is_fp8_supported_gpu():
@@ -1026,7 +1173,7 @@ def is_sm_greater_than_90():
 
 
 def get_gpu_generation():
-    """Detect GPU generation, returns '40' for 40-series, '30' for 30-series, None for others"""
+    """Detect GPU series, return '40' for 40 series, '30' for 30 series, None for others"""
     if not torch.cuda.is_available():
         return None
     try:
@@ -1035,23 +1182,23 @@ def get_gpu_generation():
         gpu_name = torch.cuda.get_device_name(0)
         gpu_name_lower = gpu_name.lower()
 
-        # Detect 40-series GPUs (RTX 40xx, RTX 4060, RTX 4070, RTX 4080, RTX 4090, etc.)
+        # Detect 40 series GPUs (RTX 40xx, RTX 4060, RTX 4070, RTX 4080, RTX 4090, etc.)
         if any(keyword in gpu_name_lower for keyword in ["rtx 40", "rtx40", "geforce rtx 40"]):
-            # Further check if it's a 40xx series
+            # Further check if it's 40xx series
             match = re.search(r"rtx\s*40\d+|40\d+", gpu_name_lower)
             if match:
                 return "40"
 
-        # Detect 30-series GPUs (RTX 30xx, RTX 3060, RTX 3070, RTX 3080, RTX 3090, etc.)
+        # Detect 30 series GPUs (RTX 30xx, RTX 3060, RTX 3070, RTX 3080, RTX 3090, etc.)
         if any(keyword in gpu_name_lower for keyword in ["rtx 30", "rtx30", "geforce rtx 30"]):
-            # Further check if it's a 30xx series
+            # Further check if it's 30xx series
             match = re.search(r"rtx\s*30\d+|30\d+", gpu_name_lower)
             if match:
                 return "30"
 
         return None
     except Exception as e:
-        logger.warning(f"Failed to detect GPU generation: {e}")
+        logger.warning(f"Cannot detect GPU series: {e}")
         return None
 
 
@@ -1077,12 +1224,12 @@ def get_quantization_options(model_path):
         if has_subdirs["int8"]:
             choices.append(int8_type)
 
-        # If no subdirectories but have original file, add original type
+        # If no subdirectories but has original file, add original type
         if has_original_file:
             if not choices or "original" not in choices:
                 choices.append(original_type)
 
-        # If no options, use default value
+        # If no options, use default
         if not choices:
             choices = [fallback_type]
 
@@ -1101,12 +1248,15 @@ def get_quantization_options(model_path):
 
 
 def determine_model_cls(model_type, dit_name, high_noise_name):
-    """Determine model_cls based on model type and file name"""
-    # Determine the file name to check
+    """Determine model_cls based on model type and filename"""
+    # Determine filename to check
     if model_type == "wan2.1":
         check_name = dit_name.lower() if dit_name else ""
         is_distill = "4step" in check_name
         return "wan2.1_distill" if is_distill else "wan2.1"
+    elif model_type == "Qwen-Image-Edit-2511":
+        # Qwen-Image-Edit-2511 uses qwen_image model class
+        return "qwen_image"
     else:
         # wan2.2
         check_name = high_noise_name.lower() if high_noise_name else ""
@@ -1122,21 +1272,27 @@ def is_distill_model_from_name(model_name):
 
 
 def get_repo_id_for_model(model_type, is_distill, model_category="dit"):
-    """Get corresponding Hugging Face repository ID based on model type, whether it's distill, and model category"""
+    """Get corresponding Hugging Face repository ID based on model type, whether distill, and model category"""
     if model_category == "dit":
         if model_type == "wan2.1":
-            return "lightx2v/Wan2.1-Distill-Models" if is_distill else "lightx2v/Wan2.1-Official-Models"
+            return "lightx2v/wan2.1-Distill-Models" if is_distill else "lightx2v/wan2.1-Official-Models"
+        elif model_type == "Qwen-Image-Edit-2511":
+            return "lightx2v/Qwen-Image-Edit-2511-Lightning"
         else:  # wan2.2
-            return "lightx2v/Wan2.2-Distill-Models" if is_distill else "lightx2v/Wan2.2-Official-Models"
+            return "lightx2v/wan2.2-Distill-Models" if is_distill else "lightx2v/wan2.2-Official-Models"
     elif model_category == "high_noise" or model_category == "low_noise":
         if is_distill:
-            return "lightx2v/Wan2.2-Distill-Models"
+            return "lightx2v/wan2.2-Distill-Models"
         else:
-            return "lightx2v/Wan2.2-Official-Models"
+            return "lightx2v/wan2.2-Official-Models"
     elif model_category == "t5" or model_category == "clip":
+        return "lightx2v/Encoders"
+    elif model_category == "qwen25vl":
         return "lightx2v/Encoders"
     elif model_category == "vae":
         return "lightx2v/Autoencoders"
+    elif model_category == "qwen_image_vae" or model_category == "qwen_image_scheduler":
+        return "Qwen/Qwen-Image-Edit-2511"
     return None
 
 
@@ -1156,7 +1312,7 @@ for op_name, is_installed in available_quant_ops:
 available_attn_ops = get_available_attn_ops()
 # Priority order
 attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
-# Sort by priority, installed ones first, uninstalled ones last
+# Sort by priority, installed first, uninstalled last
 attn_op_choices = []
 attn_op_dict = dict(available_attn_ops)
 
@@ -1174,9 +1330,9 @@ for op_name in attn_priority:
         display_text = f"{status_text}{op_name}"
         attn_op_choices.append((op_name, display_text))
 
-# Add other operators not in priority list (installed ones first)
+# Add other operators not in priority list (installed first)
 other_ops = [(op_name, is_installed) for op_name, is_installed in available_attn_ops if op_name not in attn_priority]
-for op_name, is_installed in sorted(other_ops, key=lambda x: not x[1]):  # Installed ones first
+for op_name, is_installed in sorted(other_ops, key=lambda x: not x[1]):  # Installed first
     status_text = "✅" if is_installed else "❌"
     display_text = f"{status_text}{op_name}"
     attn_op_choices.append((op_name, display_text))
@@ -1218,6 +1374,11 @@ def run_inference(
     vae_encoder_path_input,
     vae_decoder_path_input,
     image_path=None,
+    # Qwen-Image-Edit-2511 related parameters
+    qwen_image_dit_path_input=None,
+    qwen_image_vae_path_input=None,
+    qwen_image_scheduler_path_input=None,
+    qwen25vl_encoder_path_input=None,
 ):
     cleanup_memory()
 
@@ -1257,7 +1418,13 @@ def run_inference(
 
     task = task_type_input
     model_cls = determine_model_cls(model_type_input, dit_path_input, high_noise_path_input)
-    logger.info(f"Automatically determined model_cls: {model_cls} (model type: {model_type_input})")
+    logger.info(f"Auto-determined model_cls: {model_cls} (model type: {model_type_input})")
+
+    # Qwen-Image-Edit-2511 related configuration
+    qwen_image_dit_path_input = extract_model_name(qwen_image_dit_path_input) if qwen_image_dit_path_input else ""
+    qwen_image_vae_path_input = extract_model_name(qwen_image_vae_path_input) if qwen_image_vae_path_input else ""
+    qwen_image_scheduler_path_input = extract_model_name(qwen_image_scheduler_path_input) if qwen_image_scheduler_path_input else ""
+    qwen25vl_encoder_path_input = extract_model_name(qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else ""
 
     if model_type_input == "wan2.1":
         dit_quant_detected = detect_quant_scheme(dit_path_input)
@@ -1265,14 +1432,19 @@ def run_inference(
         dit_quant_detected = detect_quant_scheme(high_noise_path_input)
     t5_quant_detected = detect_quant_scheme(t5_path_input)
     clip_quant_detected = detect_quant_scheme(clip_path_input)
-    logger.info(f"Automatically detected quantization precision - DIT: {dit_quant_detected}, T5: {t5_quant_detected}, CLIP: {clip_quant_detected}")
+    logger.info(f"Auto-detected quantization precision - DIT: {dit_quant_detected}, T5: {t5_quant_detected}, CLIP: {clip_quant_detected}")
 
     if model_path_input and model_path_input.strip():
         model_path = model_path_input.strip()
 
-    model_config = MODEL_CONFIG["Wan_14b"]
+    if model_type_input == "Qwen-Image-Edit-2511":
+        model_config = MODEL_CONFIG["Qwen_Image_Edit_2511"]
+    else:
+        model_config = MODEL_CONFIG["Wan_14b"]
 
-    save_result_path = generate_unique_filename(output_dir)
+    # Generate output filename based on task type
+    is_image_output = task == "i2i"
+    save_result_path = generate_unique_filename(output_dir, is_image=is_image_output)
 
     is_dit_quant = dit_quant_detected in ["fp8", "int8"]
     is_t5_quant = t5_quant_detected in ["fp8", "int8"]
@@ -1285,7 +1457,7 @@ def run_inference(
     high_noise_original_ckpt = None
     low_noise_original_ckpt = None
 
-    # Handle quant_op: if it's torch, need to convert to torchao based on quantization type
+    # Handle quant_op: if torch, convert based on quantization type to torchao
     def get_quant_scheme(quant_detected, quant_op_val):
         """Generate quant_scheme based on quantization type and operator"""
         if quant_op_val == "torch":
@@ -1312,7 +1484,7 @@ def run_inference(
             high_noise_original_ckpt = os.path.join(model_path, high_noise_path_input)
             low_noise_original_ckpt = os.path.join(model_path, low_noise_path_input)
 
-    # Use T5 path selected from frontend
+    # Use frontend-selected T5 path
     if is_t5_quant:
         t5_quantized_ckpt = os.path.join(model_path, t5_path_input)
         t5_quant_scheme = get_quant_scheme(t5_quant_detected, quant_op)
@@ -1322,7 +1494,7 @@ def run_inference(
         t5_quant_scheme = None
         t5_original_ckpt = os.path.join(model_path, t5_path_input)
 
-    # Use CLIP path selected from frontend
+    # Use frontend-selected CLIP path
     if is_clip_quant:
         clip_quantized_ckpt = os.path.join(model_path, clip_path_input)
         clip_quant_scheme = get_quant_scheme(clip_quant_detected, quant_op)
@@ -1338,21 +1510,20 @@ def run_inference(
         current_dit_path = f"{high_noise_path_input}|{low_noise_path_input}" if high_noise_path_input and low_noise_path_input else None
 
     current_t5_path = f"{t5_path_input}|{t5_tokenizer_path_input}" if t5_path_input and t5_tokenizer_path_input else t5_path_input
-    # CLIP path: only needed when wan2.1 and i2v
+    # CLIP path: only needed for wan2.1 with i2v
     if model_type_input == "wan2.1" and task_type_input == "i2v":
         current_clip_path = f"{clip_path_input}|{clip_tokenizer_path_input}" if clip_path_input and clip_tokenizer_path_input else clip_path_input
     else:
         current_clip_path = None
 
     needs_reinit = lazy_load or unload_modules or global_runner is None or cur_dit_path != current_dit_path or cur_t5_path != current_t5_path or cur_clip_path != current_clip_path
-
     if cfg_scale == 1:
         enable_cfg = False
     else:
         enable_cfg = True
 
     # VAE configuration: determine based on decoder path
-    vae_encoder_path = vae_encoder_path_input if vae_encoder_path_input else "Wan2.1_VAE.safetensors"
+    vae_encoder_path = vae_encoder_path_input if vae_encoder_path_input else "wan2.1_VAE.safetensors"
     vae_decoder_path = vae_decoder_path_input if vae_decoder_path_input else None
 
     vae_decoder_name_lower = vae_decoder_path.lower() if vae_decoder_path else ""
@@ -1366,13 +1537,57 @@ def run_inference(
         tae_path = os.path.join(model_path, vae_decoder_path) if vae_decoder_path else None
         vae_path = os.path.join(model_path, vae_encoder_path) if vae_encoder_path else None
     else:
-        # Other cases: vae_path is decoder path, tae_path is None
+        # Otherwise: vae_path is decoder path, tae_path is None
         vae_path = os.path.join(model_path, vae_decoder_path) if vae_decoder_path else None
         tae_path = None
 
     logger.info(
-        f"VAE configuration - use_tae: {use_tae}, use_lightvae: {use_lightvae}, need_scaled: {need_scaled} (VAE encoder: {vae_encoder_path}, VAE decoder: {vae_decoder_path}, vae_path: {vae_path}, tae_path: {tae_path})"
+        f"VAE config - use_tae: {use_tae}, use_lightvae: {use_lightvae}, need_scaled: {need_scaled} (VAE encoder: {vae_encoder_path}, VAE decoder: {vae_decoder_path}, vae_path: {vae_path}, tae_path: {tae_path})"
     )
+
+    # Qwen-Image-Edit-2511 specific configuration
+    is_qwen_image = model_cls == "qwen_image"
+    qwen_image_config = {
+        "attention_out_dim": 3072,
+        "attention_dim_head": 128,
+        "CONDITION_IMAGE_SIZE": 147456,
+        "USE_IMAGE_ID_IN_PROMPT": True,
+        "transformer_in_channels": 64,
+        "prompt_template_encode": "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        "prompt_template_encode_start_idx": 64,
+        "vae_scale_factor": 8,
+    }
+
+    if is_qwen_image:
+        # Handle qwen_image dit model path
+        qwen_dit_quant_detected = detect_quant_scheme(qwen_image_dit_path_input)
+        is_qwen_dit_quant = qwen_dit_quant_detected in ["fp8", "int8"]
+        if is_qwen_dit_quant:
+            qwen_image_config["dit_quantized"] = True
+            qwen_image_config["dit_quant_scheme"] = get_quant_scheme(qwen_dit_quant_detected, quant_op)
+            qwen_image_config["dit_quantized_ckpt"] = os.path.join(model_path, qwen_image_dit_path_input) if qwen_image_dit_path_input else None
+            qwen_image_config["dit_original_ckpt"] = None
+        else:
+            qwen_image_config["dit_quantized"] = False
+            qwen_image_config["dit_quant_scheme"] = "Default"
+            qwen_image_config["dit_original_ckpt"] = os.path.join(model_path, qwen_image_dit_path_input) if qwen_image_dit_path_input else None
+            qwen_image_config["dit_quantized_ckpt"] = None
+
+        # VAE and Scheduler
+        qwen_image_config["vae_path"] = os.path.join(model_path, qwen_image_vae_path_input) if qwen_image_vae_path_input else None
+        qwen_image_config["scheduler_path"] = os.path.join(model_path, qwen_image_scheduler_path_input) if qwen_image_scheduler_path_input else None
+
+        # Qwen25-VL encoder (INT4 GPTQ)
+        qwen_image_config["qwen25vl_quantized"] = True
+        qwen_image_config["qwen25vl_quant_scheme"] = "int4"
+        qwen_image_config["qwen25vl_quantized_ckpt"] = os.path.join(model_path, qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else None
+        qwen_image_config["qwen25vl_tokenizer_path"] = os.path.join(model_path, qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else None
+        qwen_image_config["qwen25vl_processor_path"] = os.path.join(model_path, qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else None
+
+        # Set zero_cond_t to true (2511 feature)
+        qwen_image_config["zero_cond_t"] = True
+        qwen_image_config["_auto_resize"] = True
+        qwen_image_config["attn_type"] = attention_type
 
     config_graio = {
         "infer_steps": infer_steps,
@@ -1439,6 +1654,10 @@ def run_inference(
         "t5_lazy_load": lazy_load,
     }
 
+    # If it's a qwen_image model, override related configuration
+    if is_qwen_image:
+        config_graio.update(qwen_image_config)
+
     args = argparse.Namespace(
         model_cls=model_cls,
         seed=seed,
@@ -1458,7 +1677,7 @@ def run_inference(
     config.update(config_graio)
 
     logger.info(f"Using model: {model_path}")
-    logger.info(f"Inference configuration:\n{json.dumps(config, indent=4, ensure_ascii=False)}")
+    logger.info(f"Inference config:\n{json.dumps(config, indent=4, ensure_ascii=False)}")
 
     # Initialize or reuse the runner
     runner = global_runner
@@ -1495,7 +1714,7 @@ def handle_lazy_load_change(lazy_load_enabled):
     return gr.update(value=lazy_load_enabled)
 
 
-def auto_configure(resolution, num_frames=81):
+def auto_configure(resolution, num_frames=81, task_type=None):
     """Automatically set inference options based on machine configuration and resolution"""
     default_config = {
         "lazy_load_val": False,
@@ -1519,21 +1738,22 @@ def auto_configure(resolution, num_frames=81):
 
     gpu_memory = round(get_gpu_memory())
     cpu_memory = round(get_cpu_memory())
-
-    attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
-
-    # If sm > (9,0) and sage_attn3 is available, put it after sage_attn2
+    if task_type == "i2i":
+        attn_priority = ["torch_sdpa", "sage_attn2", "flash_attn3", "flash_attn2"]
+    else:
+        attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
+    # If sm > (9,0) and sage_attn3 is available, place it after sage_attn2
     if is_sm_greater_than_90():
         # Check if sage_attn3 is available
         sage3_available = dict(available_attn_ops).get("sage_attn3", False)
         if sage3_available:
-            # Find sage_attn2 position, insert sage_attn3 after it
+            # Find sage_attn2 position and insert sage_attn3 after it
             if "sage_attn2" in attn_priority:
                 sage2_index = attn_priority.index("sage_attn2")
                 if "sage_attn3" not in attn_priority:
                     attn_priority.insert(sage2_index + 1, "sage_attn3")
                 else:
-                    # If already in list, remove first then insert to correct position
+                    # If already in list, remove and insert at correct position
                     attn_priority.remove("sage_attn3")
                     attn_priority.insert(sage2_index + 1, "sage_attn3")
             else:
@@ -1541,13 +1761,13 @@ def auto_configure(resolution, num_frames=81):
                 if "sage_attn3" not in attn_priority:
                     attn_priority.insert(0, "sage_attn3")
 
-    # Adjust quant_op priority based on GPU generation
+    # Adjust quant_op priority based on GPU series
     gpu_gen = get_gpu_generation()
     if gpu_gen == "40":
-        # 40-series GPUs: q8f first
+        # 40 series GPU: q8f first
         quant_op_priority = ["q8f", "triton", "vllm", "sgl", "torch"]
     elif gpu_gen == "30":
-        # 30-series GPUs: vllm first
+        # 30 series GPU: vllm first
         quant_op_priority = ["vllm", "triton", "q8f", "sgl", "torch"]
     else:
         # Other cases: keep original order
@@ -1705,7 +1925,7 @@ def auto_configure(resolution, num_frames=81):
     # If memory is less than 8GB, raise exception
     if cpu_memory < 8:
         raise Exception(
-            f"Insufficient system memory: current available memory is {cpu_memory:.1f}GB, at least 8GB memory is required to run normally.\n"
+            f"Insufficient system memory: Current available memory is {cpu_memory:.1f}GB, at least 8GB memory is required.\n"
             f"Suggested solutions:\n"
             f"1. Check your machine configuration to ensure sufficient memory\n"
             f"2. Use quantized models (fp8/int8) to reduce memory usage\n"
@@ -1787,7 +2007,7 @@ css = """
             box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6) !important;
         }
 
-        /* Accordion title style */
+        /* Accordion header style */
         .model-config .gr-accordion-header,
         .input-params .gr-accordion-header,
         .output-video .gr-accordion-header {
@@ -1810,6 +2030,18 @@ css = """
         /* Diffusion model container */
         .diffusion-model-group {
             margin-bottom: 20px !important;
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Remove default border of Gradio components */
+        .diffusion-model-group > div,
+        .diffusion-model-group .gr-group,
+        .diffusion-model-group .gr-box {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
         }
 
         /* Encoder group container (text encoder, image encoder) */
@@ -1842,7 +2074,7 @@ css = """
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
         }
 
-        /* Horizontally arranged Radio buttons */
+        /* Horizontal radio buttons */
         .horizontal-radio .form-radio {
             display: flex !important;
             flex-direction: row !important;
@@ -1851,6 +2083,30 @@ css = """
         .horizontal-radio .form-radio > label {
             margin-right: 20px !important;
         }
+
+        /* wan2.2 row style - remove top border and divider */
+        .wan22-row {
+            border-top: none !important;
+            border-bottom: none !important;
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+        }
+        .wan22-row > div {
+            border-top: none !important;
+            border-bottom: none !important;
+        }
+        .wan22-row .gr-column {
+            border-top: none !important;
+            border-bottom: none !important;
+            border-left: none !important;
+            border-right: none !important;
+        }
+        .wan22-row .gr-column:first-child {
+            border-right: none !important;
+        }
+        .wan22-row .gr-column:last-child {
+            border-left: none !important;
+        }
     """
 
 
@@ -1858,49 +2114,49 @@ def main():
     # Load Hugging Face model list cache at startup
     logger.info("Loading Hugging Face model list cache...")
     load_hf_models_cache()
-    logger.info("Model list cache loading completed")
+    logger.info("Model list cache loaded")
 
     with gr.Blocks(title="Lightx2v (Lightweight Video Inference and Generation Engine)") as demo:
-        gr.Markdown(f"# 🎬 LightX2V Video Generator")
+        gr.Markdown(f"# 🎬 LightX2V Image/Video Generator")
         gr.HTML(f"<style>{css}</style>")
-        # Main layout: left and right columns
+        # Main layout: left-right columns
         with gr.Row():
             # Left side: configuration and input area
             with gr.Column(scale=5):
                 # Model configuration area
                 with gr.Accordion("🗂️ Model Configuration", open=True, elem_classes=["model-config"]):
-                    gr.Markdown("💡 **Tip**: Please ensure that each model option below has at least one downloaded ✅ model available, otherwise video generation may not work properly.")
-                    # FP8 support hint
+                    gr.Markdown("💡 **Tip**: Please ensure that at least one downloaded ✅ model is available for each model option below, otherwise video generation may not work properly.")
+                    # FP8 support notice
                     if not is_fp8_supported_gpu():
-                        gr.Markdown("⚠️ **Your device does not support fp8 inference**, fp8 model options have been automatically hidden.")
+                        gr.Markdown("⚠️ **Your device does not support fp8 inference**, models containing fp8 have been automatically hidden.")
 
-                    # Hidden status component
+                    # Hidden state component
                     model_path_input = gr.Textbox(value=model_path, visible=False)
 
                     # Model type + Task type + Download source
                     with gr.Row():
                         model_type_input = gr.Radio(
                             label="Model Type",
-                            choices=["wan2.1", "wan2.2"],
+                            choices=["wan2.1", "wan2.2", "Qwen-Image-Edit-2511"],
                             value="wan2.1",
-                            info="wan2.2 requires specifying high noise model and low noise model separately",
+                            info="wan2.2 requires separate high-noise and low-noise models; Qwen-Image-Edit-2511 is for image editing (i2i)",
                         )
                         task_type_input = gr.Radio(
                             label="Task Type",
                             choices=["i2v", "t2v"],
                             value="i2v",
-                            info="i2v: image-to-video, t2v: text-to-video",
+                            info="i2v: Image-to-Video, t2v: Text-to-Video, i2i: Image Editing",
                         )
                         download_source_input = gr.Radio(
                             label="📥 Download Source",
                             choices=["huggingface", "modelscope"] if (HF_AVAILABLE and MS_AVAILABLE) else (["huggingface"] if HF_AVAILABLE else ["modelscope"] if MS_AVAILABLE else []),
-                            value="huggingface" if HF_AVAILABLE else ("modelscope" if MS_AVAILABLE else None),
+                            value="modelscope" if MS_AVAILABLE else ("huggingface" if HF_AVAILABLE else None),
                             info="Select model download source",
                             visible=HF_AVAILABLE or MS_AVAILABLE,
                             elem_classes=["horizontal-radio"],
                         )
 
-                    # wan2.1: Diffusion model (beautified layout)
+                    # wan2.1: Diffusion model (styled layout)
                     with gr.Column(elem_classes=["diffusion-model-group"]) as wan21_row:
                         with gr.Row():
                             with gr.Column(scale=5):
@@ -1916,12 +2172,12 @@ def main():
                                 dit_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
                         dit_download_status = gr.Markdown("", visible=False)
 
-                    # wan2.2 specific: high noise model + low noise model (hidden by default)
-                    with gr.Row(visible=False) as wan22_row:
+                    # wan2.2 specific: high-noise model + low-noise model (hidden by default)
+                    with gr.Row(visible=False, elem_classes=["wan22-row"]) as wan22_row:
                         with gr.Column(scale=1):
                             high_noise_choices_init = get_high_noise_choices(model_path, "wan2.2", "i2v")
                             high_noise_path_input = gr.Dropdown(
-                                label="🔊 High Noise Model",
+                                label="🔊 High-Noise Model",
                                 choices=high_noise_choices_init,
                                 value=high_noise_choices_init[0] if high_noise_choices_init else "",
                                 allow_custom_value=True,
@@ -1931,7 +2187,7 @@ def main():
                         with gr.Column(scale=1):
                             low_noise_choices_init = get_low_noise_choices(model_path, "wan2.2", "i2v")
                             low_noise_path_input = gr.Dropdown(
-                                label="🔇 Low Noise Model",
+                                label="🔇 Low-Noise Model",
                                 choices=low_noise_choices_init,
                                 value=low_noise_choices_init[0] if low_noise_choices_init else "",
                                 allow_custom_value=True,
@@ -1939,8 +2195,60 @@ def main():
                             low_noise_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
                             low_noise_download_status = gr.Markdown("", visible=False)
 
-                    # Text encoder (model + Tokenizer)
-                    with gr.Row():
+                    # Qwen-Image-Edit-2511 specific (hidden by default)
+                    with gr.Column(visible=False, elem_classes=["diffusion-model-group"]) as qwen_image_row:
+                        # Diffusion model
+                        with gr.Row():
+                            with gr.Column(scale=5):
+                                qwen_image_dit_choices_init = get_qwen_image_dit_choices(model_path)
+                                qwen_image_dit_path_input = gr.Dropdown(
+                                    label="🎨 Diffusion Model (Qwen Image Edit)",
+                                    choices=qwen_image_dit_choices_init,
+                                    value=qwen_image_dit_choices_init[0] if qwen_image_dit_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                            with gr.Column(scale=1, min_width=150):
+                                qwen_image_dit_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
+                        qwen_image_dit_download_status = gr.Markdown("", visible=False)
+
+                        # VAE and Scheduler
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                qwen_image_vae_choices_init = get_qwen_image_vae_choices(model_path)
+                                qwen_image_vae_path_input = gr.Dropdown(
+                                    label="🎞️ VAE (Image Encoder/Decoder)",
+                                    choices=qwen_image_vae_choices_init,
+                                    value=qwen_image_vae_choices_init[0] if qwen_image_vae_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                                qwen_image_vae_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
+                                qwen_image_vae_download_status = gr.Markdown("", visible=False)
+                            with gr.Column(scale=1):
+                                qwen_image_scheduler_choices_init = get_qwen_image_scheduler_choices(model_path)
+                                qwen_image_scheduler_path_input = gr.Dropdown(
+                                    label="⏱️ Scheduler",
+                                    choices=qwen_image_scheduler_choices_init,
+                                    value=qwen_image_scheduler_choices_init[0] if qwen_image_scheduler_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                                qwen_image_scheduler_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
+                                qwen_image_scheduler_download_status = gr.Markdown("", visible=False)
+
+                        # Qwen25-VL encoder
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                qwen25vl_encoder_choices_init = get_qwen25vl_encoder_choices(model_path)
+                                qwen25vl_encoder_path_input = gr.Dropdown(
+                                    label="📝 Qwen25-VL Encoder (INT4 GPTQ)",
+                                    choices=qwen25vl_encoder_choices_init,
+                                    value=qwen25vl_encoder_choices_init[0] if qwen25vl_encoder_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                                qwen25vl_encoder_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
+                                qwen25vl_encoder_download_status = gr.Markdown("", visible=False)
+
+                    # Text encoder (Model + Tokenizer)
+                    with gr.Row() as t5_row:
                         with gr.Column(scale=1):
                             t5_model_choices_init = get_t5_model_choices(model_path)
                             t5_path_input = gr.Dropdown(
@@ -1961,7 +2269,7 @@ def main():
                             t5_tokenizer_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
                             t5_tokenizer_download_status = gr.Markdown("", visible=False)
 
-                    # Image encoder (model + Tokenizer, conditional display)
+                    # Image encoder (Model + Tokenizer, conditionally shown)
                     with gr.Row(visible=True) as clip_row:
                         with gr.Column(scale=1):
                             clip_model_choices_init = get_clip_model_choices(model_path)
@@ -1983,7 +2291,7 @@ def main():
                             clip_tokenizer_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
                             clip_tokenizer_download_status = gr.Markdown("", visible=False)
 
-                    # VAE (encoder + decoder)
+                    # VAE (Encoder + Decoder)
                     with gr.Row() as vae_row:
                         with gr.Column(scale=1) as vae_encoder_col:
                             vae_encoder_choices_init = get_vae_encoder_choices(model_path)
@@ -2007,23 +2315,23 @@ def main():
                             vae_decoder_download_btn = gr.Button("📥 Download", visible=False, size="sm", variant="secondary")
                             vae_decoder_download_status = gr.Markdown("", visible=False)
 
-                    # Attention operator and quantized matrix multiplication operator
+                    # Attention operators and quantized matrix multiplication operators
                     with gr.Row():
                         attention_type = gr.Dropdown(
                             label="⚡ Attention Operator",
                             choices=[op[1] for op in attn_op_choices],
                             value=attn_op_choices[0][1] if attn_op_choices else "",
-                            info="Use appropriate attention operator to accelerate inference",
+                            info="Use appropriate attention operators to accelerate inference",
                         )
                         quant_op = gr.Dropdown(
-                            label="⚡ Matrix Multiplication Operator",
+                            label="⚡ MatMul Operator",
                             choices=[op[1] for op in quant_op_choices],
                             value=quant_op_choices[0][1],
-                            info="Select low-precision matrix multiplication operator to accelerate inference",
+                            info="Select low-precision matrix multiplication operators to accelerate inference",
                             interactive=True,
                         )
 
-                    # Determine if model is distill version
+                    # Determine if model is a distill version
                     def is_distill_model(model_type, dit_path, high_noise_path):
                         """Determine if it's a distill version based on model type and path"""
                         if model_type == "wan2.1":
@@ -2034,16 +2342,20 @@ def main():
 
                     # Task type change event
                     def on_task_type_change(model_type, task_type, model_path_val):
-                        # Determine if CLIP should be shown (not shown when wan2.2 or t2v)
+                        # Determine whether to show CLIP (hidden for wan2.2, t2v, or i2i)
                         show_clip = model_type == "wan2.1" and task_type == "i2v"
-                        # Determine if VAE encoder should be shown (not shown when t2v)
-                        show_vae_encoder = task_type == "i2v"
-                        # VAE decoder always shown
-                        show_vae_decoder = True
+                        # Determine whether to show VAE encoder (hidden for t2v, qwen-image-edit has its own VAE)
+                        show_vae_encoder = task_type == "i2v" and model_type != "Qwen-Image-Edit-2511"
+                        # VAE decoder always shown (qwen-image-edit has its own VAE)
+                        show_vae_decoder = model_type != "Qwen-Image-Edit-2511"
+                        # Show image input (shown for i2v and i2i)
+                        show_image_input = task_type in ["i2v", "i2i"]
+                        # Output label
+                        output_label = "Output Image Path" if task_type == "i2i" else "Output Video Path"
 
                         # Update model options based on task type
                         if model_type == "wan2.1":
-                            dit_choices = get_dit_choices(model_path_val, "wan2.1", task_type)
+                            dit_choices = get_dit_choices(model_path_val, "wan2.1", task_type if task_type != "i2i" else "i2v")
                             t5_choices = get_t5_model_choices(model_path_val)
                             clip_choices = get_clip_model_choices(model_path_val) if show_clip else []
                             vae_encoder_choices = get_vae_encoder_choices(model_path_val) if show_vae_encoder else []
@@ -2060,10 +2372,33 @@ def main():
                                 gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),  # clip_path_input
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
+                                gr.update(visible=show_image_input),  # image_input_row
+                                gr.update(label=output_label),  # save_result_path
+                            )
+                        elif model_type == "Qwen-Image-Edit-2511":
+                            # qwen-image-edit only supports i2i
+                            qwen_image_dit_choices = get_qwen_image_dit_choices(model_path_val)
+                            qwen_image_vae_choices = get_qwen_image_vae_choices(model_path_val)
+                            qwen_image_scheduler_choices = get_qwen_image_scheduler_choices(model_path_val)
+                            qwen25vl_encoder_choices = get_qwen25vl_encoder_choices(model_path_val)
+
+                            return (
+                                gr.update(visible=False),  # clip_row
+                                gr.update(visible=False),  # vae_encoder_col
+                                gr.update(visible=False),  # vae_decoder_col
+                                gr.update(),  # dit_path_input
+                                gr.update(),  # high_noise_path_input
+                                gr.update(),  # low_noise_path_input
+                                gr.update(),  # t5_path_input
+                                gr.update(),  # clip_path_input
+                                gr.update(),  # vae_encoder_path_input
+                                gr.update(),  # vae_decoder_path_input
+                                gr.update(visible=True),  # image_input_row (i2i needs image input)
+                                gr.update(label="Output Image Path"),  # save_result_path
                             )
                         else:  # wan2.2
-                            high_noise_choices = get_high_noise_choices(model_path_val, "wan2.2", task_type)
-                            low_noise_choices = get_low_noise_choices(model_path_val, "wan2.2", task_type)
+                            high_noise_choices = get_high_noise_choices(model_path_val, "wan2.2", task_type if task_type != "i2i" else "i2v")
+                            low_noise_choices = get_low_noise_choices(model_path_val, "wan2.2", task_type if task_type != "i2i" else "i2v")
                             t5_choices = get_t5_model_choices(model_path_val)
                             vae_encoder_choices = get_vae_encoder_choices(model_path_val) if show_vae_encoder else []
                             vae_decoder_choices = get_vae_decoder_choices(model_path_val)
@@ -2076,21 +2411,56 @@ def main():
                                 gr.update(choices=high_noise_choices, value=high_noise_choices[0] if high_noise_choices else ""),  # high_noise_path_input
                                 gr.update(choices=low_noise_choices, value=low_noise_choices[0] if low_noise_choices else ""),  # low_noise_path_input
                                 gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),  # t5_path_input
+                                gr.update(),  # clip_path_input (not used for wan2.2)
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
+                                gr.update(visible=show_image_input),  # image_input_row
+                                gr.update(label=output_label),  # save_result_path
                             )
 
                     # Model type change event
                     def on_model_type_change(model_type, model_path_val, task_type):
-                        # Determine if CLIP should be shown (not shown when wan2.2 or t2v)
+                        # Determine whether to show CLIP (hidden for wan2.2, t2v, or qwen-image-edit)
                         show_clip = model_type == "wan2.1" and task_type == "i2v"
-                        # Determine if VAE encoder should be shown (not shown when t2v)
-                        show_vae_encoder = task_type == "i2v"
-                        # VAE decoder always shown
-                        show_vae_decoder = True
+                        # Determine whether to show VAE encoder (hidden for t2v, qwen-image-edit has its own VAE)
+                        show_vae_encoder = task_type == "i2v" and model_type != "Qwen-Image-Edit-2511"
+                        # VAE decoder always shown (qwen-image-edit has its own VAE)
+                        show_vae_decoder = model_type != "Qwen-Image-Edit-2511"
+                        # Show text encoder row (qwen-image-edit has its own encoder)
+                        show_t5_row = model_type != "Qwen-Image-Edit-2511"
 
-                        if model_type == "wan2.2":
-                            # Update wan2.2 high noise and low noise model options
+                        if model_type == "Qwen-Image-Edit-2511":
+                            # Update qwen-image-edit model options
+                            qwen_image_dit_choices = get_qwen_image_dit_choices(model_path_val)
+                            qwen_image_vae_choices = get_qwen_image_vae_choices(model_path_val)
+                            qwen_image_scheduler_choices = get_qwen_image_scheduler_choices(model_path_val)
+                            qwen25vl_encoder_choices = get_qwen25vl_encoder_choices(model_path_val)
+
+                            return (
+                                gr.update(visible=False),  # wan21_row
+                                gr.update(visible=False),  # wan22_row
+                                gr.update(visible=True),  # qwen_image_row
+                                gr.update(visible=False),  # dit_path_input (not used for qwen-image-edit)
+                                gr.update(),  # high_noise_path_input
+                                gr.update(),  # low_noise_path_input
+                                gr.update(visible=False),  # clip_row
+                                gr.update(visible=False),  # vae_encoder_col
+                                gr.update(visible=False),  # vae_decoder_col
+                                gr.update(visible=False),  # t5_row
+                                gr.update(),  # t5_path_input
+                                gr.update(),  # clip_path_input
+                                gr.update(),  # vae_encoder_path_input
+                                gr.update(),  # vae_decoder_path_input
+                                gr.update(visible=False),  # dit_download_btn
+                                gr.update(visible=False),  # dit_download_status
+                                gr.update(choices=qwen_image_dit_choices, value=qwen_image_dit_choices[0] if qwen_image_dit_choices else ""),  # qwen_image_dit_path_input
+                                gr.update(choices=qwen_image_vae_choices, value=qwen_image_vae_choices[0] if qwen_image_vae_choices else ""),  # qwen_image_vae_path_input
+                                gr.update(choices=qwen_image_scheduler_choices, value=qwen_image_scheduler_choices[0] if qwen_image_scheduler_choices else ""),  # qwen_image_scheduler_path_input
+                                gr.update(choices=qwen25vl_encoder_choices, value=qwen25vl_encoder_choices[0] if qwen25vl_encoder_choices else ""),  # qwen25vl_encoder_path_input
+                                gr.update(choices=["i2i"], value="i2i"),  # task_type_input only shows i2i
+                            )
+                        elif model_type == "wan2.2":
+                            # Update wan2.2 high-noise and low-noise model options
                             high_noise_choices = get_high_noise_choices(model_path_val, "wan2.2", task_type)
                             low_noise_choices = get_low_noise_choices(model_path_val, "wan2.2", task_type)
                             t5_choices = get_t5_model_choices(model_path_val)
@@ -2101,18 +2471,25 @@ def main():
                             return (
                                 gr.update(visible=False),  # wan21_row
                                 gr.update(visible=True),  # wan22_row
+                                gr.update(visible=False),  # qwen_image_row
                                 gr.update(visible=False),  # dit_path_input (not used for wan2.2)
                                 gr.update(choices=high_noise_choices, value=high_noise_choices[0] if high_noise_choices else ""),  # high_noise_path_input
                                 gr.update(choices=low_noise_choices, value=low_noise_choices[0] if low_noise_choices else ""),  # low_noise_path_input
                                 gr.update(visible=show_clip),  # clip_row
                                 gr.update(visible=show_vae_encoder),  # vae_encoder_col
                                 gr.update(visible=show_vae_decoder),  # vae_decoder_col
+                                gr.update(visible=True),  # t5_row
                                 gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),  # t5_path_input
                                 gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),  # clip_path_input
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
                                 gr.update(visible=False),  # dit_download_btn
                                 gr.update(visible=False),  # dit_download_status
+                                gr.update(),  # qwen_image_dit_path_input
+                                gr.update(),  # qwen_image_vae_path_input
+                                gr.update(),  # qwen_image_scheduler_path_input
+                                gr.update(),  # qwen25vl_encoder_path_input
+                                gr.update(choices=["i2v", "t2v"], value=task_type if task_type in ["i2v", "t2v"] else "i2v"),  # task_type_input only shows i2v and t2v
                             )
                         else:
                             # Update wan2.1 Diffusion model options
@@ -2125,18 +2502,25 @@ def main():
                             return (
                                 gr.update(visible=True),  # wan21_row
                                 gr.update(visible=False),  # wan22_row
+                                gr.update(visible=False),  # qwen_image_row
                                 gr.update(choices=dit_choices, value=dit_choices[0] if dit_choices else "", visible=True),  # dit_path_input
                                 gr.update(),  # high_noise_path_input (used for wan2.2)
                                 gr.update(),  # low_noise_path_input (used for wan2.2)
                                 gr.update(visible=show_clip),  # clip_row
                                 gr.update(visible=show_vae_encoder),  # vae_encoder_col
                                 gr.update(visible=show_vae_decoder),  # vae_decoder_col
+                                gr.update(visible=True),  # t5_row
                                 gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),  # t5_path_input
                                 gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),  # clip_path_input
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
                                 gr.update(),  # dit_download_btn (visibility controlled by wan21_row)
                                 gr.update(),  # dit_download_status (visibility controlled by wan21_row)
+                                gr.update(),  # qwen_image_dit_path_input
+                                gr.update(),  # qwen_image_vae_path_input
+                                gr.update(),  # qwen_image_scheduler_path_input
+                                gr.update(),  # qwen25vl_encoder_path_input
+                                gr.update(choices=["i2v", "t2v"], value=task_type if task_type in ["i2v", "t2v"] else "i2v"),  # task_type_input only shows i2v and t2v
                             )
 
                     model_type_input.change(
@@ -2145,39 +2529,29 @@ def main():
                         outputs=[
                             wan21_row,
                             wan22_row,
+                            qwen_image_row,
                             dit_path_input,
                             high_noise_path_input,
                             low_noise_path_input,
                             clip_row,
                             vae_encoder_col,
                             vae_decoder_col,
+                            t5_row,
                             t5_path_input,
                             clip_path_input,
                             vae_encoder_path_input,
                             vae_decoder_path_input,
                             dit_download_btn,
                             dit_download_status,
+                            qwen_image_dit_path_input,
+                            qwen_image_vae_path_input,
+                            qwen_image_scheduler_path_input,
+                            qwen25vl_encoder_path_input,
+                            task_type_input,
                         ],
                     )
 
-                    task_type_input.change(
-                        fn=on_task_type_change,
-                        inputs=[model_type_input, task_type_input, model_path_input],
-                        outputs=[
-                            clip_row,
-                            vae_encoder_col,
-                            vae_decoder_col,
-                            dit_path_input,
-                            high_noise_path_input,
-                            low_noise_path_input,
-                            t5_path_input,
-                            clip_path_input,
-                            vae_encoder_path_input,
-                            vae_decoder_path_input,
-                        ],
-                    )
-
-                    # Function to update model download status
+                    # Functions to update model download status
                     def update_dit_status(model_path_val, model_name, model_type_val):
                         if not model_name:
                             return gr.update(visible=False)
@@ -2289,7 +2663,36 @@ def main():
                         else:
                             return gr.update(visible=True)
 
-                    # Download function
+                    # qwen-image-edit related status update functions
+                    def update_qwen_image_dit_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    def update_qwen_image_vae_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    def update_qwen_image_scheduler_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    def update_qwen25vl_encoder_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    # Download functions
                     def download_dit_model(model_path_val, model_name, model_type_val, task_type_val, download_source_val, progress=gr.Progress()):
                         if not model_name:
                             return gr.update(value="Please select a model first"), gr.update(visible=False), gr.update()
@@ -2301,7 +2704,7 @@ def main():
                         # Update status and options
                         btn_visible = update_dit_status(model_path_val, format_model_choice(actual_name, model_path_val), model_type_val)
                         choices = get_dit_choices(model_path_val, model_type_val, task_type_val)
-                        # Find updated option value
+                        # Find the updated option value
                         updated_value = format_model_choice(actual_name, model_path_val)
                         return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
 
@@ -2395,6 +2798,51 @@ def main():
                         updated_value = format_model_choice(actual_name, model_path_val)
                         return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
 
+                    # qwen-image-edit download functions
+                    def download_qwen_image_dit(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="Please select a model first"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "lightx2v/Qwen-Image-Edit-2511-Lightning"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen_image_dit_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen_image_dit_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    def download_qwen_image_vae(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="Please select a model first"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "Qwen/Qwen-Image-Edit-2511"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen_image_vae_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen_image_vae_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    def download_qwen_image_scheduler(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="Please select a model first"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "Qwen/Qwen-Image-Edit-2511"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen_image_scheduler_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen_image_scheduler_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    def download_qwen25vl_encoder(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="Please select a model first"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "lightx2v/Encoders"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen25vl_encoder_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen25vl_encoder_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
                     # Bind events: update status when model selection changes
                     dit_path_input.change(
                         fn=lambda mp, mn, mt: update_dit_status(mp, mn, mt),
@@ -2415,7 +2863,7 @@ def main():
                     )
 
                     def update_t5_model_and_tokenizer_status(model_path_val, model_name):
-                        """Update both T5 model and Tokenizer status"""
+                        """Simultaneously update T5 model and Tokenizer status"""
                         model_btn = update_t5_model_status(model_path_val, model_name)
                         tokenizer_dropdown, tokenizer_btn = update_t5_tokenizer_status(model_path_val)
                         return model_btn, tokenizer_dropdown, tokenizer_btn
@@ -2427,7 +2875,7 @@ def main():
                     )
 
                     def update_clip_model_and_tokenizer_status(model_path_val, model_name):
-                        """Update both CLIP model and Tokenizer status"""
+                        """Simultaneously update CLIP model and Tokenizer status"""
                         model_btn = update_clip_model_status(model_path_val, model_name)
                         tokenizer_dropdown, tokenizer_btn = update_clip_tokenizer_status(model_path_val)
                         return model_btn, tokenizer_dropdown, tokenizer_btn
@@ -2505,8 +2953,71 @@ def main():
                         outputs=[vae_decoder_download_status, vae_decoder_download_btn, vae_decoder_path_input],
                     )
 
+                    # qwen-image-edit related event bindings
+                    qwen_image_dit_path_input.change(
+                        fn=update_qwen_image_dit_status,
+                        inputs=[model_path_input, qwen_image_dit_path_input],
+                        outputs=[qwen_image_dit_download_btn],
+                    )
+
+                    qwen_image_vae_path_input.change(
+                        fn=update_qwen_image_vae_status,
+                        inputs=[model_path_input, qwen_image_vae_path_input],
+                        outputs=[qwen_image_vae_download_btn],
+                    )
+
+                    qwen_image_scheduler_path_input.change(
+                        fn=update_qwen_image_scheduler_status,
+                        inputs=[model_path_input, qwen_image_scheduler_path_input],
+                        outputs=[qwen_image_scheduler_download_btn],
+                    )
+
+                    qwen25vl_encoder_path_input.change(
+                        fn=update_qwen25vl_encoder_status,
+                        inputs=[model_path_input, qwen25vl_encoder_path_input],
+                        outputs=[qwen25vl_encoder_download_btn],
+                    )
+
+                    qwen_image_dit_download_btn.click(
+                        fn=download_qwen_image_dit,
+                        inputs=[model_path_input, qwen_image_dit_path_input, download_source_input],
+                        outputs=[qwen_image_dit_download_status, qwen_image_dit_download_btn, qwen_image_dit_path_input],
+                    )
+
+                    qwen_image_vae_download_btn.click(
+                        fn=download_qwen_image_vae,
+                        inputs=[model_path_input, qwen_image_vae_path_input, download_source_input],
+                        outputs=[qwen_image_vae_download_status, qwen_image_vae_download_btn, qwen_image_vae_path_input],
+                    )
+
+                    qwen_image_scheduler_download_btn.click(
+                        fn=download_qwen_image_scheduler,
+                        inputs=[model_path_input, qwen_image_scheduler_path_input, download_source_input],
+                        outputs=[qwen_image_scheduler_download_status, qwen_image_scheduler_download_btn, qwen_image_scheduler_path_input],
+                    )
+
+                    qwen25vl_encoder_download_btn.click(
+                        fn=download_qwen25vl_encoder,
+                        inputs=[model_path_input, qwen25vl_encoder_path_input, download_source_input],
+                        outputs=[qwen25vl_encoder_download_status, qwen25vl_encoder_download_btn, qwen25vl_encoder_path_input],
+                    )
+
                     # Initialize all model statuses
-                    def init_all_statuses(model_path_val, dit_name, high_noise_name, low_noise_name, t5_name, clip_name, vae_encoder_name, vae_decoder_name, model_type_val):
+                    def init_all_statuses(
+                        model_path_val,
+                        dit_name,
+                        high_noise_name,
+                        low_noise_name,
+                        t5_name,
+                        clip_name,
+                        vae_encoder_name,
+                        vae_decoder_name,
+                        model_type_val,
+                        qwen_image_dit_name,
+                        qwen_image_vae_name,
+                        qwen_image_scheduler_name,
+                        qwen25vl_encoder_name,
+                    ):
                         dit_btn_visible = update_dit_status(model_path_val, dit_name, model_type_val)
                         high_noise_btn_visible = update_high_noise_status(model_path_val, high_noise_name)
                         low_noise_btn_visible = update_low_noise_status(model_path_val, low_noise_name)
@@ -2516,6 +3027,11 @@ def main():
                         clip_tokenizer_dropdown_val, clip_tokenizer_btn_visible = update_clip_tokenizer_status(model_path_val)
                         vae_encoder_btn_visible = update_vae_encoder_status(model_path_val, vae_encoder_name)
                         vae_decoder_btn_visible = update_vae_decoder_status(model_path_val, vae_decoder_name)
+                        # qwen-image-edit related status
+                        qwen_image_dit_btn_visible = update_qwen_image_dit_status(model_path_val, qwen_image_dit_name)
+                        qwen_image_vae_btn_visible = update_qwen_image_vae_status(model_path_val, qwen_image_vae_name)
+                        qwen_image_scheduler_btn_visible = update_qwen_image_scheduler_status(model_path_val, qwen_image_scheduler_name)
+                        qwen25vl_encoder_btn_visible = update_qwen25vl_encoder_status(model_path_val, qwen25vl_encoder_name)
                         return (
                             dit_btn_visible,
                             high_noise_btn_visible,
@@ -2528,6 +3044,10 @@ def main():
                             clip_tokenizer_btn_visible,
                             vae_encoder_btn_visible,
                             vae_decoder_btn_visible,
+                            qwen_image_dit_btn_visible,
+                            qwen_image_vae_btn_visible,
+                            qwen_image_scheduler_btn_visible,
+                            qwen25vl_encoder_btn_visible,
                         )
 
                     demo.load(
@@ -2542,6 +3062,10 @@ def main():
                             vae_encoder_path_input,
                             vae_decoder_path_input,
                             model_type_input,
+                            qwen_image_dit_path_input,
+                            qwen_image_vae_path_input,
+                            qwen_image_scheduler_path_input,
+                            qwen25vl_encoder_path_input,
                         ],
                         outputs=[
                             dit_download_btn,
@@ -2555,26 +3079,60 @@ def main():
                             clip_tokenizer_download_btn,
                             vae_encoder_download_btn,
                             vae_decoder_download_btn,
+                            qwen_image_dit_download_btn,
+                            qwen_image_vae_download_btn,
+                            qwen_image_scheduler_download_btn,
+                            qwen25vl_encoder_download_btn,
                         ],
                     )
 
                 # Input parameters area
                 with gr.Accordion("📥 Input Parameters", open=True, elem_classes=["input-params"]):
-                    # Image input (shown when i2v)
-                    with gr.Row(visible=True) as image_input_row:
-                        image_path = gr.Image(
-                            label="Input Image",
-                            type="filepath",
-                            height=300,
+                    # Image input (shown for i2v)
+                    with gr.Column(visible=True) as image_input_row:
+                        image_files = gr.File(
+                            label="Input Images (drag and drop multiple images)",
+                            file_count="multiple",
+                            file_types=["image"],
+                            height=150,
                             interactive=True,
                         )
+                        # Image preview Gallery
+                        image_gallery = gr.Gallery(
+                            label="Uploaded Images Preview",
+                            columns=4,
+                            rows=2,
+                            height=200,
+                            object_fit="contain",
+                            show_label=True,
+                        )
+                        # Convert multiple file paths to comma-separated string
+                        image_path = gr.Textbox(
+                            label="Image Path",
+                            visible=False,
+                        )
 
-                    # Task type change event
-                    def on_task_type_change(task_type):
-                        return gr.update(visible=(task_type == "i2v"))
+                        def update_image_path_and_gallery(files):
+                            if files is None or len(files) == 0:
+                                return "", []
+                            # Extract file paths
+                            paths = [f.name if hasattr(f, "name") else f for f in files]
+                            # Return comma-separated paths and image list for Gallery display
+                            return ",".join(paths), paths
+
+                        image_files.change(
+                            fn=update_image_path_and_gallery,
+                            inputs=[image_files],
+                            outputs=[image_path, image_gallery],
+                        )
+
+                    # Task type change event (image input display logic)
+                    def on_task_type_change_image(task_type):
+                        # Show image input for i2v and i2i
+                        return gr.update(visible=(task_type in ["i2v", "i2i"]))
 
                     task_type_input.change(
-                        fn=on_task_type_change,
+                        fn=on_task_type_change_image,
                         inputs=[task_type_input],
                         outputs=[image_input_row],
                     )
@@ -2584,23 +3142,23 @@ def main():
                             prompt = gr.Textbox(
                                 label="Prompt",
                                 lines=3,
-                                placeholder="Describe video content...",
+                                placeholder="Describe video/image content...",
                                 max_lines=5,
                             )
                         with gr.Column():
                             negative_prompt = gr.Textbox(
                                 label="Negative Prompt",
                                 lines=3,
-                                placeholder="Content you don't want in the video...",
+                                placeholder="Content you don't want in the video/image...",
                                 max_lines=5,
-                                value="camera shake, overly saturated colors, overexposed, static, blurry details, subtitles, style, artwork, painting, still image, overall gray, worst quality, low quality, JPEG compression artifacts, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn face, deformed, disfigured, malformed limbs, fused fingers, static image, cluttered background, three legs, many people in background, walking backwards",
+                                value="camera shake, saturated colors, overexposed, static, blurry details, subtitles, style, artwork, painting, picture, still, overall gray, worst quality, low quality, JPEG artifacts, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn face, deformed, disfigured, malformed limbs, fused fingers, frozen frame, cluttered background, three legs, many people in background, walking backwards",
                             )
-                        with gr.Column():
+                        with gr.Column(visible=True) as resolution_col:
                             resolution = gr.Dropdown(
                                 choices=["480p", "540p", "720p"],
                                 value="480p",
                                 label="Max Resolution",
-                                info="If you run out of memory (OOM), please lower the resolution",
+                                info="Lower the resolution if you run out of VRAM",
                             )
 
                         with gr.Column(scale=9):
@@ -2615,7 +3173,6 @@ def main():
                             default_dit = get_dit_choices(model_path, "wan2.1", "i2v")[0] if get_dit_choices(model_path, "wan2.1", "i2v") else ""
                             default_high_noise = get_high_noise_choices(model_path, "wan2.2", "i2v")[0] if get_high_noise_choices(model_path, "wan2.2", "i2v") else ""
                             default_is_distill = is_distill_model("wan2.1", default_dit, default_high_noise)
-
                             if default_is_distill:
                                 infer_steps = gr.Slider(
                                     label="Inference Steps",
@@ -2623,7 +3180,7 @@ def main():
                                     maximum=100,
                                     step=1,
                                     value=4,
-                                    info="Distill model inference steps default to 4.",
+                                    info="Default 4 steps for distilled models.",
                                 )
                             else:
                                 infer_steps = gr.Slider(
@@ -2632,18 +3189,22 @@ def main():
                                     maximum=100,
                                     step=1,
                                     value=40,
-                                    info="Number of inference steps for video generation. Increasing steps may improve quality but reduce speed.",
+                                    info="Inference steps for video generation. More steps may improve quality but reduce speed.",
                                 )
 
                             # Dynamically update inference steps when model path changes
                             def update_infer_steps(model_type, dit_path, high_noise_path):
-                                is_distill = is_distill_model(model_type, dit_path, high_noise_path)
-                                if is_distill:
-                                    return gr.update(minimum=1, maximum=100, value=4, interactive=True)
+                                # Qwen-Image-Edit-2511 (i2i) defaults to 8 steps
+                                if model_type == "Qwen-Image-Edit-2511":
+                                    return gr.update(minimum=1, maximum=100, value=8, interactive=True)
                                 else:
-                                    return gr.update(minimum=1, maximum=100, value=40, interactive=True)
+                                    is_distill = is_distill_model(model_type, dit_path, high_noise_path)
+                                    if is_distill:
+                                        return gr.update(minimum=1, maximum=100, value=4, interactive=True)
+                                    else:
+                                        return gr.update(minimum=1, maximum=100, value=40, interactive=True)
 
-                            # Listen to model path changes
+                            # Listen for model path changes
                             dit_path_input.change(
                                 fn=lambda mt, dp, hnp: update_infer_steps(mt, dp, hnp),
                                 inputs=[model_type_input, dit_path_input, high_noise_path_input],
@@ -2660,45 +3221,45 @@ def main():
                                 outputs=[infer_steps],
                             )
 
-                    # Set default CFG based on model category
-                    # CFG scale factor: default to 1 for distill, otherwise default to 5
+                    # Set default CFG based on model type
+                    # CFG scale: defaults to 1 for distill, otherwise 5
                     default_cfg_scale = 1 if default_is_distill else 5
-                    # enable_cfg is not exposed to frontend, automatically set based on cfg_scale
-                    # If cfg_scale == 1, then enable_cfg = False, otherwise enable_cfg = True
+                    # enable_cfg not exposed to frontend, auto-set based on cfg_scale
+                    # If cfg_scale == 1, enable_cfg = False, otherwise enable_cfg = True
                     default_enable_cfg = False if default_cfg_scale == 1 else True
                     enable_cfg = gr.Checkbox(
                         label="Enable Classifier-Free Guidance",
                         value=default_enable_cfg,
-                        visible=False,  # Hidden, not exposed to frontend
+                        visible=False,  # Hidden from frontend
                     )
 
                     with gr.Row():
                         sample_shift = gr.Slider(
-                            label="Distribution Shift",
+                            label="Sample Shift",
                             value=5,
                             minimum=0,
                             maximum=10,
                             step=1,
-                            info="Control the degree of sample distribution shift. Larger values indicate more obvious shift.",
+                            info="Controls the degree of sample distribution shift. Higher values mean more shift.",
                         )
                         cfg_scale = gr.Slider(
-                            label="CFG Scale Factor",
+                            label="CFG Scale",
                             minimum=1,
                             maximum=10,
                             step=1,
                             value=default_cfg_scale,
-                            info="Control the influence strength of the prompt. Higher values mean greater prompt influence. When value is 1, CFG is automatically disabled.",
+                            info="Controls prompt influence strength. Higher values increase prompt influence. CFG is automatically disabled when value is 1.",
                         )
 
                     # Update enable_cfg based on cfg_scale
                     def update_enable_cfg(cfg_scale_val):
-                        """Automatically set enable_cfg based on cfg_scale value"""
+                        """Auto-set enable_cfg based on cfg_scale value"""
                         if cfg_scale_val == 1:
                             return gr.update(value=False)
                         else:
                             return gr.update(value=True)
 
-                    # Dynamically update CFG scale factor and enable_cfg when model path changes
+                    # Dynamically update CFG scale and enable_cfg when model path changes
                     def update_cfg_scale(model_type, dit_path, high_noise_path):
                         is_distill = is_distill_model(model_type, dit_path, high_noise_path)
                         if is_distill:
@@ -2730,14 +3291,14 @@ def main():
                         outputs=[enable_cfg],
                     )
 
-                    with gr.Row():
+                    with gr.Row(visible=True) as fps_frames_row:
                         fps = gr.Slider(
                             label="Frames Per Second (FPS)",
                             minimum=8,
                             maximum=30,
                             step=1,
                             value=16,
-                            info="Frames per second of the video. Higher FPS produces smoother videos.",
+                            info="Video frames per second. Higher FPS produces smoother video.",
                         )
                         num_frames = gr.Slider(
                             label="Total Frames",
@@ -2745,42 +3306,114 @@ def main():
                             maximum=120,
                             step=1,
                             value=81,
-                            info="Total number of frames in the video. More frames produce longer videos.",
+                            info="Total frames in the video. More frames produce longer video.",
                         )
 
                     save_result_path = gr.Textbox(
                         label="Output Video Path",
                         value=generate_unique_filename(output_dir),
-                        info="Must include .mp4 extension. If left empty or using default value, a unique filename will be automatically generated.",
-                        visible=False,  # Hide output path, auto-generate
+                        info="Must include .mp4 extension. A unique filename will be auto-generated if left empty or using default.",
+                        visible=False,  # Hidden, auto-generated
                     )
 
             with gr.Column(scale=4):
-                with gr.Accordion("📤 Generated Video", open=True, elem_classes=["output-video"]):
+                with gr.Accordion("📤 Generated Result", open=True, elem_classes=["output-video"]) as output_accordion:
                     output_video = gr.Video(
                         label="",
                         height=600,
                         autoplay=True,
                         show_label=False,
+                        visible=True,
+                    )
+                    output_image = gr.Image(
+                        label="Output Image",
+                        height=600,
+                        show_label=False,
+                        visible=False,
                     )
 
                     infer_btn = gr.Button("🎬 Generate Video", variant="primary", size="lg", elem_classes=["generate-btn"])
 
-            rope_chunk = gr.Checkbox(label="Chunked Rotary Position Encoding", value=False, visible=False)
-            rope_chunk_size = gr.Slider(label="Rotary Encoding Chunk Size", value=100, minimum=100, maximum=10000, step=100, visible=False)
+            rope_chunk = gr.Checkbox(label="Chunked RoPE", value=False, visible=False)
+            rope_chunk_size = gr.Slider(label="RoPE Chunk Size", value=100, minimum=100, maximum=10000, step=100, visible=False)
             unload_modules = gr.Checkbox(label="Unload Modules", value=False, visible=False)
-            clean_cuda_cache = gr.Checkbox(label="Clean CUDA Memory Cache", value=False, visible=False)
+            clean_cuda_cache = gr.Checkbox(label="Clean CUDA Cache", value=False, visible=False)
             cpu_offload = gr.Checkbox(label="CPU Offload", value=False, visible=False)
-            lazy_load = gr.Checkbox(label="Enable Lazy Loading", value=False, visible=False)
-            offload_granularity = gr.Dropdown(label="Dit Offload Granularity", choices=["block", "phase"], value="phase", visible=False)
+            lazy_load = gr.Checkbox(label="Enable Lazy Load", value=False, visible=False)
+            offload_granularity = gr.Dropdown(label="DiT Offload Granularity", choices=["block", "phase"], value="phase", visible=False)
             t5_cpu_offload = gr.Checkbox(label="T5 CPU Offload", value=False, visible=False)
             clip_cpu_offload = gr.Checkbox(label="CLIP CPU Offload", value=False, visible=False)
             vae_cpu_offload = gr.Checkbox(label="VAE CPU Offload", value=False, visible=False)
             use_tiling_vae = gr.Checkbox(label="VAE Tiled Inference", value=False, visible=False)
 
+        # Update output components and button when task type changes
+        def on_task_type_change_output(task_type):
+            is_i2i = task_type == "i2i"
+            btn_text = "🖼️ Generate Image" if is_i2i else "🎬 Generate Video"
+            # Default negative prompt to empty for i2i task
+            default_negative = (
+                ""
+                if is_i2i
+                else "camera shake, saturated colors, overexposed, static, blurry details, subtitles, style, artwork, painting, picture, still, overall gray, worst quality, low quality, JPEG artifacts, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn face, deformed, disfigured, malformed limbs, fused fingers, frozen frame, cluttered background, three legs, many people in background, walking backwards"
+            )
+            return (
+                gr.update(visible=not is_i2i),  # output_video
+                gr.update(visible=is_i2i),  # output_image
+                gr.update(value=btn_text),  # infer_btn
+                gr.update(value=default_negative),  # negative_prompt
+                gr.update(visible=not is_i2i),  # resolution_col (hide resolution for i2i)
+                gr.update(visible=not is_i2i),  # fps_frames_row (hide frame settings for i2i)
+            )
+
+        task_type_input.change(
+            fn=on_task_type_change_output,
+            inputs=[task_type_input],
+            outputs=[output_video, output_image, infer_btn, negative_prompt, resolution_col, fps_frames_row],
+        )
+
+        # Update model options when task type changes
+        task_type_input.change(
+            fn=on_task_type_change,
+            inputs=[model_type_input, task_type_input, model_path_input],
+            outputs=[
+                clip_row,
+                vae_encoder_col,
+                vae_decoder_col,
+                dit_path_input,
+                high_noise_path_input,
+                low_noise_path_input,
+                t5_path_input,
+                clip_path_input,
+                vae_encoder_path_input,
+                vae_decoder_path_input,
+                image_input_row,
+                save_result_path,
+            ],
+        )
+
+        task_type_input.change(
+            fn=auto_configure,
+            inputs=[resolution, num_frames, task_type_input],
+            outputs=[
+                lazy_load,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                use_tiling_vae,
+            ],
+        )
+
         resolution.change(
             fn=auto_configure,
-            inputs=[resolution, num_frames],
+            inputs=[resolution, num_frames, task_type_input],
             outputs=[
                 lazy_load,
                 rope_chunk,
@@ -2800,7 +3433,7 @@ def main():
 
         num_frames.change(
             fn=auto_configure,
-            inputs=[resolution, num_frames],
+            inputs=[resolution, num_frames, task_type_input],
             outputs=[
                 lazy_load,
                 rope_chunk,
@@ -2838,8 +3471,20 @@ def main():
             ],
         )
 
+        # Wrap inference function to return to correct output component based on task type
+        def run_inference_wrapper(*args):
+            result = run_inference(*args)
+            # Get task_type_input value (28th parameter, index 27)
+            task_type = args[27]
+            if task_type == "i2i":
+                # i2i task returns image
+                return gr.update(), gr.update(value=result)
+            else:
+                # Video task returns video
+                return gr.update(value=result), gr.update()
+
         infer_btn.click(
-            fn=run_inference,
+            fn=run_inference_wrapper,
             inputs=[
                 prompt,
                 negative_prompt,
@@ -2876,8 +3521,13 @@ def main():
                 vae_encoder_path_input,
                 vae_decoder_path_input,
                 image_path,
+                # Qwen-Image-Edit-2511 related parameters
+                qwen_image_dit_path_input,
+                qwen_image_vae_path_input,
+                qwen_image_scheduler_path_input,
+                qwen25vl_encoder_path_input,
             ],
-            outputs=output_video,
+            outputs=[output_video, output_image],
         )
 
     demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])

@@ -8,7 +8,7 @@ except ImportError:
     apply_rope_with_cos_sin_cache_inplace = None
 
 
-def apply_wan_rope_with_flashinfer(
+def apply_qwen_rope_with_flashinfer(
     xq: torch.Tensor,
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
@@ -34,7 +34,7 @@ def apply_wan_rope_with_flashinfer(
     return xq_out, xk_out
 
 
-def apply_rotary_emb_qwen(
+def apply_qwen_rope_with_torch(
     xq: torch.Tensor,
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
@@ -45,3 +45,28 @@ def apply_rotary_emb_qwen(
     xq_out = torch.view_as_real(xq_rotated * freqs_cis).flatten(-2)
     xk_out = torch.view_as_real(xk_rotated * freqs_cis).flatten(-2)
     return xq_out.type_as(xq), xk_out.type_as(xk)
+
+
+def apply_qwen_rope_with_torch_naive(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    cos = cos_sin_cache.real.unsqueeze(1)
+    sin = cos_sin_cache.imag.unsqueeze(1)
+
+    def _rotate(x: torch.Tensor) -> torch.Tensor:
+        x_even = x[..., 0::2]
+        x_odd = x[..., 1::2]
+
+        x_rot_even = x_even * cos - x_odd * sin
+        x_rot_odd = x_even * sin + x_odd * cos
+
+        x_out = torch.empty_like(x)
+        x_out[..., 0::2] = x_rot_even
+        x_out[..., 1::2] = x_rot_odd
+        return x_out
+
+    xq_out = _rotate(xq)
+    xk_out = _rotate(xk)
+    return xq_out, xk_out

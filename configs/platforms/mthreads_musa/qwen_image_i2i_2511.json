@@ -15,7 +15,7 @@
     "USE_IMAGE_ID_IN_PROMPT": true,
     "zero_cond_t": true,
     "modulate_type": "torch",
-    "rope_type": "torch",
+    "rope_type": "torch_naive",
     "ln_type": "Default",
     "rms_type": "Default"
 }

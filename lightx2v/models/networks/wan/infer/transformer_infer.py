@@ -6,7 +6,7 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 from lightx2v.utils.envs import *
 
 from .triton_ops import fuse_scale_shift_kernel
-from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
+from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
 
 
 def modulate(x, scale, shift):
@@ -32,16 +32,17 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            if self.config.get("rope_chunk", False):
-                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_flashinfer)
-            else:
-                self.apply_rope_func = apply_wan_rope_with_flashinfer
+        rope_funcs = {
+            "flashinfer": apply_wan_rope_with_flashinfer,
+            "torch": apply_wan_rope_with_torch,
+            "torch_naive": apply_wan_rope_with_torch_naive,
+        }
+        rope_type = self.config.get("rope_type", "flashinfer")
+        rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
+        if self.config.get("rope_chunk", False):
+            self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=rope_func)
         else:
-            if self.config.get("rope_chunk", False):
-                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_torch)
-            else:
-                self.apply_rope_func = apply_wan_rope_with_torch
+            self.apply_rope_func = rope_func
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
