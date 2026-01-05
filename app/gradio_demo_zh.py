@@ -224,7 +224,19 @@ def check_model_exists(model_path, model_name):
         return False
 
     model_path_full = os.path.join(model_path, model_name)
-    return os.path.exists(model_path_full)
+    # 检查是否存在（文件或目录）
+    if os.path.exists(model_path_full):
+        return True
+
+    # 额外检查：如果是 safetensors 文件，也检查同名目录（_split 目录）
+    if model_name.endswith(".safetensors"):
+        # 检查同名目录（可能是分块存储）
+        base_name = model_name.replace(".safetensors", "")
+        split_dir = os.path.join(model_path, base_name + "_split")
+        if os.path.exists(split_dir):
+            return True
+
+    return False
 
 
 def format_model_choice(model_name, model_path, status_emoji=None):
@@ -250,6 +262,41 @@ def extract_model_name(formatted_name):
     if formatted_name.startswith("✅ ") or formatted_name.startswith("❌ "):
         return formatted_name[2:].strip()
     return formatted_name.strip()
+
+
+def sort_model_choices(models):
+    """根据设备能力和模型类型对模型列表排序
+
+    排序规则：
+    - 如果设备支持 fp8：fp8+split > int8+split > fp8 > int8 > 其他
+    - 如果设备不支持 fp8：int8+split > int8 > 其他
+    """
+    fp8_supported = is_fp8_supported_gpu()
+
+    def get_priority(name):
+        name_lower = name.lower()
+        if fp8_supported:
+            # fp8 设备：fp8+split > int8+split > fp8 > int8 > 其他
+            if "fp8" in name_lower and "_split" in name_lower:
+                return 0  # 最高优先级
+            elif "int8" in name_lower and "_split" in name_lower:
+                return 1
+            elif "fp8" in name_lower:
+                return 2
+            elif "int8" in name_lower:
+                return 3
+            else:
+                return 4  # 其他
+        else:
+            # 非 fp8 设备：优先 int8+split，其次 int8
+            if "int8" in name_lower and "_split" in name_lower:
+                return 0  # 最高优先级
+            elif "int8" in name_lower:
+                return 1
+            else:
+                return 2  # 其他（fp8 已经被过滤掉了）
+
+    return sorted(models, key=lambda x: (get_priority(x), x.lower()))
 
 
 def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=None):
@@ -332,8 +379,8 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -401,8 +448,8 @@ def get_high_noise_choices(model_path, model_type="wan2.2", task_type=None, is_d
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -470,8 +517,8 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -518,8 +565,8 @@ def get_t5_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -583,8 +630,8 @@ def get_clip_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -610,8 +657,8 @@ def get_clip_tokenizer_choices(model_path):
 
 
 def get_vae_encoder_choices(model_path):
-    """获取 VAE 编码器可选项，只返回 wan2.1_VAE.safetensors"""
-    encoder_name = "wan2.1_VAE.safetensors"
+    """获取 VAE 编码器可选项，只返回 Wan2.1_VAE.safetensors"""
+    encoder_name = "Wan2.1_VAE.safetensors"
 
     # 从 Hugging Face Autoencoders 仓库获取
     repo_id = "lightx2v/Autoencoders"
@@ -679,10 +726,13 @@ def get_vae_decoder_choices(model_path):
     local_models = safetensors_choices + dir_choices
 
     # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    all_models = list(set(valid_hf_models + local_models))
 
     # 对于VAE解码器，只显示包含"2_1"或"2.1"的选项
     all_models = [m for m in all_models if "2_1" in m or "2.1" in m]
+
+    # 按优先级排序
+    all_models = sort_model_choices(all_models)
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -724,8 +774,8 @@ def get_qwen_image_dit_choices(model_path):
         if is_valid(item):
             local_models.append(item)
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -1523,7 +1573,7 @@ def run_inference(
         enable_cfg = True
 
     # VAE 配置：根据解码器路径判断
-    vae_encoder_path = vae_encoder_path_input if vae_encoder_path_input else "wan2.1_VAE.safetensors"
+    vae_encoder_path = vae_encoder_path_input if vae_encoder_path_input else "Wan2.1_VAE.safetensors"
     vae_decoder_path = vae_decoder_path_input if vae_decoder_path_input else None
 
     vae_decoder_name_lower = vae_decoder_path.lower() if vae_decoder_path else ""
@@ -3535,7 +3585,8 @@ def main():
             outputs=[output_video, output_image],
         )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
+    # max_file_size: 设置上传文件大小限制，"1gb" 表示最大 1GB
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir], max_file_size="1gb")
 
 
 if __name__ == "__main__":

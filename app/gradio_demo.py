@@ -224,7 +224,19 @@ def check_model_exists(model_path, model_name):
         return False
 
     model_path_full = os.path.join(model_path, model_name)
-    return os.path.exists(model_path_full)
+    # Check if exists (file or directory)
+    if os.path.exists(model_path_full):
+        return True
+
+    # Additional check: if it's a safetensors file, also check for same-name directory (_split directory)
+    if model_name.endswith(".safetensors"):
+        # Check for same-name directory (may be stored in chunks)
+        base_name = model_name.replace(".safetensors", "")
+        split_dir = os.path.join(model_path, base_name + "_split")
+        if os.path.exists(split_dir):
+            return True
+
+    return False
 
 
 def format_model_choice(model_name, model_path, status_emoji=None):
@@ -250,6 +262,41 @@ def extract_model_name(formatted_name):
     if formatted_name.startswith("✅ ") or formatted_name.startswith("❌ "):
         return formatted_name[2:].strip()
     return formatted_name.strip()
+
+
+def sort_model_choices(models):
+    """Sort model list based on device capability and model type
+
+    Sort rules:
+    - If device supports fp8: fp8+split > int8+split > fp8 > int8 > others
+    - If device doesn't support fp8: int8+split > int8 > others
+    """
+    fp8_supported = is_fp8_supported_gpu()
+
+    def get_priority(name):
+        name_lower = name.lower()
+        if fp8_supported:
+            # fp8 device: fp8+split > int8+split > fp8 > int8 > others
+            if "fp8" in name_lower and "_split" in name_lower:
+                return 0  # Highest priority
+            elif "int8" in name_lower and "_split" in name_lower:
+                return 1
+            elif "fp8" in name_lower:
+                return 2
+            elif "int8" in name_lower:
+                return 3
+            else:
+                return 4  # Others
+        else:
+            # Non-fp8 device: int8+split > int8 > others
+            if "int8" in name_lower and "_split" in name_lower:
+                return 0  # Highest priority
+            elif "int8" in name_lower:
+                return 1
+            else:
+                return 2  # Others (fp8 already filtered out)
+
+    return sorted(models, key=lambda x: (get_priority(x), x.lower()))
 
 
 def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=None):
@@ -332,8 +379,8 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    # Merge HF and local models, deduplicate, and sort by priority
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -401,8 +448,8 @@ def get_high_noise_choices(model_path, model_type="wan2.2", task_type=None, is_d
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    # Merge HF and local models, deduplicate, and sort by priority
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -470,8 +517,8 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    # Merge HF and local models, deduplicate, and sort by priority
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -518,8 +565,8 @@ def get_t5_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    # Merge HF and local models, deduplicate, and sort by priority
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -583,8 +630,8 @@ def get_clip_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    # Merge HF and local models, deduplicate, and sort by priority
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -679,10 +726,13 @@ def get_vae_decoder_choices(model_path):
     local_models = safetensors_choices + dir_choices
 
     # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    all_models = list(set(valid_hf_models + local_models))
 
     # For VAE decoder, only show options containing "2_1" or "2.1"
     all_models = [m for m in all_models if "2_1" in m or "2.1" in m]
+
+    # Sort by priority
+    all_models = sort_model_choices(all_models)
 
     # Format options, add download status (✅ downloaded, ❌ not downloaded)
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -724,8 +774,8 @@ def get_qwen_image_dit_choices(model_path):
         if is_valid(item):
             local_models.append(item)
 
-    # Merge HF and local models, deduplicate
-    all_models = sorted(set(valid_hf_models + local_models))
+    # Merge HF and local models, deduplicate, and sort by priority
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # Format options, add download status
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -3535,7 +3585,8 @@ def main():
             outputs=[output_video, output_image],
         )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
+    # max_file_size: Set upload file size limit, "1gb" means maximum 1GB
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir], max_file_size="1gb")
 
 
 if __name__ == "__main__":
