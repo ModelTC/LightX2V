@@ -48,7 +48,6 @@ class QwenImageRunner(DefaultRunner):
     def load_transformer(self):
         model = QwenImageTransformerModel(self.config)
         if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False)
             lora_wrapper = QwenImageLoraWrapper(model)
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]

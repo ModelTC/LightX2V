@@ -7,6 +7,10 @@ except Exception:
     logger.warning("qtorch not found, please install qtorch.Please install qtorch (pip install qtorch).")
     float_quantize = None
 
+try:
+    from vllm import _custom_ops as ops
+except ImportError:
+    ops = None
 
 class BaseQuantizer(object):
     def __init__(self, bit, symmetric, granularity, **kwargs):
@@ -170,11 +174,42 @@ class FloatQuantizer(BaseQuantizer):
         return tensor
 
 
-# 导入 VLLM 的量化函数
-try:
-    from vllm import _custom_ops as ops
-except ImportError:
-    ops = None
+def quant_naive_inplace(w, dtype):
+    if w.dim() != 2:
+        raise ValueError(f"Only 2D tensors supported. Got {w.dim()}D tensor")
+    if torch.isnan(w).any():
+        raise ValueError("Tensor contains NaN values")
+
+    org_w_shape = w.shape
+    max_val = w.abs().amax(dim=1, keepdim=True).clamp(min=1e-5)
+    if dtype == torch.float8_e4m3fn:
+        finfo = torch.finfo(dtype)
+        qmin, qmax = finfo.min, finfo.max
+    elif dtype == torch.int8:
+        qmin, qmax = -128, 127
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
+    scales = max_val / qmax
+    w.div_(scales)
+    w.clamp_(qmin, qmax)
+
+    if dtype == torch.int8:
+        w.round_()
+    w = w.to(dtype)
+    assert torch.isnan(scales).sum() == 0, "Scales contains NaN"
+    assert torch.isnan(w).sum() == 0, "Quantized tensor contains NaN"
+
+    scales = scales.view(org_w_shape[0], -1)
+    w = w.view(org_w_shape)
+    return w, scales
+
+
+def dequant_naive_inplace(input_tensor, input_tensor_scale, dtype):
+    out = torch.empty_like(input_tensor, dtype=dtype)
+    out.copy_(input_tensor)
+    out.mul_(input_tensor_scale)
+    return out
 
 
 def quant_fp8_vllm(input_tensor):
