@@ -98,7 +98,7 @@ class LightX2VPipeline:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
 
-        if model_cls in ["qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
+        if model_cls in ["qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511", "qwen-image-2512"]:
             self.zero_cond_t = False
             self.CONDITION_IMAGE_SIZE = 147456
             self.USE_IMAGE_ID_IN_PROMPT = True
@@ -143,11 +143,9 @@ class LightX2VPipeline:
         denoising_step_list=[1000, 750, 500, 250],
         config_json=None,
         rope_type="torch",
-        auto_resize=False,
+        resize_mode=None,
     ):
-        if self.model_cls in ["qwen_image"]:
-            self._auto_resize = auto_resize
-
+        self.resize_mode = resize_mode
         if config_json is not None:
             self.set_infer_config_json(config_json)
         else:

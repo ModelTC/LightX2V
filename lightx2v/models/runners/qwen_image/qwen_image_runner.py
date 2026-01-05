@@ -247,7 +247,7 @@ class QwenImageRunner(DefaultRunner):
                 return (width, height)
             logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
 
-        if self.config["task"] == "t2i" or not self.config["_auto_resize"]:
+        if self.config["task"] == "t2i" or not self.config.get("resize_mode", None) == "adaptive":
             width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
             return (width, height)
         return None
