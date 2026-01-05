@@ -405,7 +405,8 @@ class QwenImageScheduler(BaseScheduler):
         self.is_layered = config.get("layered", False)
         if self.is_layered:
             self.layers = config.get("layers", 4)
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config["model_path"], "scheduler"))
+        scheduler_path = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
+        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(scheduler_path)
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
         self.dtype = torch.bfloat16
