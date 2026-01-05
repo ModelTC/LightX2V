@@ -1,8 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils.registry_factory import (
-    MM_WEIGHT_REGISTER,
-    RMS_WEIGHT_REGISTER,
-)
+from lightx2v.utils.registry_factory import EMBEDDING_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
 class QwenImagePreWeights(WeightModule):
@@ -28,6 +25,9 @@ class QwenImagePreWeights(WeightModule):
         self.add_module(
             "time_text_embed_timestep_embedder_linear_2", MM_WEIGHT_REGISTER["Default"]("time_text_embed.timestep_embedder.linear_2.weight", "time_text_embed.timestep_embedder.linear_2.bias")
         )
+        self.is_layered = self.config.get("layered", False)
+        if self.is_layered:
+            self.add_module("time_text_embed_addition_t_embedding", EMBEDDING_WEIGHT_REGISTER["Default"]("time_text_embed.addition_t_embedding.weight"))
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
