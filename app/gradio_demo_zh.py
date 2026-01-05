@@ -1652,6 +1652,11 @@ def run_inference(
         "use_image_encoder": False if "wan2.2" in model_cls else True,
         "rope_type": "flashinfer" if apply_rope_with_cos_sin_cache_inplace else "torch",
         "t5_lazy_load": lazy_load,
+        "bucket_shape": {
+            "0.667": [[480, 832], [544, 960], [720, 960]],
+            "1.500": [[832, 480], [960, 544], [960, 720]],
+            "1.000": [[480, 480], [576, 576], [720, 720]],
+        },
     }
 
     # 如果是 qwen_image 模型，覆盖相关配置
