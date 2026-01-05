@@ -6,7 +6,7 @@
 lightx2v_path=
 model_path=
 
-export PLATFORM=mlu
+export PLATFORM=cambricon_mlu
 export MLU_VISIBLE_DEVICES=0
 export PYTORCH_MLU_ALLOC_CONF=expandable_segments:True
 
