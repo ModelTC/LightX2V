@@ -12,6 +12,7 @@ try:
 except ImportError:
     ops = None
 
+
 class BaseQuantizer(object):
     def __init__(self, bit, symmetric, granularity, **kwargs):
         self.bit = bit

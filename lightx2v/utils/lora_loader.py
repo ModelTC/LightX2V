@@ -17,8 +17,11 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 from loguru import logger
-from .quant_utils import quant_naive_inplace as quant, dequant_naive_inplace as dequant
+
 from .envs import *
+from .quant_utils import dequant_naive_inplace as dequant
+from .quant_utils import quant_naive_inplace as quant
+
 
 class LoRAFormat(Enum):
     """Enum for different LoRA format patterns."""
@@ -381,7 +384,7 @@ class LoRALoader:
                 lora_down = lora_weights[down_key].to(param.device, param_dtype)
             else:
                 lora_up = lora_weights[up_key].to(param.device)
-                lora_down = lora_weights[down_key].to(param.device)   
+                lora_down = lora_weights[down_key].to(param.device)
 
             # Get LoRA-specific alpha if available, otherwise use global alpha
             # Apply LoRA: W' = W + (alpha/rank) * B @ A
