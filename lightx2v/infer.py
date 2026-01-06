@@ -120,22 +120,6 @@ def main():
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
-
-    # Aspect ratio and custom shape for image tasks (t2i, i2i)
-    parser.add_argument(
-        "--aspect_ratio",
-        type=str,
-        default="16:9",
-        choices=["16:9", "9:16", "1:1", "4:3", "3:4"],
-        help="Aspect ratio for image generation. Only used for t2i and i2i tasks.",
-    )
-    parser.add_argument(
-        "--custom_shape",
-        type=str,
-        default=None,
-        help="Custom shape for image generation in format 'height,width' (e.g., '928,1664'). Only used for t2i and i2i tasks. Takes precedence over aspect_ratio.",
-    )
-    parser.add_argument("--strength", type=float, default=0.6, help="The strength for image-to-image generation")
     args = parser.parse_args()
     validate_task_arguments(args)
 

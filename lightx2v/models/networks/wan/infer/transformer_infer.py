@@ -4,6 +4,7 @@ import torch
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
+from lightx2v.utils.registry_factory import *
 
 from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
@@ -38,7 +39,19 @@ class WanTransformerInfer(BaseTransformerInfer):
             "torch_naive": apply_wan_rope_with_torch_naive,
         }
         rope_type = self.config.get("rope_type", "flashinfer")
-        rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
+        # Try to get rope function from registry first (for platform-specific implementations)
+        if rope_type in ROPE_REGISTER:
+            rope_class = ROPE_REGISTER[rope_type]
+            self.rope_instance = rope_class()
+
+            # Create a wrapper function that matches the expected signature
+            def rope_wrapper(xq, xk, cos_sin_cache):
+                return self.rope_instance.apply(xq, xk, cos_sin_cache)
+
+            rope_func = rope_wrapper
+        else:
+            # Fallback to hardcoded functions
+            rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
         if self.config.get("rope_chunk", False):
             self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=rope_func)
         else:

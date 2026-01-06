@@ -115,7 +115,7 @@ class ZImageRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_image_len.observe(width * height)
 
-        vae_scale_factor = self.config.get("vae_scale_factor", 8)
+        vae_scale_factor = self.config.get["vae_scale_factor"]
         vae_scale = vae_scale_factor * 2
         if height % vae_scale != 0 or width % vae_scale != 0:
             logger.warning(f"Image dimensions ({height}, {width}) are not divisible by {vae_scale}. Resizing to nearest valid dimensions.")
@@ -249,7 +249,7 @@ class ZImageRunner(DefaultRunner):
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
         # Use config vae_scale_factor to match official pipeline calculation
-        vae_scale_factor = self.config.get("vae_scale_factor", 8)
+        vae_scale_factor = self.config.get["vae_scale_factor"]
         height = 2 * (int(height) // (vae_scale_factor * 2))
         width = 2 * (int(width) // (vae_scale_factor * 2))
 
@@ -271,7 +271,7 @@ class ZImageRunner(DefaultRunner):
                 width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.input_info.aspect_ratio]
             else:
                 width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.config["aspect_ratio"]]
-            vae_scale_factor = self.config.get("vae_scale_factor", 8)
+            vae_scale_factor = self.config.get["vae_scale_factor"]
             latent_height = 2 * (int(height) // (vae_scale_factor * 2))
             latent_width = 2 * (int(width) // (vae_scale_factor * 2))
 
@@ -279,7 +279,7 @@ class ZImageRunner(DefaultRunner):
         patch_height = latent_height // patch_size
         patch_width = latent_width // patch_size
 
-        image_shapes = [(1, patch_height, patch_width)] * self.config["batchsize"]
+        image_shapes = [(1, patch_height, patch_width)]
         self.input_info.image_shapes = image_shapes
 
     def init_scheduler(self):

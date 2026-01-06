@@ -283,10 +283,128 @@ class QwenEmbedRope(nn.Module):
         return freqs.clone().contiguous()
 
 
+class QwenEmbedLayer3DRope(nn.Module):
+    def __init__(self, theta: int, axes_dim: List[int], scale_rope=False):
+        super().__init__()
+        self.theta = theta
+        self.axes_dim = axes_dim
+        pos_index = torch.arange(4096)
+        neg_index = torch.arange(4096).flip(0) * -1 - 1
+        self.pos_freqs = torch.cat(
+            [
+                self.rope_params(pos_index, self.axes_dim[0], self.theta),
+                self.rope_params(pos_index, self.axes_dim[1], self.theta),
+                self.rope_params(pos_index, self.axes_dim[2], self.theta),
+            ],
+            dim=1,
+        )
+        self.neg_freqs = torch.cat(
+            [
+                self.rope_params(neg_index, self.axes_dim[0], self.theta),
+                self.rope_params(neg_index, self.axes_dim[1], self.theta),
+                self.rope_params(neg_index, self.axes_dim[2], self.theta),
+            ],
+            dim=1,
+        )
+
+        self.scale_rope = scale_rope
+
+    def rope_params(self, index, dim, theta=10000):
+        """
+        Args:
+            index: [0, 1, 2, 3] 1D Tensor representing the position index of the token
+        """
+        assert dim % 2 == 0
+        freqs = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
+        freqs = torch.polar(torch.ones_like(freqs), freqs)
+        return freqs
+
+    def forward(self, video_fhw, txt_seq_lens, device):
+        """
+        Args: video_fhw: [frame, height, width] a list of 3 integers representing the shape of the video Args:
+        txt_length: [bs] a list of 1 integers representing the length of the text
+        """
+        if self.pos_freqs.device != device:
+            self.pos_freqs = self.pos_freqs.to(device)
+            self.neg_freqs = self.neg_freqs.to(device)
+
+        if isinstance(video_fhw, list):
+            video_fhw = video_fhw[0]
+        if not isinstance(video_fhw, list):
+            video_fhw = [video_fhw]
+
+        vid_freqs = []
+        max_vid_index = 0
+        layer_num = len(video_fhw) - 1
+        for idx, fhw in enumerate(video_fhw):
+            frame, height, width = fhw
+            if idx != layer_num:
+                video_freq = self._compute_video_freqs(frame, height, width, idx)
+            else:
+                ### For the condition image, we set the layer index to -1
+                video_freq = self._compute_condition_freqs(frame, height, width)
+            video_freq = video_freq.to(device)
+            vid_freqs.append(video_freq)
+
+            if self.scale_rope:
+                max_vid_index = max(height // 2, width // 2, max_vid_index)
+            else:
+                max_vid_index = max(height, width, max_vid_index)
+
+        max_vid_index = max(max_vid_index, layer_num)
+
+        max_len = txt_seq_lens
+        txt_freqs = self.pos_freqs[max_vid_index : max_vid_index + max_len, ...]
+        vid_freqs = torch.cat(vid_freqs, dim=0)
+
+        return vid_freqs, txt_freqs
+
+    @functools.lru_cache(maxsize=None)
+    def _compute_video_freqs(self, frame, height, width, idx=0):
+        seq_lens = frame * height * width
+        freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
+        freqs_neg = self.neg_freqs.split([x // 2 for x in self.axes_dim], dim=1)
+
+        freqs_frame = freqs_pos[0][idx : idx + frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+        if self.scale_rope:
+            freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
+            freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
+            freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
+        else:
+            freqs_height = freqs_pos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_width = freqs_pos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+
+        freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
+        return freqs.clone().contiguous()
+
+    @functools.lru_cache(maxsize=None)
+    def _compute_condition_freqs(self, frame, height, width):
+        seq_lens = frame * height * width
+        freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
+        freqs_neg = self.neg_freqs.split([x // 2 for x in self.axes_dim], dim=1)
+
+        freqs_frame = freqs_neg[0][-1:].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+        if self.scale_rope:
+            freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
+            freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
+            freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
+        else:
+            freqs_height = freqs_pos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_width = freqs_pos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+
+        freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
+        return freqs.clone().contiguous()
+
+
 class QwenImageScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
+        self.is_layered = config.get("layered", False)
+        if self.is_layered:
+            self.layers = config.get("layers", 4)
         scheduler_path = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(scheduler_path)
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
@@ -298,13 +416,22 @@ class QwenImageScheduler(BaseScheduler):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=[16, 56, 56], scale_rope=True)
+        self.use_layer3d_rope = config.get("use_layer3d_rope", False)
+        if self.use_layer3d_rope:
+            self.pos_embed = QwenEmbedLayer3DRope(theta=10000, axes_dim=[16, 56, 56], scale_rope=True)
+        else:
+            self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=[16, 56, 56], scale_rope=True)
 
     @staticmethod
-    def _pack_latents(latents, batch_size, num_channels_latents, height, width):
-        latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
-        latents = latents.permute(0, 2, 4, 1, 3, 5)
-        latents = latents.reshape(batch_size, (height // 2) * (width // 2), num_channels_latents * 4)
+    def _pack_latents(latents, batchsize, num_channels_latents, height, width, layers=None):
+        if not layers:
+            latents = latents.view(batchsize, num_channels_latents, height // 2, 2, width // 2, 2)
+            latents = latents.permute(0, 2, 4, 1, 3, 5)
+            latents = latents.reshape(batchsize, (height // 2) * (width // 2), num_channels_latents * 4)
+        else:
+            latents = latents.view(batchsize, layers, num_channels_latents, height // 2, 2, width // 2, 2)
+            latents = latents.permute(0, 1, 3, 5, 2, 4, 6)
+            latents = latents.reshape(batchsize, layers * (height // 2) * (width // 2), num_channels_latents * 4)
         return latents
 
     @staticmethod
@@ -339,11 +466,12 @@ class QwenImageScheduler(BaseScheduler):
         self.input_info = input_info
         shape = input_info.target_shape
         width, height = shape[-1], shape[-2]
-
         latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
-        latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width)
+        if self.is_layered:
+            latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width, self.layers + 1)
+        else:
+            latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width)
         latent_image_ids = self._prepare_latent_image_ids(1, height // 2, width // 2, AI_DEVICE, self.dtype)
-
         self.latents = latents
         self.latent_image_ids = latent_image_ids
         self.noise_pred = None
@@ -351,13 +479,18 @@ class QwenImageScheduler(BaseScheduler):
     def set_timesteps(self):
         sigmas = np.linspace(1.0, 1 / self.config["infer_steps"], self.config["infer_steps"])
         image_seq_len = self.latents.shape[1]
-        mu = calculate_shift(
-            image_seq_len,
-            self.scheduler_config.get("base_image_seq_len", 256),
-            self.scheduler_config.get("max_image_seq_len", 4096),
-            self.scheduler_config.get("base_shift", 0.5),
-            self.scheduler_config.get("max_shift", 1.15),
-        )
+        if self.is_layered:
+            base_seqlen = 256 * 256 / 16 / 16
+            image_seq_len = self.latents.shape[1] // 5
+            mu = (image_seq_len / base_seqlen) ** 0.5
+        else:
+            mu = calculate_shift(
+                image_seq_len,
+                self.scheduler_config.get("base_image_seq_len", 256),
+                self.scheduler_config.get("max_image_seq_len", 4096),
+                self.scheduler_config.get("base_shift", 0.5),
+                self.scheduler_config.get("max_shift", 1.15),
+            )
         num_inference_steps = self.config["infer_steps"]
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,

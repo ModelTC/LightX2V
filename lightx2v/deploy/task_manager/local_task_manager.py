@@ -32,7 +32,10 @@ class LocalTaskManager(BaseTaskManager):
         super().parse_dict(data)
         for k in ["create_t", "update_t", "ping_t", "valid_t"]:
             if k in data:
-                data[k] = str2time(data[k])
+                if isinstance(data[k], str):
+                    data[k] = str2time(data[k])
+                elif isinstance(data[k], (int, float)):
+                    data[k] = float(data[k])
 
     def save(self, task, subtasks, with_fmt=True):
         info = {"task": task, "subtasks": subtasks}

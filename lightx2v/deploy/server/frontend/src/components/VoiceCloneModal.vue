@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-2">
+  <div class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-2">
     <div class="relative w-full h-full max-w-4xl max-h-[100vh] bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] border border-black/10 dark:border-white/10 rounded-3xl shadow-[0_20px_60px_rgba(0,0,0,0.2)] overflow-hidden flex flex-col">
 
       <!-- Method Selection Screen -->
@@ -327,6 +327,23 @@
             <p class="text-sm text-[#86868b] dark:text-[#98989d] text-center h-4">
               {{ isTrimMode ? t('dragToAdjustSelection') : isTrimmed ? t('trimConfirmed') : ' ' }}
             </p>
+
+            <!-- User Text Input -->
+            <div class="w-full space-y-2 max-w-2xl mx-auto">
+              <label class="text-sm font-semibold text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] flex items-center gap-2">
+                <i class="fas fa-keyboard text-xs"></i>
+                <span>{{ t('audioText') }}</span>
+                <span class="text-xs text-[#86868b] dark:text-[#98989d] font-normal">{{ t('optional') }}</span>
+              </label>
+              <textarea
+                v-model="userInputText"
+                :placeholder="t('audioTextPlaceholder')"
+                class="w-full min-h-[80px] bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 rounded-xl p-4 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 focus:shadow-[0_4px_16px_rgba(var(--brand-primary-rgb),0.12)] dark:focus:shadow-[0_4px_16px_rgba(var(--brand-primary-light-rgb),0.2)] transition-all resize-none leading-relaxed"
+              ></textarea>
+              <p class="text-xs text-[#86868b] dark:text-[#98989d] text-center">
+                {{ t('audioTextHint') }}
+              </p>
+            </div>
           </div>
         </div>
         <div class="px-6 py-4 border-t border-black/8 dark:border-white/8">
@@ -506,6 +523,7 @@ export default {
     const previewAudioRef = ref(null)
     const cnPreviewUrl = ref('')
     const enPreviewUrl = ref('')
+    const userInputText = ref('')  // 用户输入的文本
 
     const changeSentence = () => {
       // 根据当前语言环境选择对应的句子数组
@@ -1130,12 +1148,9 @@ export default {
       const lowerMessage = message.toLowerCase()
 
       // 1. 字符错误率过高
-      if (lowerMessage.includes('char error rate high') || lowerMessage.includes('error rate high')) {
-        if (lowerMessage.includes('noisy') || lowerMessage.includes('too noisy')) {
-          return '字符错误率过高，可能音频太嘈杂，请重试。'
+      if (lowerMessage.includes('char error rate high')) {
+          return '自动识别音频文本错误率过高，请上传清晰音频或尝试手动输入音频文本。'
         }
-        return '字符错误率过高，请重试。'
-      }
 
       // 2. 文本长度过长
       if (lowerMessage.includes('text length') && lowerMessage.includes('too long')) {
@@ -1208,6 +1223,10 @@ export default {
         }
 
         formData.append('file', fileToUpload)
+        // 如果用户输入了文本，也一起发送
+        if (userInputText.value && userInputText.value.trim()) {
+          formData.append('text', userInputText.value.trim())
+        }
         // 不再在克隆时传递名称，名称在保存时传递
 
         const token = localStorage.getItem('accessToken')
@@ -1221,7 +1240,13 @@ export default {
 
         if (!response.ok) {
           const error = await response.json()
-          throw new Error(error.error || 'Clone failed')
+          const errorMessage = error.error || 'Clone failed'
+          // 如果错误信息中包含 char error rate high，标记为建议手动输入
+          const errorObj = new Error(errorMessage)
+          if (errorMessage.toLowerCase().includes('char error rate high')) {
+            errorObj.suggestManualInput = true
+          }
+          throw errorObj
         }
 
         const result = await response.json()
@@ -1236,8 +1261,25 @@ export default {
         console.error('Clone error:', error)
         const errorMessage = error.message || error.toString() || 'Unknown error'
         const processedMessage = processErrorMessage(errorMessage)
-        showAlert(t('cloneFailed') + ': ' + processedMessage, 'danger')
-        currentScreen.value = 'AUDIO_EDITOR'
+
+        // 如果后端建议手动输入文本，显示更友好的提示并聚焦到文本输入框
+        if (error.suggestManualInput || errorMessage.includes('manually enter') || errorMessage.includes('text input box')) {
+          showAlert(t('cloneFailed') + ': ' + processedMessage, 'warning')
+          // 确保在音频编辑器界面，并聚焦到文本输入框
+          currentScreen.value = 'AUDIO_EDITOR'
+          // 使用 nextTick 确保 DOM 更新后再聚焦
+          nextTick(() => {
+            const textInput = document.querySelector('textarea[placeholder*="音频对应的文本"]') ||
+                             document.querySelector('textarea[placeholder*="text content"]')
+            if (textInput) {
+              textInput.focus()
+              textInput.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+          })
+        } else {
+          showAlert(t('cloneFailed') + ': ' + processedMessage, 'danger')
+          currentScreen.value = 'AUDIO_EDITOR'
+        }
       }
     }
 
@@ -1385,6 +1427,7 @@ export default {
       customText.value = ''
       useSampleSentence.value = true
       currentSentence.value = ''
+      userInputText.value = ''  // 重置用户输入的文本
       isPlayingPreview.value = null
       if (previewAudioRef.value) {
         previewAudioRef.value.pause()
@@ -1523,7 +1566,8 @@ export default {
       playPreview,
       saveVoice,
       reclone,
-      closeModal
+      closeModal,
+      userInputText
     }
   }
 }

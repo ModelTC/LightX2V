@@ -139,7 +139,6 @@ class I2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
-    strength: float = field(default_factory=lambda: 0.6)  # Control transformation strength (0.0-1.0)
     # shape related
     target_shape: int = field(default_factory=int)
     image_shapes: list = field(default_factory=list)
@@ -225,18 +224,6 @@ def set_input_info(args):
             negative_prompt=args.negative_prompt,
             save_result_path=args.save_result_path,
         )
-        if hasattr(args, "aspect_ratio") and args.aspect_ratio:
-            input_info.aspect_ratio = args.aspect_ratio
-        if hasattr(args, "custom_shape") and args.custom_shape:
-            try:
-                # Parse "height,width" format
-                parts = args.custom_shape.split(",")
-                if len(parts) == 2:
-                    height = int(parts[0].strip())
-                    width = int(parts[1].strip())
-                    input_info.custom_shape = [height, width]
-            except ValueError as e:
-                raise ValueError(f"Failed to parse custom_shape '{args.custom_shape}': {e}. Ignoring.")
     elif args.task == "i2i":
         input_info = I2IInputInfo(
             seed=args.seed,
@@ -245,26 +232,6 @@ def set_input_info(args):
             image_path=args.image_path,
             save_result_path=args.save_result_path,
         )
-        # Set strength if provided
-        if hasattr(args, "strength") and args.strength is not None:
-            strength = float(args.strength)
-            if strength < 0.0 or strength > 1.0:
-                raise ValueError(f"The value of strength should be in [0.0, 1.0] but is {strength}")
-            input_info.strength = strength
-        # Set aspect_ratio if provided
-        if hasattr(args, "aspect_ratio") and args.aspect_ratio:
-            input_info.aspect_ratio = args.aspect_ratio
-        # Set custom_shape if provided (takes precedence over aspect_ratio)
-        if hasattr(args, "custom_shape") and args.custom_shape:
-            try:
-                # Parse "height,width" format
-                parts = args.custom_shape.split(",")
-                if len(parts) == 2:
-                    height = int(parts[0].strip())
-                    width = int(parts[1].strip())
-                    input_info.custom_shape = [height, width]
-            except ValueError as e:
-                raise ValueError(f"Failed to parse custom_shape '{args.custom_shape}': {e}. Ignoring.")
     else:
         raise ValueError(f"Unsupported task: {args.task}")
     return input_info

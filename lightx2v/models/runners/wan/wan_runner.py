@@ -48,7 +48,6 @@ class WanRunner(DefaultRunner):
             self.init_device,
         )
         if self.config.get("lora_configs") and self.config.lora_configs:
-            assert not self.config.get("dit_quantized", False)
             lora_wrapper = WanLoraWrapper(model)
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]
@@ -580,8 +579,6 @@ class Wan22MoeRunner(WanRunner):
             )
 
             if self.config.get("lora_configs") and self.config["lora_configs"]:
-                assert not self.config.get("dit_quantized", False)
-
                 for lora_config in self.config["lora_configs"]:
                     lora_path = lora_config["path"]
                     strength = lora_config.get("strength", 1.0)

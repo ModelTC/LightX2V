@@ -385,14 +385,24 @@
                       <span>{{ item.segment.voiceData?.name || t('tts.selectVoice') }}</span>
                     </button>
                   </div>
+                  <!-- 调节按钮 -->
                   <button
-                    @click="generateSegmentTTS(item.originalIndex)"
+                    @click.stop="toggleSegmentSettings(item.originalIndex)"
+                    class="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-full transition-all duration-200"
+                    :title="t('tts.adjustSettings')"
+                    :class="{ 'bg-[color:var(--brand-primary)]/20 dark:bg-[color:var(--brand-primary-light)]/20 border-[color:var(--brand-primary)]/30 dark:border-[color:var(--brand-primary-light)]/30 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]': showSegmentSettings === item.originalIndex }"
+                  >
+                    <i class="fas fa-sliders-h text-xs"></i>
+                  </button>
+                  <button
+                    @click="handleSegmentGenerateOrPlay(item.originalIndex)"
                     :disabled="!item.segment.text.trim() || !item.segment.voice || item.segment.isGenerating"
                     class="w-10 h-10 flex items-center justify-center bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full hover:scale-110 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                    :title="t('tts.generate')"
+                    :title="item.segment.isGenerating ? t('tts.generating') : (item.segment.audioUrl ? (playingSegmentIndex === item.originalIndex && segmentAudioElements[item.originalIndex] && !segmentAudioElements[item.originalIndex].paused ? '暂停' : '播放') : t('tts.generate'))"
                   >
                     <i v-if="item.segment.isGenerating" class="fas fa-spinner fa-spin text-sm"></i>
-                    <i v-else class="fas fa-check text-sm"></i>
+                    <i v-else-if="item.segment.audioUrl && playingSegmentIndex === item.originalIndex && segmentAudioElements[item.originalIndex] && !segmentAudioElements[item.originalIndex].paused" class="fas fa-pause text-sm"></i>
+                    <i v-else class="fas fa-play text-sm"></i>
                   </button>
                 </div>
                 <!-- 文本输入区域 -->
@@ -414,6 +424,45 @@
                     class="w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-lg px-4 py-2 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 transition-all duration-200 resize-none"
                     rows="2"
                   ></textarea>
+                </div>
+                <!-- 设置面板 -->
+                <div v-if="showSegmentSettings === item.originalIndex" class="mt-3 p-4 bg-white/50 dark:bg-[#2c2c2e]/50 backdrop-blur-[10px] border border-black/6 dark:border-white/6 rounded-xl space-y-3">
+                  <!-- 语速控制 -->
+                  <div class="flex items-center gap-3">
+                    <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('speechRate') }}</label>
+                    <input
+                      type="range"
+                      min="-50"
+                      max="100"
+                      v-model.number="item.segment.speechRate"
+                      class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                    />
+                    <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getSpeechRateDisplayValue(item.segment.speechRate || 0) }}</span>
+                  </div>
+                  <!-- 音量控制 -->
+                  <div class="flex items-center gap-3">
+                    <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('volume') }}</label>
+                    <input
+                      type="range"
+                      min="-50"
+                      max="100"
+                      v-model.number="item.segment.loudnessRate"
+                      class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                    />
+                    <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getLoudnessDisplayValue(item.segment.loudnessRate || 0) }}</span>
+                  </div>
+                  <!-- 音调控制 -->
+                  <div class="flex items-center gap-3">
+                    <label class="text-xs font-medium text-[#86868b] dark:text-[#98989d] w-14 tracking-tight">{{ t('pitch') }}</label>
+                    <input
+                      type="range"
+                      min="-12"
+                      max="12"
+                      v-model.number="item.segment.pitch"
+                      class="flex-1 h-0.5 bg-black/6 dark:bg-white/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-[color:var(--brand-primary)] dark:[&::-webkit-slider-thumb]:bg-[color:var(--brand-primary-light)] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                    />
+                    <span class="text-xs font-medium text-[#1d1d1f] dark:text-[#f5f5f7] w-12 text-right tracking-tight">{{ getPitchDisplayValue(item.segment.pitch || 0) }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -470,219 +519,30 @@
               ></textarea>
             </div>
 
-            <!-- 音色选择区域 - Apple 风格 -->
-            <div>
-              <!-- 标签切换 -->
-              <div class="flex items-center gap-2 mb-4">
-                <button
-                  @click="voiceTab = 'ai'"
-                  class="px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                  :class="voiceTab === 'ai'
-                    ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white'
-                    : 'bg-white/80 dark:bg-[#2c2c2e]/80 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c]'"
-                >
-                  {{ t('aiVoice') }}
-                </button>
-                <button
-                  @click="voiceTab = 'clone'"
-                  class="px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                  :class="voiceTab === 'clone'
-                    ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white'
-                    : 'bg-white/80 dark:bg-[#2c2c2e]/80 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c]'"
-                >
-                  {{ t('clonedVoice') }}
-                </button>
-              </div>
-
-              <!-- AI音色区域 -->
-              <div v-if="voiceTab === 'ai'">
-                <div class="flex items-center justify-between mb-4">
-                  <div class="flex items-center gap-2">
-                    <i class="fas fa-microphone-alt text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
-                    <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('selectVoice') }}</span>
-
-                    <button
-                      @click="openVoiceHistoryPanel"
-                      class="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] transition-all duration-200"
-                      :title="t('ttsHistoryTabVoice')"
-                    >
-                      <i class="fas fa-history text-xs"></i>
-                    </button>
-                  </div>
-                </div>
-
-                <div class="flex items-center gap-3">
-                  <!-- 搜索框 - Apple 风格 -->
-                  <div class="relative w-52">
-                    <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[#86868b] dark:text-[#98989d] text-xs pointer-events-none z-10"></i>
-                    <input
-                      v-model="searchQuery"
-                      :placeholder="t('searchVoice')"
-                      class="w-full bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-lg py-2 pl-9 pr-3 text-sm text-[#1d1d1f] dark:text-[#f5f5f7] placeholder-[#86868b] dark:placeholder-[#98989d] tracking-tight hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 focus:outline-none focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/60 transition-all duration-200"
-                      type="text"
-                    />
-                  </div>
-
-                  <!-- 筛选按钮 - Apple 风格 -->
-                  <button @click="toggleFilterPanel"
-                    class="flex items-center gap-2 px-4 py-2 bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-lg transition-all duration-200 text-sm font-medium tracking-tight">
-                    <i class="fas fa-filter text-xs"></i>
-                    <span>{{ t('filter') }}</span>
-                  </button>
-                </div>
-
-                <!-- 音色列表容器 - Apple 风格 -->
-                <div class="bg-white/50 dark:bg-[#2c2c2e]/50 backdrop-blur-[10px] border border-black/6 dark:border-white/6 rounded-2xl p-5 max-h-[500px] overflow-y-auto main-scrollbar pr-3 mt-4" ref="voiceListContainer">
-                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <label
-                      v-for="(voice, index) in filteredVoices"
-                      :key="index"
-                      class="relative m-0 p-0 cursor-pointer"
-                    >
-                      <input
-                        type="radio"
-                        :value="voice.voice_type"
-                        v-model="selectedVoice"
-                        @change="onVoiceSelect(voice)"
-                        class="sr-only"
-                      />
-                      <div
-                        class="relative flex items-center p-4 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]"
-                        :class="{
-                          'border-2 border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/12 dark:bg-[color:var(--brand-primary-light)]/20 shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.35)] ring-2 ring-[color:var(--brand-primary)]/20 dark:ring-[color:var(--brand-primary-light)]/30': selectedVoice === voice.voice_type
-                        }"
-                      >
-                        <!-- 选中指示器 - Apple 风格 -->
-                        <div v-if="selectedVoice === voice.voice_type" class="absolute top-2 left-2 w-5 h-5 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full flex items-center justify-center z-10 shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)]">
-                          <i class="fas fa-check text-white text-[10px]"></i>
-                        </div>
-                        <!-- V2 标签 - Apple 风格 -->
-                        <div v-if="voice.version === '2.0'" class="absolute top-2 right-2 px-2 py-1 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white text-[10px] font-semibold rounded-md z-10">
-                          v2.0
-                        </div>
-
-                        <!-- 头像容器 -->
-                        <div class="relative mr-3 flex-shrink-0">
-                          <!-- Female Avatar -->
-                          <img
-                            v-if="isFemaleVoice(voice.voice_type)"
-                            src="../../public/female.svg"
-                            alt="Female Avatar"
-                            class="w-12 h-12 rounded-full object-cover bg-white transition-all duration-200"
-                          />
-                          <!-- Male Avatar -->
-                          <img
-                            v-else
-                            src="../../public/male.svg"
-                            alt="Male Avatar"
-                            class="w-12 h-12 rounded-full object-cover bg-white transition-all duration-200"
-                          />
-                          <!-- Loading 指示器 - Apple 风格 -->
-                          <div v-if="isGenerating && selectedVoice === voice.voice_type" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white z-20">
-                            <i class="fas fa-spinner fa-spin text-xs"></i>
-                          </div>
-                        </div>
-
-                        <!-- 音色信息 -->
-                        <div class="flex-1 min-w-0">
-                          <div class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-1 tracking-tight truncate">
-                            {{ voice.name }}
-                          </div>
-                          <div class="flex flex-wrap gap-1.5">
-                            <span v-if="voice.scene" class="inline-block px-2 py-0.5 bg-black/5 dark:bg-white/5 text-[#86868b] dark:text-[#98989d] rounded text-[11px] font-medium">
-                              {{ voice.scene }}
-                            </span>
-                            <span
-                              v-for="langCode in voice.language"
-                              :key="langCode"
-                              class="inline-block px-2 py-0.5 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] rounded text-[11px] font-medium"
-                            >
-                              {{ getLanguageDisplayName(langCode) }}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 克隆音色区域 -->
-              <div v-else class="space-y-4">
-                <div class="bg-white/50 dark:bg-[#2c2c2e]/50 backdrop-blur-[10px] border border-black/6 dark:border-white/6 rounded-2xl p-5 max-h-[500px] overflow-y-auto main-scrollbar pr-3" ref="cloneVoiceListContainer">
-                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <!-- 添加音色按钮 -->
-                    <button
-                      @click="openCloneModal"
-                      class="relative flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border-2 border-dashed border-[color:var(--brand-primary)]/50 dark:border-[color:var(--brand-primary-light)]/50 rounded-xl transition-all duration-200 hover:bg-[color:var(--brand-primary)]/10 dark:hover:bg-[color:var(--brand-primary-light)]/10 hover:border-[color:var(--brand-primary)] dark:hover:border-[color:var(--brand-primary-light)]"
-                    >
-                      <div class="flex flex-row items-center gap-2">
-                        <div class="w-12 h-12 rounded-full bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 flex items-center justify-center">
-                          <i class="fas fa-plus text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] text-xl"></i>
-                        </div>
-                        <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7]">{{ t('addClonedVoice') }}</span>
-                      </div>
-                    </button>
-
-                    <!-- 克隆音色列表 -->
-                    <label
-                      v-for="(voice, index) in clonedVoices"
-                      :key="index"
-                      class="relative m-0 p-0 cursor-pointer"
-                    >
-                      <input
-                        type="radio"
-                        :value="`clone_${voice.speaker_id}`"
-                        v-model="selectedVoice"
-                        @change="onCloneVoiceSelect(voice)"
-                        class="sr-only"
-                      />
-                      <div
-                        class="relative flex items-center p-4 bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-xl transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.2)]"
-                        :class="{
-                          'border-2 border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/12 dark:bg-[color:var(--brand-primary-light)]/20 shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.35)] ring-2 ring-[color:var(--brand-primary)]/20 dark:ring-[color:var(--brand-primary-light)]/30': selectedVoice === `clone_${voice.speaker_id}`
-                        }"
-                      >
-                        <!-- 选中指示器 -->
-                        <div v-if="selectedVoice === `clone_${voice.speaker_id}`" class="absolute top-2 left-2 w-5 h-5 bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full flex items-center justify-center z-10 shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.3)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.4)]">
-                          <i class="fas fa-check text-white text-[10px]"></i>
-                        </div>
-
-                        <!-- 头像容器 -->
-                        <div class="relative mr-3 flex-shrink-0">
-                          <div class="w-12 h-12 rounded-full bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/15 flex items-center justify-center">
-                            <i class="fas fa-user text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] text-xl"></i>
-                          </div>
-                          <!-- Loading 指示器 -->
-                          <div v-if="isGenerating && selectedVoice === `clone_${voice.speaker_id}`" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-full flex items-center justify-center text-white z-20">
-                            <i class="fas fa-spinner fa-spin text-xs"></i>
-                          </div>
-                        </div>
-
-                        <!-- 音色信息 -->
-                        <div class="flex-1 min-w-0">
-                          <div class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] mb-1 tracking-tight truncate">
-                            {{ voice.name || t('unnamedVoice') }}
-                          </div>
-                          <div class="text-xs text-[#86868b] dark:text-[#98989d]">
-                            {{ formatDate(voice.create_t) }}
-                          </div>
-                        </div>
-
-                        <!-- 删除按钮 -->
-                        <button
-                          @click.stop="handleDeleteVoiceClone(voice)"
-                          class="ml-2 w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 hover:border-red-200 dark:hover:border-red-500/20 rounded-full transition-all duration-200 hover:scale-110 active:scale-100 flex-shrink-0"
-                          :title="t('delete')"
-                        >
-                          <i class="fas fa-trash-alt text-xs"></i>
-                        </button>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <!-- 音色选择区域 - 使用复用组件 -->
+            <VoiceSelectorPanel
+              :filtered-voices="filteredVoices"
+              :cloned-voices="clonedVoices"
+              :selected-voice="selectedVoice"
+              :is-generating="isGenerating"
+              :search-query="searchQuery"
+              :initial-tab="voiceTab"
+              :show-history-button="true"
+              :show-delete-button="true"
+              search-box-width="w-52"
+              :is-female-voice="isFemaleVoice"
+              :get-language-display-name="getLanguageDisplayName"
+              :format-date="formatDate"
+              :t="t"
+              @select-voice="onVoiceSelect"
+              @select-clone-voice="onCloneVoiceSelect"
+              @open-clone-modal="openCloneModal"
+              @delete-clone-voice="handleDeleteVoiceClone"
+              @open-history="openVoiceHistoryPanel"
+              @toggle-filter="toggleFilterPanel"
+              @update:searchQuery="searchQuery = $event"
+              @update:tab="voiceTab = $event"
+            />
           </template>
         </div>
       </div>
@@ -747,36 +607,46 @@
   />
 
   <!-- 音色选择下拉菜单 - 直接在组件内渲染，使用固定定位 -->
-  <div
-    v-if="showVoiceSelector && selectedSegmentIndex >= 0 && audioSegments && audioSegments[selectedSegmentIndex]"
-    ref="dropdownContainerRef"
-    @click.stop
-    @mousedown.stop
-    class="fixed bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] border border-black/10 dark:border-white/10 rounded-xl shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden voice-selector-dropdown"
-    :style="{
-      position: 'fixed',
-      top: dropdownStyle?.top || '0px',
-      left: dropdownStyle?.left || '0px',
-      width: dropdownStyle?.width || '256px',
-      zIndex: '99999',
-      minHeight: '200px',
-      maxHeight: dropdownStyle?.maxHeight || '384px',
-      overflowY: dropdownStyle?.overflowY || 'auto',
-      pointerEvents: 'auto'
-    }"
-  >
-    <VoiceSelector
-      :voices="voices"
-      :filtered-voices="filteredVoices"
-      :selected-voice="(audioSegments && audioSegments[selectedSegmentIndex]) ? (audioSegments[selectedSegmentIndex].voice || '') : ''"
-      :is-generating="(audioSegments && audioSegments[selectedSegmentIndex]) ? (audioSegments[selectedSegmentIndex].isGenerating || false) : false"
-      mode="dropdown"
-      :show-search="false"
-      :show-filter="false"
-      :show-history-button="false"
-      @select-voice="onVoiceSelectForSegment"
-      class="voice-selector-component"
-    />
+  <!-- 段落音色选择面板 - Apple 风格 -->
+  <div v-if="showVoiceSelector && selectedSegmentIndex >= 0 && audioSegments && audioSegments[selectedSegmentIndex]" class="fixed inset-0 bg-black/50 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" @click="closeSegmentVoiceSelector">
+    <div class="bg-white/95 dark:bg-[#1e1e1e]/95 backdrop-blur-[40px] backdrop-saturate-[180%] border border-black/10 dark:border-white/10 rounded-3xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.6)] flex flex-col" @click.stop>
+      <!-- 面板头部 - Apple 风格 -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-black/8 dark:border-white/8 bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-[20px] flex-shrink-0">
+        <h3 class="text-lg font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center gap-2 tracking-tight">
+          <i class="fas fa-microphone-alt text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+          <span>{{ t('selectVoice') }}</span>
+        </h3>
+        <button @click="closeSegmentVoiceSelector"
+          class="w-9 h-9 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-full transition-all duration-200 hover:scale-110 active:scale-100">
+          <i class="fas fa-times text-sm"></i>
+        </button>
+      </div>
+
+      <!-- 面板内容 -->
+      <div class="flex-1 overflow-y-auto p-6 main-scrollbar">
+        <VoiceSelectorPanel
+          :filtered-voices="segmentFilteredVoices"
+          :cloned-voices="clonedVoices"
+          :selected-voice="getSegmentSelectedVoice()"
+          :is-generating="audioSegments[selectedSegmentIndex]?.isGenerating || false"
+          :search-query="segmentSearchQuery"
+          :initial-tab="segmentVoiceTab"
+          :show-history-button="false"
+          :show-delete-button="false"
+          search-box-width="flex-1 max-w-xs"
+          :is-female-voice="isFemaleVoice"
+          :get-language-display-name="getLanguageDisplayName"
+          :format-date="formatDate"
+          :t="t"
+          @select-voice="onVoiceSelectForSegment"
+          @select-clone-voice="onCloneVoiceSelectForSegment"
+          @open-clone-modal="openCloneModal"
+          @toggle-filter="toggleFilterPanel"
+          @update:searchQuery="segmentSearchQuery = $event"
+          @update:tab="segmentVoiceTab = $event"
+        />
+      </div>
+    </div>
   </div>
 
   <!-- 筛选面板遮罩 - Apple 风格 -->
@@ -895,6 +765,7 @@ import VoiceCloneModal from './VoiceCloneModal.vue'
 import Confirm from './Confirm.vue'
 import { ttsHistory, loadTtsHistory, addTtsHistoryEntry, removeTtsHistoryEntry, showConfirmDialog, showAlert } from '../utils/other'
 import VoiceSelector from './VoiceSelector.vue'
+import VoiceSelectorPanel from './VoiceSelectorPanel.vue'
 
 export default {
   name: 'VoiceTTS',
@@ -903,7 +774,8 @@ export default {
     VoiceTtsHistoryPanel,
     VoiceCloneModal,
     Confirm,
-    VoiceSelector
+    VoiceSelector,
+    VoiceSelectorPanel
   },
   emits: ['tts-complete', 'close-modal'],
   setup(props, { emit }) {
@@ -958,9 +830,12 @@ export default {
     const showInstructionInput = ref(-1) // 显示语音指令输入的段索引
     const selectedSegmentIndex = ref(-1) // 当前选择音色的段索引
     const showVoiceSelector = ref(false) // 是否显示音色选择器
+    const showSegmentSettings = ref(-1) // 显示设置的段索引
     const segmentVoiceSelectors = ref({}) // 分段音色选择器容器引用
     const dropdownStyle = ref({}) // 下拉菜单样式（不包含 display，由 v-show 控制）
     const dropdownContainerRef = ref(null) // 下拉菜单容器 ref
+    const segmentVoiceTab = ref('ai') // 段落音色选择标签页 'ai' or 'clone'
+    const segmentSearchQuery = ref('') // 段落音色选择搜索查询
     const draggingSegmentIndex = ref(-1) // 正在拖拽的段落索引
     const dragOverSegmentIndex = ref(-1) // 拖拽悬停的段落索引
 
@@ -1232,6 +1107,63 @@ export default {
       }
 
       console.log('最终筛选结果:', filtered.length)
+      return filtered
+    })
+
+    // 段落音色选择的筛选音色列表
+    const segmentFilteredVoices = computed(() => {
+      let filtered = [...voices.value] // 创建副本，避免修改原始数据
+
+      // Filter by category
+      if (selectedCategory.value !== '全部场景') {
+        filtered = filtered.filter(voice => voice.scene === selectedCategory.value)
+      }
+
+      // Filter by version
+      if (selectedVersion.value !== '全部版本') {
+        filtered = filtered.filter(voice => voice.version === selectedVersion.value)
+      }
+
+      // Filter by language
+      if (selectedLanguage.value !== '全部语言') {
+        let languageFilter = selectedLanguage.value
+        const languageMap = {
+          '中文': 'chinese',
+          '美式英语': 'en_us',
+          '英式英语': 'en_gb',
+          '澳洲英语': 'en_au',
+          '西语': 'es',
+          '日语': 'ja'
+        }
+
+        if (languageMap[selectedLanguage.value]) {
+          languageFilter = languageMap[selectedLanguage.value]
+        }
+
+        filtered = filtered.filter(voice => {
+          return voice.language && Array.isArray(voice.language) && voice.language.includes(languageFilter)
+        })
+      }
+
+      // Filter by gender
+      if (selectedGender.value !== '全部性别') {
+        let genderFilter = selectedGender.value
+        if (selectedGender.value === '女性') {
+          genderFilter = 'female'
+        } else if (selectedGender.value === '男性') {
+          genderFilter = 'male'
+        }
+
+        filtered = filtered.filter(voice => voice.gender === genderFilter)
+      }
+
+      // Filter by search query
+      if (segmentSearchQuery.value) {
+        filtered = filtered.filter(voice =>
+          voice.name.toLowerCase().includes(segmentSearchQuery.value.toLowerCase())
+        )
+      }
+
       return filtered
     })
 
@@ -1824,7 +1756,12 @@ export default {
         duration: 0,
         currentTime: 0,
         isGenerating: false,
-        contextText: '用少女俏皮可爱的音色说'
+        contextText: '用少女俏皮可爱的音色说',
+        speechRate: 0,
+        loudnessRate: 0,
+        pitch: 0,
+        isCloneVoice: false, // 默认不是克隆音色
+        audioSnapshot: null
       }
       audioSegments.value.push(segment1)
 
@@ -1839,7 +1776,12 @@ export default {
         duration: 0,
         currentTime: 0,
         isGenerating: false,
-        contextText: '磁性的低音炮，宠溺的语气'
+        contextText: '磁性的低音炮，宠溺的语气',
+        speechRate: 0,
+        loudnessRate: 0,
+        pitch: 0,
+        isCloneVoice: false, // 默认不是克隆音色
+        audioSnapshot: null
       }
       audioSegments.value.push(segment2)
 
@@ -1876,7 +1818,12 @@ export default {
         duration: 0,
         currentTime: 0,
         isGenerating: false,
-        contextText: ''
+        contextText: '',
+        speechRate: 0,
+        loudnessRate: 0,
+        pitch: 0,
+        isCloneVoice: false, // 标记是否是克隆音色
+        audioSnapshot: null // 记录生成音频时的参数快照
       })
     }
 
@@ -1895,7 +1842,12 @@ export default {
         duration: 0, // 重置时长
         currentTime: 0, // 重置当前时间
         isGenerating: false, // 重置生成状态
-        contextText: segment.contextText || '' // 复制语音指令
+        contextText: segment.contextText || '', // 复制语音指令
+        speechRate: segment.speechRate || 0, // 复制语速设置
+        loudnessRate: segment.loudnessRate || 0, // 复制音量设置
+        pitch: segment.pitch || 0, // 复制音调设置
+        isCloneVoice: segment.isCloneVoice || false, // 复制克隆音色标志
+        audioSnapshot: null // 新段落没有快照，需要重新生成
       }
 
       // 将复制的段落添加到列表末尾
@@ -1949,22 +1901,41 @@ export default {
     const selectVoiceForSegment = (index) => {
       if (selectedSegmentIndex.value === index && showVoiceSelector.value) {
         // 如果点击的是已选中的，则关闭
-        selectedSegmentIndex.value = -1
-        showVoiceSelector.value = false
+        closeSegmentVoiceSelector()
       } else {
         // 先关闭其他可能打开的选择器
         if (showVoiceSelector.value) {
-          showVoiceSelector.value = false
+          closeSegmentVoiceSelector()
         }
-        // 使用 setTimeout 延迟打开，避免点击事件立即触发 handleClickOutside
-        setTimeout(() => {
-          selectedSegmentIndex.value = index
-          showVoiceSelector.value = true
-          // 等待 DOM 更新后再更新位置
-          nextTick(() => {
-            updateDropdownPosition(index)
-          })
-        }, 10)
+        // 打开音色选择面板
+        selectedSegmentIndex.value = index
+        showVoiceSelector.value = true
+        segmentVoiceTab.value = 'ai' // 默认显示 AI 音色标签页
+        segmentSearchQuery.value = '' // 重置搜索查询
+      }
+    }
+
+    // 获取当前段落选中的音色
+    const getSegmentSelectedVoice = () => {
+      if (selectedSegmentIndex.value >= 0 && audioSegments.value[selectedSegmentIndex.value]) {
+        return audioSegments.value[selectedSegmentIndex.value].voice || ''
+      }
+      return ''
+    }
+
+    // 关闭段落音色选择面板
+    const closeSegmentVoiceSelector = () => {
+      selectedSegmentIndex.value = -1
+      showVoiceSelector.value = false
+      segmentSearchQuery.value = '' // 重置搜索查询
+    }
+
+    // 切换段落设置面板
+    const toggleSegmentSettings = (index) => {
+      if (showSegmentSettings.value === index) {
+        showSegmentSettings.value = -1
+      } else {
+        showSegmentSettings.value = index
       }
     }
 
@@ -1973,82 +1944,32 @@ export default {
         const segment = audioSegments.value[selectedSegmentIndex.value]
         segment.voice = voice.voice_type
         segment.voiceData = voice
+        segment.isCloneVoice = false // 标记为普通AI音色
         segment.contextText = '' // 重置语音指令
         showInstructionInput.value = -1
       }
-      selectedSegmentIndex.value = -1
-      showVoiceSelector.value = false
+      closeSegmentVoiceSelector()
     }
 
-    // 更新下拉菜单位置
-    const updateDropdownPosition = (index) => {
-      // 使用双重 nextTick 确保 DOM 完全更新
-      nextTick(() => {
-        nextTick(() => {
-          if (!segmentVoiceSelectors || !segmentVoiceSelectors.value) {
-            return
-          }
-
-          const container = segmentVoiceSelectors.value[index]
-          if (!container) {
-            // 延迟重试，因为 ref 可能还没绑定
-            setTimeout(() => {
-              const retryContainer = segmentVoiceSelectors.value?.[index]
-              if (retryContainer) {
-                const rect = retryContainer.getBoundingClientRect()
-                dropdownStyle.value = {
-                  position: 'fixed',
-                  top: `${rect.bottom + 8}px`,
-                  left: `${rect.left}px`,
-                  width: '256px',
-                  zIndex: 10000,
-                  maxHeight: '384px',
-                  overflowY: 'auto',
-                  pointerEvents: 'auto'
-                }
-              }
-            }, 100)
-            return
-          }
-
-          const rect = container.getBoundingClientRect()
-          dropdownStyle.value = {
-            position: 'fixed',
-            top: `${rect.bottom + 8}px`,
-            left: `${rect.left}px`,
-            width: '256px',
-            zIndex: '10000',
-            maxHeight: '384px',
-            overflowY: 'auto',
-            pointerEvents: 'auto'
-          }
-        })
-      })
-    }
-
-    // 计算是否应该显示下拉菜单（已移除，直接在模板中使用条件判断）
-
-    // 监听窗口滚动和调整大小，更新下拉菜单位置
-    const handleScrollOrResize = () => {
-      if (showVoiceSelector.value && selectedSegmentIndex.value >= 0) {
-        updateDropdownPosition(selectedSegmentIndex.value)
+    // 处理段落克隆音色选择
+    const onCloneVoiceSelectForSegment = (voice) => {
+      if (selectedSegmentIndex.value >= 0) {
+        const segment = audioSegments.value[selectedSegmentIndex.value]
+        segment.voice = `clone_${voice.speaker_id}`
+        segment.voiceData = {
+          voice_type: `clone_${voice.speaker_id}`,
+          name: voice.name || t('unnamedVoice'),
+          speaker_id: voice.speaker_id,
+          resource_id: voice.resource_id || voice.speaker_id // 确保有 resource_id
+        }
+        segment.isCloneVoice = true // 标记为克隆音色
+        segment.contextText = '' // 重置语音指令
+        showInstructionInput.value = -1
       }
+      closeSegmentVoiceSelector()
     }
 
-    // 在打开下拉菜单时添加监听器
-    watch([showVoiceSelector, selectedSegmentIndex], () => {
-      if (showVoiceSelector.value && selectedSegmentIndex.value >= 0) {
-        window.addEventListener('scroll', handleScrollOrResize, true)
-        window.addEventListener('resize', handleScrollOrResize)
-        // 更新位置
-        nextTick(() => {
-          updateDropdownPosition(selectedSegmentIndex.value)
-        })
-      } else {
-        window.removeEventListener('scroll', handleScrollOrResize, true)
-        window.removeEventListener('resize', handleScrollOrResize)
-      }
-    })
+    // 下拉菜单相关代码已移除，现在使用面板模式
 
     // 监听合并音频 URL 变化，自动加载音频
     watch(mergedAudioUrl, async (newUrl, oldUrl) => {
@@ -2125,17 +2046,8 @@ export default {
 
     // 点击外部关闭音色选择器
     const handleClickOutside = (event) => {
-      if (!showVoiceSelector.value) return
-
-      // 检查是否点击在音色选择器容器内（包括下拉菜单）
-      const clickedInContainer = event.target.closest('.voice-selector-container') ||
-                                  event.target.closest('.voice-selector-component') ||
-                                  event.target.closest('.voice-selector-dropdown')
-
-      if (!clickedInContainer) {
-        showVoiceSelector.value = false
-        selectedSegmentIndex.value = -1
-      }
+      // 面板通过遮罩层点击关闭，这里保留作为备用
+      // 面板的关闭逻辑由 closeSegmentVoiceSelector 处理
     }
 
     onUnmounted(() => {
@@ -2165,32 +2077,95 @@ export default {
 
       segment.isGenerating = true
       try {
-        const response = await fetch('/api/v1/tts/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: segment.text,
-            voice_type: segment.voice,
-            context_texts: segment.contextText || '',
-            emotion: 'neutral',
-            emotion_scale: 3,
-            speech_rate: 0,
-            loudness_rate: 0,
-            pitch: 0,
-            resource_id: segment.voiceData?.resource_id || ''
+        let response
+        const token = localStorage.getItem('accessToken')
+
+        // 如果是克隆音色，使用克隆音色合成接口（与单段模式一致）
+        if (segment.isCloneVoice && segment.voiceData?.speaker_id) {
+          response = await fetch('/api/v1/voice/clone/tts', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              text: segment.text,
+              speaker_id: segment.voiceData.speaker_id,
+              style: '正常',
+              speed: getSpeechRateValue(segment.speechRate || 0),
+              volume: getLoudnessValue(segment.loudnessRate || 0),
+              pitch: getPitchValue(segment.pitch || 0),
+              language: 'ZH_CN'
+            })
           })
-        })
+        } else {
+          // 普通AI音色
+          response = await fetch('/api/v1/tts/generate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text: segment.text,
+              voice_type: segment.voice,
+              context_texts: segment.contextText || '',
+              emotion: 'neutral',
+              emotion_scale: 3,
+              speech_rate: parseInt(segment.speechRate || 0),
+              loudness_rate: parseInt(segment.loudnessRate || 0),
+              pitch: parseInt(segment.pitch || 0),
+              resource_id: segment.voiceData?.resource_id || ''
+            })
+          })
+        }
 
         if (response.ok) {
           const blob = await response.blob()
           segment.audioBlob = blob
           segment.audioUrl = URL.createObjectURL(blob)
+          // 保存参数快照
+          segment.audioSnapshot = {
+            text: segment.text,
+            voice: segment.voice,
+            contextText: segment.contextText || '',
+            speechRate: segment.speechRate || 0,
+            loudnessRate: segment.loudnessRate || 0,
+            pitch: segment.pitch || 0,
+            resource_id: segment.voiceData?.resource_id || '',
+            isCloneVoice: segment.isCloneVoice || false
+          }
           // 等待音频加载后获取时长
           await nextTick()
           if (segmentAudioElements.value[index]) {
             segmentAudioElements.value[index].load()
+            // 等待音频元数据加载完成
+            await new Promise((resolve) => {
+              const audioEl = segmentAudioElements.value[index]
+              if (audioEl.readyState >= 2) {
+                // 如果已经加载了元数据，直接解析
+                resolve()
+              } else {
+                // 否则等待 loadedmetadata 事件
+                audioEl.addEventListener('loadedmetadata', resolve, { once: true })
+              }
+            })
+            // 自动播放生成的音频
+            try {
+              // 停止其他正在播放的段
+              Object.values(segmentAudioElements.value).forEach((el, i) => {
+                if (el && i !== index && !el.paused) {
+                  el.pause()
+                  if (audioSegments.value[i]) {
+                    audioSegments.value[i].currentTime = el.currentTime
+                  }
+                }
+              })
+              await segmentAudioElements.value[index].play()
+              playingSegmentIndex.value = index
+            } catch (playError) {
+              console.log('自动播放失败:', playError)
+              // 自动播放失败不影响功能，用户可以手动播放
+            }
           }
         } else {
           throw new Error('TTS generation failed')
@@ -2202,6 +2177,59 @@ export default {
         segment.isGenerating = false
         // 自动合并所有段
         await mergeAllSegments()
+      }
+    }
+
+    // 检查段的参数是否与音频快照匹配
+    const isSegmentParamsChanged = (index) => {
+      const segment = audioSegments.value[index]
+      if (!segment || !segment.audioSnapshot) {
+        // 如果没有快照，说明还没有生成过音频，需要生成
+        return true
+      }
+
+      const snapshot = segment.audioSnapshot
+      // 检查所有相关参数是否改变
+      return (
+        segment.text !== snapshot.text ||
+        segment.voice !== snapshot.voice ||
+        (segment.contextText || '') !== (snapshot.contextText || '') ||
+        (segment.speechRate || 0) !== (snapshot.speechRate || 0) ||
+        (segment.loudnessRate || 0) !== (snapshot.loudnessRate || 0) ||
+        (segment.pitch || 0) !== (snapshot.pitch || 0) ||
+        (segment.voiceData?.resource_id || '') !== (snapshot.resource_id || '') ||
+        (segment.isCloneVoice || false) !== (snapshot.isCloneVoice || false)
+      )
+    }
+
+    const handleSegmentGenerateOrPlay = (index) => {
+      const segment = audioSegments.value[index]
+      if (!segment) return
+
+      // 检查参数是否改变
+      if (segment.audioUrl && isSegmentParamsChanged(index)) {
+        // 参数已改变，清除旧音频并重新生成
+        if (segment.audioUrl) {
+          URL.revokeObjectURL(segment.audioUrl)
+        }
+        segment.audioUrl = ''
+        segment.audioBlob = null
+        segment.duration = 0
+        segment.currentTime = 0
+        segment.audioSnapshot = null
+        // 停止播放（如果正在播放）
+        if (playingSegmentIndex.value === index && segmentAudioElements.value[index]) {
+          segmentAudioElements.value[index].pause()
+          playingSegmentIndex.value = -1
+        }
+        // 重新生成
+        generateSegmentTTS(index)
+      } else if (segment.audioUrl) {
+        // 参数未改变，直接播放/暂停
+        playSegment(index)
+      } else {
+        // 如果没有音频，则生成
+        generateSegmentTTS(index)
       }
     }
 
@@ -2826,6 +2854,8 @@ export default {
       playingSegmentIndex,
       segmentAudioElements,
       showInstructionInput,
+      showSegmentSettings,
+      toggleSegmentSettings,
       toggleMode,
       addSegment,
       copySegment,
@@ -2833,8 +2863,15 @@ export default {
       setSegmentVoiceSelectorRef,
       selectVoiceForSegment,
       onVoiceSelectForSegment,
+      onCloneVoiceSelectForSegment,
+      getSegmentSelectedVoice,
+      closeSegmentVoiceSelector,
+      segmentVoiceTab,
+      segmentSearchQuery,
+      segmentFilteredVoices,
       dropdownStyle,
       generateSegmentTTS,
+      handleSegmentGenerateOrPlay,
       onSegmentAudioLoaded,
       onSegmentTimeUpdate,
       onSegmentAudioEnded,

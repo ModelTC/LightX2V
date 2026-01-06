@@ -15,7 +15,7 @@ pipe = LightX2VPipeline(
 
 # Alternative: create generator from config JSON file
 # pipe.create_generator(
-#     config_json="../configs/qwen_image/qwen_image_i2i_2511_4step_quant.json"
+#     config_json="../configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json"
 # )
 
 # Enable offloading to significantly reduce VRAM usage with minimal speed impact
@@ -27,12 +27,12 @@ pipe = LightX2VPipeline(
 #     vae_offload=False,
 # )
 
-pipe.enable_quantize(dit_quantized=True, dit_quantized_ckpt="lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-quant/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors", quant_scheme="fp8-sgl")
+pipe.enable_quantize(dit_quantized=True, dit_quantized_ckpt="lightx2v/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors", quant_scheme="fp8-sgl")
 
 # Create generator manually with specified parameters
 pipe.create_generator(
     attn_mode="flash_attn3",
-    auto_resize=True,
+    resize_mode="adaptive",
     infer_steps=8,
     guidance_scale=1,
 )
