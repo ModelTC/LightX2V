@@ -247,10 +247,8 @@ class DraftAttnWeight(AttnWeightTemplate):
         mask[:, :, :mask_size_pre_frame] = True
 
         # diagonal mask
-        for f in range(num_frames):
-            start = f * mask_size_pre_frame
-            end = (f + 1) * mask_size_pre_frame
-            mask[:, start:end, start:end] = True
+        block_indices = torch.arange(mask.shape[1], device=mask.device) // mask_size_pre_frame
+        mask |= block_indices[:, None] == block_indices[None, :]
 
         h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True)  # [N, 3] -> [head, i, j]
         bucket_offsets = self.bucket_offsets_dict[(seqlen, frame_h, frame_w)]
