@@ -15,7 +15,7 @@ class ZImageTransformerWeights(WeightModule):
 
     def __init__(self, config):
         super().__init__()
-        self.blocks_num = config["num_layers"]
+        self.blocks_num = config["n_layers"]
         self.task = config["task"]
         self.config = config
         self.mm_type = config.get("dit_quant_scheme", "Default")
