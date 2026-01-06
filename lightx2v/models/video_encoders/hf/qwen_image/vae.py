@@ -1,5 +1,4 @@
 import gc
-import json
 import os
 
 import torch
@@ -39,9 +38,6 @@ class AutoencoderKLQwenImageVAE:
         vae_path = self.config.get("vae_path", os.path.join(self.config["model_path"], "vae"))
         self.model = AutoencoderKLQwenImage.from_pretrained(vae_path).to(self.device).to(self.dtype)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
-        with open(os.path.join(self.config["model_path"], "vae", "config.json"), "r") as f:
-            vae_config = json.load(f)
-            self.vae_scale_factor = 2 ** len(vae_config["temperal_downsample"]) if "temperal_downsample" in vae_config else 8
         if self.config.get("use_tiling_vae", False):
             self.model.enable_tiling()
 
@@ -124,7 +120,7 @@ class AutoencoderKLQwenImageVAE:
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
 
-        num_channels_latents = self.config["transformer_in_channels"] // 4
+        num_channels_latents = self.config["in_channels"] // 4
         image = image.to(self.model.device)
 
         if image.shape[1] != self.latent_channels:

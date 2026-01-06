@@ -36,7 +36,7 @@ class Qwen3Model_TextEncoder:
         self.tokenizer = Qwen2Tokenizer.from_pretrained(os.path.join(self.config["model_path"], "tokenizer"))
 
         if self.config["task"] == "i2i":
-            self.image_processor = VaeImageProcessor(vae_scale_factor=self.config.get("vae_scale_factor", 8) * 2)
+            self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
 
     def preprocess_image(self, image):
         if isinstance(image, Image.Image):

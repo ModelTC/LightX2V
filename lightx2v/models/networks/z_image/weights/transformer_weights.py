@@ -178,7 +178,7 @@ class ZImageTransformerBlock(WeightModule):
 
         # AdaLN modulation (if modulation is enabled)
         if self.modulation:
-            dim = config.get("dim", config.get("attention_out_dim", 3840))
+            dim = config["dim"]
             adaln_embed_dim = min(dim, 256)  # ADALN_EMBED_DIM = 256
             self.add_module(
                 "adaLN_modulation",
@@ -208,7 +208,7 @@ class ZImageSingleStreamAttention(WeightModule):
         self.quant_method = config.get("quant_method", None)
         self.sparge = config.get("sparge", False)
         self.attn_type = config.get("attn_type", "flash_attn3")
-        self.heads = config["attention_out_dim"] // config["attention_dim_head"]
+        self.heads = config["n_heads"]
         self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
         self.lazy_load = lazy_load
@@ -321,7 +321,7 @@ class ZImageFeedForward(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
 
-        dim = config.get("dim", config.get("attention_out_dim", 3840))
+        dim = config["dim"]
         hidden_dim = int(dim / 3 * 8)  # FeedForward hidden_dim = dim / 3 * 8
 
         # w1, w2, w3 for SiLU gating

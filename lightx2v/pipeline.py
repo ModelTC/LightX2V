@@ -99,20 +99,12 @@ class LightX2VPipeline:
             self.num_channels_latents = 32
 
         if model_cls in ["qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511", "qwen-image-2512"]:
-            self.zero_cond_t = False
             self.CONDITION_IMAGE_SIZE = 147456
             self.USE_IMAGE_ID_IN_PROMPT = True
             if model_cls == "qwen-image-edit":
                 self.CONDITION_IMAGE_SIZE = 1048576
                 self.USE_IMAGE_ID_IN_PROMPT = False
-            elif model_cls == "qwen-image-edit-2511":
-                self.zero_cond_t = True
             self.model_cls = "qwen_image"
-            self.num_layers = 60
-            self.attention_out_dim = 3072
-            self.attention_dim_head = 128
-            self.transformer_in_channels = 64
-            self.vae_scale_factor = 8
             if self.task in ["i2i"]:
                 self.prompt_template_encode = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
                 self.prompt_template_encode_start_idx = 64
@@ -121,11 +113,6 @@ class LightX2VPipeline:
                 self.prompt_template_encode_start_idx = 34
         elif self.model_cls in ["z_image"]:
             self.model_cls = "z_image"
-            self.num_layers = 30
-            self.attention_out_dim = 3840
-            self.attention_dim_head = 128
-            self.transformer_in_channels = 64
-            self.vae_scale_factor = 8
 
     def create_generator(
         self,
