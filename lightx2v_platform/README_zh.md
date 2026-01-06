@@ -12,6 +12,7 @@
 - 华为Ascend 910B
 - AMD ROCm
 - 摩尔线程 MUSA
+- 燧原 Enflame S60 (GCU)
 
 相关的docker环境可以参考：https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 

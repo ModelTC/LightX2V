@@ -11,6 +11,7 @@ Currently supported backends include:
 - Ascend 910B
 - AMD ROCm
 - MThreads MUSA
+- Enflame S60 (GCU)
 
 For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 

@@ -39,6 +39,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **January 6, 2026:** 🚀 Supported deployment on Enflame S60 (GCU).
+
 - **December 31, 2025:** 🚀 We support the [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) text-to-image model since Day 0. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) has been updated with CFG / step-distilled LoRA. Usage examples can be found [here](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image).
 
 - **December 27, 2025:** 🚀 Supported deployment on MThreads MUSA.
