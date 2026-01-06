@@ -217,8 +217,8 @@ class DraftAttnWeight(AttnWeightTemplate):
             return out.reshape(out.shape[0], -1)
 
         seqlen, head_num, head_dim = q.shape
-        block_size = frame_h * frame_w
-        num_frames = seqlen // block_size
+        frame_size = frame_h * frame_w
+        num_frames = seqlen // frame_size
 
         pool_h, pool_w = (8, 16) if frame_h < frame_w else (16, 8)
 
@@ -242,18 +242,27 @@ class DraftAttnWeight(AttnWeightTemplate):
 
         mask = self.attention_percentile_mask_headwise(attn, 1 - self.sparsity_ratio)
 
+        # sink mask
+        mask_size_pre_frame = mask.shape[1] // num_frames
+        mask[:, :, :mask_size_pre_frame] = True
+
+        # diagonal mask
+        for f in range(num_frames):
+            start = f * mask_size_pre_frame
+            end = (f + 1) * mask_size_pre_frame
+            mask[:, start:end, start:end] = True
+
         h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True)  # [N, 3] -> [head, i, j]
         bucket_offsets = self.bucket_offsets_dict[(seqlen, frame_h, frame_w)]
-        mask_size_pre_frame = mask.shape[1] // num_frames
 
         base_offset = h_indices * seqlen
 
-        q_frame_base = (i_indices // mask_size_pre_frame) * block_size
+        q_frame_base = (i_indices // mask_size_pre_frame) * frame_size
         q_bucket_idx = i_indices % mask_size_pre_frame
         q_start = base_offset + q_frame_base + bucket_offsets[q_bucket_idx]
         q_end = base_offset + q_frame_base + bucket_offsets[q_bucket_idx + 1]
 
-        k_frame_base = (j_indices // mask_size_pre_frame) * block_size
+        k_frame_base = (j_indices // mask_size_pre_frame) * frame_size
         k_bucket_idx = j_indices % mask_size_pre_frame
         k_start = base_offset + k_frame_base + bucket_offsets[k_bucket_idx]
         k_end = base_offset + k_frame_base + bucket_offsets[k_bucket_idx + 1]
