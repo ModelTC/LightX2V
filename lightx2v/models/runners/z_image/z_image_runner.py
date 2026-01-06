@@ -115,7 +115,7 @@ class ZImageRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_image_len.observe(width * height)
 
-        vae_scale_factor = self.config.get["vae_scale_factor"]
+        vae_scale_factor = self.config["vae_scale_factor"]
         vae_scale = vae_scale_factor * 2
         if height % vae_scale != 0 or width % vae_scale != 0:
             logger.warning(f"Image dimensions ({height}, {width}) are not divisible by {vae_scale}. Resizing to nearest valid dimensions.")
@@ -240,23 +240,22 @@ class ZImageRunner(DefaultRunner):
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def set_target_shape(self):
-        if hasattr(self.input_info, "custom_shape") and isinstance(self.input_info.custom_shape, list) and len(self.input_info.custom_shape) == 2:
-            height, width = self.input_info.custom_shape
-        elif hasattr(self.input_info, "aspect_ratio") and isinstance(self.input_info.aspect_ratio, str) and self.input_info.aspect_ratio:
-            width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.input_info.aspect_ratio]
+        if self.config.get("custom_shape", None) is not None:
+            parts = self.config["custom_shape"].split(",")
+            height = int(parts[0].strip())
+            width = int(parts[1].strip())
+        elif self.config.get("aspect_ratio", None) is not None:
+            width, height = ASPECT_RATIO_MAP[self.config["aspect_ratio"]]
         else:
-            width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.config["aspect_ratio"]]
+            raise NotImplementedError
+
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
         # Use config vae_scale_factor to match official pipeline calculation
-        vae_scale_factor = self.config.get["vae_scale_factor"]
+        vae_scale_factor = self.config["vae_scale_factor"]
         height = 2 * (int(height) // (vae_scale_factor * 2))
         width = 2 * (int(width) // (vae_scale_factor * 2))
-
-        if self.config["task"] == "i2i":
-            num_channels_latents = self.model.in_channels
-        else:
-            num_channels_latents = self.config.get("num_channels_latents", 16)
+        num_channels_latents = self.config.get("num_channels_latents", 16)
         self.input_info.target_shape = (1, num_channels_latents, height, width)
 
     def set_img_shapes(self):
@@ -265,13 +264,16 @@ class ZImageRunner(DefaultRunner):
                 raise ValueError(f"target_shape must be 4D [B, C, H, W], got {len(self.input_info.target_shape)}D: {self.input_info.target_shape}")
             _, _, latent_height, latent_width = self.input_info.target_shape
         else:
-            if hasattr(self.input_info, "custom_shape") and isinstance(self.input_info.custom_shape, list) and len(self.input_info.custom_shape) == 2:
-                height, width = self.input_info.custom_shape
-            elif hasattr(self.input_info, "aspect_ratio") and isinstance(self.input_info.aspect_ratio, str) and self.input_info.aspect_ratio:
-                width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.input_info.aspect_ratio]
+            if self.config.get("custom_shape", None) is not None:
+                parts = self.config["custom_shape"].split(",")
+                height = int(parts[0].strip())
+                width = int(parts[1].strip())
+            elif self.config.get("aspect_ratio", None) is not None:
+                width, height = ASPECT_RATIO_MAP[self.config["aspect_ratio"]]
             else:
-                width, height = self.config.get("aspect_ratios", ASPECT_RATIO_MAP)[self.config["aspect_ratio"]]
-            vae_scale_factor = self.config.get["vae_scale_factor"]
+                raise NotImplementedError
+
+            vae_scale_factor = self.config["vae_scale_factor"]
             latent_height = 2 * (int(height) // (vae_scale_factor * 2))
             latent_width = 2 * (int(width) // (vae_scale_factor * 2))
 
