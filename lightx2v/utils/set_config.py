@@ -90,6 +90,16 @@ def set_config(args):
             config["attnmap_frame_num"] += 1
             config["padding_multiple"] = config["attnmap_frame_num"]
 
+    # Load diffusers vae config
+    if os.path.exists(os.path.join(config["model_path"], "vae", "config.json")):
+        with open(os.path.join(config["model_path"], "vae", "config.json"), "r") as f:
+            vae_config = json.load(f)
+            if "temperal_downsample" in vae_config:
+                vae_config["vae_scale_factor"] = 2 ** len(vae_config["temperal_downsample"])
+            elif "block_out_channels" in vae_config:
+                vae_config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
+        config.update(vae_config)
+
     return config
 
 
