@@ -13,7 +13,7 @@ import torch.distributed as dist
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-@PLATFORM_DEVICE_REGISTER("gcu")
+@PLATFORM_DEVICE_REGISTER("enflame_gcu")
 class EnflameGcuDevice:
     """
     Enflame GCU Device implementation for LightX2V.
@@ -22,7 +22,7 @@ class EnflameGcuDevice:
     Most PyTorch operations work transparently through the GCU backend.
     """
 
-    name = "gcu"
+    name = "enflame_gcu"
 
     @staticmethod
     def is_available() -> bool:
