@@ -1143,6 +1143,10 @@ async def api_v1_voice_clone(request: Request, user=Depends(verify_user_access))
         if not file:
             return JSONResponse({"error": "No file uploaded"}, status_code=400)
         raw_data = await file.read()
+
+        user_text = form.get("text", "").strip() if form.get("text") else ""
+        use_user_text = bool(user_text)
+
         cur_duration, min_duration, step_duration = 10.0, 5.0, 2.0
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1152,13 +1156,19 @@ async def api_v1_voice_clone(request: Request, user=Depends(verify_user_access))
                 async with aiofiles.open(audio_path, "wb") as fout:
                     await fout.write(audio_data)
 
-                asr_success, asr_result = await volcengine_asr_client.recognize_request(file_path=audio_path)
-                if not asr_success:
-                    return JSONResponse({"error": f"ASR failed: {asr_result}"}, status_code=500)
-                asr_text = asr_result.get("result", {}).get("text", "")
-                if not asr_text:
-                    return JSONResponse({"error": "Failed to extract text from audio"}, status_code=500)
-                logger.info(f"ASR recognized text: {asr_text}")
+                if use_user_text:
+                    asr_text = user_text
+                    logger.info(f"Using user input text (skipping ASR): {asr_text}")
+                else:
+                    if volcengine_asr_client is None:
+                        return JSONResponse({"error": "ASR client not initialized"}, status_code=500)
+                    asr_success, asr_result = await volcengine_asr_client.recognize_request(file_path=audio_path)
+                    if not asr_success:
+                        return JSONResponse({"error": f"ASR failed: {asr_result}"}, status_code=500)
+                    asr_text = asr_result.get("result", {}).get("text", "")
+                    if not asr_text:
+                        return JSONResponse({"error": "Failed to extract text from audio"}, status_code=500)
+                    logger.info(f"ASR recognized text: {asr_text}")
 
                 clone_success, clone_result = await sensetime_voice_clone_client.upload_audio_clone(
                     audio_path=audio_path,

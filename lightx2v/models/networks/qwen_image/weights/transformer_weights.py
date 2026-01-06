@@ -206,7 +206,7 @@ class QwenImageImgAttention(WeightModule):
         self.mm_type = mm_type
         self.task = task
         self.config = config
-        self.heads = config["attention_out_dim"] // config["attention_dim_head"]
+        self.heads = config["num_attention_heads"]
         self.rms_norm_type = config.get("rms_norm_type", "one-pass")
         self.ln_type = config.get("ln_type", "Triton")
         self.lazy_load = lazy_load
@@ -320,7 +320,7 @@ class QwenImageTxtAttention(WeightModule):
         self.mm_type = mm_type
         self.task = task
         self.config = config
-        self.heads = config["attention_out_dim"] // config["attention_dim_head"]
+        self.heads = config["num_attention_heads"]
         self.rms_norm_type = config.get("rms_norm_type", "one-pass")
         self.ln_type = config.get("ln_type", "Triton")
         self.lazy_load = lazy_load

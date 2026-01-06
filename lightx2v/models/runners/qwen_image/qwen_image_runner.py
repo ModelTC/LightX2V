@@ -180,7 +180,6 @@ class QwenImageRunner(DefaultRunner):
     def run_vae_encoder(self, image):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
-            self.vae_scale_factor = self.vae.vae_scale_factor
         image_latents = self.vae.encode_vae_image(image.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae
@@ -260,14 +259,13 @@ class QwenImageRunner(DefaultRunner):
         return None
 
     def set_target_shape(self):
-        vae_scale_factor = self.config["vae_scale_factor"]
         custom_shape = self.get_custom_shape()
         if custom_shape is not None:
             width, height = custom_shape
         else:
             width, height = self.input_info.original_size[-1]
             calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, width / height)
-            multiple_of = vae_scale_factor * 2
+            multiple_of = self.config["vae_scale_factor"] * 2
             width = calculated_width // multiple_of * multiple_of
             height = calculated_height // multiple_of * multiple_of
         logger.info(f"Qwen Image Runner set target shape: {width}x{height}")
@@ -276,8 +274,8 @@ class QwenImageRunner(DefaultRunner):
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
-        height = 2 * (int(height) // (vae_scale_factor * 2))
-        width = 2 * (int(width) // (vae_scale_factor * 2))
+        height = 2 * (int(height) // (self.config["vae_scale_factor"] * 2))
+        width = 2 * (int(width) // (self.config["vae_scale_factor"] * 2))
         num_channels_latents = self.config["in_channels"] // 4
         if not self.is_layered:
             self.input_info.target_shape = (1, 1, num_channels_latents, height, width)

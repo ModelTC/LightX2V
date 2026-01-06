@@ -1,15 +1,9 @@
 {
     "aspect_ratio": "16:9",
     "num_channels_latents": 16,
-    "batchsize": 1,
-    "vae_scale_factor": 8,
     "infer_steps": 9,
-    "num_layers": 30,
-    "attention_out_dim": 3840,
-    "attention_dim_head": 128,
     "attn_type": "flash_attn3",
     "enable_cfg": false,
     "sample_guide_scale": 0.0,
-    "n_refiner_layers": 2,
     "patch_size": 2
 }
