@@ -36,6 +36,7 @@ class EnflameGcuDevice:
         """
         try:
             import torch_gcu
+
             return torch_gcu.gcu.is_available()
         except ImportError:
             return False
@@ -65,15 +66,15 @@ class EnflameGcuDevice:
             import torch_gcu
         except ImportError:
             raise ImportError("torch_gcu is not available. Please install torch_gcu for Enflame GCU support.")
-        
+
         # Use NCCL backend directly (ECCL is compatible with NCCL API)
         # ECCL should make NCCL backend available through torch_gcu
         dist.init_process_group(backend="nccl")
-        
+
         # Use torch.gcu.set_device() instead of torch.cuda.set_device()
-        if hasattr(torch, 'gcu') and hasattr(torch.gcu, 'set_device'):
+        if hasattr(torch, "gcu") and hasattr(torch.gcu, "set_device"):
             torch.gcu.set_device(dist.get_rank())
-        elif hasattr(torch_gcu, 'gcu') and hasattr(torch_gcu.gcu, 'set_device'):
+        elif hasattr(torch_gcu, "gcu") and hasattr(torch_gcu.gcu, "set_device"):
             torch_gcu.gcu.set_device(dist.get_rank())
         else:
             # Fallback: try cuda API (may work if torch_gcu provides CUDA compatibility)
@@ -82,5 +83,5 @@ class EnflameGcuDevice:
             except Exception:
                 # If all else fails, just log a warning
                 import warnings
-                warnings.warn("Could not set GCU device. Continuing without explicit device setting.")
 
+                warnings.warn("Could not set GCU device. Continuing without explicit device setting.")

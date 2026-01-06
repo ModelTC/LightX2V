@@ -13,6 +13,7 @@ flash_attn_interface = None
 # Try Flash Attention 3 first (newer, faster)
 try:
     import flash_attn_interface
+
     flash_attn_interface.flash_attn_varlen_func  # Test if function exists
     FLASH_ATTN_3_AVAILABLE = True
     logger.info("Flash Attention 3 is available for Enflame GCU")
@@ -20,6 +21,7 @@ except (ImportError, AttributeError):
     # Fallback to Flash Attention 2
     try:
         from flash_attn import flash_attn_varlen_func
+
         FLASH_ATTN_2_AVAILABLE = True
         logger.info("Flash Attention 2 is available for Enflame GCU")
     except ImportError:
@@ -117,23 +119,15 @@ class FlashAttnEnflameGcu(AttnWeightTemplate):
         if cu_seqlens_q is None:
             # If not provided, assume uniform sequence lengths
             bs = q_flat.shape[0] // max_seqlen_q if max_seqlen_q else 1
-            q_lens = torch.tensor([max_seqlen_q] * bs, dtype=torch.int32).to(
-                device=q_flat.device, non_blocking=True
-            )
-            cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
-                0, dtype=torch.int32
-            ).to(q_flat.device, non_blocking=True)
+            q_lens = torch.tensor([max_seqlen_q] * bs, dtype=torch.int32).to(device=q_flat.device, non_blocking=True)
+            cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32).to(q_flat.device, non_blocking=True)
         elif cu_seqlens_q.dtype != torch.int32:
             cu_seqlens_q = cu_seqlens_q.to(torch.int32)
 
         if cu_seqlens_kv is None:
             bs = k_flat.shape[0] // max_seqlen_kv if max_seqlen_kv else 1
-            k_lens = torch.tensor([max_seqlen_kv] * bs, dtype=torch.int32).to(
-                device=k_flat.device, non_blocking=True
-            )
-            cu_seqlens_kv = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
-                0, dtype=torch.int32
-            ).to(k_flat.device, non_blocking=True)
+            k_lens = torch.tensor([max_seqlen_kv] * bs, dtype=torch.int32).to(device=k_flat.device, non_blocking=True)
+            cu_seqlens_kv = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32).to(k_flat.device, non_blocking=True)
         elif cu_seqlens_kv.dtype != torch.int32:
             cu_seqlens_kv = cu_seqlens_kv.to(torch.int32)
 
@@ -221,13 +215,10 @@ class FlashAttnEnflameGcu(AttnWeightTemplate):
 
         # GCU compatibility: ensure all tensors are float32 (not float64)
         # scaled_dot_product_attention may use int64 internally, but we ensure inputs are correct
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p
-        )
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p)
 
         # Transpose back to [B, L, Nq, C] and flatten
         out = out.transpose(1, 2).contiguous()
         out = out.reshape(bs * max_seqlen_q, -1)
 
         return out
-
