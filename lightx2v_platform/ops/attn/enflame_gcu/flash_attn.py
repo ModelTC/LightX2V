@@ -1,6 +1,7 @@
 import torch
 from loguru import logger
 
+from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
@@ -99,6 +100,22 @@ class FlashAttnEnflameGcu(AttnWeightTemplate):
             # Fallback to PyTorch SDPA
             return self._sdpa_fallback(q, k, v, cu_seqlens_q, max_seqlen_q, causal, dropout_p)
 
+        # Ensure all tensors are on GCU device
+        # Get GCU device (AI_DEVICE should be "gcu" for enflame platform)
+        gcu_device = torch.device(AI_DEVICE) if AI_DEVICE else q.device
+
+        # Move tensors to GCU device if not already there
+        if q.device.type != "gcu":
+            q = q.to(gcu_device)
+        if k.device.type != "gcu":
+            k = k.to(gcu_device)
+        if v.device.type != "gcu":
+            v = v.to(gcu_device)
+        if cu_seqlens_q is not None and cu_seqlens_q.device.type != "gcu":
+            cu_seqlens_q = cu_seqlens_q.to(gcu_device)
+        if cu_seqlens_kv is not None and cu_seqlens_kv.device.type != "gcu":
+            cu_seqlens_kv = cu_seqlens_kv.to(gcu_device)
+
         # Ensure data types are half precision
         import math
 
@@ -114,22 +131,28 @@ class FlashAttnEnflameGcu(AttnWeightTemplate):
         k_flat = half(k)
         v_flat = half(v)
 
-        # Ensure cu_seqlens are int32 (GCU does not support int64)
+        # Ensure cu_seqlens are int32 (GCU does not support int64) and on GCU device
         # Build cu_seqlens from q_lens/k_lens if provided, following native implementation
         if cu_seqlens_q is None:
             # If not provided, assume uniform sequence lengths
             bs = q_flat.shape[0] // max_seqlen_q if max_seqlen_q else 1
-            q_lens = torch.tensor([max_seqlen_q] * bs, dtype=torch.int32).to(device=q_flat.device, non_blocking=True)
-            cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32).to(q_flat.device, non_blocking=True)
-        elif cu_seqlens_q.dtype != torch.int32:
-            cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+            q_lens = torch.tensor([max_seqlen_q] * bs, dtype=torch.int32, device=gcu_device)
+            cu_seqlens_q = torch.cat([q_lens.new_zeros([1], device=gcu_device), q_lens]).cumsum(0, dtype=torch.int32)
+        else:
+            if cu_seqlens_q.dtype != torch.int32:
+                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+            if cu_seqlens_q.device.type != "gcu":
+                cu_seqlens_q = cu_seqlens_q.to(gcu_device)
 
         if cu_seqlens_kv is None:
             bs = k_flat.shape[0] // max_seqlen_kv if max_seqlen_kv else 1
-            k_lens = torch.tensor([max_seqlen_kv] * bs, dtype=torch.int32).to(device=k_flat.device, non_blocking=True)
-            cu_seqlens_kv = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32).to(k_flat.device, non_blocking=True)
-        elif cu_seqlens_kv.dtype != torch.int32:
-            cu_seqlens_kv = cu_seqlens_kv.to(torch.int32)
+            k_lens = torch.tensor([max_seqlen_kv] * bs, dtype=torch.int32, device=gcu_device)
+            cu_seqlens_kv = torch.cat([k_lens.new_zeros([1], device=gcu_device), k_lens]).cumsum(0, dtype=torch.int32)
+        else:
+            if cu_seqlens_kv.dtype != torch.int32:
+                cu_seqlens_kv = cu_seqlens_kv.to(torch.int32)
+            if cu_seqlens_kv.device.type != "gcu":
+                cu_seqlens_kv = cu_seqlens_kv.to(gcu_device)
 
         # Ensure max_seqlen are int (not int64)
         if max_seqlen_q is not None:

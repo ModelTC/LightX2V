@@ -25,6 +25,17 @@ class EnflameGcuDevice:
     name = "enflame_gcu"
 
     @staticmethod
+    def init_device_env():
+        """
+        Initialize Enflame GCU device environment.
+
+        This method is called during platform initialization.
+        Currently no special initialization is needed as torch_gcu
+        handles device setup automatically.
+        """
+        pass
+
+    @staticmethod
     def is_available() -> bool:
         """
         Check if Enflame GCU is available.

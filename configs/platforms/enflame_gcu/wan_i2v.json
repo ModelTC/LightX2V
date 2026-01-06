@@ -13,7 +13,9 @@
     "cpu_offload": true,
     "offload_granularity": "model",
     "modulate_type": "torch",
-    "rope_type": "torch",
+    "rope_type": "gcu_wan_rope",
+    "ln_type": "gcu_layer_norm",
+    "rms_type": "Default",
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",
@@ -21,4 +23,3 @@
     },
     "comment_parallel": "Hybrid parallelism: 4-way Ulysses + 2-way CFG = 8 GPUs total"
 }
-

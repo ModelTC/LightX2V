@@ -16,7 +16,7 @@ elif PLATFORM == "ascend_npu":
     from .mm.ascend_npu import *
 elif PLATFORM == "metax_cuda":
     from .attn.metax_cuda import *
-elif PLATFORM == "gcu":
+elif PLATFORM == "enflame_gcu":
     from .attn.enflame_gcu import *
     from .norm.enflame_gcu import *
     from .rope.enflame_gcu import *
