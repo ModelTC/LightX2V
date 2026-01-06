@@ -30,14 +30,14 @@ pipe = LightX2VPipeline(
 # Load distilled LoRA weights
 pipe.enable_lora(
     [
-        {"path": "lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors", "strength": 1.0},
+        {"path": "lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-8steps-V1.0-fp32.safetensors", "strength": 1.0},
     ]
 )
 # Create generator manually with specified parameters
 pipe.create_generator(
     attn_mode="flash_attn3",
     aspect_ratio="16:9",
-    infer_steps=4,
+    infer_steps=8,
     guidance_scale=1,
 )
 

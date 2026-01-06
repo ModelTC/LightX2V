@@ -42,10 +42,10 @@ Text-to-Image Models
 # Inference with 2512 text-to-image original model, default is 50 steps
 bash qwen_image_t2i_2512.sh
 
-# Inference with 2512 text-to-image step-distilled model, default is 4 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
+# Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
 bash qwen_image_t2i_2512_lora.sh
 
-# Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 4 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
+# Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 8 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
 bash qwen_image_t2i_2512_distill_fp8.sh
 ```
 
@@ -54,10 +54,10 @@ Image Editing Models
 # Inference with 2511 image editing original model, default is 40 steps
 bash qwen_image_i2i_2511.sh
 
-# Inference with 2511 image editing step-distilled model, default is 4 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
+# Inference with 2511 image editing step-distilled model, default is 8 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
 bash qwen_image_i2i_2511_lora.sh
 
-# Inference with 2511 image editing step-distilled + FP8 quantized model, default is 4 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
+# Inference with 2511 image editing step-distilled + FP8 quantized model, default is 8 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
 bash qwen_image_i2i_2511_distill_fp8.sh
 ```
 

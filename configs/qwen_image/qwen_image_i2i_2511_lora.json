@@ -10,7 +10,7 @@
     "USE_IMAGE_ID_IN_PROMPT": true,
     "lora_configs": [
         {
-          "path": "lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors",
+          "path": "lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors",
           "strength": 1.0
         }
       ]
