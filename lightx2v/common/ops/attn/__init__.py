@@ -5,6 +5,8 @@ from .radial_attn import RadialAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2Weight, SageAttn3Weight
 from .spassage_attn import SageAttnWeight
+from .ssta_attn import SstaAttnWeight
+from .sta_attn import StaAttnWeight
 from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight

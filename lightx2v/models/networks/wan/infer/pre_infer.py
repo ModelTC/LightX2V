@@ -62,6 +62,7 @@ class WanPreInfer:
             motion_vec = None
 
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
+        # print(f"grid_sizes: {grid_sizes_t}, {grid_sizes_h}, {grid_sizes_w}")
         x = x.flatten(2).transpose(1, 2).contiguous()
         # seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
 

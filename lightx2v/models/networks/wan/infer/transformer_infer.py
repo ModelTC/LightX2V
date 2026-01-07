@@ -195,7 +195,8 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
-            if self.self_attn_1_type in ["flash_attn2", "flash_attn3", "draft_attn"]:
+            # if self.self_attn_1_type in ["flash_attn2", "flash_attn3", "draft_attn"]:
+            if True:
                 self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
             else:
                 self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
@@ -232,7 +233,33 @@ class WanTransformerInfer(BaseTransformerInfer):
                     frame_w=self.scheduler.latents.shape[3] // self.scheduler.patch_size[2],
                     block_idx=self.block_idx,
                 )
+            elif self.config["self_attn_1_type"] == "ssta_attn_hyflex":
+                if self.scheduler.step_index < 12:
+                    # print("self_attn_1_full")
+                    attn_out = phase.self_attn_1_full.apply(
+                        q=q,
+                        k=k,
+                        v=v,
+                        cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                        cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                        max_seqlen_q=img_qkv_len,
+                        max_seqlen_kv=img_qkv_len,
+                        model_cls=self.config["model_cls"],
+                    )
+                else:
+                    # print("self_attn_1")
+                    attn_out = phase.self_attn_1.apply(
+                        q=q,
+                        k=k,
+                        v=v,
+                        cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                        cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                        max_seqlen_q=img_qkv_len,
+                        max_seqlen_kv=img_qkv_len,
+                        model_cls=self.config["model_cls"],
+                    )
             else:
+                # print("self_attn_1_full fa3")
                 attn_out = phase.self_attn_1.apply(
                     q=q,
                     k=k,
