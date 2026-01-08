@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from torch import nn
+from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -501,7 +502,6 @@ class ZImageScheduler(BaseScheduler):
                 image_latents_list = [item["image_latents"] for item in input_info.image_encoder_output]
                 if len(image_latents_list) > 0:
                     image_latents = torch.cat(image_latents_list, dim=0) if len(image_latents_list) > 1 else image_latents_list[0]
-
                     batch_size = self.latents.shape[0]
                     if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
                         additional_image_per_prompt = batch_size // image_latents.shape[0]
@@ -511,17 +511,13 @@ class ZImageScheduler(BaseScheduler):
 
                     _, _, height, width = self.latents.shape
                     if image_latents.shape[2:] != (height, width):
-                        from torch.nn import functional as F
-
                         image_latents = F.interpolate(image_latents, size=(height, width), mode="bilinear", align_corners=False)
-
                     latent_timestep = self.timesteps[:1].repeat(self.latents.shape[0])
 
                     noise = randn_tensor(self.latents.shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
                     if image_latents.shape[1] != self.latents.shape[1]:
                         repeat_factor = self.latents.shape[1] // image_latents.shape[1]  # 64 // 16 = 4
                         image_latents = image_latents.repeat(1, repeat_factor, 1, 1)
-
                     self.latents = self.scheduler.scale_noise(image_latents, latent_timestep, noise)
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
