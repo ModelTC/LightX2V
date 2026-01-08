@@ -1,18 +1,3 @@
-""" 
-Copyright (c) 2025 by SLA team.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-
-Citation (please cite if you use this code):
-
-@article{zhang2025sla,
-  title={SLA: Beyond Sparsity in Diffusion Transformers via Fine-Tunable Sparse-Linear Attention}, 
-  author={Jintao Zhang and Haoxu Wang and Kai Jiang and Shuo Yang and Kaiwen Zheng and Haocheng Xi and Ziteng Wang and Hongzhou Zhu and Min Zhao and Ion Stoica and Joseph E. Gonzalez and Jun Zhu and Jianfei Chen},
-  journal={arXiv preprint arXiv:2509.24006},
-  year={2025}
-}
-"""
-
 import torch
 import triton
 import triton.language as tl
@@ -20,10 +5,14 @@ import triton.language as tl
 
 @triton.jit
 def _attn_fwd(
-    Q, K, V,
+    Q,
+    K,
+    V,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
-    LUT, LSE, OS,
+    LUT,
+    LSE,
+    OS,
     L: tl.constexpr,
     M_BLOCKS: tl.constexpr,
     D: tl.constexpr,
@@ -46,8 +35,8 @@ def _attn_fwd(
     OS_ptrs = OS + qkv_offset + offs_m[:, None] * D + offs_d[None, :]
     LUT_ptr = LUT + lut_offset
     LSE_ptrs = LSE + lse_offset + offs_m
-    
-    m_i = tl.full([BLOCK_M], -float('inf'), dtype=tl.float32)
+
+    m_i = tl.full([BLOCK_M], -float("inf"), dtype=tl.float32)
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     o_s = tl.zeros([BLOCK_M, D], dtype=tl.float32)
 
@@ -55,7 +44,7 @@ def _attn_fwd(
     for block_idx in tl.range(topk):
         idx_n = tl.load(LUT_ptr + block_idx)
         n_mask = offs_n < L - idx_n * BLOCK_N
-        
+
         k = tl.load(K_ptrs + idx_n * BLOCK_N * D, mask=n_mask[None, :])
         qk = tl.dot(q, k) * (qk_scale * 1.4426950408889634)  # = 1 / ln(2)
         if L - idx_n * BLOCK_N < BLOCK_N:
@@ -77,14 +66,16 @@ def _attn_fwd(
 
     o_s = o_s / l_i[:, None]
     tl.store(OS_ptrs, o_s.to(OS.type.element_ty), mask=offs_m[:, None] < L)
-    
+
     m_i += tl.math.log2(l_i)
     tl.store(LSE_ptrs, m_i, mask=offs_m < L)
 
 
 @triton.jit
 def _attn_bwd_preprocess(
-    OS, DOS, DELTAS,
+    OS,
+    DOS,
+    DELTAS,
     L,
     D: tl.constexpr,
     BLOCK_M: tl.constexpr,
@@ -101,7 +92,7 @@ def _attn_bwd_preprocess(
 
     o_s = tl.load(OS + offs_m[:, None] * D + offs_d[None, :], mask=offs_m[:, None] < L)
     do_s = tl.load(DOS + offs_m[:, None] * D + offs_d[None, :], mask=offs_m[:, None] < L)
-    
+
     delta_s = tl.sum(o_s * do_s, axis=1).to(DELTAS.type.element_ty)
     tl.store(DELTAS + offs_m, delta_s, mask=offs_m < L)
 
@@ -109,8 +100,14 @@ def _attn_bwd_preprocess(
 # the main inner-loop logic for computing dQ
 @triton.jit
 def _attn_bwd_dq(
-    Q, K, V, LSE, DELTAS,
-    DOS, DQ, LUT,
+    Q,
+    K,
+    V,
+    LSE,
+    DELTAS,
+    DOS,
+    DQ,
+    LUT,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
     L: tl.constexpr,
@@ -144,30 +141,38 @@ def _attn_bwd_dq(
     do_s = tl.load(DOS_ptrs, mask=offs_m[:, None] < L)
     delta_s = tl.load(DELTAS_ptrs, mask=offs_m < L)
     lse = tl.load(LSE_ptrs, mask=offs_m < L, other=float("inf"))
-    
+
     dq = tl.zeros([BLOCK_M, D], dtype=tl.float32)
     for block_idx in tl.range(topk, num_stages=2):
         idx_n = tl.load(LUT_ptr + block_idx)
         n_mask = offs_n < L - idx_n * BLOCK_N
-        
+
         k = tl.load(K_ptrs + idx_n * BLOCK_N * D, mask=n_mask[:, None])
         v = tl.load(V_ptrs + idx_n * BLOCK_N * D, mask=n_mask[:, None])
         qk = tl.dot(q, k.T) * (qk_scale * 1.4426950408889634)  # = 1 / ln(2)
         p = tl.math.exp2(qk - lse[:, None])
         p = tl.where(n_mask[None, :], p, 0.0)
-        
+
         # Compute dP and dS.
         dp = tl.dot(do_s, v.T).to(tl.float32)
         ds = p * (dp - delta_s[:, None])
         # Compute dQ.
         dq += tl.dot(ds.to(k.dtype), k)
     tl.store(DQ_ptrs, dq * qk_scale, mask=offs_m[:, None] < L)
-    
+
 
 @triton.jit
 def _attn_bwd_dkdv(
-    Q, K, V, DOS, DK, DV,
-    qk_scale, KBID, LSE, DELTAS,
+    Q,
+    K,
+    V,
+    DOS,
+    DK,
+    DV,
+    qk_scale,
+    KBID,
+    LSE,
+    DELTAS,
     L: tl.constexpr,
     M_BLOCKS: tl.constexpr,
     N_BLOCKS: tl.constexpr,
@@ -202,7 +207,7 @@ def _attn_bwd_dkdv(
     # load K, V and CK: they stay in SRAM throughout the inner loop.
     k = tl.load(K_ptrs, mask=offs_n[:, None] < L)
     v = tl.load(V_ptrs, mask=offs_n[:, None] < L)
-        
+
     dk = tl.zeros([BLOCK_N, D], dtype=tl.float32)
     dv = tl.zeros([BLOCK_N, D], dtype=tl.float32)
     for idx_m in tl.range(0, L, BLOCK_M2):
@@ -223,7 +228,7 @@ def _attn_bwd_dkdv(
             dpT = tl.dot(v, tl.trans(do))
             dsT = pT * (dpT - delta[None, :])
             dk += tl.dot(dsT.to(q.dtype), q)
-        
+
         # Increment pointers
         Q_ptrs += BLOCK_M2 * D
         DOS_ptrs += BLOCK_M2 * D
@@ -235,7 +240,7 @@ def _attn_bwd_dkdv(
     # Write back dK, dV and dCK
     tl.store(DK_ptrs, dk * qk_scale, mask=offs_n[:, None] < L)
     tl.store(DV_ptrs, dv, mask=offs_n[:, None] < L)
-    
+
 
 class _attention(torch.autograd.Function):
     @staticmethod
@@ -257,15 +262,8 @@ class _attention(torch.autograd.Function):
         lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
 
         grid = (M_BLOCKS, B * H)
-        _attn_fwd[grid](
-            q, k, v, qk_scale, topk,
-            lut, lse, o_s,
-            L, M_BLOCKS,
-            D, BLOCK_M, BLOCK_N,
-            num_warps=4 if q.shape[-1] == 64 else 8,
-            num_stages=3
-        )
-        
+        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, L, M_BLOCKS, D, BLOCK_M, BLOCK_N, num_warps=4 if q.shape[-1] == 64 else 8, num_stages=3)
+
         ctx.save_for_backward(q, k, v, k_block_id, lut, lse, o_s)
         ctx.qk_scale = qk_scale
         ctx.topk = topk
@@ -291,30 +289,40 @@ class _attention(torch.autograd.Function):
 
         grid = (M_BLOCKS, B * H)
         _attn_bwd_preprocess[grid](
-            o_s, do_s, delta_s,
-            L, D, BLOCK_M,
+            o_s,
+            do_s,
+            delta_s,
+            L,
+            D,
+            BLOCK_M,
         )
 
         grid = (M_BLOCKS, B * H)
         _attn_bwd_dq[grid](
-            q, k, v, lse, delta_s,
-            do_s, dq, lut,
-            ctx.qk_scale, ctx.topk,
-            L, M_BLOCKS,
-            D, BLOCK_M, BLOCK_N,
-            num_warps=4 if q.shape[-1] == 64 else 8,
-            num_stages=4 if q.shape[-1] == 64 else 5
+            q, k, v, lse, delta_s, do_s, dq, lut, ctx.qk_scale, ctx.topk, L, M_BLOCKS, D, BLOCK_M, BLOCK_N, num_warps=4 if q.shape[-1] == 64 else 8, num_stages=4 if q.shape[-1] == 64 else 5
         )
 
         grid = (N_BLOCKS, B * H)
         _attn_bwd_dkdv[grid](
-            q, k, v, do_s, dk, dv,
-            ctx.qk_scale, k_block_id, lse, delta_s,
-            L, M_BLOCKS, N_BLOCKS,
-            D, BLOCK_M, BLOCK_N,
+            q,
+            k,
+            v,
+            do_s,
+            dk,
+            dv,
+            ctx.qk_scale,
+            k_block_id,
+            lse,
+            delta_s,
+            L,
+            M_BLOCKS,
+            N_BLOCKS,
+            D,
+            BLOCK_M,
+            BLOCK_N,
             BLOCK_SLICE_FACTOR=BLOCK_M // 64,
             num_warps=4 if q.shape[-1] == 64 else 8,
-            num_stages=4 if q.shape[-1] == 64 else 5
+            num_stages=4 if q.shape[-1] == 64 else 5,
         )
 
         return dq, dk, dv, None, None, None, None, None, None

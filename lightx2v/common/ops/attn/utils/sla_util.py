@@ -5,7 +5,8 @@ import triton.language as tl
 
 @triton.jit
 def compress_kernel(
-    X, XM,
+    X,
+    XM,
     L: tl.constexpr,
     D: tl.constexpr,
     BLOCK_L: tl.constexpr,
@@ -38,7 +39,7 @@ def mean_pool(x, BLK):
 
 
 def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64):
-    arg_k = k - torch.mean(k, dim=-2, keepdim=True) # smooth-k technique in SageAttention
+    arg_k = k - torch.mean(k, dim=-2, keepdim=True)  # smooth-k technique in SageAttention
     pooled_qblocks = mean_pool(q, BLKQ)
     pooled_kblocks = mean_pool(arg_k, BLKK)
     pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2)
