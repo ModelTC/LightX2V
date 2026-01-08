@@ -50,20 +50,20 @@ def generate_nbhd_mask(a, block_num, attnmap_frame_num, coefficient=[1.0, 0.5, 0
     return mask
 
 
-def generate_qk_ranges(mask, block_size, seqlen):
-    indices = torch.nonzero(mask, as_tuple=False)  # shape: [N, 2]
+def generate_qk_ranges(mask, q_block_size, k_block_size, seqlen):
+    # mask: [H, Q_block_num, K_block_num]
+    h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True)
 
-    i_indices = indices[:, 0]  # [N]
-    j_indices = indices[:, 1]  # [N]
+    base_offset = h_indices * seqlen
 
-    q_start = i_indices * block_size  # [N]
-    q_end = torch.clamp((i_indices + 1) * block_size, max=seqlen)  # [N]
+    q_start = base_offset + i_indices * q_block_size
+    q_end = base_offset + torch.clamp((i_indices + 1) * q_block_size, max=seqlen)
 
-    k_start = j_indices * block_size  # [N]
-    k_end = torch.clamp((j_indices + 1) * block_size, max=seqlen)  # [N]
+    k_start = base_offset + j_indices * k_block_size
+    k_end = base_offset + torch.clamp((j_indices + 1) * k_block_size, max=seqlen)
 
-    q_ranges = torch.stack([q_start, q_end], dim=1)  # [N, 2]
-    k_ranges = torch.stack([k_start, k_end], dim=1)  # [N, 2]
+    q_ranges = torch.stack([q_start, q_end], dim=1)
+    k_ranges = torch.stack([k_start, k_end], dim=1)
 
     return q_ranges, k_ranges
 
@@ -84,13 +84,14 @@ class NbhdAttnWeight(AttnWeightTemplate):
 
     @classmethod
     @torch.compiler.disable
-    def prepare_mask(cls, seqlen):
+    def prepare_mask(cls, seqlen, head_num):
         if seqlen == cls.seqlen:
             return
         block_num = (seqlen + cls.block_size - 1) // cls.block_size
         block_num_per_frame = seqlen / cls.attnmap_frame_num / cls.block_size
         mask = generate_nbhd_mask(block_num_per_frame, block_num, cls.attnmap_frame_num, coefficient=cls.coefficient, min_width=cls.min_width, device="cpu")
-        q_ranges, k_ranges = generate_qk_ranges(mask, cls.block_size, seqlen)
+        repeat_mask = mask.unsqueeze(0).repeat(head_num, 1, 1)
+        q_ranges, k_ranges = generate_qk_ranges(repeat_mask, cls.block_size, cls.block_size, seqlen)
         attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cuda")
         q_ranges = q_ranges.to(torch.int32).to("cuda")
         k_ranges = k_ranges.to(torch.int32).to("cuda")
@@ -118,7 +119,13 @@ class NbhdAttnWeight(AttnWeightTemplate):
         k: [seqlen, head_num, head_dim]
         v: [seqlen, head_num, head_dim]
         """
-        self.prepare_mask(seqlen=q.shape[0])
+        seqlen, head_num, head_dim = q.shape
+        self.prepare_mask(seqlen=seqlen, head_num=head_num)
+
+        q = q.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
+        k = k.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
+        v = v.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
+
         out = magi_ffa_func(
             q,
             k,
@@ -128,6 +135,9 @@ class NbhdAttnWeight(AttnWeightTemplate):
             attn_type_map=self.attn_type_map,
             auto_range_merge=True,
         )[0]
+
+        out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
+
         return out.reshape(out.shape[0], -1)
 
 
