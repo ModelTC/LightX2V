@@ -250,7 +250,7 @@ class _attention(torch.autograd.Function):
 
         # We recommend the following two settings
         assert BLOCK_M == 64 or BLOCK_M == 128
-        assert BLOCK_N == 64
+        assert BLOCK_N == 64 or BLOCK_N == 128
 
         B, H, L, D = q.shape
         if qk_scale is None:
