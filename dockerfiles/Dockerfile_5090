@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel AS base
+FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-devel AS base
 
 WORKDIR /app
 
@@ -43,6 +43,10 @@ RUN cd SageAttention-1104/sageattention3_blackwell && python setup.py install &&
 RUN git clone https://github.com/SandAI-org/MagiAttention.git --recursive
 
 RUN cd MagiAttention && TORCH_CUDA_ARCH_LIST="9.0" pip install --no-cache-dir --no-build-isolation -v -e .
+
+RUN git clone https://github.com/thu-ml/SpargeAttn.git --depth 1
+
+RUN cd SpargeAttn && TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" pip install --no-cache-dir --no-build-isolation -v -e .
 
 RUN git clone https://github.com/ModelTC/FlashVSR.git --depth 1
 
