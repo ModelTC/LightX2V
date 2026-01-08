@@ -341,6 +341,14 @@ class WanSelfAttention(WeightModule):
         if self.config["self_attn_1_type"] == "draft_attn":
             attention_weights_cls.sparsity_ratio = self.config.get("draft_attn_sparsity_ratio", 0.75)
 
+        # sla_attn setting
+        if self.config["self_attn_1_type"] == "sla_attn":
+            if "sla_attn_setting" in self.config:
+                if "sparsity_ratio" in self.config["sla_attn_setting"]:
+                    attention_weights_cls.sparsity_ratio = self.config["sla_attn_setting"]["sparsity_ratio"]
+                if "operator" in self.config["sla_attn_setting"]:
+                    attention_weights_cls.operator = self.config["sla_attn_setting"]["operator"]
+
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
