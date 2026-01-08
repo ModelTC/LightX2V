@@ -4,12 +4,17 @@ import torch
 
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+from loguru import logger
 
 
 class Conv3dWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, bias_name, stride=1, padding=0, dilation=1, groups=1):
+    def __init__(self, weight_name, bias_name, weight_diff_name=None, bias_diff_name=None, stride=1, padding=0, dilation=1, groups=1):
         self.weight_name = weight_name
         self.bias_name = bias_name
+        self.weight_diff_name = weight_diff_name
+        self.bias_diff_name = bias_diff_name
+        self.weight_diff = 0.0
+        self.bias_diff = 0.0
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
@@ -24,6 +29,16 @@ class Conv3dWeightTemplate(metaclass=ABCMeta):
     def apply(self, input_tensor):
         pass
 
+    def register_diff(self, weight_dict):
+        if self.weight_diff_name is None and self.bias_diff_name is None:
+            return
+        self.weight_diff = weight_dict[self.weight_diff_name]
+        logger.debug(f"Register Diff to {self.weight_name}")
+        if self.bias_diff_name is not None:
+            self.bias_diff = weight_dict[self.bias_diff_name]
+            logger.debug(f"Register Diff to {self.bias_name}")
+        
+
     def set_config(self, config=None):
         if config is not None:
             self.config = config
@@ -31,8 +46,8 @@ class Conv3dWeightTemplate(metaclass=ABCMeta):
 
 @CONV3D_WEIGHT_REGISTER("Default")
 class Conv3dWeight(Conv3dWeightTemplate):
-    def __init__(self, weight_name, bias_name, stride=1, padding=0, dilation=1, groups=1):
-        super().__init__(weight_name, bias_name, stride, padding, dilation, groups)
+    def __init__(self, weight_name, bias_name, weight_diff_name=None, bias_diff_name=None,stride=1, padding=0, dilation=1, groups=1):
+        super().__init__(weight_name, bias_name, weight_diff_name, bias_diff_name, stride, padding, dilation, groups)
 
     def load(self, weight_dict):
         device = weight_dict[self.weight_name].device
@@ -59,16 +74,16 @@ class Conv3dWeight(Conv3dWeightTemplate):
                 self.bias = None
 
     def apply(self, input_tensor):
-        input_tensor = torch.nn.functional.conv3d(
+        output_tensor = torch.nn.functional.conv3d(
             input_tensor,
-            weight=self.weight,
-            bias=self.bias,
+            weight=self.weight if self.weight_diff_name is None else self.weight + self.weight_diff,
+            bias=self.bias if self.bias_diff_name is None else self.bias + self.bias_diff,
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
             groups=self.groups,
         )
-        return input_tensor
+        return output_tensor
 
     def to_cuda(self, non_blocking=False):
         self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
@@ -88,7 +103,7 @@ class Conv3dWeight(Conv3dWeightTemplate):
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight  # .cpu().detach().clone().contiguous()
+        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
         if self.bias_name is not None:
-            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias  # .cpu().detach().clone()
+            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
         return destination

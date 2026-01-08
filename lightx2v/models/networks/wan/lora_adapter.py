@@ -14,7 +14,7 @@ class WanLoraWrapper:
         self.lora_loader = LoRALoader()
         self.override_dict = {}  # On CPU
 
-    def load_lora(self, lora_path, lora_name=None):
+    def register_lora(self, lora_path, lora_name=None):
         if lora_name is None:
             lora_name = os.path.basename(lora_path).split(".")[0]
 
@@ -27,12 +27,12 @@ class WanLoraWrapper:
 
         return lora_name
 
-    def _load_lora_file(self, file_path):
+    def _load_lora_file(self, file_path, device='cpu'):
         with safe_open(file_path, framework="pt") as f:
-            tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
+            tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(device) for key in f.keys()}
         return tensor_dict
 
-    def apply_lora(self, lora_name, alpha=1.0):
+    def apply_lora(self, lora_name, strength=1.0):
         if lora_name not in self.lora_metadata:
             logger.info(f"LoRA {lora_name} not found. Please load it first.")
 
@@ -46,11 +46,10 @@ class WanLoraWrapper:
         self.lora_loader.apply_lora(
             weight_dict=weight_dict,
             lora_weights=lora_weights,
-            alpha=alpha,
-            strength=alpha,
+            strength=strength,
         )
         self.model._apply_weights(weight_dict)
 
-        logger.info(f"Applied LoRA: {lora_name} with alpha={alpha}")
+        logger.info(f"Applied LoRA: {lora_name} with alpha={strength}")
         del lora_weights
         return True

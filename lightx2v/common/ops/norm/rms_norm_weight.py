@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 from safetensors import safe_open
-
+from loguru import logger
 from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -18,8 +18,10 @@ except ImportError:
 
 
 class RMSWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(self, weight_name, weight_diff_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
         self.weight_name = weight_name
+        self.weight_diff_name = weight_diff_name
+        self.weight_diff = 0.0
         self.eps = eps
         self.create_cuda_buffer = create_cuda_buffer
         self.create_cpu_buffer = create_cpu_buffer
@@ -29,6 +31,12 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.config = {}
+
+    def register_diff(self, weight_dict):
+        if self.weight_diff_name is None and self.bias_diff_name is None:
+            return
+        self.weight_diff = weight_dict[self.weight_diff_name]
+        logger.debug(f"Register Diff to {self.weight_name}")
 
     def load(self, weight_dict):
         if self.create_cuda_buffer:
@@ -128,17 +136,17 @@ class RMSWeightTemplate(metaclass=ABCMeta):
 
 @RMS_WEIGHT_REGISTER("Default")
 class RMSWeight(RMSWeightTemplate):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(self, weight_name, weight_diff_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+        super().__init__(weight_name, weight_diff_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
     def apply(self, input_tensor):
         if GET_SENSITIVE_DTYPE() != GET_DTYPE():
-            input_tensor = self._norm(input_tensor).type_as(input_tensor) * self.weight
+            input_tensor = self._norm(input_tensor).type_as(input_tensor) * (self.weight + self.weight_diff)
         else:
-            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * self.weight
+            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * (self.weight + self.weight_diff)
         return input_tensor
 
 
@@ -147,6 +155,7 @@ class RMSWeightSgl(RMSWeight):
     def __init__(
         self,
         weight_name,
+        weight_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -154,30 +163,30 @@ class RMSWeightSgl(RMSWeight):
         is_post_adapter=False,
         eps=1e-6,
     ):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+        super().__init__(weight_name, weight_diff_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):
         if sgl_kernel is not None and self.sensitive_layer_dtype == self.infer_dtype:
             input_tensor = input_tensor.contiguous()
             orig_shape = input_tensor.shape
             input_tensor = input_tensor.view(-1, orig_shape[-1])
-            input_tensor = sgl_kernel.rmsnorm(input_tensor, self.weight, self.eps).view(orig_shape)
+            input_tensor = sgl_kernel.rmsnorm(input_tensor, (self.weight + self.weight_diff), self.eps).view(orig_shape)
         else:
             # sgl_kernel is not available or dtype!=torch.bfloat16/float16, fallback to default implementation
             if self.sensitive_layer_dtype != self.infer_dtype:
                 input_tensor = input_tensor * torch.rsqrt(input_tensor.float().pow(2).mean(-1, keepdim=True) + self.eps).to(self.infer_dtype)
-                input_tensor = (input_tensor * self.weight).to(self.infer_dtype)
+                input_tensor = (input_tensor * (self.weight + self.weight_diff)).to(self.infer_dtype)
             else:
                 input_tensor = input_tensor * torch.rsqrt(input_tensor.pow(2).mean(-1, keepdim=True) + self.eps)
-                input_tensor = input_tensor * self.weight
+                input_tensor = input_tensor * (self.weight + self.weight_diff)
 
         return input_tensor
 
 
 @RMS_WEIGHT_REGISTER("fp32_variance")
 class RMSWeightFP32(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(self, weight_name, weight_diff_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+        super().__init__(weight_name, weight_diff_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):
         input_dtype = input_tensor.dtype
@@ -187,7 +196,7 @@ class RMSWeightFP32(RMSWeight):
         if self.weight.dtype in [torch.float16, torch.bfloat16]:
             hidden_states = hidden_states.to(self.weight.dtype)
         if self.weight is not None:
-            hidden_states = hidden_states * self.weight
+            hidden_states = hidden_states * (self.weight + self.weight_diff)
         hidden_states = hidden_states.to(input_dtype)
 
         return hidden_states
@@ -195,14 +204,14 @@ class RMSWeightFP32(RMSWeight):
 
 @RMS_WEIGHT_REGISTER("self_forcing")
 class RMSWeightSF(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(self, weight_name, weight_diff_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+        super().__init__(weight_name, weight_diff_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
     def apply(self, x):
-        return self._norm(x.float()).type_as(x) * self.weight
+        return self._norm(x.float()).type_as(x) * (self.weight + self.weight_diff)
 
 
 @RMS_WEIGHT_REGISTER("one-pass")
@@ -210,6 +219,7 @@ class RMSWeightOnePass(RMSWeight):
     def __init__(
         self,
         weight_name,
+        weight_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -217,7 +227,7 @@ class RMSWeightOnePass(RMSWeight):
         is_post_adapter=False,
         eps=1e-6,
     ):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+        super().__init__(weight_name, weight_diff_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):
-        return rms_norm_kernel(input_tensor, self.weight, self.eps)
+        return rms_norm_kernel(input_tensor, (self.weight + self.weight_diff), self.eps)

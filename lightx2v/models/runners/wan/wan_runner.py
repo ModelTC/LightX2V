@@ -47,7 +47,7 @@ class WanRunner(DefaultRunner):
             self.config,
             self.init_device,
         )
-        if self.config.get("lora_configs") and self.config.lora_configs:
+        if self.config.get("lora_configs") and self.config.lora_configs and not self.config.get("lora_dynamic_apply", False):
             lora_wrapper = WanLoraWrapper(model)
             for lora_config in self.config.lora_configs:
                 lora_path = lora_config["path"]

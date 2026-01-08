@@ -138,7 +138,7 @@ class WanModel(CompiledMethodsMixin):
         return False
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
+        if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):
             if self.model_type in ["wan2.1"]:
                 return True
             if self.model_type in ["wan2.2_moe_high_noise"]:
@@ -320,7 +320,8 @@ class WanModel(CompiledMethodsMixin):
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
-
+        if self.config.get("lora_dynamic_apply"):
+            self._register_lora(self.config.lora_configs[0]["path"], self.config.lora_configs[0].get("strength", 1.0))
         del self.original_weight_dict
         torch.cuda.empty_cache()
         gc.collect()
@@ -397,6 +398,18 @@ class WanModel(CompiledMethodsMixin):
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
             if self.config.get("warm_up_cpu_buffers", False):
                 self.transformer_infer.offload_manager.warm_up_cpu_buffers(self.transformer_weights.blocks_num)
+
+    def _load_lora_file(self, file_path):
+        with safe_open(file_path, framework="pt") as f:
+            tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in f.keys()}
+        return tensor_dict
+    
+    def _register_lora(self, lora_path, strength):
+        lora_weight = self._load_lora_file(lora_path)
+        self.pre_weight.register_lora(lora_weight, strength)
+        self.transformer_weights.register_lora(lora_weight, strength)
+        self.pre_weight.register_diff(lora_weight)
+        self.transformer_weights.register_diff(lora_weight)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

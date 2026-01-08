@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from safetensors import safe_open
+from loguru import logger
 
 from lightx2v.common.ops.mm.triton_kernels import (
     fp8_gemm_bias_triton,
@@ -98,6 +99,11 @@ class MMWeightTemplate(metaclass=ABCMeta):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -106,6 +112,17 @@ class MMWeightTemplate(metaclass=ABCMeta):
     ):
         self.weight_name = weight_name
         self.bias_name = bias_name
+        
+        # Lora
+        self.lora_down_name = lora_down_name
+        self.lora_up_name = lora_up_name
+        self.lora_alpha_name = lora_alpha_name
+        # Diff
+        self.weight_diff_name = weight_diff_name
+        self.bias_diff_name = bias_diff_name
+        self.weight_diff = 0.0
+        self.bias_diff = 0.0
+        
         self.create_cuda_buffer = create_cuda_buffer
         self.create_cpu_buffer = create_cpu_buffer
         self.lazy_load = lazy_load
@@ -120,6 +137,35 @@ class MMWeightTemplate(metaclass=ABCMeta):
     @abstractmethod
     def apply(self):
         pass
+
+    def register_diff(self, weight_dict):
+        if self.weight_diff_name is None and self.bias_diff_name is None:
+            return
+        if self.weight_diff_name is not None:
+            self.weight_diff = weight_dict[self.weight_diff_name].t()
+            logger.debug(f"Register Diff to {self.weight_name}")
+        if self.bias_diff_name is not None:
+            self.bias_diff = weight_dict[self.bias_diff_name]
+            logger.debug(f"Register Diff to {self.bias_name}")
+
+    def register_lora(self, weight_dict, lora_strength=1):
+        if self.lora_down_name is None:
+            return
+        self.has_lora_branch = True
+        self.lora_down = weight_dict[self.lora_down_name]
+        self.lora_up = weight_dict[self.lora_up_name]
+        self.lora_strength = lora_strength
+        if self.lora_alpha_name in weight_dict:
+            self.lora_alpha = weight_dict[self.lora_alpha_name]
+            self.lora_scale = self.lora_alpha / self.lora_down.shape[0]
+        else:
+            self.lora_scale = 1
+        logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
+
+    def apply_lora(self, input_tensor):
+        h = torch.mm(input_tensor, self.lora_down.t())
+        out = torch.mm(h, self.lora_up.t())
+        return self.lora_strength * self.lora_scale * out
 
     def set_config(self, config={}):
         self.config = config
@@ -152,6 +198,11 @@ class MMWeight(MMWeightTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -161,6 +212,11 @@ class MMWeight(MMWeightTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -245,9 +301,14 @@ class MMWeight(MMWeightTemplate):
         dtype = input_tensor.dtype
         device = input_tensor.device
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
-        if self.bias is None:
-            return torch.mm(input_tensor, self.weight, out=output_tensor)
-        return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            if self.bias is None:
+                return torch.mm(input_tensor, self.weight, out=output_tensor) + self.apply_lora(input_tensor)
+            return torch.addmm(self.bias + self.bias_diff, input_tensor, self.weight, out=output_tensor) + self.apply_lora(input_tensor)
+        else:
+            if self.bias is None:
+                return torch.mm(input_tensor, self.weight + self.weight_diff, out=output_tensor)
+            return torch.addmm(self.bias + self.bias_diff, input_tensor, self.weight + self.weight_diff, out=output_tensor)
 
     def state_dict(self, destination=None):
         if destination is None:
@@ -255,6 +316,19 @@ class MMWeight(MMWeightTemplate):
         destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
         if self.bias_name is not None:
             destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
+        
+        if self.lora_alpha_name is not None:
+            destination[self.lora_alpha_name] = self.lora_alpha
+        if self.lora_down_name is not None:
+            destination[self.lora_down_name] = self.lora_down
+        if self.lora_up_name is not None:
+            destination[self.lora_up_name] = self.lora_up
+    
+        if self.weight_diff_name is not None:
+            destination[self.weight_diff_name] = self.weight_diff
+        if self.bias_diff_name is not None:
+            destination[self.bias_diff_name] = self.bias_diff_name
+        
         return destination
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
@@ -318,12 +392,18 @@ class MMWeight(MMWeightTemplate):
             self.bias = None
 
 
+
 @MM_WEIGHT_REGISTER("Default-Force-FP32")
 class MMWeightForceFP32(MMWeight):
     def __init__(
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -333,6 +413,11 @@ class MMWeightForceFP32(MMWeight):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -353,6 +438,11 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -362,6 +452,11 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -772,6 +867,11 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -781,6 +881,11 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -804,8 +909,10 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self.bias if self.bias is not None else None,
+            self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -824,6 +931,11 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -833,6 +945,11 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -856,8 +973,10 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self.bias if self.bias is not None else None,
+            self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -875,6 +994,11 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -884,6 +1008,11 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -907,8 +1036,10 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -926,6 +1057,11 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -935,6 +1071,11 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -958,8 +1099,10 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -977,6 +1120,11 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -986,6 +1134,11 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1009,8 +1162,10 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1028,6 +1183,11 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1037,6 +1197,11 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1290,8 +1455,10 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
     def to_cuda(self, non_blocking=False):
@@ -1457,6 +1624,11 @@ class MMCalibNvfp4(MMWeight):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1466,6 +1638,11 @@ class MMCalibNvfp4(MMWeight):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1510,6 +1687,11 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1519,6 +1701,11 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1538,13 +1725,14 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         output_tensor = fp8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias.float() if self.bias is not None else None,
+            self.bias.float() + self.bias_diff if self.bias is not None else None,
             input_tensor_scale.float(),
             self.weight_scale,
             out_dtype=self.infer_dtype,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor +  + self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
-
 
 @MM_WEIGHT_REGISTER("int8-q8f")
 class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
@@ -1561,6 +1749,11 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1570,6 +1763,11 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1589,14 +1787,15 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         output_tensor = q8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias.float() if self.bias is not None else None,
+            self.bias.float() + self.bias_diff if self.bias is not None else None,
             input_tensor_scale.float(),
             self.weight_scale,
             fuse_gelu=False,
             out_dtype=self.infer_dtype,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor +  + self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
-
 
 @MM_WEIGHT_REGISTER("fp8-triton")
 class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
@@ -1613,6 +1812,11 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1622,6 +1826,11 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1639,7 +1848,7 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
             output_tensor = fp8_gemm_bias_triton(
                 input_tensor_quant,
                 self.weight,
-                self.bias.float() if self.bias is not None else None,
+                self.bias.float() + self.bias_diff if self.bias is not None else None,
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
@@ -1652,6 +1861,8 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
             )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor +  + self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1670,6 +1881,11 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1679,6 +1895,11 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1696,7 +1917,7 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             output_tensor = int8_gemm_bias_triton(
                 input_tensor_quant,
                 self.weight,
-                self.bias.float() if self.bias is not None else None,
+                self.bias.float() + self.bias_diff if self.bias is not None else None,
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
@@ -1709,7 +1930,9 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
             )
-
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor +  + self.apply_lora(input_tensor)
+ 
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1728,6 +1951,11 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1737,6 +1965,11 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1760,9 +1993,10 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
             output_tensor,
         )
         if hasattr(self, "bias") and self.bias is not None:
-            output_tensor.add_(self.bias)
+            output_tensor.add_(self.bias + self.bias_diff)
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
-
 
 @MM_WEIGHT_REGISTER("fp8-sgl")
 class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
@@ -1779,6 +2013,11 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1788,6 +2027,11 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1806,8 +2050,10 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self.bias if self.bias is not None else None,
+            self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1826,6 +2072,11 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1835,6 +2086,11 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1858,8 +2114,10 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self.bias if self.bias is not None else None,
+            self.bias + self.bias_diff if self.bias is not None else None,
         )
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1878,6 +2136,11 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1887,6 +2150,11 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1899,16 +2167,18 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_fp8_perchannel_sym_torchao(input_tensor)
-        out = torch._scaled_mm(
+        output_tensor = torch._scaled_mm(
             input_tensor_quant,
             self.weight,
             scale_a=input_tensor_scale,
             scale_b=self.weight_scale.t(),
-            bias=self.bias,
+            bias=self.bias + self.bias_diff if self.bias is not None else None,
             out_dtype=self.infer_dtype,
             use_fast_accum=True,
         )
-        return out
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
+        return output_tensor
 
 
 @MM_WEIGHT_REGISTER("int8-torchao")
@@ -1926,6 +2196,11 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1935,6 +2210,11 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -1956,8 +2236,10 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
             output_dtype=self.infer_dtype,
         )
         if self.bias is not None:
-            output_tensor.add_(self.bias)
+            output_tensor.add_(self.bias + self.bias_diff)
 
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1966,6 +2248,11 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -1975,6 +2262,11 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -2079,7 +2371,9 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
 
     def apply(self, input_tensor):
         weight, bias = self.cast_bias_weight(input_tensor)
-        return torch.nn.functional.linear(input_tensor, weight, bias)
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return torch.nn.functional.linear(input_tensor, weight, bias + self.bias_diff) + self.apply_lora(input_tensor)
+        return torch.nn.functional.linear(input_tensor, weight, bias + self.bias_diff)
 
 
 @MM_WEIGHT_REGISTER("gguf-BF16")
@@ -2161,6 +2455,11 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         self,
         weight_name,
         bias_name,
+        lora_down_name=None,
+        lora_up_name=None,
+        lora_alpha_name=None,
+        weight_diff_name=None, 
+        bias_diff_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -2170,6 +2469,11 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         super().__init__(
             weight_name,
             bias_name,
+            lora_down_name,
+            lora_up_name,
+            lora_alpha_name,
+            weight_diff_name, 
+            bias_diff_name,
             create_cuda_buffer,
             create_cpu_buffer,
             lazy_load,
@@ -2209,5 +2513,7 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
             -1,
         )
         if hasattr(self, "bias") and self.bias is not None:
-            output_tensor.add_(self.bias)
+            output_tensor.add_(self.bias + self.bias_diff)
+        if hasattr(self, "has_lora_branch") and self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor

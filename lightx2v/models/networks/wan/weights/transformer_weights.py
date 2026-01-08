@@ -42,7 +42,7 @@ class WanTransformerWeights(WeightModule):
 
         # non blocks weights
         self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
-        self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
+        self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias", weight_diff_name="diffusion_model.head.head.diff", bias_diff_name="diffusion_model.head.head.diff_b"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
     def register_offload_buffers(self, config, lazy_load_path):
@@ -231,6 +231,7 @@ class WanSelfAttention(WeightModule):
         else:
             self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
 
+        block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
             "modulation",
             TENSOR_REGISTER["Default"](
@@ -252,6 +253,11 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.q.bias",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.q.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.q.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.self_attn.q.alpha",       
+                None,
+                f"{block_lora_prefix}.{self.block_index}.self_attn.q.diff_b",       
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -264,6 +270,11 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.k.bias",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.k.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.k.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.self_attn.k.alpha",  
+                None,
+                f"{block_lora_prefix}.{self.block_index}.self_attn.k.diff_b", 
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -275,6 +286,11 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.v.bias",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.v.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.v.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.self_attn.v.alpha",   
+                None,
+                f"{block_lora_prefix}.{self.block_index}.self_attn.v.diff_b", 
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -286,6 +302,11 @@ class WanSelfAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.self_attn.o.bias",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.o.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.o.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.self_attn.o.alpha",   
+                None,
+                f"{block_lora_prefix}.{self.block_index}.self_attn.o.diff_b", 
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -296,6 +317,7 @@ class WanSelfAttention(WeightModule):
             "self_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.norm_q.diff",
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -306,6 +328,7 @@ class WanSelfAttention(WeightModule):
             "self_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
+                f"{block_lora_prefix}.{self.block_index}.self_attn.norm_k.diff",
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -398,11 +421,15 @@ class WanCrossAttention(WeightModule):
         else:
             self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
 
+        block_lora_prefix = "diffusion_model.blocks"
+
         self.add_module(
             "norm3",
             LN_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
+                f"{block_lora_prefix}.{self.block_index}.norm3.diff",
+                f"{block_lora_prefix}.{self.block_index}.norm3.diff_b",
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -414,6 +441,11 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.q.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.q.bias",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.q.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.q.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.q.alpha",  
+                None,
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.q.diff_b",
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -425,6 +457,11 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.k.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.k.bias",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.k.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.k.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.k.alpha",   
+                None,
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.k.diff_b",  
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -436,6 +473,11 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.v.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.v.bias",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.v.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.v.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.v.alpha",   
+                None,
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.v.diff_b",  
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -447,6 +489,11 @@ class WanCrossAttention(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.o.weight",
                 f"{block_prefix}.{self.block_index}.cross_attn.o.bias",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.o.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.o.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.o.alpha",
+                None,
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.o.diff_b",     
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -457,6 +504,7 @@ class WanCrossAttention(WeightModule):
             "cross_attn_norm_q",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.norm_q.diff",
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -467,6 +515,7 @@ class WanCrossAttention(WeightModule):
             "cross_attn_norm_k",
             RMS_WEIGHT_REGISTER[self.attn_rms_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
+                f"{block_lora_prefix}.{self.block_index}.cross_attn.norm_k.diff",
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -481,6 +530,11 @@ class WanCrossAttention(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.k_img.weight",
                     f"{block_prefix}.{self.block_index}.cross_attn.k_img.bias",
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.k_img.lora_down.weight",
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.k_img.lora_up.weight",    
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.k_img.alpha",
+                    None,
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.k_img.diff_b",  
                     create_cuda_buffer,
                     create_cpu_buffer,
                     self.lazy_load,
@@ -492,6 +546,11 @@ class WanCrossAttention(WeightModule):
                 MM_WEIGHT_REGISTER[self.mm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.v_img.weight",
                     f"{block_prefix}.{self.block_index}.cross_attn.v_img.bias",
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.v_img.lora_down.weight",
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.v_img.lora_up.weight",    
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.v_img.alpha",
+                    None,
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.v_img.diff_b",  
                     create_cuda_buffer,
                     create_cpu_buffer,
                     self.lazy_load,
@@ -502,6 +561,7 @@ class WanCrossAttention(WeightModule):
                 "cross_attn_norm_k_img",
                 RMS_WEIGHT_REGISTER[self.attn_rms_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
+                    f"{block_lora_prefix}.{self.block_index}.cross_attn.norm_k_img.diff",
                     create_cuda_buffer,
                     create_cpu_buffer,
                     self.lazy_load,
@@ -532,6 +592,7 @@ class WanFFN(WeightModule):
         self.quant_method = config.get("quant_method", None)
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
+        block_lora_prefix = "diffusion_model.blocks"
 
         self.add_module(
             "norm2",
@@ -543,6 +604,11 @@ class WanFFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.ffn.0.weight",
                 f"{block_prefix}.{self.block_index}.ffn.0.bias",
+                f"{block_lora_prefix}.{self.block_index}.ffn.0.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.ffn.0.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.ffn.0.alpha",
+                None,
+                f"{block_lora_prefix}.{self.block_index}.ffn.0.diff_b",  
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
@@ -554,6 +620,11 @@ class WanFFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{self.block_index}.ffn.2.weight",
                 f"{block_prefix}.{self.block_index}.ffn.2.bias",
+                f"{block_lora_prefix}.{self.block_index}.ffn.2.lora_down.weight",
+                f"{block_lora_prefix}.{self.block_index}.ffn.2.lora_up.weight",    
+                f"{block_lora_prefix}.{self.block_index}.ffn.2.alpha",
+                None,
+                f"{block_lora_prefix}.{self.block_index}.ffn.2.diff_b", 
                 create_cuda_buffer,
                 create_cpu_buffer,
                 self.lazy_load,
