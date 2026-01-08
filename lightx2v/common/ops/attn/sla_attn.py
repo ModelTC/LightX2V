@@ -1,5 +1,4 @@
 import torch
-
 from loguru import logger
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -9,9 +8,9 @@ from .template import AttnWeightTemplate
 from .utils.sla_util import get_block_map, get_cuda_arch
 
 try:
-    import spas_sage_attn._qattn as qattn
     import spas_sage_attn._fused as fused
-    from spas_sage_attn.utils import get_vanilla_qk_quant, block_map_lut_triton
+    import spas_sage_attn._qattn as qattn
+    from spas_sage_attn.utils import block_map_lut_triton, get_vanilla_qk_quant
 except ImportError:
     logger.warning("spas_sage_attn is not installed. SageSparseLinearAttention will not be available.")
 
@@ -51,7 +50,6 @@ class SlaAttnWeight(AttnWeightTemplate):
             self.apply_func = self.apply_magi
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
-            
 
         logger.info(f"SlaAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
@@ -114,7 +112,7 @@ class SlaAttnWeight(AttnWeightTemplate):
 
         q_int8, q_scale, k_int8, k_scale = get_vanilla_qk_quant(q, k, km, self.BLKQ, self.BLKK)
         lut, valid_block_num = block_map_lut_triton(sparse_map)
-        scale = 1.0 / (headdim ** 0.5)
+        scale = 1.0 / (headdim**0.5)
 
         assert headdim in [64, 128], "headdim should be in [64, 128]. For other headdim, you can use padding and specify the softmax scale."
 
@@ -123,9 +121,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         if self.arch in ("sm80", "sm86", "sm87"):
             pvthreshold = torch.full((q.shape[-3],), 1e6, dtype=torch.float32, device=q.device)
             v_fp16 = v.to(torch.float16)
-            qattn.qk_int8_sv_f16_accum_f16_block_sparse_attn_inst_buf_with_pv_threshold(
-                q_int8, k_int8, v_fp16, o_s, lut, valid_block_num, pvthreshold, q_scale, k_scale, 1, False, 1, scale, 0
-            )
+            qattn.qk_int8_sv_f16_accum_f16_block_sparse_attn_inst_buf_with_pv_threshold(q_int8, k_int8, v_fp16, o_s, lut, valid_block_num, pvthreshold, q_scale, k_scale, 1, False, 1, scale, 0)
         else:
             b, h_kv, kv_len, head_dim = v.shape
             padded_len = (kv_len + 127) // 128 * 128
@@ -136,9 +132,7 @@ class SlaAttnWeight(AttnWeightTemplate):
             fused.scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, v_scale, kv_len, 2.25, 1)
 
             if self.arch == "sm90":
-                qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_sm90(
-                    q_int8, k_int8, v_fp8, o_s, lut, valid_block_num, q_scale, k_scale, v_scale, 1, False, 1, scale
-                )
+                qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_sm90(q_int8, k_int8, v_fp8, o_s, lut, valid_block_num, q_scale, k_scale, v_scale, 1, False, 1, scale)
             else:
                 pvthreshold = torch.full((q.shape[-3],), 1e6, dtype=torch.float32, device=q.device)
                 if SAGE2PP_ENABLED:
@@ -169,7 +163,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         q_block_map, k_block_map = q.unsqueeze(0).transpose(1, 2), k.unsqueeze(0).transpose(1, 2)
         q_block_map = q_block_map.contiguous()
         k_block_map = k_block_map.contiguous()
-        
+
         sparse_map, lut, real_topk = get_block_map(q_block_map, k_block_map, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         seqlen, head_num, head_dim = q.shape
 
@@ -195,7 +189,6 @@ class SlaAttnWeight(AttnWeightTemplate):
         return out.reshape(out.shape[0], -1)
 
     def generate_qk_ranges(self, mask, q_block_size, k_block_size, seqlen):
-
         # mask: [H, Q_block_num, K_block_num]
         h_indices, i_indices, j_indices = torch.nonzero(mask, as_tuple=True)
 
