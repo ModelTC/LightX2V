@@ -95,10 +95,9 @@ def set_config(args):
         with open(os.path.join(config["model_path"], "vae", "config.json"), "r") as f:
             vae_config = json.load(f)
             if "temperal_downsample" in vae_config:
-                vae_config["vae_scale_factor"] = 2 ** len(vae_config["temperal_downsample"])
+                config["vae_scale_factor"] = 2 ** len(vae_config["temperal_downsample"])
             elif "block_out_channels" in vae_config:
-                vae_config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
-        config.update(vae_config)
+                config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
 
     return config
 
