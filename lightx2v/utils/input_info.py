@@ -14,8 +14,7 @@ class T2VInputInfo:
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     latent_shape: list = field(default_factory=list)
-    target_shape: int = field(default_factory=int)
-    custom_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -31,7 +30,7 @@ class I2VInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -48,7 +47,7 @@ class Flf2vInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
 
 
 # Need Check
@@ -67,7 +66,7 @@ class VaceInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -87,7 +86,7 @@ class S2VInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
@@ -115,7 +114,7 @@ class AnimateInputInfo:
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -125,11 +124,10 @@ class T2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     # shape related
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
     aspect_ratio: str = field(default_factory=str)
-    custom_shape: list = field(default_factory=list)
 
 
 @dataclass
@@ -140,13 +138,12 @@ class I2IInputInfo:
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     # shape related
-    target_shape: int = field(default_factory=int)
+    target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
     processed_image_size: int = field(default_factory=list)
     original_size: list = field(default_factory=list)
     aspect_ratio: str = field(default_factory=str)
-    custom_shape: list = field(default_factory=list)
 
 
 def set_input_info(args):
@@ -157,6 +154,7 @@ def set_input_info(args):
             negative_prompt=args.negative_prompt,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
+            target_shape=args.target_shape,
         )
     elif args.task == "i2v":
         input_info = I2VInputInfo(
@@ -166,6 +164,7 @@ def set_input_info(args):
             image_path=args.image_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
+            target_shape=args.target_shape,
         )
     elif args.task == "flf2v":
         input_info = Flf2vInputInfo(
@@ -176,6 +175,7 @@ def set_input_info(args):
             last_frame_path=args.last_frame_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
+            target_shape=args.target_shape,
         )
     elif args.task == "vace":
         input_info = VaceInputInfo(
@@ -187,6 +187,7 @@ def set_input_info(args):
             src_mask=args.src_mask,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
+            target_shape=args.target_shape,
         )
     elif args.task == "s2v":
         input_info = S2VInputInfo(
@@ -197,6 +198,7 @@ def set_input_info(args):
             audio_path=args.audio_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
+            target_shape=args.target_shape,
         )
         if hasattr(args, "overlap_frame"):
             input_info.overlap_frame = args.overlap_frame
@@ -216,6 +218,7 @@ def set_input_info(args):
             src_mask_path=args.src_mask_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
+            target_shape=args.target_shape,
         )
     elif args.task == "t2i":
         input_info = T2IInputInfo(
@@ -223,6 +226,7 @@ def set_input_info(args):
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             save_result_path=args.save_result_path,
+            target_shape=args.target_shape,
         )
     elif args.task == "i2i":
         input_info = I2IInputInfo(
@@ -231,6 +235,7 @@ def set_input_info(args):
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
             save_result_path=args.save_result_path,
+            target_shape=args.target_shape,
         )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
