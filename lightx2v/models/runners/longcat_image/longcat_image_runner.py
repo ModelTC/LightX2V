@@ -3,6 +3,7 @@ import math
 
 import torch
 from loguru import logger
+from PIL import Image
 
 from lightx2v.models.input_encoders.hf.longcat.longcat_text_encoder import LongCatImageTextEncoder
 from lightx2v.models.networks.longcat_image.model import LongCatImageTransformerModel
@@ -14,6 +15,11 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+try:
+    from diffusers.image_processor import VaeImageProcessor
+except ImportError:
+    VaeImageProcessor = None
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
@@ -67,8 +73,14 @@ class LongCatImageRunner(DefaultRunner):
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
-        # LongCat only supports T2I
-        self.run_input_encoder = self._run_input_encoder_local_t2i
+
+        # Set input encoder based on task type
+        task = self.config.get("task", "t2i")
+        if task == "i2i":
+            self.run_input_encoder = self._run_input_encoder_local_i2i
+            self.run_dit = self._run_dit_local_i2i
+        else:
+            self.run_input_encoder = self._run_input_encoder_local_t2i
 
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
@@ -76,6 +88,24 @@ class LongCatImageRunner(DefaultRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
         self.model.scheduler.prepare(self.input_info)
+        latents, generator = self.run(total_steps)
+        return latents, generator
+
+    @ProfilingContext4DebugL2("Run DiT I2I")
+    def _run_dit_local_i2i(self, total_steps=None):
+        """Run DiT for I2I (image editing) task."""
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
+
+        # Load VAE for encoding input image
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae = self.load_vae()
+
+        # Prepare scheduler with input image
+        input_image_tensor = self.inputs["image_encoder_output"]["image_tensor"]
+        self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae)
+
         latents, generator = self.run(total_steps)
         return latents, generator
 
@@ -93,6 +123,111 @@ class LongCatImageRunner(DefaultRunner):
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
         }
+
+    @ProfilingContext4DebugL2("Run Encoders I2I")
+    def _run_input_encoder_local_i2i(self):
+        """Run input encoder for I2I (image editing) task."""
+        prompt = self.input_info.prompt
+        neg_prompt = self.input_info.negative_prompt
+
+        # Load input image
+        image_path = self.input_info.image_path
+        if isinstance(image_path, str):
+            input_image = Image.open(image_path).convert("RGB")
+        else:
+            input_image = image_path  # Already a PIL Image
+
+        logger.info(f"Loaded input image: {input_image.size}")
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
+
+        # Encode text with image (VL encoding)
+        text_encoder_output = self.run_text_encoder_with_image(prompt, input_image, neg_prompt=neg_prompt)
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
+
+        # Preprocess image for VAE encoding
+        image_tensor = self._preprocess_image(input_image)
+
+        torch_device_module.empty_cache()
+        gc.collect()
+
+        return {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": {"image_tensor": image_tensor},
+        }
+
+    def _preprocess_image(self, image):
+        """Preprocess image for VAE encoding."""
+        # Calculate target dimensions based on input image aspect ratio
+        image_size = image.size  # (width, height)
+        target_area = 1024 * 1024
+        ratio = image_size[0] / image_size[1]
+
+        width = math.sqrt(target_area * ratio)
+        height = width / ratio
+
+        # Round to multiple of 16
+        width = int(width) if int(width) % 16 == 0 else (int(width) // 16 + 1) * 16
+        height = int(height) if int(height) % 16 == 0 else (int(height) // 16 + 1) * 16
+
+        # Use VaeImageProcessor for preprocessing
+        vae_scale_factor = self.config.get("vae_scale_factor", 8)
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor * 2)
+
+        # Resize and preprocess
+        image = image_processor.resize(image, height, width)
+        image_tensor = image_processor.preprocess(image, height, width)
+
+        # Store dimensions for later use
+        self.input_info.auto_width = width
+        self.input_info.auto_height = height
+
+        return image_tensor.to(AI_DEVICE, dtype=torch.bfloat16)
+
+    @ProfilingContext4DebugL1(
+        "Run Text Encoder with Image",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_text_encode_duration,
+        metrics_labels=["LongCatImageRunner"],
+    )
+    def run_text_encoder_with_image(self, text, image, neg_prompt=None):
+        """Encode text + image for I2I task."""
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_input_prompt_len.observe(len(text))
+        text_encoder_output = {}
+
+        # Resize image for text encoder (half size as per diffusers)
+        vae_scale_factor = self.config.get("vae_scale_factor", 8)
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor * 2)
+
+        # Get target dimensions
+        image_size = image.size
+        target_area = 1024 * 1024
+        ratio = image_size[0] / image_size[1]
+        width = math.sqrt(target_area * ratio)
+        height = width / ratio
+        width = int(width) if int(width) % 16 == 0 else (int(width) // 16 + 1) * 16
+        height = int(height) if int(height) % 16 == 0 else (int(height) // 16 + 1) * 16
+
+        # Resize to half for prompt encoding (as per diffusers)
+        prompt_image = image_processor.resize(image, height // 2, width // 2)
+
+        # Encode with image
+        prompt_embeds, prompt_embeds_mask, _ = self.text_encoders[0].infer_with_image([text], prompt_image)
+        self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
+        text_encoder_output["prompt_embeds"] = prompt_embeds
+
+        # Encode negative prompt with image
+        if self.config.get("enable_cfg", True) and neg_prompt is not None:
+            neg_prompt = neg_prompt if neg_prompt else ""
+            neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer_with_image([neg_prompt], prompt_image)
+            self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
+            text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+
+        return text_encoder_output
 
     @ProfilingContext4DebugL1(
         "Run Text Encoder",

@@ -67,9 +67,23 @@ class LongCatImagePreInfer:
         else:
             image_rotary_emb = self.scheduler.negative_image_rotary_emb
 
+        # For I2I task: get input image latents and output sequence length
+        input_image_latents = None
+        output_seq_len = None
+        if hasattr(self.scheduler, 'input_image_latents') and self.scheduler.input_image_latents is not None:
+            # Embed input image latents
+            input_image_latents = F.linear(
+                self.scheduler.input_image_latents.squeeze(0),
+                weights.x_embedder_weight,
+                weights.x_embedder_bias
+            )
+            output_seq_len = self.scheduler.output_seq_len
+
         return LongCatImagePreInferModuleOutput(
             hidden_states=hidden_states,
             encoder_hidden_states=encoder_hidden_states,
             temb=temb,
-            image_rotary_emb=image_rotary_emb
+            image_rotary_emb=image_rotary_emb,
+            input_image_latents=input_image_latents,
+            output_seq_len=output_seq_len
         )

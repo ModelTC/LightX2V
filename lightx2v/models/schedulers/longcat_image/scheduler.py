@@ -403,6 +403,89 @@ class LongCatImageScheduler(BaseScheduler):
         latents = self.scheduler.step(self.noise_pred, t, self.latents, return_dict=False)[0]
         self.latents = latents
 
+    def prepare_i2i(self, input_info, input_image, vae):
+        """Prepare scheduler for I2I (image editing) inference.
+
+        Args:
+            input_info: Input information
+            input_image: Input image tensor [B, C, H, W] (preprocessed)
+            vae: VAE model for encoding
+        """
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
+        self.vae = vae
+        self.prepare_latents(input_info)
+        self.set_timesteps()
+
+        # Encode input image to latents
+        self.input_image_latents = self._encode_image(input_image)
+
+        # Compute position IDs and rotary embeddings
+        txt_seq_len = input_info.txt_seq_lens[0]
+        tokenizer_max_length = txt_seq_len  # 512
+
+        # Text: modality_id=0
+        txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=txt_seq_len)
+
+        # Output image: modality_id=1
+        output_img_ids = prepare_pos_ids(
+            modality_id=1,
+            type="image",
+            start=(tokenizer_max_length, tokenizer_max_length),
+            height=self.latent_height,
+            width=self.latent_width
+        )
+
+        # Input image: modality_id=2
+        input_img_ids = prepare_pos_ids(
+            modality_id=2,
+            type="image",
+            start=(tokenizer_max_length, tokenizer_max_length),
+            height=self.latent_height,
+            width=self.latent_width
+        )
+
+        # Combined image IDs: [output_img, input_img]
+        combined_img_ids = torch.cat([output_img_ids, input_img_ids], dim=0)
+
+        # Concatenate [txt, output_img, input_img] position IDs
+        ids = torch.cat([txt_ids, combined_img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
+        self.image_rotary_emb = self.pos_embed(ids)
+
+        # Store output sequence length for later truncation
+        self.output_seq_len = self.latents.shape[1]
+
+        # Handle CFG: prepare negative embeddings rotary
+        if self.config.get("enable_cfg", True):
+            neg_txt_seq_len = input_info.txt_seq_lens[1] if len(input_info.txt_seq_lens) > 1 else txt_seq_len
+            neg_txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=neg_txt_seq_len)
+            neg_ids = torch.cat([neg_txt_ids, combined_img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
+            self.negative_image_rotary_emb = self.pos_embed(neg_ids)
+
+    def _encode_image(self, image):
+        """Encode input image using VAE.
+
+        Args:
+            image: Input image tensor [B, C, H, W]
+
+        Returns:
+            Packed latents [B, L, 64]
+        """
+        with torch.no_grad():
+            # Encode image
+            latents = self.vae.model.encode(image.to(self.vae.model.dtype)).latent_dist.mode()
+
+            # Apply scaling: (latents - shift_factor) * scaling_factor
+            latents = (latents - self.vae.shift_factor) * self.vae.scaling_factor
+
+            # Pack latents
+            batch_size = latents.shape[0]
+            num_channels = latents.shape[1]
+            height = latents.shape[2]
+            width = latents.shape[3]
+            latents = self._pack_latents(latents, batch_size, num_channels, height, width)
+
+        return latents.to(self.dtype)
+
     def apply_cfg(self, noise_pred_cond, noise_pred_uncond):
         """Apply classifier-free guidance with optional renormalization.
 

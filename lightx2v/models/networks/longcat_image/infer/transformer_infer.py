@@ -335,6 +335,12 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         temb = pre_infer_out.temb
         image_rotary_emb = pre_infer_out.image_rotary_emb
 
+        # For I2I task: concatenate output latents with input image latents
+        output_seq_len = None
+        if pre_infer_out.input_image_latents is not None:
+            output_seq_len = pre_infer_out.output_seq_len
+            hidden_states = torch.cat([hidden_states, pre_infer_out.input_image_latents], dim=0)
+
         # Process double-stream blocks
         for block in block_weights.double_blocks:
             encoder_hidden_states, hidden_states = self.infer_double_stream_block(
@@ -354,5 +360,9 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
                 temb,
                 image_rotary_emb,
             )
+
+        # For I2I task: only return output image latents (not input image latents)
+        if output_seq_len is not None:
+            hidden_states = hidden_states[:output_seq_len]
 
         return hidden_states

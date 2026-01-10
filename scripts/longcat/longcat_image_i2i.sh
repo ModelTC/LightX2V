@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# LongCat Image T2I Inference Script
-# Usage: bash longcat_image_t2i.sh
+# LongCat Image Edit (I2I) Inference Script
+# Usage: bash longcat_image_i2i.sh
 
 export lightx2v_path=
 export model_path=
@@ -17,10 +17,11 @@ mkdir -p ${lightx2v_path}/save_results
 
 python -m lightx2v.infer \
     --model_cls longcat_image \
-    --task t2i \
+    --task i2i \
     --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/longcat_image/longcat_image_t2i.json \
-    --prompt "一只小猫躺在沙发上" \
+    --config_json ${lightx2v_path}/configs/longcat_image/longcat_image_i2i.json \
+    --prompt "将猫变成狗" \
     --negative_prompt "" \
-    --save_result_path ${lightx2v_path}/save_results/longcat_image_t2i.png \
-    --seed 42
+    --image_path ${lightx2v_path}/models/LongCat-Image-Edit/assets/test.png \
+    --save_result_path ${lightx2v_path}/save_results/longcat_image_i2i.png \
+    --seed 43
