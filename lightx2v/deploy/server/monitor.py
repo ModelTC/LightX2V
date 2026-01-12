@@ -131,6 +131,8 @@ class ServerMonitor:
         self.user_max_daily_tasks = self.config["user_max_daily_tasks"]
         self.user_visit_frequency = self.config["user_visit_frequency"]
 
+        self.skip_check_user_busy_list = {user.strip() for user in os.getenv("SKIP_CHECK_USER_BUSY_LIST", "").split(",") if user.strip()}
+
         assert self.worker_avg_window > 0
         assert self.worker_offline_timeout > 0
         assert self.worker_min_capacity > 0
@@ -236,6 +238,9 @@ class ServerMonitor:
 
     @class_try_catch_async
     async def check_user_busy(self, user_id, active_new_task=False):
+        if user_id in self.skip_check_user_busy_list:
+            return True
+
         # check if user visit too frequently
         cur_t = time.time()
         if user_id in self.user_visits:
