@@ -221,8 +221,8 @@ class DraftAttnWeight(AttnWeightTemplate):
             return out.reshape(out.shape[0], -1)
 
         if scheduler is not None:
-            frame_h=scheduler.latents.shape[2] // scheduler.patch_size[1]
-            frame_w=scheduler.latents.shape[3] // scheduler.patch_size[2]
+            frame_h = scheduler.latents.shape[2] // scheduler.patch_size[1]
+            frame_w = scheduler.latents.shape[3] // scheduler.patch_size[2]
         else:
             frame_h, frame_w = 32, 48
 

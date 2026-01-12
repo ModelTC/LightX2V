@@ -148,9 +148,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 v = torch.cat((shard_img_v, shard_txt_v), dim=0)
 
                 # 调用注意力函数计算注意力结果
-                head_attn = attention_module.apply(
-                    q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs
-                )
+                head_attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs)
                 head_attns.append(head_attn)
 
             # 合并当前进程的所有head的attn
