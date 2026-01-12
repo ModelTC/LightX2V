@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-devel AS base
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel AS base
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN git clone https://github.com/sgl-project/sglang.git && cd sglang/sgl-kernel 
     && make build && make clean
 
 RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy imageio \
-    imageio-ffmpeg einops loguru qtorch ftfy av decord matplotlib debugpy
+    imageio-ffmpeg einops loguru qtorch ftfy av decord matplotlib debugpy soundfile jsonschema pymongo modelscope
 
 RUN git clone https://github.com/Dao-AILab/flash-attention.git --recursive
 
@@ -44,9 +44,9 @@ RUN git clone https://github.com/SandAI-org/MagiAttention.git --recursive
 
 RUN cd MagiAttention && TORCH_CUDA_ARCH_LIST="9.0" pip install --no-cache-dir --no-build-isolation -v -e .
 
-RUN git clone https://github.com/thu-ml/SpargeAttn.git --depth 1
+RUN git clone https://github.com/Tencent-Hunyuan/flex-block-attn.git --recursive
 
-RUN cd SpargeAttn && TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" pip install --no-cache-dir --no-build-isolation -v -e .
+RUN cd flex-block-attn && python setup.py install && rm -rf build
 
 RUN git clone https://github.com/ModelTC/FlashVSR.git --depth 1
 
@@ -98,12 +98,18 @@ RUN cd /opt \
 RUN ldconfig
 
 
-# q8f for base docker
+# for base docker
 RUN git clone https://github.com/KONAKONA666/q8_kernels.git --depth 1
 RUN cd q8_kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
 
-# q8f for 5090 docker
+RUN git clone https://github.com/thu-ml/SpargeAttn.git --depth 1
+RUN cd SpargeAttn && TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" pip install --no-cache-dir --no-build-isolation -v -e .
+
+# for 5090 docker
 # RUN git clone https://github.com/ModelTC/LTX-Video-Q8-Kernels.git --depth 1
 # RUN cd LTX-Video-Q8-Kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
+
+# RUN git clone https://github.com/ModelTC/SpargeAttn.git --depth 1
+# RUN cd SpargeAttn && TORCH_CUDA_ARCH_LIST="12.0" pip install --no-cache-dir --no-build-isolation -v -e .
 
 WORKDIR /workspace
