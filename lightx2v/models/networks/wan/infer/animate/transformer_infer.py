@@ -66,7 +66,6 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
             k=k,
             v=v,
             max_seqlen_q=q.shape[1],
-            model_cls=self.config["model_cls"],
         )
 
         output = phase.linear2.apply(attn)

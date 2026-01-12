@@ -23,7 +23,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         if q.ndim == 3:
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)

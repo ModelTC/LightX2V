@@ -66,12 +66,12 @@ class FlashAttnEnflameGcu(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
         dropout_p=0.0,
         softmax_scale=None,
         causal=False,
         window_size=(-1, -1),
         deterministic=False,
+        **kwargs,
     ):
         """
         Execute Flash Attention computation with variable-length sequences.

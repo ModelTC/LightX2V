@@ -40,7 +40,7 @@ class SageAttn2Weight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         if len(q.shape) == 3:
@@ -71,7 +71,7 @@ class SageAttn3Weight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         if len(q.shape) == 3:

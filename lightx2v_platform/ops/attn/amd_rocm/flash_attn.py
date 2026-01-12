@@ -80,7 +80,7 @@ class AiterAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         if len(q.shape) == 3:
             bs = 1

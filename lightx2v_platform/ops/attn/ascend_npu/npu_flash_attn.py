@@ -15,7 +15,7 @@ class NpuFlashAttnWeight(AttnWeightTemplate):
         self.config = {}
         assert torch_npu is not None, "torch_npu is not installed."
 
-    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, model_cls=None, **kwds):
+    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, **kwds):
         if len(q.shape) == 3:
             bs = 1
         elif len(q.shape) == 4:

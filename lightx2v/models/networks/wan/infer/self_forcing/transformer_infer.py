@@ -161,7 +161,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
-                model_cls=self.config["model_cls"],
             )
         else:
             attn_out = phase.self_attn_1.apply(
@@ -172,7 +171,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=attn_k.size(0),
-                model_cls=self.config["model_cls"],
             )
 
         y = phase.self_attn_o.apply(attn_out)
@@ -227,7 +225,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
             cu_seqlens_kv=cu_seqlens_k,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
-            model_cls=self.config["model_cls"],
         )
 
         if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
@@ -246,7 +243,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
-                model_cls=self.config["model_cls"],
             )
             attn_out.add_(img_attn_out)
 
