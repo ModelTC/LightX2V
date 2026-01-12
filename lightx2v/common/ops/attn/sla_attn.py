@@ -168,7 +168,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         seqlen, head_num, head_dim = q.shape
 
         q_ranges, k_ranges = self.generate_qk_ranges(sparse_map[0], self.BLKQ, self.BLKK, seqlen)
-        attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device=q.device)
+        attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
 
         q = q.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
         k = k.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
