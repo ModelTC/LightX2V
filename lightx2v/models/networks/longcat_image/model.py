@@ -5,7 +5,6 @@ import os
 import torch
 import torch.distributed as dist
 from safetensors import safe_open
-from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import logger
@@ -206,27 +205,15 @@ class LongCatImageTransformerModel:
 
         if self.config.get("enable_cfg", True):
             # ==================== CFG Processing ====================
-            noise_pred_cond = self._infer_cond_uncond(
-                latents,
-                inputs["text_encoder_output"]["prompt_embeds"],
-                infer_condition=True
-            )
-            noise_pred_uncond = self._infer_cond_uncond(
-                latents,
-                inputs["text_encoder_output"]["negative_prompt_embeds"],
-                infer_condition=False
-            )
+            noise_pred_cond = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+            noise_pred_uncond = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
 
             # Apply CFG with optional renormalization
             noise_pred = self.scheduler.apply_cfg(noise_pred_cond, noise_pred_uncond)
             self.scheduler.noise_pred = noise_pred
         else:
             # ==================== No CFG Processing ====================
-            noise_pred = self._infer_cond_uncond(
-                latents,
-                inputs["text_encoder_output"]["prompt_embeds"],
-                infer_condition=True
-            )
+            noise_pred = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
             self.scheduler.noise_pred = noise_pred
 
     @torch.no_grad()
@@ -244,10 +231,6 @@ class LongCatImageTransformerModel:
             pre_infer_out=pre_infer_out,
         )
 
-        noise_pred = self.post_infer.infer(
-            self.post_weight,
-            hidden_states,
-            pre_infer_out.temb
-        )
+        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.temb)
 
         return noise_pred

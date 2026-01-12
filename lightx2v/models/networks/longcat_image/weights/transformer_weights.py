@@ -135,12 +135,8 @@ class LongCatImageTransformerWeights(WeightModule):
         self.num_single_layers = config.get("num_single_layers", 20)
 
         # Create weight containers for each block
-        self.double_blocks = WeightModuleList([
-            LongCatImageDoubleBlockWeights(config, i) for i in range(self.num_layers)
-        ])
-        self.single_blocks = WeightModuleList([
-            LongCatImageSingleBlockWeights(config, i) for i in range(self.num_single_layers)
-        ])
+        self.double_blocks = WeightModuleList([LongCatImageDoubleBlockWeights(config, i) for i in range(self.num_layers)])
+        self.single_blocks = WeightModuleList([LongCatImageSingleBlockWeights(config, i) for i in range(self.num_single_layers)])
 
     def load_from_state_dict(self, state_dict, prefix=""):
         """Load all block weights from state dict."""

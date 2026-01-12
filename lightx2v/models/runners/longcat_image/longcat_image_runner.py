@@ -2,8 +2,8 @@ import gc
 import math
 
 import torch
-from loguru import logger
 from PIL import Image
+from loguru import logger
 
 from lightx2v.models.input_encoders.hf.longcat.longcat_text_encoder import LongCatImageTextEncoder
 from lightx2v.models.networks.longcat_image.model import LongCatImageTransformerModel
@@ -338,9 +338,7 @@ class LongCatImageRunner(DefaultRunner):
         if custom_shape is not None:
             width, height = custom_shape
         else:
-            calculated_width, calculated_height, _ = calculate_dimensions(
-                self.resolution * self.resolution, 16 / 9
-            )
+            calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
             multiple_of = self.config.get("vae_scale_factor", 8) * 2
             width = calculated_width // multiple_of * multiple_of
             height = calculated_height // multiple_of * multiple_of

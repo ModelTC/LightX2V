@@ -122,17 +122,11 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         head_dim = self.config["attention_head_dim"]
 
         # ===== Image stream: norm1 =====
-        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self._ada_layer_norm_zero(
-            hidden_states, temb,
-            block_weights.norm1_linear_weight,
-            block_weights.norm1_linear_bias
-        )
+        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self._ada_layer_norm_zero(hidden_states, temb, block_weights.norm1_linear_weight, block_weights.norm1_linear_bias)
 
         # ===== Text stream: norm1_context =====
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self._ada_layer_norm_zero(
-            encoder_hidden_states, temb,
-            block_weights.norm1_context_linear_weight,
-            block_weights.norm1_context_linear_bias
+            encoder_hidden_states, temb, block_weights.norm1_context_linear_weight, block_weights.norm1_context_linear_bias
         )
 
         # ===== Attention projections =====
@@ -168,7 +162,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         # Reshape for rotary embedding: [L, heads, head_dim] -> [1, L, heads, head_dim]
         # Match diffusers layout [B, S, H, D] (B=1 for current implementation)
         query = query.unsqueeze(0)  # [1, L, H, D]
-        key = key.unsqueeze(0)      # [1, L, H, D]
+        key = key.unsqueeze(0)  # [1, L, H, D]
         value = value.unsqueeze(0)  # [1, L, H, D]
 
         # Apply rotary embedding (expects [B, S, H, D] with sequence_dim=1)
@@ -257,11 +251,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         residual = combined
 
         # AdaLayerNormZeroSingle
-        norm_combined, gate = self._ada_layer_norm_zero_single(
-            combined, temb,
-            block_weights.norm_linear_weight,
-            block_weights.norm_linear_bias
-        )
+        norm_combined, gate = self._ada_layer_norm_zero_single(combined, temb, block_weights.norm_linear_weight, block_weights.norm_linear_bias)
 
         # MLP branch
         mlp_hidden_states = F.linear(norm_combined, block_weights.proj_mlp_weight, block_weights.proj_mlp_bias)
@@ -284,7 +274,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         # Reshape for rotary embedding: [L, heads, head_dim] -> [1, L, heads, head_dim]
         # Match diffusers layout [B, S, H, D] (B=1 for current implementation)
         query = query.unsqueeze(0)  # [1, L, H, D]
-        key = key.unsqueeze(0)      # [1, L, H, D]
+        key = key.unsqueeze(0)  # [1, L, H, D]
         value = value.unsqueeze(0)  # [1, L, H, D]
 
         # Apply rotary embedding (expects [B, S, H, D] with sequence_dim=1)

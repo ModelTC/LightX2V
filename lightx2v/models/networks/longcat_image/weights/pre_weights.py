@@ -1,7 +1,6 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils.utils import logger
 
 
 def _get_required_weight(state_dict, key):
@@ -32,18 +31,10 @@ class LongCatImagePreWeights(WeightModule):
 
         # Time embedding
         self.time_proj_weight = None  # Sinusoidal, no weight
-        self.timestep_embedder_linear_1_weight = _get_required_weight(
-            state_dict, "time_embed.timestep_embedder.linear_1.weight"
-        )
-        self.timestep_embedder_linear_1_bias = _get_required_weight(
-            state_dict, "time_embed.timestep_embedder.linear_1.bias"
-        )
-        self.timestep_embedder_linear_2_weight = _get_required_weight(
-            state_dict, "time_embed.timestep_embedder.linear_2.weight"
-        )
-        self.timestep_embedder_linear_2_bias = _get_required_weight(
-            state_dict, "time_embed.timestep_embedder.linear_2.bias"
-        )
+        self.timestep_embedder_linear_1_weight = _get_required_weight(state_dict, "time_embed.timestep_embedder.linear_1.weight")
+        self.timestep_embedder_linear_1_bias = _get_required_weight(state_dict, "time_embed.timestep_embedder.linear_1.bias")
+        self.timestep_embedder_linear_2_weight = _get_required_weight(state_dict, "time_embed.timestep_embedder.linear_2.weight")
+        self.timestep_embedder_linear_2_bias = _get_required_weight(state_dict, "time_embed.timestep_embedder.linear_2.bias")
 
     def to_cuda(self):
         """Move weights to CUDA."""

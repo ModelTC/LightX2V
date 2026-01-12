@@ -3,8 +3,8 @@
 # LongCat Image Edit (I2I) Inference Script
 # Usage: bash longcat_image_i2i.sh
 
-export lightx2v_path=
-export model_path=
+export lightx2v_path=/workspace
+export model_path=/workspace/models/LongCat-Image-Edit
 export CUDA_VISIBLE_DEVICES=0
 
 # Source base configuration if exists

@@ -6,10 +6,8 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torch.distributed as dist
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from torch import nn
-from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.envs import GET_DTYPE
@@ -350,13 +348,7 @@ class LongCatImageScheduler(BaseScheduler):
         tokenizer_max_length = txt_seq_len  # 512
 
         txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=txt_seq_len)
-        img_ids = prepare_pos_ids(
-            modality_id=1,
-            type="image",
-            start=(tokenizer_max_length, tokenizer_max_length),
-            height=self.latent_height,
-            width=self.latent_width
-        )
+        img_ids = prepare_pos_ids(modality_id=1, type="image", start=(tokenizer_max_length, tokenizer_max_length), height=self.latent_height, width=self.latent_width)
 
         # Concatenate [txt, img] position IDs
         # Note: pos_embed expects float32 ids for accurate rope computation
@@ -410,22 +402,10 @@ class LongCatImageScheduler(BaseScheduler):
         txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=txt_seq_len)
 
         # Output image: modality_id=1
-        output_img_ids = prepare_pos_ids(
-            modality_id=1,
-            type="image",
-            start=(tokenizer_max_length, tokenizer_max_length),
-            height=self.latent_height,
-            width=self.latent_width
-        )
+        output_img_ids = prepare_pos_ids(modality_id=1, type="image", start=(tokenizer_max_length, tokenizer_max_length), height=self.latent_height, width=self.latent_width)
 
         # Input image: modality_id=2
-        input_img_ids = prepare_pos_ids(
-            modality_id=2,
-            type="image",
-            start=(tokenizer_max_length, tokenizer_max_length),
-            height=self.latent_height,
-            width=self.latent_width
-        )
+        input_img_ids = prepare_pos_ids(modality_id=2, type="image", start=(tokenizer_max_length, tokenizer_max_length), height=self.latent_height, width=self.latent_width)
 
         # Combined image IDs: [output_img, input_img]
         combined_img_ids = torch.cat([output_img_ids, input_img_ids], dim=0)

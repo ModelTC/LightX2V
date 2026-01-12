@@ -26,11 +26,7 @@ class LongCatImagePostInfer:
         """
         # AdaLayerNormContinuous: linear -> chunk -> modulate
         # norm_out.linear projects temb to 2*D for scale and shift
-        temb_out = F.linear(
-            F.silu(temb),
-            weights.norm_out_linear_weight,
-            weights.norm_out_linear_bias
-        )
+        temb_out = F.linear(F.silu(temb), weights.norm_out_linear_weight, weights.norm_out_linear_bias)
         scale, shift = torch.chunk(temb_out, 2, dim=-1)
 
         # Layer norm (no learnable params) + modulation
@@ -38,10 +34,6 @@ class LongCatImagePostInfer:
         hidden_states = hidden_states * (1 + scale) + shift
 
         # Final projection
-        output = F.linear(
-            hidden_states,
-            weights.proj_out_weight,
-            weights.proj_out_bias
-        )
+        output = F.linear(hidden_states, weights.proj_out_weight, weights.proj_out_bias)
 
         return output.unsqueeze(0)

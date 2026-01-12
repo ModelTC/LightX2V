@@ -18,6 +18,7 @@ except ImportError:
 
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 from .system_messages import SYSTEM_PROMPT_EN, SYSTEM_PROMPT_ZH
 
 # Edit task prompt templates
@@ -29,8 +30,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 def get_prompt_language(text):
     """Detect if the text is primarily Chinese or English."""
-    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-    total_chars = len(text.replace(' ', ''))
+    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    total_chars = len(text.replace(" ", ""))
     if total_chars == 0:
         return "en"
     return "zh" if chinese_chars / total_chars > 0.3 else "en"
@@ -75,12 +76,9 @@ class LongCatImageTextEncoder:
         # Use prefix/suffix templates like diffusers
         self.prompt_template_encode_prefix = config.get(
             "prompt_template_encode_prefix",
-            "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n"
+            "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n",
         )
-        self.prompt_template_encode_suffix = config.get(
-            "prompt_template_encode_suffix",
-            "<|im_end|>\n<|im_start|>assistant\n"
-        )
+        self.prompt_template_encode_suffix = config.get("prompt_template_encode_suffix", "<|im_end|>\n<|im_start|>assistant\n")
 
         self.cpu_offload = config.get("cpu_offload", False)
         self.dtype = GET_DTYPE()
@@ -90,20 +88,11 @@ class LongCatImageTextEncoder:
     def load(self):
         """Load the text encoder and tokenizer."""
         text_encoder_path = os.path.join(self.config["model_path"], "text_encoder")
-        tokenizer_path = self.config.get(
-            "tokenizer_path",
-            os.path.join(self.config["model_path"], "tokenizer")
-        )
-        processor_path = self.config.get(
-            "processor_path",
-            os.path.join(self.config["model_path"], "text_processor")
-        )
+        tokenizer_path = self.config.get("tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
+        processor_path = self.config.get("processor_path", os.path.join(self.config["model_path"], "text_processor"))
 
         # Load text encoder
-        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            text_encoder_path,
-            torch_dtype=self.dtype
-        )
+        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(text_encoder_path, torch_dtype=self.dtype)
 
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
@@ -137,7 +126,7 @@ class LongCatImageTextEncoder:
 
             if len(all_tokens) > self.tokenizer_max_length:
                 logger.warning(f"Input truncated from {len(all_tokens)} to {self.tokenizer_max_length} tokens")
-                all_tokens = all_tokens[:self.tokenizer_max_length]
+                all_tokens = all_tokens[: self.tokenizer_max_length]
 
             batch_all_tokens.append(all_tokens)
 
@@ -180,15 +169,8 @@ class LongCatImageTextEncoder:
             self.text_encoder.to(device)
 
         generated_ids = self.text_encoder.generate(**inputs, max_new_tokens=self.tokenizer_max_length)
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):]
-            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
-        output_text = self.processor.batch_decode(
-            generated_ids_trimmed,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False
-        )
+        generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+        output_text = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
         if self.cpu_offload:
             self.text_encoder.to("cpu")
@@ -289,11 +271,8 @@ class LongCatImageTextEncoder:
             self.text_encoder.to(AI_DEVICE)
 
         # Load processor if not already loaded
-        if not hasattr(self, 'processor') or self.processor is None:
-            processor_path = self.config.get(
-                "processor_path",
-                os.path.join(self.config["model_path"], "text_processor")
-            )
+        if not hasattr(self, "processor") or self.processor is None:
+            processor_path = self.config.get("processor_path", os.path.join(self.config["model_path"], "text_processor"))
             self.processor = Qwen2VLProcessor.from_pretrained(processor_path)
 
         # Process image using the VL processor's image processor
@@ -316,7 +295,7 @@ class LongCatImageTextEncoder:
 
         # Build the edit prompt template with image placeholder
         # Calculate number of image tokens
-        merge_length = image_processor.merge_size ** 2
+        merge_length = image_processor.merge_size**2
         num_image_tokens = image_grid_thw.prod() // merge_length
 
         # Replace <|image_pad|> with actual number of image tokens
@@ -343,9 +322,7 @@ class LongCatImageTextEncoder:
 
         # Concatenate: [prefix_with_image, content, suffix]
         input_ids = torch.cat((prefix_tokens, text_tokens_and_mask.input_ids[0], suffix_tokens), dim=-1)
-        attention_mask = torch.cat(
-            (prefix_tokens_mask, text_tokens_and_mask.attention_mask[0], suffix_tokens_mask), dim=-1
-        )
+        attention_mask = torch.cat((prefix_tokens_mask, text_tokens_and_mask.attention_mask[0], suffix_tokens_mask), dim=-1)
 
         input_ids = input_ids.unsqueeze(0).to(AI_DEVICE)
         attention_mask = attention_mask.unsqueeze(0).to(AI_DEVICE)
