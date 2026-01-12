@@ -200,11 +200,15 @@ class DraftAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        frame_h=32,
-        frame_w=48,
         block_idx=0,
+        scheduler=None,
+        **kwargs,
     ):
         if block_idx < 1:
+            if cu_seqlens_q is not None:
+                cu_seqlens_q = cu_seqlens_q.to(q.device)
+            if cu_seqlens_kv is not None:
+                cu_seqlens_kv = cu_seqlens_kv.to(k.device)
             out = flash_attn_varlen_func(
                 q,
                 k,
@@ -215,6 +219,12 @@ class DraftAttnWeight(AttnWeightTemplate):
                 max_seqlen_kv,
             )
             return out.reshape(out.shape[0], -1)
+
+        if scheduler is not None:
+            frame_h=scheduler.latents.shape[2] // scheduler.patch_size[1]
+            frame_w=scheduler.latents.shape[3] // scheduler.patch_size[2]
+        else:
+            frame_h, frame_w = 32, 48
 
         seqlen, head_num, head_dim = q.shape
         frame_size = frame_h * frame_w

@@ -25,10 +25,10 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         attention_module=None,
         attention_type="flash_attn2",
         seq_p_group=None,
-        model_cls=None,
         use_fp8_comm=False,
         enable_head_parallel=False,
         img_first=True,
+        **kwargs,
     ):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
@@ -149,7 +149,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
 
                 # 调用注意力函数计算注意力结果
                 head_attn = attention_module.apply(
-                    q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls
+                    q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs
                 )
                 head_attns.append(head_attn)
 
@@ -190,7 +190,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             v = torch.cat((shard_img_v, shard_txt_v), dim=0)
 
             # 调用注意力函数计算注意力结果
-            attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls)
+            attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs)
 
         # 分割图像和文本的注意力结果
         if img_first:
@@ -332,10 +332,10 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         attention_module=None,
         attention_type="flash_attn2",
         seq_p_group=None,
-        model_cls=None,
         use_fp8_comm=False,
         enable_head_parallel=False,
         img_first=True,
+        **kwargs,
     ):
         """
         执行 Ulysses 注意力机制，结合图像和文本的查询、键和值。
@@ -478,7 +478,7 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         # 调用注意力函数计算注意力结果
         # attn = attention(attention_type=attention_type, q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv)
-        attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, model_cls=model_cls)
+        attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs)
 
         # 分割图像和文本的注意力结果
         if img_first:

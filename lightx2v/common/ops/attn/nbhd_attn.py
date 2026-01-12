@@ -112,7 +112,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         """
         q: [seqlen, head_num, head_dim]
@@ -190,7 +190,7 @@ class NbhdAttnWeightFlashInfer(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         """
         q: [seqlen, head_num, head_dim]

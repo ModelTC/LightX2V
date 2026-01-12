@@ -62,9 +62,9 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
-        return self.apply_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv, model_cls)
+        return self.apply_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv, **kwargs)
 
     def apply_triton(
         self,
@@ -75,7 +75,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
@@ -98,7 +98,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
@@ -157,7 +157,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         # (L, H, D) -> (B, H, L, D)
         q_block_map, k_block_map = q.unsqueeze(0).transpose(1, 2), k.unsqueeze(0).transpose(1, 2)
