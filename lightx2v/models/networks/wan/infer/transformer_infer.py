@@ -285,7 +285,6 @@ class WanTransformerInfer(BaseTransformerInfer):
             cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
-            model_cls=self.config["model_cls"],
         )
 
         if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
@@ -306,7 +305,6 @@ class WanTransformerInfer(BaseTransformerInfer):
                 cu_seqlens_kv=self.cross_attn_cu_seqlens_kv_img,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
-                model_cls=self.config["model_cls"],
             )
             attn_out.add_(img_attn_out)
 
