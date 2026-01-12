@@ -43,12 +43,6 @@ class LongCatImageRunner(DefaultRunner):
         super().__init__(config)
         self.resolution = self.config.get("resolution", 1024)
 
-    @ProfilingContext4DebugL2("Load models")
-    def load_model(self):
-        self.model = self.load_transformer()
-        self.text_encoders = self.load_text_encoder()
-        self.vae = self.load_vae()
-
     def load_transformer(self):
         model = LongCatImageTransformerModel(self.config)
         return model

@@ -72,19 +72,13 @@ class LongCatImageDoubleBlockWeights(WeightModule):
 
     def to_cuda(self):
         """Move all weights to CUDA."""
-        for name in dir(self):
-            if name.startswith('_') or name in ('config', 'block_idx', 'inner_dim'):
-                continue
-            attr = getattr(self, name)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, torch.Tensor):
                 setattr(self, name, attr.cuda())
 
     def to_cpu(self):
         """Move all weights to CPU."""
-        for name in dir(self):
-            if name.startswith('_') or name in ('config', 'block_idx', 'inner_dim'):
-                continue
-            attr = getattr(self, name)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, torch.Tensor):
                 setattr(self, name, attr.cpu())
 
@@ -126,19 +120,13 @@ class LongCatImageSingleBlockWeights(WeightModule):
 
     def to_cuda(self):
         """Move all weights to CUDA."""
-        for name in dir(self):
-            if name.startswith('_') or name in ('config', 'block_idx', 'inner_dim'):
-                continue
-            attr = getattr(self, name)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, torch.Tensor):
                 setattr(self, name, attr.cuda())
 
     def to_cpu(self):
         """Move all weights to CPU."""
-        for name in dir(self):
-            if name.startswith('_') or name in ('config', 'block_idx', 'inner_dim'):
-                continue
-            attr = getattr(self, name)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, torch.Tensor):
                 setattr(self, name, attr.cpu())
 

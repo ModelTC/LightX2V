@@ -12,6 +12,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -247,7 +248,7 @@ class LongCatImageScheduler(BaseScheduler):
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
 
-        self.dtype = torch.bfloat16
+        self.dtype = GET_DTYPE()
         self.sample_guide_scale = self.config.get("sample_guide_scale", 4.0)
         self.enable_cfg_renorm = self.config.get("enable_cfg_renorm", True)
         self.cfg_renorm_min = self.config.get("cfg_renorm_min", 0.0)
@@ -281,24 +282,6 @@ class LongCatImageScheduler(BaseScheduler):
         latents = latents.permute(0, 2, 4, 1, 3, 5)
         # -> [B, (H//2)*(W//2), C*4]
         latents = latents.reshape(batch_size, (height // 2) * (width // 2), num_channels * 4)
-        return latents
-
-    @staticmethod
-    def _unpack_latents(latents, height, width, vae_scale_factor):
-        """Unpack latents from [B, (H//2)*(W//2), C*4] to [B, C, H, W].
-
-        Reverses the 2x2 packing used by Flux.
-        """
-        batch_size = latents.shape[0]
-        # Packed channels = 64, original channels = 16
-        channels = latents.shape[-1] // 4
-        # height and width are the packed spatial dims (half of latent dims)
-        # -> [B, H//2, W//2, C, 2, 2]
-        latents = latents.view(batch_size, height, width, channels, 2, 2)
-        # -> [B, C, H//2, 2, W//2, 2]
-        latents = latents.permute(0, 3, 1, 4, 2, 5)
-        # -> [B, C, H, W]
-        latents = latents.reshape(batch_size, channels, height * 2, width * 2)
         return latents
 
     def prepare_latents(self, input_info):

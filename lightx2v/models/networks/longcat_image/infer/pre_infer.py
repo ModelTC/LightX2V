@@ -24,13 +24,22 @@ class LongCatImagePreInfer:
 
         Args:
             weights: Pre-processing weights (x_embedder, context_embedder, time_embed)
-            hidden_states: Latent image tensor [B, L, C]
-            encoder_hidden_states: Text embeddings [B, L, D]
+            hidden_states: Latent image tensor [B, L, C] (currently only B=1 supported)
+            encoder_hidden_states: Text embeddings [B, L, D] (currently only B=1 supported)
 
         Returns:
             LongCatImagePreInferModuleOutput with processed tensors
+
+        Note:
+            Current implementation only supports batch_size=1. The squeeze(0) operations
+            assume single batch input. Batch inference support would require refactoring
+            the entire inference pipeline.
         """
-        # Embed image latents: x_embedder
+        # Validate batch size (currently only batch_size=1 is supported)
+        assert hidden_states.shape[0] == 1, f"Only batch_size=1 is supported, got {hidden_states.shape[0]}"
+        assert encoder_hidden_states.shape[0] == 1, f"Only batch_size=1 is supported, got {encoder_hidden_states.shape[0]}"
+
+        # Embed image latents: x_embedder (squeeze batch dim since B=1)
         hidden_states = F.linear(
             hidden_states.squeeze(0),
             weights.x_embedder_weight,

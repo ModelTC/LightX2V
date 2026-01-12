@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 
-def apply_rotary_emb(x, freqs_cis, use_real=True, sequence_dim=1):
+def apply_rotary_emb(x, freqs_cis, sequence_dim=1):
     """Apply rotary position embedding to query/key tensors.
 
     Follows the diffusers implementation for LongCat/Flux.
@@ -12,7 +12,6 @@ def apply_rotary_emb(x, freqs_cis, use_real=True, sequence_dim=1):
     Args:
         x: Input tensor [B, H, S, D] where H=heads, S=seq_len, D=head_dim
         freqs_cis: Tuple of (cos, sin) each [S, D]
-        use_real: Whether freqs_cis is real (cos, sin) format
         sequence_dim: Which dimension contains sequence (1 or 2)
 
     Returns:
@@ -114,6 +113,10 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         Returns:
             Updated (encoder_hidden_states, hidden_states)
+
+        Note:
+            Current implementation only supports batch_size=1. The unsqueeze(0) operations
+            add a batch dimension for attention computation.
         """
         heads = self.config["num_attention_heads"]
         head_dim = self.config["attention_head_dim"]
@@ -163,7 +166,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         value = torch.cat([txt_value, img_value], dim=0)
 
         # Reshape for rotary embedding: [L, heads, head_dim] -> [1, L, heads, head_dim]
-        # Match diffusers layout [B, S, H, D]
+        # Match diffusers layout [B, S, H, D] (B=1 for current implementation)
         query = query.unsqueeze(0)  # [1, L, H, D]
         key = key.unsqueeze(0)      # [1, L, H, D]
         value = value.unsqueeze(0)  # [1, L, H, D]
@@ -249,6 +252,10 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         Returns:
             Updated (encoder_hidden_states, hidden_states)
+
+        Note:
+            Current implementation only supports batch_size=1. The unsqueeze(0) operations
+            add a batch dimension for attention computation.
         """
         heads = self.config["num_attention_heads"]
         head_dim = self.config["attention_head_dim"]
@@ -285,7 +292,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         key = F.rms_norm(key, (head_dim,), block_weights.attn_norm_k_weight)
 
         # Reshape for rotary embedding: [L, heads, head_dim] -> [1, L, heads, head_dim]
-        # Match diffusers layout [B, S, H, D]
+        # Match diffusers layout [B, S, H, D] (B=1 for current implementation)
         query = query.unsqueeze(0)  # [1, L, H, D]
         key = key.unsqueeze(0)      # [1, L, H, D]
         value = value.unsqueeze(0)  # [1, L, H, D]

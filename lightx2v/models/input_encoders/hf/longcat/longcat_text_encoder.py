@@ -16,6 +16,7 @@ try:
 except ImportError:
     Qwen2VLProcessor = None
 
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 from .system_messages import SYSTEM_PROMPT_EN, SYSTEM_PROMPT_ZH
 
@@ -82,7 +83,7 @@ class LongCatImageTextEncoder:
         )
 
         self.cpu_offload = config.get("cpu_offload", False)
-        self.dtype = torch.bfloat16
+        self.dtype = GET_DTYPE()
         self.enable_prompt_rewrite = config.get("enable_prompt_rewrite", False)
         self.load()
 
@@ -113,14 +114,6 @@ class LongCatImageTextEncoder:
         # Load processor (for prompt rewrite)
         if self.enable_prompt_rewrite:
             self.processor = Qwen2VLProcessor.from_pretrained(processor_path)
-
-    def _extract_masked_hidden(self, hidden_states: torch.Tensor, mask: torch.Tensor):
-        """Extract hidden states based on attention mask."""
-        bool_mask = mask.bool()
-        valid_lengths = bool_mask.sum(dim=1)
-        selected = hidden_states[bool_mask]
-        split_result = torch.split(selected, valid_lengths.tolist(), dim=0)
-        return split_result
 
     def _encode_prompt(self, prompt):
         """Encode prompt with character-level tokenization for quoted text.
