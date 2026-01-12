@@ -96,13 +96,13 @@ class LongCatImageTextEncoder:
         )
         processor_path = self.config.get(
             "processor_path",
-            os.path.join(self.config["model_path"], "processor")
+            os.path.join(self.config["model_path"], "text_processor")
         )
 
         # Load text encoder
         self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             text_encoder_path,
-            torch_dtype=torch.bfloat16
+            torch_dtype=self.dtype
         )
 
         if not self.cpu_offload:
@@ -136,7 +136,7 @@ class LongCatImageTextEncoder:
                     all_tokens.extend(tokens)
 
             if len(all_tokens) > self.tokenizer_max_length:
-                print(f"Warning: Input truncated from {len(all_tokens)} to {self.tokenizer_max_length} tokens")
+                logger.warning(f"Input truncated from {len(all_tokens)} to {self.tokenizer_max_length} tokens")
                 all_tokens = all_tokens[:self.tokenizer_max_length]
 
             batch_all_tokens.append(all_tokens)
@@ -144,7 +144,7 @@ class LongCatImageTextEncoder:
         return batch_all_tokens
 
     @torch.no_grad()
-    def rewire_prompt(self, prompt, device=None):
+    def rewrite_prompt(self, prompt, device=None):
         """Rewrite prompts using the LLM for better generation quality.
 
         Args:
@@ -198,12 +198,12 @@ class LongCatImageTextEncoder:
         return output_text
 
     @torch.no_grad()
-    def infer(self, text, image_list=None):
+    def infer(self, text, _image_list=None):
         """Encode text prompts to embeddings.
 
         Args:
             text: List of text prompts
-            image_list: Unused for T2I, kept for API compatibility
+            _image_list: Unused for T2I, kept for API compatibility
 
         Returns:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)

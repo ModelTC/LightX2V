@@ -200,13 +200,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states = encoder_hidden_states + c_gate_msa * txt_attn_output
 
         # ===== FFN for image stream =====
-        # Use norm2 with learned parameters
-        norm_hidden_states2 = F.layer_norm(
-            hidden_states,
-            (hidden_states.shape[-1],),
-            weight=block_weights.norm2_weight,
-            bias=block_weights.norm2_bias
-        )
+        # Layer norm without learnable parameters (LongCat/Flux architecture)
+        norm_hidden_states2 = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
         norm_hidden_states2 = norm_hidden_states2 * (1 + scale_mlp) + shift_mlp
         ff_output = F.linear(norm_hidden_states2, block_weights.ff_net_0_proj_weight, block_weights.ff_net_0_proj_bias)
         ff_output = F.gelu(ff_output, approximate="tanh")
@@ -214,13 +209,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         hidden_states = hidden_states + gate_mlp * ff_output
 
         # ===== FFN for text stream =====
-        # Use norm2_context with learned parameters
-        norm_encoder_hidden_states2 = F.layer_norm(
-            encoder_hidden_states,
-            (encoder_hidden_states.shape[-1],),
-            weight=block_weights.norm2_context_weight,
-            bias=block_weights.norm2_context_bias
-        )
+        # Layer norm without learnable parameters (LongCat/Flux architecture)
+        norm_encoder_hidden_states2 = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
         norm_encoder_hidden_states2 = norm_encoder_hidden_states2 * (1 + c_scale_mlp) + c_shift_mlp
         context_ff_output = F.linear(norm_encoder_hidden_states2, block_weights.ff_context_net_0_proj_weight, block_weights.ff_context_net_0_proj_bias)
         context_ff_output = F.gelu(context_ff_output, approximate="tanh")

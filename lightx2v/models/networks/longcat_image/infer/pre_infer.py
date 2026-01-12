@@ -36,8 +36,10 @@ class LongCatImagePreInfer:
             the entire inference pipeline.
         """
         # Validate batch size (currently only batch_size=1 is supported)
-        assert hidden_states.shape[0] == 1, f"Only batch_size=1 is supported, got {hidden_states.shape[0]}"
-        assert encoder_hidden_states.shape[0] == 1, f"Only batch_size=1 is supported, got {encoder_hidden_states.shape[0]}"
+        if hidden_states.shape[0] != 1:
+            raise ValueError(f"Only batch_size=1 is supported, got {hidden_states.shape[0]}")
+        if encoder_hidden_states.shape[0] != 1:
+            raise ValueError(f"Only batch_size=1 is supported, got {encoder_hidden_states.shape[0]}")
 
         # Embed image latents: x_embedder (squeeze batch dim since B=1)
         hidden_states = F.linear(

@@ -20,6 +20,7 @@ try:
     from diffusers.image_processor import VaeImageProcessor
 except ImportError:
     VaeImageProcessor = None
+    logger.warning("VaeImageProcessor not available. I2I task will not work.")
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
@@ -32,6 +33,28 @@ def calculate_dimensions(target_area, ratio):
     height = round(height / 32) * 32
 
     return width, height, None
+
+
+def calculate_target_dimensions_from_image(image_size, target_area=1024 * 1024, multiple_of=16):
+    """Calculate target dimensions from image size while preserving aspect ratio.
+
+    Args:
+        image_size: Tuple of (width, height) of the input image
+        target_area: Target pixel area (default 1024*1024)
+        multiple_of: Dimensions will be rounded to multiples of this value
+
+    Returns:
+        Tuple of (width, height)
+    """
+    ratio = image_size[0] / image_size[1]
+    width = math.sqrt(target_area * ratio)
+    height = width / ratio
+
+    # Round to multiple
+    width = int(width) if int(width) % multiple_of == 0 else (int(width) // multiple_of + 1) * multiple_of
+    height = int(height) if int(height) % multiple_of == 0 else (int(height) // multiple_of + 1) * multiple_of
+
+    return width, height
 
 
 @RUNNER_REGISTER("longcat_image")
@@ -156,16 +179,7 @@ class LongCatImageRunner(DefaultRunner):
     def _preprocess_image(self, image):
         """Preprocess image for VAE encoding."""
         # Calculate target dimensions based on input image aspect ratio
-        image_size = image.size  # (width, height)
-        target_area = 1024 * 1024
-        ratio = image_size[0] / image_size[1]
-
-        width = math.sqrt(target_area * ratio)
-        height = width / ratio
-
-        # Round to multiple of 16
-        width = int(width) if int(width) % 16 == 0 else (int(width) // 16 + 1) * 16
-        height = int(height) if int(height) % 16 == 0 else (int(height) // 16 + 1) * 16
+        width, height = calculate_target_dimensions_from_image(image.size)
 
         # Use VaeImageProcessor for preprocessing
         vae_scale_factor = self.config.get("vae_scale_factor", 8)
@@ -179,7 +193,7 @@ class LongCatImageRunner(DefaultRunner):
         self.input_info.auto_width = width
         self.input_info.auto_height = height
 
-        return image_tensor.to(AI_DEVICE, dtype=torch.bfloat16)
+        return image_tensor.to(AI_DEVICE, dtype=GET_DTYPE())
 
     @ProfilingContext4DebugL1(
         "Run Text Encoder with Image",
@@ -197,14 +211,8 @@ class LongCatImageRunner(DefaultRunner):
         vae_scale_factor = self.config.get("vae_scale_factor", 8)
         image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor * 2)
 
-        # Get target dimensions
-        image_size = image.size
-        target_area = 1024 * 1024
-        ratio = image_size[0] / image_size[1]
-        width = math.sqrt(target_area * ratio)
-        height = width / ratio
-        width = int(width) if int(width) % 16 == 0 else (int(width) // 16 + 1) * 16
-        height = int(height) if int(height) % 16 == 0 else (int(height) // 16 + 1) * 16
+        # Get target dimensions using helper function
+        width, height = calculate_target_dimensions_from_image(image.size)
 
         # Resize to half for prompt encoding (as per diffusers)
         prompt_image = image_processor.resize(image, height // 2, width // 2)
@@ -239,7 +247,7 @@ class LongCatImageRunner(DefaultRunner):
 
         # Optionally rewrite the prompt
         if enable_prompt_rewrite:
-            text = self.text_encoders[0].rewire_prompt(text)[0]
+            text = self.text_encoders[0].rewrite_prompt(text)[0]
             logger.info(f"Rewritten prompt: {text}")
 
         prompt_embeds, prompt_embeds_mask, _ = self.text_encoders[0].infer([text])

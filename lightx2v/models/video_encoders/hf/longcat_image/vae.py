@@ -33,7 +33,8 @@ class LongCatImageVAE:
         self.dtype = GET_DTYPE()
 
         # LongCat VAE parameters
-        self.latent_channels = config.get("in_channels", 64)
+        # Note: VAE uses 16 latent channels, which becomes 64 after 2x2 packing for transformer input
+        self.latent_channels = config.get("latent_channels", 16)
         self.vae_scale_factor = config.get("vae_scale_factor", 8)
 
         # Scaling factors for LongCat

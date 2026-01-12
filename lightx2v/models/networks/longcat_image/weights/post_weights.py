@@ -2,6 +2,8 @@ import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
 
+from .pre_weights import _get_required_weight
+
 
 class LongCatImagePostWeights(WeightModule):
     """Post-processing weights for LongCat Image Transformer."""
@@ -17,12 +19,12 @@ class LongCatImagePostWeights(WeightModule):
     def load_from_state_dict(self, state_dict):
         """Load weights from state dict."""
         # norm_out (AdaLayerNormContinuous)
-        self.norm_out_linear_weight = state_dict.get("norm_out.linear.weight")
-        self.norm_out_linear_bias = state_dict.get("norm_out.linear.bias")
+        self.norm_out_linear_weight = _get_required_weight(state_dict, "norm_out.linear.weight")
+        self.norm_out_linear_bias = _get_required_weight(state_dict, "norm_out.linear.bias")
 
         # proj_out
-        self.proj_out_weight = state_dict.get("proj_out.weight")
-        self.proj_out_bias = state_dict.get("proj_out.bias")
+        self.proj_out_weight = _get_required_weight(state_dict, "proj_out.weight")
+        self.proj_out_bias = _get_required_weight(state_dict, "proj_out.bias")
 
     def to_cuda(self):
         """Move weights to CUDA."""

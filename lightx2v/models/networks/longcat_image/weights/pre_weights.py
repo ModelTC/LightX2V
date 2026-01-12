@@ -1,6 +1,14 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.utils.utils import logger
+
+
+def _get_required_weight(state_dict, key):
+    """Get a required weight from state dict, raising error if missing."""
+    if key not in state_dict:
+        raise KeyError(f"Required weight '{key}' not found in state dict")
+    return state_dict[key]
 
 
 class LongCatImagePreWeights(WeightModule):
@@ -16,25 +24,25 @@ class LongCatImagePreWeights(WeightModule):
 
     def load_from_state_dict(self, state_dict):
         """Load weights from state dict."""
-        self.x_embedder_weight = state_dict.get("x_embedder.weight")
-        self.x_embedder_bias = state_dict.get("x_embedder.bias")
+        self.x_embedder_weight = _get_required_weight(state_dict, "x_embedder.weight")
+        self.x_embedder_bias = _get_required_weight(state_dict, "x_embedder.bias")
 
-        self.context_embedder_weight = state_dict.get("context_embedder.weight")
-        self.context_embedder_bias = state_dict.get("context_embedder.bias")
+        self.context_embedder_weight = _get_required_weight(state_dict, "context_embedder.weight")
+        self.context_embedder_bias = _get_required_weight(state_dict, "context_embedder.bias")
 
         # Time embedding
         self.time_proj_weight = None  # Sinusoidal, no weight
-        self.timestep_embedder_linear_1_weight = state_dict.get(
-            "time_embed.timestep_embedder.linear_1.weight"
+        self.timestep_embedder_linear_1_weight = _get_required_weight(
+            state_dict, "time_embed.timestep_embedder.linear_1.weight"
         )
-        self.timestep_embedder_linear_1_bias = state_dict.get(
-            "time_embed.timestep_embedder.linear_1.bias"
+        self.timestep_embedder_linear_1_bias = _get_required_weight(
+            state_dict, "time_embed.timestep_embedder.linear_1.bias"
         )
-        self.timestep_embedder_linear_2_weight = state_dict.get(
-            "time_embed.timestep_embedder.linear_2.weight"
+        self.timestep_embedder_linear_2_weight = _get_required_weight(
+            state_dict, "time_embed.timestep_embedder.linear_2.weight"
         )
-        self.timestep_embedder_linear_2_bias = state_dict.get(
-            "time_embed.timestep_embedder.linear_2.bias"
+        self.timestep_embedder_linear_2_bias = _get_required_weight(
+            state_dict, "time_embed.timestep_embedder.linear_2.bias"
         )
 
     def to_cuda(self):
