@@ -9,7 +9,7 @@ from lightx2v.utils.registry_factory import (
 
 class WanAudioTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
-        super().__init__(self, config, lazy_load_path, lora_path)
+        super().__init__(config, lazy_load_path, lora_path)
         for i in range(self.blocks_num):
             self.blocks[i].compute_phases.append(
                 WanAudioAdapterCA(

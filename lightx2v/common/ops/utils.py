@@ -31,7 +31,7 @@ def resolve_block_name(name, block_index, adapter_block_index=None, is_post_adap
         return re.sub(r"\.\d+", lambda m: f".{block_index}", name, count=1)
 
 
-def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32):
+def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32):
     """Get the source tensor from either weight dictionary or lazy loading safetensors file.
 
     Args:
@@ -56,10 +56,16 @@ def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_i
                 return lazy_load_file.get_tensor(source_name).to(GET_DTYPE())
             elif scale_force_fp32 and "weight_scale" in source_name:
                 return lazy_load_file.get_tensor(source_name).to(torch.float32)
+            elif bias_force_fp32 and "bias" in source_name:
+                return lazy_load_file.get_tensor(source_name).to(torch.float32)
             return lazy_load_file.get_tensor(source_name)
     else:
         if use_infer_dtype:
             return weight_dict[source_name].to(GET_DTYPE())
+        elif scale_force_fp32 and "weight_scale" in source_name:
+            return weight_dict[source_name].to(torch.float32)
+        elif bias_force_fp32 and "bias" in source_name:
+            return weight_dict[source_name].to(torch.float32)
         return weight_dict[source_name]
 
 
@@ -104,7 +110,7 @@ def get_lazy_load_file_path(lazy_load_file, weight_name_for_block=None):
         )
 
 
-def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_infer_dtype=None, scale_force_fp32=False):
+def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_infer_dtype=None, scale_force_fp32=False, bias_force_fp32=False):
     """Create tensor buffers and move them to CUDA device (specified by AI_DEVICE).
 
     Args:
@@ -119,7 +125,7 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
     """
     result = {}
     for name, attr_name, transpose in base_attrs:
-        tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32)
+        tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32)
         if transpose:
             tensor = tensor.t()
         result[attr_name] = tensor.to(AI_DEVICE)
@@ -127,7 +133,7 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
     return result
 
 
-def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_force_fp32=False):
+def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_force_fp32=False, bias_force_fp32=False):
     """Create pinned memory tensor buffers on CPU for lazy loading scenario.
 
     Args:
@@ -142,7 +148,7 @@ def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_
 
     # Use get_source_tensor to load the tensor (weight_dict is not required when lazy_load=True)
     for name, attr_name, transpose in base_attrs:
-        tensor = get_source_tensor(name, {}, lazy_load=True, lazy_load_file=lazy_load_file, use_infer_dtype=use_infer_dtype, scale_force_fp32=scale_force_fp32)
+        tensor = get_source_tensor(name, {}, lazy_load=True, lazy_load_file=lazy_load_file, use_infer_dtype=use_infer_dtype, scale_force_fp32=scale_force_fp32, bias_force_fp32=bias_force_fp32)
         result[attr_name] = create_pin_tensor(tensor, transpose=transpose)
 
     return result

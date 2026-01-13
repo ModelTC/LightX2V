@@ -353,7 +353,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.pin_weight = self.pin_weight.t()
             if hasattr(self, "weight_cuda_buffer") and self.weight_cuda_buffer is not None:
                 self.weight_cuda_buffer = self.weight_cuda_buffer.t()
-
         if hasattr(self, "bias") and self.bias is not None:
             if self.bias_force_fp32:
                 self.bias = self.bias.to(torch.float32)
@@ -366,11 +365,11 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.pin_bias = self.pin_bias.to(self.infer_dtype)
         if self.bias_force_fp32 and hasattr(self, "bias_diff"):
             self.bias_diff = self.bias_diff.to(torch.float32)
-
-        if hasattr(self, "weight_scale") and self.weight_scale is not None:
-            self.weight_scale = self.weight_scale.to(torch.float32)
-        if hasattr(self, "pin_weight_scale") and self.pin_weight_scale is not None:
-            self.pin_weight_scale = self.pin_weight_scale.to(torch.float32)
+        if self.scale_force_fp32:
+            if hasattr(self, "weight_scale") and self.weight_scale is not None:
+                self.weight_scale = self.weight_scale.to(torch.float32)
+            if hasattr(self, "pin_weight_scale") and self.pin_weight_scale is not None:
+                self.pin_weight_scale = self.pin_weight_scale.to(torch.float32)
 
     def load_quantized(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
@@ -382,12 +381,12 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.pin_weight_scale = pin_tensors.get("weight_scale")
             self.pin_bias = pin_tensors.get("bias")
         elif self.create_cuda_buffer:
-            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32)
+            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
             self.weight_cuda_buffer = result.get("weight")
             self.weight_scale_cuda_buffer = result.get("weight_scale")
             self.bias_cuda_buffer = result.get("bias")
         elif self.create_cpu_buffer:
-            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32)
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
             self.pin_weight = result.get("weight")
             self.pin_weight_scale = result.get("weight_scale")
             self.pin_bias = result.get("bias")
@@ -877,100 +876,247 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
-            lora_prefix,
-            lora_path,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
         )
         self.load_func = self.load_nvfp4
         self.input_absmax_name = self.weight_name.replace(".weight", ".input_absmax")
         self.weight_global_scale_name = self.weight_name + "_global_scale"
         self.input_global_scale_name = self.weight_name.replace(".weight", ".input_global_scale")
         self.alpha_name = self.weight_name.replace(".weight", ".alpha")
-        self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_nvfp4
+        self.weight_need_transpose = False
 
-    def _update_base_attrs(self):
-        super()._update_base_attrs()
-        self.base_attrs.append((self.input_global_scale_name, "input_global_scale", False))
-        self.base_attrs.append((self.alpha_name, "alpha", False))
+    def load_quantized(self, weight_dict):
+        if self.create_cuda_buffer:
+            self._load_cuda_buffers(weight_dict)
+        elif self.create_cpu_buffer:
+            self._load_cpu_pin_buffers()
+        else:
+            self._load_default_tensors(weight_dict)
 
-    def _compute_input_global_scale_and_alpha(self, source, is_lazy=False):
+    def _load_cuda_buffers(self, weight_dict):
+        if self.lazy_load:
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                )
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
+                (
+                    self.weight_cuda_buffer,
+                    self.weight_scale_cuda_buffer,
+                    self.input_global_scale_cuda_buffer,
+                    self.alpha_cuda_buffer,
+                ) = self._get_cuda_tensor_pair(source, self.lazy_load)
+                self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
+        else:
+            source = weight_dict
+            (
+                self.weight_cuda_buffer,
+                self.weight_scale_cuda_buffer,
+                self.input_global_scale_cuda_buffer,
+                self.alpha_cuda_buffer,
+            ) = self._get_cuda_tensor_pair(source, self.lazy_load)
+            self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
+
+    def _get_cuda_tensor_pair(self, source, is_lazy):
         if is_lazy:
-            if hasattr(source, "get_tensor") and source.get_tensor(self.input_absmax_name) is not None:
+            if self.input_absmax_name in source.keys():
                 input_absmax = source.get_tensor(self.input_absmax_name)
-                input_global_scale = (2688.0 / input_absmax).to(torch.float32)
-                weight_global_scale = source.get_tensor(self.weight_global_scale_name)
+                input_global_scale = (2688.0 / input_absmax).to(torch.float32).to(AI_DEVICE)
+                weight_global_scale = source.get_tensor(self.weight_global_scale_name).to(AI_DEVICE)
                 alpha = 1.0 / (input_global_scale * weight_global_scale)
-                return input_global_scale, alpha
+            else:
+                input_global_scale = source.get_tensor(self.input_global_scale_name).to(torch.float32).to(AI_DEVICE)
+                alpha = source.get_tensor(self.alpha_name).to(torch.float32).to(AI_DEVICE)
+            weight = source.get_tensor(self.weight_name).to(AI_DEVICE)
+            scale = source.get_tensor(self.weight_scale_name).to(AI_DEVICE)
+        else:
+            if self.input_absmax_name in source:
+                input_absmax = source[self.input_absmax_name]
+                input_global_scale = (2688.0 / input_absmax).to(torch.float32).to(AI_DEVICE)
+                weight_global_scale = source[self.weight_global_scale_name].to(AI_DEVICE)
+                alpha = 1.0 / (input_global_scale * weight_global_scale)
+            else:
+                input_global_scale = source[self.input_global_scale_name].to(torch.float32).to(AI_DEVICE)
+                alpha = source[self.alpha_name].to(torch.float32).to(AI_DEVICE)
+
+            weight = source[self.weight_name].to(AI_DEVICE)
+            scale = source[self.weight_scale_name].to(AI_DEVICE)
+        return weight, scale, input_global_scale, alpha
+
+    def _get_cuda_bias_tensor(self, source, is_lazy):
+        if self.bias_name is None:
+            return None
+        if is_lazy:
+            bias = source.get_tensor(self.bias_name)
+            dtype = self.infer_dtype
+        else:
+            bias = source[self.bias_name]
+            dtype = bias.dtype
+        if self.bias_force_fp32:
+            bias = bias.to(torch.float32)
+        else:
+            bias = bias.to(dtype)
+        return bias.to(AI_DEVICE)
+
+    def _load_cpu_pin_buffers(self):
+        (
+            self.pin_weight,
+            self.pin_weight_scale,
+            self.pin_input_global_scale,
+            self.pin_alpha,
+        ) = self._get_cpu_pin_tensor_pair(self.lazy_load_file, is_lazy=True)
+        self.pin_bias = self._get_cpu_pin_bias_tensor(self.lazy_load_file, is_lazy=True)
+        self.bias = None
+
+    def _get_cpu_pin_tensor_pair(self, source, is_lazy):
+        if is_lazy:
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                )
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
+                weight_tensor = source.get_tensor(self.weight_name)
+                scale_tensor = source.get_tensor(self.weight_scale_name)
+                if self.input_absmax_name in source.keys():
+                    input_absmax = source.get_tensor(self.input_absmax_name)
+                    input_global_scale = (2688.0 / input_absmax).to(torch.float32)
+                    weight_global_scale = source.get_tensor(self.weight_global_scale_name)
+                    alpha = 1.0 / (input_global_scale * weight_global_scale)
+                else:
+                    input_global_scale = source.get_tensor(self.input_global_scale_name).to(torch.float32)
+                    alpha = source.get_tensor(self.alpha_name).to(torch.float32)
+                pin_weight = self._create_pin_tensor(weight_tensor)
+                pin_scale = self._create_pin_tensor(scale_tensor)
+                pin_input_global_scale = self._create_pin_tensor(input_global_scale)
+                pin_alpha = self._create_pin_tensor(alpha)
+        else:
+            weight_tensor = source[self.weight_name]
+            scale_tensor = source[self.weight_scale_name]
+            if self.input_absmax_name in source:
+                input_absmax = source[self.input_absmax_name]
+                input_global_scale = (2688.0 / input_absmax).to(torch.float32)
+                weight_global_scale = source[self.weight_global_scale_name]
+                alpha = 1.0 / (input_global_scale * weight_global_scale)
+            else:
+                input_global_scale = source[self.input_global_scale_name].to(torch.float32)
+                alpha = source[self.alpha_name].to(torch.float32)
+            pin_weight = self._create_pin_tensor(weight_tensor)
+            pin_scale = self._create_pin_tensor(scale_tensor)
+            pin_input_global_scale = self._create_pin_tensor(input_global_scale)
+            pin_alpha = self._create_pin_tensor(alpha)
+
+        return pin_weight, pin_scale, pin_input_global_scale, pin_alpha
+
+    def _get_cpu_pin_bias_tensor(self, source, is_lazy):
+        if self.bias_name is None:
+            return None
+        if is_lazy:
+            if Path(self.lazy_load_file).is_file():
+                lazy_load_file_path = self.lazy_load_file
+            else:
+                lazy_load_file_path = os.path.join(
+                    self.lazy_load_file,
+                    f"block_{self.weight_name.split('.')[1]}.safetensors",
+                )
+            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
+                bias_tensor = source.get_tensor(self.bias_name)
+                if not self.bias_force_fp32:
+                    bias_tensor = bias_tensor.to(self.infer_dtype)
+                if self.bias_force_fp32:
+                    bias_tensor = bias_tensor.to(torch.float32)
+                return self._create_pin_tensor(bias_tensor)
+        else:
+            bias_tensor = source[self.bias_name]
+            if self.bias_force_fp32:
+                bias_tensor = bias_tensor.to(torch.float32)
+            return self._create_pin_tensor(bias_tensor)
+
+    def _create_pin_tensor(self, tensor, dtype=None):
+        dtype = dtype or tensor.dtype
+        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
+        pin_tensor.copy_(tensor)
+        del tensor
+        return pin_tensor
+
+    def _load_default_tensors(self, weight_dict):
+        if not self.lazy_load:
+            (
+                self.weight,
+                self.weight_scale,
+                self.input_global_scale,
+                self.alpha,
+                self.pin_weight,
+                self.pin_weight_scale,
+                self.pin_input_global_scale,
+                self.pin_alpha,
+            ) = self._get_device_tensor_pair(weight_dict)
+            self._load_default_bias(weight_dict)
+        else:
+            self.bias = None
+            self.pin_bias = None
+
+    def _get_device_tensor_pair(self, source):
+        device = source[self.weight_name].device
+        if device.type == "cpu":
+            pin_weight, pin_scale, pin_input_global_scale, pin_alpha = self._get_cpu_pin_tensor_pair(source, is_lazy=False)
+            return (
+                None,
+                None,
+                None,
+                None,
+                pin_weight,
+                pin_scale,
+                pin_input_global_scale,
+                pin_alpha,
+            )
         else:
             if self.input_absmax_name in source:
                 input_absmax = source[self.input_absmax_name]
                 input_global_scale = (2688.0 / input_absmax).to(torch.float32)
                 weight_global_scale = source[self.weight_global_scale_name]
                 alpha = 1.0 / (input_global_scale * weight_global_scale)
-                return input_global_scale, alpha
-        return None, None
-
-    def _post_process_special_tensors(self, weight_dict, result=None, device_tensors=None, pin_tensors=None):
-        if self.lazy_load:
-            lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
-                input_global_scale, alpha = self._compute_input_global_scale_and_alpha(source, is_lazy=True)
-        else:
-            source = weight_dict
-            input_global_scale, alpha = self._compute_input_global_scale_and_alpha(source, is_lazy=False)
-
-        if input_global_scale is not None and alpha is not None:
-            if result is not None:
-                if self.create_cuda_buffer:
-                    result["input_global_scale"] = input_global_scale.to(AI_DEVICE)
-                    result["alpha"] = alpha.to(AI_DEVICE)
-                elif self.create_cpu_buffer:
-                    result["input_global_scale"] = create_pin_tensor(input_global_scale)
-                    result["alpha"] = create_pin_tensor(alpha)
             else:
-                device = weight_dict[self.weight_name].device if self.weight_name in weight_dict else torch.device("cpu")
-                if device.type == "cpu":
-                    pin_tensors["input_global_scale"] = create_pin_tensor(input_global_scale)
-                    pin_tensors["alpha"] = create_pin_tensor(alpha)
-                else:
-                    device_tensors["input_global_scale"] = input_global_scale.to(AI_DEVICE)
-                    device_tensors["alpha"] = alpha.to(AI_DEVICE)
+                input_global_scale = source[self.input_global_scale_name].to(torch.float32).to(AI_DEVICE)
+                alpha = source[self.alpha_name].to(torch.float32).to(AI_DEVICE)
+            return (
+                source[self.weight_name],
+                source[self.weight_scale_name],
+                input_global_scale,
+                alpha,
+                None,
+                None,
+                None,
+                None,
+            )
 
-    def load_quantized(self, weight_dict):
-        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
-            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
-            self._post_process_special_tensors(weight_dict, device_tensors=device_tensors, pin_tensors=pin_tensors)
-            self.weight = device_tensors.get("weight")
-            self.weight_scale = device_tensors.get("weight_scale")
-            self.bias = device_tensors.get("bias")
-            self.input_global_scale = device_tensors.get("input_global_scale")
-            self.alpha = device_tensors.get("alpha")
-
-            self.pin_weight = pin_tensors.get("weight")
-            self.pin_weight_scale = pin_tensors.get("weight_scale")
-            self.pin_bias = pin_tensors.get("bias")
-            self.pin_input_global_scale = pin_tensors.get("input_global_scale")
-            self.pin_alpha = pin_tensors.get("alpha")
-        elif self.create_cuda_buffer:
-            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file)
-            self._post_process_special_tensors(weight_dict, result=result)
-            self.weight_cuda_buffer = result.get("weight")
-            self.weight_scale_cuda_buffer = result.get("weight_scale")
-            self.bias_cuda_buffer = result.get("bias")
-            self.input_global_scale_cuda_buffer = result.get("input_global_scale")
-            self.alpha_cuda_buffer = result.get("alpha")
-        elif self.create_cpu_buffer:
-            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file)
-            self._post_process_special_tensors(weight_dict, result=result)
-            self.pin_weight = result.get("weight")
-            self.pin_weight_scale = result.get("weight_scale")
-            self.pin_bias = result.get("bias")
-            self.pin_input_global_scale = result.get("input_global_scale")
-            self.pin_alpha = result.get("alpha")
-
-            self.weight = None
-            self.weight_scale = None
+    def _load_default_bias(self, source):
+        if self.bias_name is None:
             self.bias = None
+            self.pin_bias = None
+            self.bias_cuda_buffer = None
+            return
+
+        if self.create_cuda_buffer:
+            self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, is_lazy=False)
+            self.bias = None
+            self.pin_bias = None
+        else:
+            bias_tensor = source[self.bias_name].float() if self.bias_force_fp32 else source[self.bias_name]
+            device = bias_tensor.device
+            if device.type == "cpu":
+                self.pin_bias = self._get_cpu_pin_bias_tensor(source, is_lazy=False)
+                self.bias = None
+            else:
+                self.bias = bias_tensor
+                self.pin_bias = None
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
@@ -980,11 +1126,36 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self._get_actual_bias(),
+            bias=self.bias,
         )
-        if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
+
+    def to_cuda(self, non_blocking=False):
+        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
+        if hasattr(self, "pin_weight_scale"):
+            self.weight_scale = self.pin_weight_scale.to(AI_DEVICE, non_blocking=non_blocking)
+            self.input_global_scale = self.pin_input_global_scale.to(AI_DEVICE, non_blocking=non_blocking)
+            self.alpha = self.pin_alpha.to(AI_DEVICE, non_blocking=non_blocking)
+        if hasattr(self, "pin_bias") and self.pin_bias is not None:
+            self.bias = self.pin_bias.to(AI_DEVICE, non_blocking=non_blocking)
+
+    def to_cpu(self, non_blocking=False):
+        if hasattr(self, "pin_weight"):
+            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            if hasattr(self, "weight_scale_name"):
+                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
+                self.input_global_scale = self.pin_input_global_scale.copy_(self.input_global_scale, non_blocking=non_blocking).cpu()
+                self.alpha = self.pin_alpha.copy_(self.alpha, non_blocking=non_blocking).cpu()
+            if self.bias is not None:
+                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+        else:
+            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
+            if hasattr(self, "weight_scale"):
+                self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
+                self.input_global_scale = self.input_global_scale.to("cpu", non_blocking=non_blocking)
+                self.alpha = self.alpha.to("cpu", non_blocking=non_blocking)
+            if hasattr(self, "bias") and self.bias is not None:
+                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
 
     def state_dict(self, destination=None):
         if destination is None:
@@ -1000,31 +1171,10 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         return destination
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            weight_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.weight_scale_name,
-                count=1,
-            )
-            input_global_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.input_global_scale_name,
-                count=1,
-            )
-            alpha_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.alpha_name,
-                count=1,
-            )
-        else:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-            weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
-            input_global_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.input_global_scale_name, count=1)
-            alpha_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.alpha_name, count=1)
+        weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+        weight_scale_name = resolve_block_name(self.weight_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        input_global_scale_name = resolve_block_name(self.input_global_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        alpha_name = resolve_block_name(self.alpha_name, block_index, adapter_block_index, self.is_post_adapter)
 
         if weight_name not in destination:
             self.weight = None
@@ -1035,78 +1185,33 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         self.input_global_scale = self.input_global_scale_cuda_buffer.copy_(destination[input_global_scale_name], non_blocking=True)
         self.alpha = self.alpha_cuda_buffer.copy_(destination[alpha_name], non_blocking=True)
         if self.bias_name is not None:
-            bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
+            bias_name = resolve_block_name(self.bias_name, block_index, adapter_block_index, self.is_post_adapter)
             self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
         else:
             self.bias = None
 
-    # def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
-    #     if self.is_post_adapter:
-    #         self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-    #         self.weight_scale_name = re.sub(
-    #             r"\.\d+",
-    #             lambda m: f".{adapter_block_index}",
-    #             self.weight_scale_name,
-    #             count=1,
-    #         )
-    #         self.input_global_scale_name = re.sub(
-    #             r"\.\d+",
-    #             lambda m: f".{adapter_block_index}",
-    #             self.input_global_scale_name,
-    #             count=1,
-    #         )
-    #         self.alpha_name = re.sub(
-    #             r"\.\d+",
-    #             lambda m: f".{adapter_block_index}",
-    #             self.alpha_name,
-    #             count=1,
-    #         )
-    #     else:
-    #         self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-    #         self.weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
-    #         self.input_global_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.input_global_scale_name, count=1)
-    #         self.alpha_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.alpha_name, count=1)
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.weight_scale_name = resolve_block_name(self.weight_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.input_global_scale_name = resolve_block_name(self.input_global_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.alpha_name = resolve_block_name(self.alpha_name, block_index, adapter_block_index, self.is_post_adapter)
 
-    #     if self.bias_name is not None:
-    #         if self.is_post_adapter:
-    #             assert adapter_block_index is not None
-    #             self.bias_name = re.sub(
-    #                 r"\.\d+",
-    #                 lambda m: f".{adapter_block_index}",
-    #                 self.bias_name,
-    #                 count=1,
-    #             )
-    #         else:
-    #             self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-    #     if Path(self.lazy_load_file).is_file():
-    #         lazy_load_file_path = self.lazy_load_file
-    #     else:
-    #         lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
-    #     with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-    #         if self.weight_need_transpose:
-    #             weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
-    #         else:
-    #             weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+        if self.bias_name is not None:
+            self.bias_name = resolve_block_name(self.bias_name, block_index, adapter_block_index, self.is_post_adapter)
 
-    #         self.pin_weight = self.pin_weight.copy_(weight_tensor)
-    #         del weight_tensor
+        lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            if self.weight_need_transpose:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
+            else:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
 
-    #         weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
-    #         self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
-    #         del weight_scale_tensor
+            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+            del weight_tensor
 
-    #         input_global_scale_tensor = lazy_load_file.get_tensor(self.input_global_scale_name)
-    #         self.pin_input_global_scale = self.pin_input_global_scale.copy_(input_global_scale_tensor)
-    #         del input_global_scale_tensor
-
-    #         alpha_tensor = lazy_load_file.get_tensor(self.alpha_name)
-    #         self.pin_alpha = self.pin_alpha.copy_(alpha_tensor)
-    #         del alpha_tensor
-
-    #         if self.bias_name is not None:
-    #             bias_tensor = lazy_load_file.get_tensor(self.bias_name)
-    #             self.pin_bias.copy_(bias_tensor)
-    #             del bias_tensor
+            weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
+            self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
+            del weight_scale_tensor
 
 
 @MM_WEIGHT_REGISTER("Calib")

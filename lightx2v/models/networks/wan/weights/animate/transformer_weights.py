@@ -16,7 +16,7 @@ from lightx2v.utils.registry_factory import (
 
 class WanAnimateTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
-        super().__init__(self, config, lazy_load_path, lora_path)
+        super().__init__(config, lazy_load_path, lora_path)
         self.adapter_blocks_num = self.blocks_num // 5
         for i in range(self.blocks_num):
             if i % 5 == 0:
