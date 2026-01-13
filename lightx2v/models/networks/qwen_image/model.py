@@ -24,9 +24,11 @@ class QwenImageTransformerModel:
     transformer_weight_class = QwenImageTransformerWeights
     post_weight_class = QwenImagePostWeights
 
-    def __init__(self, config):
+    def __init__(self, config, lora_path=None, lora_strength=1.0):
         self.config = config
         self.model_path = os.path.join(config["model_path"], "transformer")
+        self.lora_path = lora_path
+        self.lora_strength = lora_strength
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
@@ -47,6 +49,25 @@ class QwenImageTransformerModel:
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    def _load_lora_file(self, file_path):
+        if self.device.type != "cpu" and dist.is_initialized():
+            device = dist.get_rank()
+        else:
+            device = str(self.device)
+        if device == "cpu":
+            with safe_open(file_path, framework="pt", device=device) as f:
+                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).pin_memory() for key in f.keys()}
+        else:
+            with safe_open(file_path, framework="pt", device=device) as f:
+                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
+        return tensor_dict
+
+    def _register_lora(self, lora_path, strength):
+        lora_weight = self._load_lora_file(lora_path)
+        self.pre_weight.register_lora(lora_weight, strength)
+        self.transformer_weights.register_lora(lora_weight, strength)
+        self.post_weight.register_lora(lora_weight, strength)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -87,7 +108,7 @@ class QwenImageTransformerModel:
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
         if self.lazy_load:
-            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path)
+            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
         else:
             self.transformer_weights = self.transformer_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
@@ -102,6 +123,9 @@ class QwenImageTransformerModel:
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
+        if self.config.get("lora_dynamic_apply"):
+            assert self.config.get("lora_configs", False)
+            self._register_lora(self.lora_path, self.lora_strength)
         self.post_weight.load(self.original_weight_dict)
 
         del self.original_weight_dict
@@ -124,7 +148,7 @@ class QwenImageTransformerModel:
         return False
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
+        if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):
             return True
         return False
 

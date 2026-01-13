@@ -301,8 +301,9 @@ class LightX2VPipeline:
             [960, 960],
         ]
 
-    def enable_lora(self, lora_configs):
+    def enable_lora(self, lora_configs, lora_dynamic_apply=False):
         self.lora_configs = lora_configs
+        self.lora_dynamic_apply = lora_dynamic_apply
 
     def enable_cache(
         self,

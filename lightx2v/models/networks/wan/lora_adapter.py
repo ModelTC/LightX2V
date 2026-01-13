@@ -12,9 +12,8 @@ class WanLoraWrapper:
         self.model = wan_model
         self.lora_metadata = {}
         self.lora_loader = LoRALoader()
-        self.override_dict = {}  # On CPU
 
-    def register_lora(self, lora_path, lora_name=None):
+    def load_lora(self, lora_path, lora_name=None):
         if lora_name is None:
             lora_name = os.path.basename(lora_path).split(".")[0]
 
@@ -27,7 +26,7 @@ class WanLoraWrapper:
 
         return lora_name
 
-    def _load_lora_file(self, file_path, device='cpu'):
+    def _load_lora_file(self, file_path, device="cpu"):
         with safe_open(file_path, framework="pt") as f:
             tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(device) for key in f.keys()}
         return tensor_dict
@@ -50,6 +49,6 @@ class WanLoraWrapper:
         )
         self.model._apply_weights(weight_dict)
 
-        logger.info(f"Applied LoRA: {lora_name} with alpha={strength}")
+        logger.info(f"Applied LoRA: {lora_name} with strength={strength}")
         del lora_weights
         return True

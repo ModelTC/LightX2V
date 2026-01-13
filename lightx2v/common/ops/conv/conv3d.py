@@ -1,83 +1,81 @@
 from abc import ABCMeta, abstractmethod
 
 import torch
+from loguru import logger
 
+from lightx2v.common.ops.utils import *
+from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from loguru import logger
 
 
 class Conv3dWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, bias_name, weight_diff_name=None, bias_diff_name=None, stride=1, padding=0, dilation=1, groups=1):
+    def __init__(self, weight_name, bias_name, stride=1, padding=0, dilation=1, groups=1, lora_prefix="diffusion_model.blocks"):
         self.weight_name = weight_name
         self.bias_name = bias_name
-        self.weight_diff_name = weight_diff_name
-        self.bias_diff_name = bias_diff_name
-        self.weight_diff = 0.0
-        self.bias_diff = 0.0
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
         self.groups = groups
         self.config = {}
+        self.lora_prefix = lora_prefix
+        self.has_lora_branch = False
+        self.has_diff = False
+        self._get_base_attrs_mapping()
+        self._get_lora_attr_mapping()
 
-    @abstractmethod
-    def load(self, weight_dict):
-        pass
+    def _get_base_attrs_mapping(self):
+        self.base_attrs = []
+        self.base_attrs.append((self.weight_name, "weight", False))
+        self.base_attrs.append((self.bias_name, "bias", False))
 
-    @abstractmethod
-    def apply(self, input_tensor):
-        pass
+    def _get_lora_attr_mapping(self):
+        _, _, _, self.weight_diff_name, self.bias_diff_name = build_lora_and_diff_names(self.weight_name, self.lora_prefix)
+        self.lora_attrs = {
+            "weight_diff": "weight_diff_name",
+            "bias_diff": "bias_diff_name",
+        }
+        self.weight_diff = torch.tensor(0.0, dtype=GET_DTYPE(), device=AI_DEVICE)
+        self.bias_diff = torch.tensor(0.0, dtype=GET_DTYPE(), device=AI_DEVICE)
 
     def register_diff(self, weight_dict):
-        if self.weight_diff_name is None and self.bias_diff_name is None:
-            return
-        self.weight_diff = weight_dict[self.weight_diff_name]
-        logger.debug(f"Register Diff to {self.weight_name}")
-        if self.bias_diff_name is not None:
+        if self.weight_diff_name in weight_dict:
+            self.weight_diff = weight_dict[self.weight_diff_name]
+            logger.debug(f"Register Diff to {self.weight_name}")
+        if self.bias_diff_name in weight_dict:
             self.bias_diff = weight_dict[self.bias_diff_name]
             logger.debug(f"Register Diff to {self.bias_name}")
-        
 
     def set_config(self, config=None):
         if config is not None:
             self.config = config
 
+    @abstractmethod
+    def load(self, weight_dict):
+        pass
+
+    @abstractmethod
+    def apply(self, input_tensor):
+        pass
+
 
 @CONV3D_WEIGHT_REGISTER("Default")
 class Conv3dWeight(Conv3dWeightTemplate):
-    def __init__(self, weight_name, bias_name, weight_diff_name=None, bias_diff_name=None,stride=1, padding=0, dilation=1, groups=1):
-        super().__init__(weight_name, bias_name, weight_diff_name, bias_diff_name, stride, padding, dilation, groups)
+    def __init__(self, weight_name, bias_name, stride=1, padding=0, dilation=1, groups=1, lora_prefix="diffusion_model.blocks"):
+        super().__init__(weight_name, bias_name, stride, padding, dilation, groups, lora_prefix)
 
     def load(self, weight_dict):
-        device = weight_dict[self.weight_name].device
-        if device.type == "cpu":
-            weight_shape = weight_dict[self.weight_name].shape
-            weight_dtype = weight_dict[self.weight_name].dtype
-            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-            self.pin_weight.copy_(weight_dict[self.weight_name])
-
-            if self.bias_name is not None:
-                bias_shape = weight_dict[self.bias_name].shape
-                bias_dtype = weight_dict[self.bias_name].dtype
-                self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                self.pin_bias.copy_(weight_dict[self.bias_name])
-            else:
-                self.bias = None
-                self.pin_bias = None
-            del weight_dict[self.weight_name]
-        else:
-            self.weight = weight_dict[self.weight_name]
-            if self.bias_name is not None:
-                self.bias = weight_dict[self.bias_name]
-            else:
-                self.bias = None
+        device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+        self.weight = device_tensors.get("weight")
+        self.bias = device_tensors.get("bias")
+        self.pin_weight = pin_tensors.get("weight")
+        self.pin_bias = pin_tensors.get("bias")
 
     def apply(self, input_tensor):
         output_tensor = torch.nn.functional.conv3d(
             input_tensor,
-            weight=self.weight if self.weight_diff_name is None else self.weight + self.weight_diff,
-            bias=self.bias if self.bias_diff_name is None else self.bias + self.bias_diff,
+            weight=self.weight + self.weight_diff,
+            bias=self.bias + self.bias_diff,
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
@@ -86,24 +84,13 @@ class Conv3dWeight(Conv3dWeightTemplate):
         return output_tensor
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
-        if hasattr(self, "pin_bias") and self.pin_bias is not None:
-            self.bias = self.pin_bias.to(AI_DEVICE, non_blocking=non_blocking)
+        move_attr_to_cuda(self, self.base_attrs, self.lora_attrs, non_blocking)
 
     def to_cpu(self, non_blocking=False):
-        if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
-            if self.bias is not None:
-                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
-        else:
-            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-            if hasattr(self, "bias") and self.bias is not None:
-                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
+        move_attr_to_cpu(self, self.base_attrs, self.lora_attrs, non_blocking)
 
     def state_dict(self, destination=None):
-        if destination is None:
-            destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
-        if self.bias_name is not None:
-            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
-        return destination
+        return state_dict(self, self.base_attrs, self.lora_attrs, destination)
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        return load_state_dict(self, self.base_attrs, self.lora_attrs, destination, block_index, adapter_block_index)

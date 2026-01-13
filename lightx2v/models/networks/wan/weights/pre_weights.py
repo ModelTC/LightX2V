@@ -21,8 +21,7 @@ class WanPreWeights(WeightModule):
                 "patch_embedding.weight",
                 "patch_embedding.bias",
                 stride=self.patch_size,
-                weight_diff_name="diffusion_model.patch_embedding.diff",
-                bias_diff_name="diffusion_model.patch_embedding.diff_b",
+                lora_prefix="diffusion_model.patch_embedding",
             ),
         )
         self.add_module(
@@ -30,9 +29,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"](
                 "text_embedding.0.weight",
                 "text_embedding.0.bias",
-                "diffusion_model.text_embedding.0.lora_down.weight",
-                "diffusion_model.text_embedding.0.lora_up.weight",
-                bias_diff_name="diffusion_model.text_embedding.0.diff_b",
+                lora_prefix="diffusion_model.text_embedding",
             ),
         )
         self.add_module(
@@ -40,9 +37,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"](
                 "text_embedding.2.weight",
                 "text_embedding.2.bias",
-                "diffusion_model.text_embedding.2.lora_down.weight",
-                "diffusion_model.text_embedding.2.lora_up.weight",
-                bias_diff_name="diffusion_model.text_embedding.2.diff_b",
+                lora_prefix="diffusion_model.text_embedding",
             ),
         )
         self.add_module(
@@ -50,9 +45,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"](
                 "time_embedding.0.weight",
                 "time_embedding.0.bias",
-                "diffusion_model.time_embedding.0.lora_down.weight",
-                "diffusion_model.time_embedding.0.lora_up.weight",
-                bias_diff_name="diffusion_model.time_embedding.0.diff_b",
+                lora_prefix="diffusion_model.time_embedding",
             ),
         )
         self.add_module(
@@ -60,9 +53,7 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"](
                 "time_embedding.2.weight",
                 "time_embedding.2.bias",
-                "diffusion_model.time_embedding.2.lora_down.weight",
-                "diffusion_model.time_embedding.2.lora_up.weight",
-                bias_diff_name="diffusion_model.time_embedding.2.diff_b",
+                lora_prefix="diffusion_model.time_embedding",
             ),
         )
         self.add_module(
@@ -70,22 +61,17 @@ class WanPreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"](
                 "time_projection.1.weight",
                 "time_projection.1.bias",
-                "diffusion_model.time_projection.1.lora_down.weight",
-                "diffusion_model.time_projection.1.lora_up.weight",
-                bias_diff_name="diffusion_model.time_projection.1.diff_b",
+                lora_prefix="diffusion_model.time_projection",
             ),
         )
 
-        if config["task"] in ["i2v", "flf2v", "animate", "s2v"] and config.get(
-            "use_image_encoder", True
-        ):
+        if config["task"] in ["i2v", "flf2v", "animate", "s2v"] and config.get("use_image_encoder", True):
             self.add_module(
                 "proj_0",
                 LN_WEIGHT_REGISTER["Default"](
                     "img_emb.proj.0.weight",
                     "img_emb.proj.0.bias",
-                    weight_diff_name="diffusion_model.img_emb.proj.0.diff",
-                    bias_diff_name="diffusion_model.img_emb.proj.0.diff_b",
+                    lora_prefix="diffusion_model.img_emb",
                 ),
             )
             self.add_module(
@@ -93,9 +79,7 @@ class WanPreWeights(WeightModule):
                 MM_WEIGHT_REGISTER["Default"](
                     "img_emb.proj.1.weight",
                     "img_emb.proj.1.bias",
-                    "diffusion_model.img_emb.proj.1.lora_down.weight",
-                    "diffusion_model.img_emb.proj.1.lora_up.weight",
-                    bias_diff_name="diffusion_model.img_emb.proj.1.diff_b",
+                    lora_prefix="diffusion_model.img_emb",
                 ),
             )
             self.add_module(
@@ -103,9 +87,7 @@ class WanPreWeights(WeightModule):
                 MM_WEIGHT_REGISTER["Default"](
                     "img_emb.proj.3.weight",
                     "img_emb.proj.3.bias",
-                    "diffusion_model.img_emb.proj.3.lora_down.weight",
-                    "diffusion_model.img_emb.proj.3.lora_up.weight",
-                    bias_diff_name="diffusion_model.img_emb.proj.3.diff_b",
+                    lora_prefix="diffusion_model.img_emb",
                 ),
             )
             self.add_module(
@@ -113,14 +95,11 @@ class WanPreWeights(WeightModule):
                 LN_WEIGHT_REGISTER["Default"](
                     "img_emb.proj.4.weight",
                     "img_emb.proj.4.bias",
-                    weight_diff_name="diffusion_model.img_emb.proj.4.diff",
-                    bias_diff_name="diffusion_model.img_emb.proj.4.diff_b",
+                    lora_prefix="diffusion_model.img_emb",
                 ),
             )
 
-        if config["model_cls"] == "wan2.1_distill" and config.get(
-            "enable_dynamic_cfg", False
-        ):
+        if config["model_cls"] == "wan2.1_distill" and config.get("enable_dynamic_cfg", False):
             self.add_module(
                 "cfg_cond_proj_1",
                 MM_WEIGHT_REGISTER["Default"](
@@ -139,15 +118,11 @@ class WanPreWeights(WeightModule):
         if config["model_cls"] == "wan2.1_mean_flow_distill":
             self.add_module(
                 "time_embedding_r_0",
-                MM_WEIGHT_REGISTER["Default"](
-                    "time_embedding_r.0.weight", "time_embedding_r.0.bias"
-                ),
+                MM_WEIGHT_REGISTER["Default"]("time_embedding_r.0.weight", "time_embedding_r.0.bias"),
             )
             self.add_module(
                 "time_embedding_r_2",
-                MM_WEIGHT_REGISTER["Default"](
-                    "time_embedding_r.2.weight", "time_embedding_r.2.bias"
-                ),
+                MM_WEIGHT_REGISTER["Default"]("time_embedding_r.2.weight", "time_embedding_r.2.bias"),
             )
 
         if config["task"] == "flf2v" and config.get("use_image_encoder", True):

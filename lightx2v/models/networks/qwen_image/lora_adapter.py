@@ -31,7 +31,7 @@ class QwenImageLoraWrapper:
 
     def _load_lora_file(self, file_path):
         with safe_open(file_path, framework="pt") as f:
-            tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in f.keys()}
+            tensor_dict = {key: f.get_tensor(key).to(self.device) for key in f.keys()}
         return tensor_dict
 
     def apply_lora(self, lora_name, strength=1.0):
@@ -43,7 +43,6 @@ class QwenImageLoraWrapper:
             return False
 
         lora_weights = self._load_lora_file(self.lora_metadata[lora_name]["path"])
-
         weight_dict = self.model.original_weight_dict
         self.lora_loader.apply_lora(
             weight_dict=weight_dict,

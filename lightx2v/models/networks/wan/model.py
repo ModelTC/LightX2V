@@ -40,9 +40,11 @@ class WanModel(CompiledMethodsMixin):
     pre_weight_class = WanPreWeights
     transformer_weight_class = WanTransformerWeights
 
-    def __init__(self, model_path, config, device, model_type="wan2.1"):
+    def __init__(self, model_path, config, device, model_type="wan2.1", lora_path=None, lora_strength=1.0):
         super().__init__()
         self.model_path = model_path
+        self.lora_path = lora_path
+        self.lora_strength = lora_strength
         self.config = config
         self.cpu_offload = self.config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
@@ -63,7 +65,6 @@ class WanModel(CompiledMethodsMixin):
             assert self.config.get("dit_quant_scheme", "Default") in [
                 "fp8-triton",
                 "int8-triton",
-                "Default-Force-FP32",
                 "fp8-vllm",
                 "int8-vllm",
                 "fp8-q8f",
@@ -306,7 +307,7 @@ class WanModel(CompiledMethodsMixin):
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
         if self.lazy_load:
-            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path)
+            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
         else:
             self.transformer_weights = self.transformer_weight_class(self.config)
         if not self._should_init_empty_model():
@@ -321,7 +322,8 @@ class WanModel(CompiledMethodsMixin):
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
         if self.config.get("lora_dynamic_apply"):
-            self._register_lora(self.config.lora_configs[0]["path"], self.config.lora_configs[0].get("strength", 1.0))
+            assert self.config.get("lora_configs", False)
+            self._register_lora(self.lora_path, self.lora_strength)
         del self.original_weight_dict
         torch.cuda.empty_cache()
         gc.collect()
@@ -396,14 +398,20 @@ class WanModel(CompiledMethodsMixin):
         self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
         if self.lazy_load:
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
-            if self.config.get("warm_up_cpu_buffers", False):
-                self.transformer_infer.offload_manager.warm_up_cpu_buffers(self.transformer_weights.blocks_num)
 
     def _load_lora_file(self, file_path):
-        with safe_open(file_path, framework="pt") as f:
-            tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in f.keys()}
+        if self.device.type != "cpu" and dist.is_initialized():
+            device = dist.get_rank()
+        else:
+            device = str(self.device)
+        if device == "cpu":
+            with safe_open(file_path, framework="pt", device=device) as f:
+                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).pin_memory() for key in f.keys()}
+        else:
+            with safe_open(file_path, framework="pt", device=device) as f:
+                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
         return tensor_dict
-    
+
     def _register_lora(self, lora_path, strength):
         lora_weight = self._load_lora_file(lora_path)
         self.pre_weight.register_lora(lora_weight, strength)

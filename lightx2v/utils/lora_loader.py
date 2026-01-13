@@ -18,10 +18,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from loguru import logger
 
-from .envs import *
-from .quant_utils import dequant_naive_inplace as dequant
-from .quant_utils import quant_naive_inplace as quant
-
 
 class LoRAFormat(Enum):
     """Enum for different LoRA format patterns."""
@@ -369,7 +365,6 @@ class LoRALoader:
                 continue
 
             param = weight_dict[model_key]
-            param_dtype = param.dtype
             up_key = pair_info["up_key"]
             down_key = pair_info["down_key"]
 
@@ -379,37 +374,34 @@ class LoRALoader:
             if pair_info["mid_key"]:
                 used_lora_keys.add(pair_info["mid_key"])
 
-            if param_dtype not in [torch.int8, torch.float8_e4m3fn]:
-                lora_up = lora_weights[up_key].to(param.device, param_dtype)
-                lora_down = lora_weights[down_key].to(param.device, param_dtype)
-            else:
-                lora_up = lora_weights[up_key].to(param.device)
-                lora_down = lora_weights[down_key].to(param.device)
+            try:
+                lora_up = lora_weights[up_key].to(param.device, param.dtype)
+                lora_down = lora_weights[down_key].to(param.device, param.dtype)
 
-            # Get LoRA-specific alpha if available, otherwise use global alpha
-            # Apply LoRA: W' = W + (alpha/rank) * B @ A
-            # where B = up (out_features, rank), A = down (rank, in_features)
-            if pair_info["alpha"]:
-                lora_scale = pair_info["alpha"] / lora_down.shape[0]
-            elif alpha is not None:
-                lora_scale = alpha / lora_down.shape[0]
-            else:
-                lora_scale = 1
+                # Get LoRA-specific alpha if available, otherwise use global alpha
+                # Apply LoRA: W' = W + (alpha/rank) * B @ A
+                # where B = up (out_features, rank), A = down (rank, in_features)
+                if pair_info["alpha"]:
+                    lora_scale = pair_info["alpha"] / lora_down.shape[0]
+                elif alpha is not None:
+                    lora_scale = alpha / lora_down.shape[0]
+                else:
+                    lora_scale = 1
 
-            if len(lora_down.shape) == 2 and len(lora_up.shape) == 2:
-                lora_delta = torch.mm(lora_up, lora_down) * lora_scale
-                if strength is not None:
-                    lora_delta = lora_delta * float(strength)
+                if len(lora_down.shape) == 2 and len(lora_up.shape) == 2:
+                    lora_delta = torch.mm(lora_up, lora_down) * lora_scale
+                    if strength is not None:
+                        lora_delta = lora_delta * float(strength)
 
-                if param_dtype in [torch.int8, torch.float8_e4m3fn]:
-                    param.data = dequant(param.data, weight_dict[model_key + "_scale"], GET_DTYPE())
-                param.data += lora_delta
-                if param_dtype in [torch.int8, torch.float8_e4m3fn]:
-                    param.data, weight_dict[model_key + "_scale"] = quant(param.data, param_dtype)
-                applied_count += 1
-                logger.debug(f"Applied LoRA to {model_key} with lora_scale={lora_scale}")
-            else:
-                logger.warning(f"Unexpected LoRA shape for {model_key}: down={lora_down.shape}, up={lora_up.shape}")
+                    param.data += lora_delta
+                    applied_count += 1
+                    logger.debug(f"Applied LoRA to {model_key} with lora_scale={lora_scale}")
+                else:
+                    logger.warning(f"Unexpected LoRA shape for {model_key}: down={lora_down.shape}, up={lora_up.shape}")
+
+            except Exception as e:
+                logger.warning(f"Failed to apply LoRA pair for {model_key}: {e}")
+                logger.warning(f"  Shapes - param: {param.shape}, down: {lora_weights[down_key].shape}, up: {lora_weights[up_key].shape}")
 
         # Apply diff weights (direct addition)
         for model_key, diff_info in lora_diffs.items():
@@ -418,26 +410,21 @@ class LoRALoader:
                 continue
 
             param = weight_dict[model_key]
-            param_dtype = param.dtype
             diff_key = diff_info["diff_key"]
 
             # Track used keys
             used_lora_keys.add(diff_key)
 
-            if param_dtype not in [torch.int8, torch.float8_e4m3fn]:
-                lora_diff = lora_weights[diff_key].to(param.device, param_dtype)
-            else:
-                lora_diff = lora_weights[diff_key].to(param.device)
-            if param_dtype in [torch.int8, torch.float8_e4m3fn]:
-                param.data = dequant(param.data, weight_dict[model_key + "_scale"], GET_DTYPE())
-            if alpha is not None:
-                param.data += lora_diff * alpha * (float(strength) if strength is not None else 1.0)
-            else:
-                param.data += lora_diff * (float(strength) if strength is not None else 1.0)
-            if param_dtype in [torch.int8, torch.float8_e4m3fn]:
-                param.data, weight_dict[model_key + "_scale"] = quant(param.data, param_dtype)
-            applied_count += 1
-            logger.debug(f"Applied LoRA diff to {model_key} (type: {diff_info['type']})")
+            try:
+                lora_diff = lora_weights[diff_key].to(param.device, param.dtype)
+                if alpha is not None:
+                    param.data += lora_diff * alpha * (float(strength) if strength is not None else 1.0)
+                else:
+                    param.data += lora_diff * (float(strength) if strength is not None else 1.0)
+                applied_count += 1
+                logger.debug(f"Applied LoRA diff to {model_key} (type: {diff_info['type']})")
+            except Exception as e:
+                logger.warning(f"Failed to apply LoRA diff for {model_key}: {e}")
 
         # Warn about unused keys
         all_lora_keys = set(k for k in lora_weights.keys() if not k.endswith(".alpha"))
