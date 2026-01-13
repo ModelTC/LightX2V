@@ -28,7 +28,7 @@ class ZImagePostInfer:
             output = output[:, :image_tokens_len, :]
 
         patch_size = self.config.get("patch_size", 2)
-        f_patch_size = 1
+        f_patch_size = self.config.get("f_patch_size", 1)
         transformer_out_channels = out_dim // (patch_size * patch_size * f_patch_size)
         expected_out_dim = patch_size * patch_size * f_patch_size * transformer_out_channels
 

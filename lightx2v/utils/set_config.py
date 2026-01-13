@@ -70,6 +70,15 @@ def set_config(args):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
+
+            if config["model_cls"] == "z_image":
+                # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
+                z_image_patch_size = model_config.pop("all_patch_size", [2])
+                z_image_f_patch_size = model_config.pop("all_f_patch_size", [1])
+                assert len(z_image_patch_size) == 1 and len(z_image_f_patch_size) == 1
+                model_config["patch_size"] = z_image_patch_size[0]
+                model_config["f_patch_size"] = z_image_f_patch_size[0]
+
             config.update(model_config)
         # load quantized config
         if config.get("dit_quantized_ckpt", None) is not None:
