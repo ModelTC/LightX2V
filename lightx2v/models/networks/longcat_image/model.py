@@ -89,10 +89,10 @@ class LongCatImageTransformerModel:
             del weight_dict
             gc.collect()
 
-        # Load weights into containers
-        self.pre_weight.load_from_state_dict(self.original_weight_dict)
-        self.transformer_weights.load_from_state_dict(self.original_weight_dict)
-        self.post_weight.load_from_state_dict(self.original_weight_dict)
+        # Load weights into containers using modular load method
+        self.pre_weight.load(self.original_weight_dict)
+        self.transformer_weights.load(self.original_weight_dict)
+        self.post_weight.load(self.original_weight_dict)
 
         del self.original_weight_dict
         torch.cuda.empty_cache()

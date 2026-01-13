@@ -18,5 +18,7 @@
     "num_attention_heads": 24,
     "attention_head_dim": 128,
     "joint_attention_dim": 3584,
-    "axes_dims_rope": [16, 56, 56]
+    "axes_dims_rope": [16, 56, 56],
+    "dit_quant_scheme": "Default",
+    "rms_norm_type": "sgl-kernel"
 }

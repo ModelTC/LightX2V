@@ -40,19 +40,19 @@ class LongCatImagePreInfer:
             raise ValueError(f"Only batch_size=1 is supported, got {encoder_hidden_states.shape[0]}")
 
         # Embed image latents: x_embedder (squeeze batch dim since B=1)
-        hidden_states = F.linear(hidden_states.squeeze(0), weights.x_embedder_weight, weights.x_embedder_bias)
+        hidden_states = weights.x_embedder.apply(hidden_states.squeeze(0))
 
         # Embed text context: context_embedder
-        encoder_hidden_states = F.linear(encoder_hidden_states.squeeze(0), weights.context_embedder_weight, weights.context_embedder_bias)
+        encoder_hidden_states = weights.context_embedder.apply(encoder_hidden_states.squeeze(0))
 
         # Timestep embedding
         # time_proj is sinusoidal (computed in scheduler), then pass through MLP
         timesteps_proj = self.scheduler.timesteps_proj  # [B, 256]
 
         # timestep_embedder: linear_1 -> silu -> linear_2
-        temb = F.linear(timesteps_proj, weights.timestep_embedder_linear_1_weight, weights.timestep_embedder_linear_1_bias)
+        temb = weights.timestep_embedder_linear_1.apply(timesteps_proj)
         temb = F.silu(temb)
-        temb = F.linear(temb, weights.timestep_embedder_linear_2_weight, weights.timestep_embedder_linear_2_bias)
+        temb = weights.timestep_embedder_linear_2.apply(temb)
 
         # Get rotary embeddings from scheduler
         if self.scheduler.infer_condition:
@@ -65,7 +65,7 @@ class LongCatImagePreInfer:
         output_seq_len = None
         if hasattr(self.scheduler, "input_image_latents") and self.scheduler.input_image_latents is not None:
             # Embed input image latents
-            input_image_latents = F.linear(self.scheduler.input_image_latents.squeeze(0), weights.x_embedder_weight, weights.x_embedder_bias)
+            input_image_latents = weights.x_embedder.apply(self.scheduler.input_image_latents.squeeze(0))
             output_seq_len = self.scheduler.output_seq_len
 
         return LongCatImagePreInferModuleOutput(

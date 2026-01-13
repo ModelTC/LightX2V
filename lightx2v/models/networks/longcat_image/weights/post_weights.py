@@ -1,8 +1,5 @@
-import torch
-
 from lightx2v.common.modules.weight_module import WeightModule
-
-from .pre_weights import _get_required_weight
+from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 
 class LongCatImagePostWeights(WeightModule):
@@ -15,30 +12,32 @@ class LongCatImagePostWeights(WeightModule):
         # Use transformer_in_channels to avoid conflict with VAE's in_channels
         self.out_channels = config.get("transformer_in_channels", config.get("in_channels", 64))
         self.patch_size = config.get("patch_size", 1)
+        self.mm_type = config.get("dit_quant_scheme", "Default")
 
-    def load_from_state_dict(self, state_dict):
-        """Load weights from state dict."""
         # norm_out (AdaLayerNormContinuous)
-        self.norm_out_linear_weight = _get_required_weight(state_dict, "norm_out.linear.weight")
-        self.norm_out_linear_bias = _get_required_weight(state_dict, "norm_out.linear.bias")
+        self.add_module(
+            "norm_out_linear",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                "norm_out.linear.weight",
+                "norm_out.linear.bias",
+            ),
+        )
 
         # proj_out
-        self.proj_out_weight = _get_required_weight(state_dict, "proj_out.weight")
-        self.proj_out_bias = _get_required_weight(state_dict, "proj_out.bias")
+        self.add_module(
+            "proj_out",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                "proj_out.weight",
+                "proj_out.bias",
+            ),
+        )
 
-    def to_cuda(self):
-        """Move weights to CUDA."""
-        from lightx2v.utils.envs import GET_DTYPE
-        from lightx2v_platform.base.global_var import AI_DEVICE
+    def to_cuda(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cuda"):
+                module.to_cuda(non_blocking=non_blocking)
 
-        for attr_name in dir(self):
-            attr = getattr(self, attr_name)
-            if isinstance(attr, torch.Tensor):
-                setattr(self, attr_name, attr.to(AI_DEVICE, dtype=GET_DTYPE()))
-
-    def to_cpu(self):
-        """Move weights to CPU."""
-        for attr_name in dir(self):
-            attr = getattr(self, attr_name)
-            if isinstance(attr, torch.Tensor):
-                setattr(self, attr_name, attr.to("cpu"))
+    def to_cpu(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cpu"):
+                module.to_cpu(non_blocking=non_blocking)

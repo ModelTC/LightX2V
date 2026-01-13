@@ -1,8 +1,5 @@
-import torch
-
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-
-from .pre_weights import _get_required_weight
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
 class LongCatImageDoubleBlockWeights(WeightModule):
@@ -13,68 +10,160 @@ class LongCatImageDoubleBlockWeights(WeightModule):
         self.config = config
         self.block_idx = block_idx
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
+        self.mm_type = config.get("dit_quant_scheme", "Default")
+        self.rms_norm_type = config.get("rms_norm_type", "Default")
+        self.attn_type = config.get("attn_type", "flash_attn3")
 
-    def load_from_state_dict(self, state_dict, prefix=""):
-        """Load weights from state dict."""
-        p = f"{prefix}transformer_blocks.{self.block_idx}."
+        p = f"transformer_blocks.{self.block_idx}"
 
         # Image stream norm1 (AdaLayerNormZero)
-        self.norm1_linear_weight = _get_required_weight(state_dict, f"{p}norm1.linear.weight")
-        self.norm1_linear_bias = _get_required_weight(state_dict, f"{p}norm1.linear.bias")
+        self.add_module(
+            "norm1_linear",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.norm1.linear.weight",
+                f"{p}.norm1.linear.bias",
+            ),
+        )
 
         # Context stream norm1 (AdaLayerNormZero)
-        self.norm1_context_linear_weight = _get_required_weight(state_dict, f"{p}norm1_context.linear.weight")
-        self.norm1_context_linear_bias = _get_required_weight(state_dict, f"{p}norm1_context.linear.bias")
+        self.add_module(
+            "norm1_context_linear",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.norm1_context.linear.weight",
+                f"{p}.norm1_context.linear.bias",
+            ),
+        )
 
         # Attention - image stream
-        self.attn_to_q_weight = _get_required_weight(state_dict, f"{p}attn.to_q.weight")
-        self.attn_to_q_bias = _get_required_weight(state_dict, f"{p}attn.to_q.bias")
-        self.attn_to_k_weight = _get_required_weight(state_dict, f"{p}attn.to_k.weight")
-        self.attn_to_k_bias = _get_required_weight(state_dict, f"{p}attn.to_k.bias")
-        self.attn_to_v_weight = _get_required_weight(state_dict, f"{p}attn.to_v.weight")
-        self.attn_to_v_bias = _get_required_weight(state_dict, f"{p}attn.to_v.bias")
-        self.attn_norm_q_weight = _get_required_weight(state_dict, f"{p}attn.norm_q.weight")
-        self.attn_norm_k_weight = _get_required_weight(state_dict, f"{p}attn.norm_k.weight")
+        self.add_module(
+            "to_q",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_q.weight",
+                f"{p}.attn.to_q.bias",
+            ),
+        )
+        self.add_module(
+            "to_k",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_k.weight",
+                f"{p}.attn.to_k.bias",
+            ),
+        )
+        self.add_module(
+            "to_v",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_v.weight",
+                f"{p}.attn.to_v.bias",
+            ),
+        )
+        self.add_module(
+            "norm_q",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{p}.attn.norm_q.weight",
+            ),
+        )
+        self.add_module(
+            "norm_k",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{p}.attn.norm_k.weight",
+            ),
+        )
 
         # Attention - context stream (added projections)
-        self.attn_add_q_proj_weight = _get_required_weight(state_dict, f"{p}attn.add_q_proj.weight")
-        self.attn_add_q_proj_bias = _get_required_weight(state_dict, f"{p}attn.add_q_proj.bias")
-        self.attn_add_k_proj_weight = _get_required_weight(state_dict, f"{p}attn.add_k_proj.weight")
-        self.attn_add_k_proj_bias = _get_required_weight(state_dict, f"{p}attn.add_k_proj.bias")
-        self.attn_add_v_proj_weight = _get_required_weight(state_dict, f"{p}attn.add_v_proj.weight")
-        self.attn_add_v_proj_bias = _get_required_weight(state_dict, f"{p}attn.add_v_proj.bias")
-        self.attn_norm_added_q_weight = _get_required_weight(state_dict, f"{p}attn.norm_added_q.weight")
-        self.attn_norm_added_k_weight = _get_required_weight(state_dict, f"{p}attn.norm_added_k.weight")
+        self.add_module(
+            "add_q_proj",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.add_q_proj.weight",
+                f"{p}.attn.add_q_proj.bias",
+            ),
+        )
+        self.add_module(
+            "add_k_proj",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.add_k_proj.weight",
+                f"{p}.attn.add_k_proj.bias",
+            ),
+        )
+        self.add_module(
+            "add_v_proj",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.add_v_proj.weight",
+                f"{p}.attn.add_v_proj.bias",
+            ),
+        )
+        self.add_module(
+            "norm_added_q",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{p}.attn.norm_added_q.weight",
+            ),
+        )
+        self.add_module(
+            "norm_added_k",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{p}.attn.norm_added_k.weight",
+            ),
+        )
 
         # Attention output projections
-        self.attn_to_out_0_weight = _get_required_weight(state_dict, f"{p}attn.to_out.0.weight")
-        self.attn_to_out_0_bias = _get_required_weight(state_dict, f"{p}attn.to_out.0.bias")
-        self.attn_to_add_out_weight = _get_required_weight(state_dict, f"{p}attn.to_add_out.weight")
-        self.attn_to_add_out_bias = _get_required_weight(state_dict, f"{p}attn.to_add_out.bias")
+        self.add_module(
+            "to_out",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_out.0.weight",
+                f"{p}.attn.to_out.0.bias",
+            ),
+        )
+        self.add_module(
+            "to_add_out",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_add_out.weight",
+                f"{p}.attn.to_add_out.bias",
+            ),
+        )
+
+        # Attention calculation module
+        self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
         # Image FFN
-        self.ff_net_0_proj_weight = _get_required_weight(state_dict, f"{p}ff.net.0.proj.weight")
-        self.ff_net_0_proj_bias = _get_required_weight(state_dict, f"{p}ff.net.0.proj.bias")
-        self.ff_net_2_weight = _get_required_weight(state_dict, f"{p}ff.net.2.weight")
-        self.ff_net_2_bias = _get_required_weight(state_dict, f"{p}ff.net.2.bias")
+        self.add_module(
+            "ff_net_0_proj",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.ff.net.0.proj.weight",
+                f"{p}.ff.net.0.proj.bias",
+            ),
+        )
+        self.add_module(
+            "ff_net_2",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.ff.net.2.weight",
+                f"{p}.ff.net.2.bias",
+            ),
+        )
 
         # Context FFN
-        self.ff_context_net_0_proj_weight = _get_required_weight(state_dict, f"{p}ff_context.net.0.proj.weight")
-        self.ff_context_net_0_proj_bias = _get_required_weight(state_dict, f"{p}ff_context.net.0.proj.bias")
-        self.ff_context_net_2_weight = _get_required_weight(state_dict, f"{p}ff_context.net.2.weight")
-        self.ff_context_net_2_bias = _get_required_weight(state_dict, f"{p}ff_context.net.2.bias")
+        self.add_module(
+            "ff_context_net_0_proj",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.ff_context.net.0.proj.weight",
+                f"{p}.ff_context.net.0.proj.bias",
+            ),
+        )
+        self.add_module(
+            "ff_context_net_2",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.ff_context.net.2.weight",
+                f"{p}.ff_context.net.2.bias",
+            ),
+        )
 
-    def to_cuda(self):
-        """Move all weights to CUDA."""
-        for name, attr in self.__dict__.items():
-            if isinstance(attr, torch.Tensor):
-                setattr(self, name, attr.cuda())
+    def to_cuda(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cuda"):
+                module.to_cuda(non_blocking=non_blocking)
 
-    def to_cpu(self):
-        """Move all weights to CPU."""
-        for name, attr in self.__dict__.items():
-            if isinstance(attr, torch.Tensor):
-                setattr(self, name, attr.cpu())
+    def to_cpu(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cpu"):
+                module.to_cpu(non_blocking=non_blocking)
 
 
 class LongCatImageSingleBlockWeights(WeightModule):
@@ -85,44 +174,86 @@ class LongCatImageSingleBlockWeights(WeightModule):
         self.config = config
         self.block_idx = block_idx
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
+        self.mm_type = config.get("dit_quant_scheme", "Default")
+        self.rms_norm_type = config.get("rms_norm_type", "Default")
+        self.attn_type = config.get("attn_type", "flash_attn3")
 
-    def load_from_state_dict(self, state_dict, prefix=""):
-        """Load weights from state dict."""
-        p = f"{prefix}single_transformer_blocks.{self.block_idx}."
+        p = f"single_transformer_blocks.{self.block_idx}"
 
         # AdaLayerNormZeroSingle
-        self.norm_linear_weight = _get_required_weight(state_dict, f"{p}norm.linear.weight")
-        self.norm_linear_bias = _get_required_weight(state_dict, f"{p}norm.linear.bias")
+        self.add_module(
+            "norm_linear",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.norm.linear.weight",
+                f"{p}.norm.linear.bias",
+            ),
+        )
 
         # MLP projection
-        self.proj_mlp_weight = _get_required_weight(state_dict, f"{p}proj_mlp.weight")
-        self.proj_mlp_bias = _get_required_weight(state_dict, f"{p}proj_mlp.bias")
+        self.add_module(
+            "proj_mlp",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.proj_mlp.weight",
+                f"{p}.proj_mlp.bias",
+            ),
+        )
 
         # Output projection (combined attn + mlp)
-        self.proj_out_weight = _get_required_weight(state_dict, f"{p}proj_out.weight")
-        self.proj_out_bias = _get_required_weight(state_dict, f"{p}proj_out.bias")
+        self.add_module(
+            "proj_out",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.proj_out.weight",
+                f"{p}.proj_out.bias",
+            ),
+        )
 
         # Attention
-        self.attn_to_q_weight = _get_required_weight(state_dict, f"{p}attn.to_q.weight")
-        self.attn_to_q_bias = _get_required_weight(state_dict, f"{p}attn.to_q.bias")
-        self.attn_to_k_weight = _get_required_weight(state_dict, f"{p}attn.to_k.weight")
-        self.attn_to_k_bias = _get_required_weight(state_dict, f"{p}attn.to_k.bias")
-        self.attn_to_v_weight = _get_required_weight(state_dict, f"{p}attn.to_v.weight")
-        self.attn_to_v_bias = _get_required_weight(state_dict, f"{p}attn.to_v.bias")
-        self.attn_norm_q_weight = _get_required_weight(state_dict, f"{p}attn.norm_q.weight")
-        self.attn_norm_k_weight = _get_required_weight(state_dict, f"{p}attn.norm_k.weight")
+        self.add_module(
+            "to_q",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_q.weight",
+                f"{p}.attn.to_q.bias",
+            ),
+        )
+        self.add_module(
+            "to_k",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_k.weight",
+                f"{p}.attn.to_k.bias",
+            ),
+        )
+        self.add_module(
+            "to_v",
+            MM_WEIGHT_REGISTER[self.mm_type](
+                f"{p}.attn.to_v.weight",
+                f"{p}.attn.to_v.bias",
+            ),
+        )
+        self.add_module(
+            "norm_q",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{p}.attn.norm_q.weight",
+            ),
+        )
+        self.add_module(
+            "norm_k",
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
+                f"{p}.attn.norm_k.weight",
+            ),
+        )
 
-    def to_cuda(self):
-        """Move all weights to CUDA."""
-        for name, attr in self.__dict__.items():
-            if isinstance(attr, torch.Tensor):
-                setattr(self, name, attr.cuda())
+        # Attention calculation module
+        self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
-    def to_cpu(self):
-        """Move all weights to CPU."""
-        for name, attr in self.__dict__.items():
-            if isinstance(attr, torch.Tensor):
-                setattr(self, name, attr.cpu())
+    def to_cuda(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cuda"):
+                module.to_cuda(non_blocking=non_blocking)
+
+    def to_cpu(self, non_blocking=True):
+        for module in self._modules.values():
+            if module is not None and hasattr(module, "to_cpu"):
+                module.to_cpu(non_blocking=non_blocking)
 
 
 class LongCatImageTransformerWeights(WeightModule):
@@ -138,23 +269,17 @@ class LongCatImageTransformerWeights(WeightModule):
         self.double_blocks = WeightModuleList([LongCatImageDoubleBlockWeights(config, i) for i in range(self.num_layers)])
         self.single_blocks = WeightModuleList([LongCatImageSingleBlockWeights(config, i) for i in range(self.num_single_layers)])
 
-    def load_from_state_dict(self, state_dict, prefix=""):
-        """Load all block weights from state dict."""
-        for block in self.double_blocks:
-            block.load_from_state_dict(state_dict, prefix)
-        for block in self.single_blocks:
-            block.load_from_state_dict(state_dict, prefix)
+        self.add_module("double_blocks", self.double_blocks)
+        self.add_module("single_blocks", self.single_blocks)
 
-    def to_cuda(self):
-        """Move all weights to CUDA."""
+    def to_cuda(self, non_blocking=True):
         for block in self.double_blocks:
-            block.to_cuda()
+            block.to_cuda(non_blocking=non_blocking)
         for block in self.single_blocks:
-            block.to_cuda()
+            block.to_cuda(non_blocking=non_blocking)
 
-    def to_cpu(self):
-        """Move all weights to CPU."""
+    def to_cpu(self, non_blocking=True):
         for block in self.double_blocks:
-            block.to_cpu()
+            block.to_cpu(non_blocking=non_blocking)
         for block in self.single_blocks:
-            block.to_cpu()
+            block.to_cpu(non_blocking=non_blocking)
