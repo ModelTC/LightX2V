@@ -47,7 +47,6 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.attn_type = config.get("attn_type", "flash_attn3")
 
         # Sequence parallel settings
         if self.config.get("seq_parallel", False):
