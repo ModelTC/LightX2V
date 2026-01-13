@@ -154,7 +154,6 @@ def set_input_info(args):
             negative_prompt=args.negative_prompt,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
-            target_shape=args.target_shape,
         )
     elif args.task == "i2v":
         input_info = I2VInputInfo(
@@ -164,7 +163,6 @@ def set_input_info(args):
             image_path=args.image_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
-            target_shape=args.target_shape,
         )
     elif args.task == "flf2v":
         input_info = Flf2vInputInfo(
@@ -175,7 +173,6 @@ def set_input_info(args):
             last_frame_path=args.last_frame_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
-            target_shape=args.target_shape,
         )
     elif args.task == "vace":
         input_info = VaceInputInfo(
@@ -187,7 +184,6 @@ def set_input_info(args):
             src_mask=args.src_mask,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
-            target_shape=args.target_shape,
         )
     elif args.task == "s2v":
         input_info = S2VInputInfo(
@@ -198,7 +194,6 @@ def set_input_info(args):
             audio_path=args.audio_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
-            target_shape=args.target_shape,
         )
         if hasattr(args, "overlap_frame"):
             input_info.overlap_frame = args.overlap_frame
@@ -218,7 +213,6 @@ def set_input_info(args):
             src_mask_path=args.src_mask_path,
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
-            target_shape=args.target_shape,
         )
     elif args.task == "t2i":
         input_info = T2IInputInfo(
@@ -226,7 +220,6 @@ def set_input_info(args):
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
             save_result_path=args.save_result_path,
-            target_shape=args.target_shape,
         )
     elif args.task == "i2i":
         input_info = I2IInputInfo(
@@ -235,10 +228,12 @@ def set_input_info(args):
             negative_prompt=args.negative_prompt,
             image_path=args.image_path,
             save_result_path=args.save_result_path,
-            target_shape=args.target_shape,
         )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
+
+    if hasattr(args, "target_shape"):
+        input_info.target_shape = args.target_shape
     return input_info
 
 
