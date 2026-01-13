@@ -241,6 +241,7 @@ class ShotConfig:
     negative_prompt: str
     save_result_path: str
     clip_configs: list[ClipConfig]
+    target_shape: list[int]
 
 
 class ShotStreamPipeline:
@@ -266,6 +267,7 @@ class ShotStreamPipeline:
                 return_result_tensor=True,
                 overlap_frame=self.overlap_frame,
                 overlap_latent=self.overlap_latent,
+                target_shape=self.shot_cfg.target_shape,
             )
             self.clip_inputs[name] = set_input_info(args)
 
@@ -361,6 +363,7 @@ def main():
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
+    parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
     args = parser.parse_args()
 
     seed_all(args.seed)
@@ -375,6 +378,7 @@ def main():
         negative_prompt=args.negative_prompt,
         save_result_path=args.save_result_path,
         clip_configs=clip_configs,
+        target_shape=args.target_shape,
     )
 
     with ProfilingContext4DebugL1("Total Cost"):
