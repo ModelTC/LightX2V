@@ -1322,7 +1322,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
             out_dtype=self.infer_dtype,
         )
         if self.has_lora_branch:
-            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
