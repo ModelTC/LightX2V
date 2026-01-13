@@ -246,8 +246,7 @@ class ZImageRunner(DefaultRunner):
             return ASPECT_RATIO_MAP[self.input_info.aspect_ratio]
         else:
             raise NotImplementedError
-        
-    
+
     def set_target_shape(self):
         height, width = self.get_input_target_shape()
 
