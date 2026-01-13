@@ -1,12 +1,12 @@
 # Service Deployment
 
-lightx2v provides asynchronous service functionality. The code entry point is [here](https://github.com/ModelTC/lightx2v/blob/main/lightx2v/api_server.py)
+lightx2v provides asynchronous service functionality. The code entry point is [here](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/main.py)
 
 ### Start the Service
 
 ```shell
 # Modify the paths in the script
-bash scripts/start_server.sh
+bash scripts/server/start_server.sh
 ```
 
 The `--port 8000` option means the service will bind to port `8000` on the local machine. You can change this as needed.
@@ -14,28 +14,29 @@ The `--port 8000` option means the service will bind to port `8000` on the local
 ### Client Sends Request
 
 ```shell
-python scripts/post.py
+python scripts/server/post.py
 ```
 
 The service endpoint is: `/v1/tasks/`
 
-The `message` parameter in `scripts/post.py` is as follows:
+The `message` parameter in `scripts/server/post.py` is as follows:
 
 ```python
 message = {
     "prompt": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
     "negative_prompt": "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
     "image_path": "",
+    "target_shape": [720, 720],
 }
 ```
 
-1. `prompt`, `negative_prompt`, and `image_path` are basic inputs for video generation. `image_path` can be an empty string, indicating no image input is needed.
+1. `prompt`, `negative_prompt`, and `image_path` are basic inputs for video generation. `image_path` can be an empty string, indicating no image input is needed. `target_shape` optional output video resolution, defaults to the configured resolution.
 
 
 ### Client Checks Server Status
 
 ```shell
-python scripts/check_status.py
+python scripts/server/check_status.py
 ```
 
 The service endpoints include:
@@ -49,7 +50,7 @@ The service endpoints include:
 ### Client Stops the Current Task on the Server at Any Time
 
 ```shell
-python scripts/stop_running_task.py
+python scripts/server/stop_running_task.py
 ```
 
 The service endpoint is: `/v1/tasks/running`
@@ -58,10 +59,10 @@ After terminating the task, the server will not exit but will return to waiting 
 
 ### Starting Multiple Services on a Single Node
 
-On a single node, you can start multiple services using `scripts/start_server.sh` (Note that the port numbers under the same IP must be different for each service), or you can start multiple services at once using `scripts/start_multi_servers.sh`:
+On a single node, you can start multiple services using `scripts/server/start_server.sh` (Note that the port numbers under the same IP must be different for each service), or you can start multiple services at once using `scripts/server/start_multi_servers.sh`:
 
 ```shell
-num_gpus=8 bash scripts/start_multi_servers.sh
+num_gpus=8 bash scripts/server/start_multi_servers.sh
 ```
 
 Where `num_gpus` indicates the number of services to start; the services will run on consecutive ports starting from `--start_port`.
@@ -69,7 +70,7 @@ Where `num_gpus` indicates the number of services to start; the services will ru
 ### Scheduling Between Multiple Services
 
 ```shell
-python scripts/post_multi_servers.py
+python scripts/server/post_multi_servers.py
 ```
 
 `post_multi_servers.py` will schedule multiple client requests based on the idle status of the services.
