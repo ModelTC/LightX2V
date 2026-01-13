@@ -75,7 +75,14 @@ def set_config(args):
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
                 z_image_patch_size = model_config.pop("all_patch_size", [2])
                 z_image_f_patch_size = model_config.pop("all_f_patch_size", [1])
-                assert len(z_image_patch_size) == 1 and len(z_image_f_patch_size) == 1
+                if not (len(z_image_patch_size) == 1 and len(z_image_f_patch_size) == 1):
+                    raise ValueError(
+                        f"Expected 'all_patch_size' and 'all_f_patch_size' in z_image config to be lists of length 1, "
+                        f"but got lengths {len(z_image_patch_size)} and {len(z_image_f_patch_size)} respectively. "
+                        f"If the official z-image configs have been updated, ensure the current lightx2v's z-image model "
+                        f"implementation matches the new configs then update this check."
+                    )
+
                 model_config["patch_size"] = z_image_patch_size[0]
                 model_config["f_patch_size"] = z_image_f_patch_size[0]
 

@@ -26,7 +26,6 @@ class ZImagePreInfer:
         f_patch_size = self.config.get("f_patch_size", 1)
 
         if hidden_states.dim() == 4:
-            patch_size = self.config.get("patch_size", 2)
             hidden_states = patchify(hidden_states, patch_size=patch_size, f_patch_size=f_patch_size)
 
         batch_size, num_tokens, patch_dim = hidden_states.shape
