@@ -181,7 +181,7 @@ class LightX2VPipeline:
         self.target_video_length = num_frames
         self.sample_guide_scale = guidance_scale
         self.sample_shift = sample_shift
-        if self.sample_guide_scale == 1:
+        if self.sample_guide_scale == 1 or (self.model_cls == "z_image" and self.sample_guide_scale == 0):
             self.enable_cfg = False
         else:
             self.enable_cfg = True
