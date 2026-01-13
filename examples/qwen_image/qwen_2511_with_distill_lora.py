@@ -31,7 +31,8 @@ pipe = LightX2VPipeline(
 pipe.enable_lora(
     [
         {"path": "lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors", "strength": 1.0},
-    ]
+    ],
+    lora_dynamic_apply=False,  # Support inference with LoRA weights, save memory but slower, default is False
 )
 # Create generator manually with specified parameters
 pipe.create_generator(
