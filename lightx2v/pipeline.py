@@ -351,6 +351,7 @@ class LightX2VPipeline:
         src_video=None,
         src_mask=None,
         return_result_tensor=False,
+        target_shape=[],
     ):
         # Run inference (following LightX2V pattern)
         self.seed = seed
@@ -364,6 +365,7 @@ class LightX2VPipeline:
         self.negative_prompt = negative_prompt
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
+        self.target_shape = target_shape
         seed_all(self.seed)
         input_info = set_input_info(self)
         self.runner.run_pipeline(input_info)
