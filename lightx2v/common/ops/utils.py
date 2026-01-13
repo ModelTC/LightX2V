@@ -39,9 +39,12 @@ def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_i
         weight_dict: Preloaded weight dictionary
         lazy_load: Whether to enable lazy loading mode
         lazy_load_file: File or directory path for lazy loading
+        use_infer_dtype: Whether to convert tensor to inference dtype
+        scale_force_fp32: Whether to force weight_scale tensors to float32
+        bias_force_fp32: Whether to force bias tensors to float32
 
     Returns:
-        The target tensor retrieved from the source
+        The target tensor retrieved from the source with appropriate dtype conversion applied
     """
     if lazy_load:
         if Path(lazy_load_file).is_file():
@@ -119,6 +122,9 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
         weight_dict: Preloaded weight dictionary
         lazy_load: Whether to use lazy loading mode
         lazy_load_file: File or directory path for lazy loading
+        use_infer_dtype: Whether to convert tensors to inference dtype (optional)
+        scale_force_fp32: Whether to force weight_scale tensors to float32 (optional)
+        bias_force_fp32: Whether to force bias tensors to float32 (optional)
 
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of tensors located on CUDA device
@@ -140,6 +146,9 @@ def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_
         base_attrs: [(name, attr_name, transpose), ...] Configuration list,
                     where transpose indicates whether transposition is required
         lazy_load_file: File or directory path for lazy loading
+        use_infer_dtype: Whether to convert tensors to inference dtype (optional)
+        scale_force_fp32: Whether to force weight_scale tensors to float32 (optional)
+        bias_force_fp32: Whether to force bias tensors to float32 (optional)
 
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of pinned memory tensors on CPU
@@ -239,6 +248,14 @@ def build_lora_and_diff_names(weight_name, lora_prefix):
 
 
 def move_attr_to_cuda(cls, base_attrs, lora_attrs, non_blocking=False):
+    """Move base attributes and LoRA attributes to CUDA device.
+
+    Args:
+        cls: Target class instance containing tensor attributes
+        base_attrs: [(name, attr_name, transpose), ...] List of base attribute specifications
+        lora_attrs: Dictionary mapping LoRA attribute names to their name attributes
+        non_blocking: Whether to perform non-blocking data transfer (optional)
+    """
     # Base
     for _, base_attr_name, _ in base_attrs:
         move_tensor_to_device(cls, base_attr_name, AI_DEVICE, non_blocking)
@@ -249,6 +266,14 @@ def move_attr_to_cuda(cls, base_attrs, lora_attrs, non_blocking=False):
 
 
 def move_attr_to_cpu(cls, base_attrs, lora_attrs, non_blocking=False):
+    """Move base attributes and LoRA attributes to CPU device.
+
+    Args:
+        cls: Target class instance containing tensor attributes
+        base_attrs: [(name, attr_name, transpose), ...] List of base attribute specifications
+        lora_attrs: Dictionary mapping LoRA attribute names to their name attributes
+        non_blocking: Whether to perform non-blocking data transfer (optional)
+    """
     # Base
     for _, base_attr_name, _ in base_attrs:
         move_tensor_to_device(cls, base_attr_name, "cpu", non_blocking, use_copy=True)
@@ -259,6 +284,17 @@ def move_attr_to_cpu(cls, base_attrs, lora_attrs, non_blocking=False):
 
 
 def state_dict(cls, base_attrs, lora_attrs, destination=None):
+    """Generate state dictionary containing base attributes and LoRA attributes.
+
+    Args:
+        cls: Target class instance containing tensor attributes
+        base_attrs: [(name, attr_name, transpose), ...] List of base attribute specifications
+        lora_attrs: Dictionary mapping LoRA attribute names to their name attributes
+        destination: Optional destination dictionary to store state dict (if None, creates new dict)
+
+    Returns:
+        dict: State dictionary containing all base and LoRA attributes with their corresponding names
+    """
     if destination is None:
         destination = {}
     # Base
@@ -277,6 +313,16 @@ def state_dict(cls, base_attrs, lora_attrs, destination=None):
 
 
 def load_state_dict(cls, base_attrs, lora_attrs, destination, block_index, adapter_block_index=None):
+    """Load state dictionary into class instance, resolving block indices for base and LoRA attributes.
+
+    Args:
+        cls: Target class instance to load state dict into
+        base_attrs: [(name, attr_name, transpose), ...] List of base attribute specifications
+        lora_attrs: Dictionary mapping LoRA attribute names to their name attributes
+        destination: Source state dictionary to load from
+        block_index: Block index to resolve tensor names
+        adapter_block_index: Adapter block index for post-adapter scenarios (optional)
+    """
     # Base
     for name, attr_name, _ in base_attrs:
         actual_name = resolve_block_name(name, block_index, adapter_block_index, cls.is_post_adapter)
