@@ -83,18 +83,6 @@ class QwenImageRunner(DefaultRunner):
             model = build_qwen_image_model_with_lora(QwenImageTransformerModel, self.config, qwen_image_model_kwargs, lora_configs)
         return model
 
-    # def load_transformer(self):
-    #     model = QwenImageTransformerModel(self.config)
-    #     if self.config.get("lora_configs") and self.config.lora_configs:
-    #         lora_wrapper = QwenImageLoraWrapper(model)
-    #         for lora_config in self.config.lora_configs:
-    #             lora_path = lora_config["path"]
-    #             strength = lora_config.get("strength", 1.0)
-    #             lora_name = lora_wrapper.load_lora(lora_path)
-    #             lora_wrapper.apply_lora(lora_name, strength)
-    #             logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-    #     return model
-
     def load_text_encoder(self):
         text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
         text_encoders = [text_encoder]
