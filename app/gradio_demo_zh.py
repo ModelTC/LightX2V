@@ -1723,6 +1723,7 @@ def run_inference(
         image_path=image_path,
         save_result_path=save_result_path,
         return_result_tensor=False,
+        target_shape=[],
     )
 
     config = get_default_config()

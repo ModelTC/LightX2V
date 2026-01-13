@@ -474,7 +474,7 @@ def convert_weights(args):
                 weights = weights["module"]
         elif file_path.endswith(".safetensors"):
             # Use lazy loading for safetensors to reduce memory usage
-            with safe_open(file_path, framework="pt") as f:
+            with safe_open(file_path, framework="pt", device=args.device) as f:
                 # Only load tensors when needed (lazy loading)
                 weights = {}
                 keys = f.keys()

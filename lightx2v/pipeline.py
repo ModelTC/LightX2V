@@ -181,7 +181,7 @@ class LightX2VPipeline:
         self.target_video_length = num_frames
         self.sample_guide_scale = guidance_scale
         self.sample_shift = sample_shift
-        if self.sample_guide_scale == 1:
+        if self.sample_guide_scale == 1 or (self.model_cls == "z_image" and self.sample_guide_scale == 0):
             self.enable_cfg = False
         else:
             self.enable_cfg = True
@@ -352,6 +352,7 @@ class LightX2VPipeline:
         src_video=None,
         src_mask=None,
         return_result_tensor=False,
+        target_shape=[],
     ):
         # Run inference (following LightX2V pattern)
         self.seed = seed
@@ -365,6 +366,7 @@ class LightX2VPipeline:
         self.negative_prompt = negative_prompt
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
+        self.target_shape = target_shape
         seed_all(self.seed)
         input_info = set_input_info(self)
         self.runner.run_pipeline(input_info)

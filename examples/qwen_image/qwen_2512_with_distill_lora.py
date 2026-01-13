@@ -38,7 +38,7 @@ pipe.enable_lora(
 pipe.create_generator(
     attn_mode="flash_attn3",
     aspect_ratio="16:9",
-    infer_steps=4,
+    infer_steps=8,
     guidance_scale=1,
 )
 

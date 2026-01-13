@@ -39,6 +39,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年1月6日:** 🚀 我们更新了[Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512)和[Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)的8步的CFG/步数蒸馏模型。可以在[Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)和[Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning)下载对应的权重进行使用。使用教程参考[这里](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。
+
 - **2026年1月6日:** 🚀 支持燧原 Enflame S60 (GCU) 的部署。
 
 - **2025年12月31日:** 🚀 我们Day0支持了[Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) 文生图模型. 我们的[HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) 已经更新了CFG/步数蒸馏lora权重。使用方式可以参考[这里](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。

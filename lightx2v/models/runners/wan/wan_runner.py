@@ -480,11 +480,14 @@ class WanRunner(DefaultRunner):
         return latent_shape
 
     def get_latent_shape_with_target_hw(self):
+        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
+        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
+
         latent_shape = [
             self.config.get("num_channels_latents", 16),
             (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
-            int(self.config["target_height"]) // self.config["vae_stride"][1],
-            int(self.config["target_width"]) // self.config["vae_stride"][2],
+            int(target_height) // self.config["vae_stride"][1],
+            int(target_width) // self.config["vae_stride"][2],
         ]
         return latent_shape
 
