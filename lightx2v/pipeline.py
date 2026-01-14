@@ -21,7 +21,7 @@ from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # 
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import set_input_info_from_args
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
@@ -367,7 +367,7 @@ class LightX2VPipeline:
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
         seed_all(self.seed)
-        input_info = set_input_info(self)
+        input_info = set_input_info_from_args(self)
         self.runner.run_pipeline(input_info)
         logger.info("Video generated successfully!")
         logger.info(f"Video Saved in {save_result_path}")

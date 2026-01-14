@@ -15,7 +15,7 @@ from einops import rearrange
 from loguru import logger
 
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import set_input_info_from_args
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config
@@ -269,7 +269,7 @@ class ShotStreamPipeline:
                 overlap_latent=self.overlap_latent,
                 target_shape=self.shot_cfg.target_shape,
             )
-            self.clip_inputs[name] = set_input_info(args)
+            self.clip_inputs[name] = set_input_info_from_args(args)
 
     def _init_runner(self, config):
         torch.set_grad_enabled(False)

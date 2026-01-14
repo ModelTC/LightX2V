@@ -7,7 +7,7 @@ from easydict import EasyDict
 from loguru import logger
 
 from lightx2v.infer import init_runner
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import set_input_info_from_args
 from lightx2v.utils.set_config import set_config, set_parallel_config
 
 from ..distributed_utils import DistributedManager
@@ -70,7 +70,7 @@ class TorchrunInferenceWorker:
                     logger.warning(f"Target FPS {target_fps} is set, but video frame interpolation is not configured")
 
             task_data = EasyDict(task_data)
-            input_info = set_input_info(task_data)
+            input_info = set_input_info_from_args(task_data)
 
             self.runner.set_config(task_data)
             self.runner.run_pipeline(input_info)

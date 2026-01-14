@@ -26,7 +26,7 @@ import psutil  # noqa E402
 import torch  # noqa E402
 from loguru import logger  # noqa E402
 
-from lightx2v.utils.input_info import set_input_info  # noqa E402
+from lightx2v.utils.input_info import set_input_info_from_args  # noqa E402
 from lightx2v.utils.set_config import get_default_config  # noqa E402
 
 try:
@@ -1745,7 +1745,7 @@ def run_inference(
         from lightx2v.infer import init_runner  # noqa
 
         runner = init_runner(config)
-        input_info = set_input_info(args)
+        input_info = set_input_info_from_args(args)
 
         current_config = config
         cur_dit_path = current_dit_path
@@ -1756,7 +1756,7 @@ def run_inference(
             global_runner = runner
     else:
         runner.config = config
-        input_info = set_input_info(args)
+        input_info = set_input_info_from_args(args)
 
     runner.run_pipeline(input_info)
     cleanup_memory()

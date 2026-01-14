@@ -18,7 +18,7 @@ from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import set_input_info_from_args
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
@@ -139,7 +139,7 @@ def main():
 
     with ProfilingContext4DebugL1("Total Cost"):
         runner = init_runner(config)
-        input_info = set_input_info(args)
+        input_info = set_input_info_from_args(args)
         runner.run_pipeline(input_info)
 
     # Clean up distributed process group

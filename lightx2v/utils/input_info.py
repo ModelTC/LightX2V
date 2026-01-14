@@ -146,7 +146,7 @@ class I2IInputInfo:
     aspect_ratio: str = field(default_factory=str)
 
 
-def set_input_info(args):
+def set_input_info_from_args(args):
     if args.task == "t2v":
         input_info = T2VInputInfo(
             seed=args.seed,
