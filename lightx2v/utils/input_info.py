@@ -13,6 +13,7 @@ class T2VInputInfo:
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
+    resize_mode: str = field(default_factory=str)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
 
@@ -27,6 +28,7 @@ class I2VInputInfo:
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
+    resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -44,6 +46,7 @@ class Flf2vInputInfo:
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
+    resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -63,6 +66,7 @@ class VaceInputInfo:
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
+    resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -83,6 +87,7 @@ class S2VInputInfo:
     return_result_tensor: bool = field(default_factory=lambda: False)
     stream_config: dict = field(default_factory=dict)
     # shape related
+    resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -111,6 +116,7 @@ class AnimateInputInfo:
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
+    resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -124,6 +130,7 @@ class T2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     # shape related
+    resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
@@ -138,6 +145,7 @@ class I2IInputInfo:
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     # shape related
+    resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
