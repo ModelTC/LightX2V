@@ -10,3 +10,6 @@ from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
 from .ulysses_attn import Ulysses4090AttnWeight, UlyssesAttnWeight
+from .general_sparse_attn import GeneralSparseAttnWeight
+from .sparse_operator import SlaTritonOperator, MagiOperator
+from .sparse_mask_generator import SlaMaskGenerator, NbhdMaskGenerator
