@@ -283,6 +283,7 @@ class OmniVAReader:
         model_runner=None,
         huoshan_tts_voice_type=None,
         stream_config: dict = {},
+        **kwargs,
     ):
         self.rank = rank
         self.world_size = world_size
@@ -298,6 +299,7 @@ class OmniVAReader:
 
         self.target_rank = target_rank % self.world_size
         self.flag_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
+        self.valid_duration_tensor = torch.tensor([0], dtype=torch.float32).to(device="cuda")
         self.immediate_switch_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
         chunk_size = int(self.segment_duration * self.sample_rate) * 2
         self.audio_tensor = torch.zeros(chunk_size, dtype=torch.uint8, device="cuda")
@@ -366,6 +368,12 @@ class OmniVAReader:
             audio_data = self.audio_tensor.cpu().numpy().tobytes()
         return audio_data
 
+    def braodcast_valid_duration(self, valid_duration):
+        if self.rank == self.target_rank:
+            self.valid_duration_tensor.fill_(valid_duration)
+        dist.broadcast(self.valid_duration_tensor, src=self.target_rank)
+        return self.valid_duration_tensor.item()
+
     def bytes_to_ndarray(self, audio_data):
         if audio_data is None:
             return None
@@ -398,6 +406,7 @@ class OmniVAReader:
         if chat_audio_result is not None:
             audio_data, audio_info = chat_audio_result
             audio, sample_count = self.convert_pcm_s16le_to_mono_resampled(audio_data, audio_info)
+        valid_duration = sample_count / self.sample_rate
 
         # if is not the first segment, concat with previous segment
         if self.prev_seg_chunk is not None:
@@ -415,7 +424,7 @@ class OmniVAReader:
         # update prev seg chunk
         self.prev_seg_chunk = audio[-self.prev_seg_sample_count :]
         # logger.info(f"audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}, prev seg chunk: {self.prev_seg_chunk.shape}")
-        return audio.tobytes()
+        return audio.tobytes(), valid_duration
 
     def get_fetch_duration(self):
         fetch_duration = self.segment_duration
@@ -429,28 +438,36 @@ class OmniVAReader:
             fetch_duration -= self.prev_duration
         return fetch_duration
 
-    def get_audio_segment(self):
+    def get_audio_segment(self, fetch_duration: float = None, prev_duration: float = None):
         audio_data = None
+        valid_duration = 0
+        if prev_duration is not None and self.prev_duration != prev_duration:
+            raise ValueError(f"prev_duration {prev_duration} != {self.prev_duration}")
+        if fetch_duration is not None and self.segment_duration != fetch_duration:
+            logger.warning(f"segment duration changed: {self.segment_duration} -> {fetch_duration}")
+            self.segment_duration = fetch_duration
+
         if self.rank == self.target_rank:
             try:
                 fetch_duration = self.get_fetch_duration()
                 # logger.info(f"Get segment, fetch_duration: {fetch_duration}")
                 if self.chat_adapter.status == "voice":
                     audio_result = self.chat_adapter.get_audio(fetch_duration)
-                    audio_data = self.prepare_audio_data(audio_result)
+                    audio_data, valid_duration = self.prepare_audio_data(audio_result)
                     # think all voice segments inferred, naturally switch to blank
                     if audio_result is None:
                         logger.info(f"Think all voice segments inferred, naturally switch to blank")
                         self.chat_adapter.status = "blank"
                 else:
-                    audio_data = self.prepare_audio_data(None)
+                    audio_data, valid_duration = self.prepare_audio_data(None)
             except Exception as e:
                 logger.warning(f"Failed to get voice segment: {e}")
                 return None
         if self.world_size > 1:
             audio_data = self.braodcast_audio_data(audio_data)
+            valid_duration = self.braodcast_valid_duration(valid_duration)
         audio_data = self.bytes_to_ndarray(audio_data)
-        return audio_data
+        return audio_data, valid_duration
 
     def get_immediate_switch(self):
         if self.rank == self.target_rank:
@@ -463,6 +480,12 @@ class OmniVAReader:
         dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
         immediate_switch = self.immediate_switch_tensor.item()
         return immediate_switch
+
+    def get_image_switch(self):
+        return None
+
+    def get_action_switch(self):
+        return None
 
     def stop(self):
         self.model_runner = None

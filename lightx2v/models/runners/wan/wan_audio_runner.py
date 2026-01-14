@@ -589,7 +589,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         metrics_func=monitor_cli.lightx2v_run_end_run_segment_duration,
         metrics_labels=["WanAudioRunner"],
     )
-    def end_run_segment(self, segment_idx):
+    def end_run_segment(self, segment_idx, valid_duration=1e9):
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
         video_seg = self.gen_video[:, :, :useful_length].cpu()
@@ -616,7 +616,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             )
 
         if self.va_controller.recorder is not None:
-            self.va_controller.pub_livestream(video_seg, audio_seg, self.gen_video[:, :, :useful_length])
+            self.va_controller.pub_livestream(video_seg, audio_seg, self.gen_video[:, :, :useful_length], valid_duration=valid_duration)
         elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
@@ -633,7 +633,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         metrics_func=monitor_cli.lightx2v_run_end_run_segment_duration,
         metrics_labels=["WanAudioRunner"],
     )
-    def end_run_segment_stream(self, latents):
+    def end_run_segment_stream(self, latents, valid_duration=1e9):
         valid_length = self.segment.end_frame - self.segment.start_frame
         frame_segments = []
         frame_idx = 0
@@ -649,10 +649,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             audio_seg = self.segment.audio_array[:, audio_start:audio_end].sum(dim=0)
 
             if self.va_controller.recorder is not None:
-                self.va_controller.pub_livestream(video_seg, audio_seg, origin_seg[:, :, :valid_T])
+                self.va_controller.pub_livestream(video_seg, audio_seg, origin_seg[:, :, :valid_T], valid_duration=valid_duration)
 
             frame_segments.append(origin_seg)
             frame_idx += valid_T
+            cur_duration = valid_T / self.config.get("fps", 16)
+            valid_duration = max(valid_duration - cur_duration, 0)
             del video_seg, audio_seg
 
         # Update prev_video for next iteration
@@ -682,17 +684,20 @@ class WanAudioRunner(WanRunner):  # type:ignore
             while True:
                 with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
                     control = self.va_controller.next_control()
-                    if control.action == "switch":
+                    if control.action == "blank_to_voice":
                         self.prev_video = control.data
-                    elif control.action == "image":
-                        self.prev_video = None
+                    elif control.action == "switch_image":
                         self.input_info.image_path = control.data
                         self.inputs = self.run_input_encoder()
+                        if self.config.get("f2v_process", False):
+                            self.prev_video = self.ref_img.unsqueeze(2)
+                        else:
+                            self.prev_video = None
                     elif control.action == "wait":
                         time.sleep(0.01)
                         continue
 
-                    audio_array = self.va_controller.reader.get_audio_segment()
+                    audio_array, valid_duration = self.va_controller.reader.get_audio_segment()
                     if audio_array is None:
                         fail_count += 1
                         logger.warning(f"Failed to get audio chunk {fail_count} times")
@@ -709,11 +714,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
                         latents = self.run_segment(segment_idx)
                         self.check_stop()
                         if self.config.get("use_stream_vae", False):
-                            self.end_run_segment_stream(latents)
+                            self.end_run_segment_stream(latents, valid_duration=valid_duration)
                         else:
                             self.gen_video = self.run_vae_decoder(latents)
                             self.check_stop()
-                            self.end_run_segment(segment_idx)
+                            self.end_run_segment(segment_idx, valid_duration=valid_duration)
                         segment_idx += 1
                         fail_count = 0
                     except Exception as e:
