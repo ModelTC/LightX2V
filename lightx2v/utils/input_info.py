@@ -215,19 +215,10 @@ def set_input_info(args):
             return_result_tensor=args.return_result_tensor,
         )
     elif args.task == "t2i":
-        input_info = T2IInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            save_result_path=args.save_result_path,
-        )
+        input_info = T2IInputInfo(seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio)
     elif args.task == "i2i":
         input_info = I2IInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            image_path=args.image_path,
-            save_result_path=args.save_result_path,
+            seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, image_path=args.image_path, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio
         )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
