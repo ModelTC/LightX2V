@@ -1,8 +1,8 @@
 import torch
+
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 
 from .kernels.sla_kernel import _attention
-
 
 try:
     from magi_attention.functional import flex_flash_attn_func as magi_ffa_func
@@ -10,10 +10,8 @@ except ImportError:
     magi_ffa_func = None
 
 
-
 @SPARSE_OPERATOR_REGISTER("sla_triton_operator")
 class SlaTritonOperator:
-
     def __init__(self):
         self.q_block_size = 128
         self.k_block_size = 128
@@ -47,7 +45,6 @@ class SlaTritonOperator:
 
 @SPARSE_OPERATOR_REGISTER("magi_operator")
 class MagiOperator:
-
     def __init__(self):
         self.q_block_size = 128
         self.k_block_size = 128
@@ -102,4 +99,3 @@ class MagiOperator:
         out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
 
         return out.reshape(out.shape[0], -1)
-

@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
-from .utils.sla_util import get_block_map
-from .nbhd_attn import generate_nbhd_mask
+
 from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER
+
+from .nbhd_attn import generate_nbhd_mask
+from .utils.sla_util import get_block_map
 
 
 class GeneralMaskGenerator(ABC):
@@ -30,6 +32,7 @@ class SlaMaskGenerator(GeneralMaskGenerator):
         sparse_map, lut, topk = get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
         # return: [H, Q_block_num, K_block_num]
         return sparse_map[0]
+
 
 @SPARSE_MASK_GENERATOR_REGISTER("nbhd_mask_generator")
 class NbhdMaskGenerator(GeneralMaskGenerator):

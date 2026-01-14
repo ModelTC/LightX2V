@@ -1,12 +1,12 @@
 from loguru import logger
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER
+
 from .template import AttnWeightTemplate
 
 
 @ATTN_WEIGHT_REGISTER("general_sparse_attn")
 class GeneralSparseAttnWeight(AttnWeightTemplate):
-
     sparse_mask_generator = None
     sparse_operator = None
     sparse_setting = {}
@@ -39,7 +39,6 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
-
         # Generate sparse mask
         mask = self.mask_generator(q, k)
 
@@ -47,4 +46,3 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
         out = self.operator(q, k, v, mask, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_kv, max_seqlen_q=max_seqlen_q, max_seqlen_kv=max_seqlen_kv, **kwargs)
 
         return out
-
