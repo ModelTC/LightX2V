@@ -365,7 +365,7 @@ class SvgAttnWeight(AttnWeightTemplate):
             q, k, v, query_out, key_out, value_out, best_mask_idx, self.context_length, self.attnmap_frame_num, seq_len // self.attnmap_frame_num
         )
 
-        hidden_states = self.sparse_attention(query_out, key_out, value_out)
+        hidden_states = self.sparse_attention(query_out, key_out, value_out, block_mask=self.block_mask)
         wan_hidden_states_placement(hidden_states, output_hidden_states, best_mask_idx, self.context_length, self.attnmap_frame_num, seq_len // self.attnmap_frame_num)
 
         return output_hidden_states.reshape(bs, num_heads, seq_len, dim).transpose(1, 2).reshape(bs * seq_len, -1)

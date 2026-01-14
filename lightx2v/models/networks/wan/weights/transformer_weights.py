@@ -375,6 +375,17 @@ class WanSelfAttention(WeightModule):
             if "operator" in sla_config:
                 attention_weights_cls.operator = sla_config["operator"]
 
+        # general_sparse_attn setting
+        if self.config["self_attn_1_type"] == "general_sparse_attn":
+            attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
+            general_sparse_attn_setting = self.config.get("general_sparse_attn_setting", {})
+            if "sparse_mask_generator" in general_sparse_attn_setting:
+                attention_weights_cls.sparse_mask_generator = general_sparse_attn_setting["sparse_mask_generator"]
+            if "sparse_operator" in general_sparse_attn_setting:
+                attention_weights_cls.sparse_operator = general_sparse_attn_setting["sparse_operator"]
+            if "sparse_setting" in general_sparse_attn_setting:
+                attention_weights_cls.sparse_setting = general_sparse_attn_setting["sparse_setting"]
+
         self.add_module("self_attn_1", attention_weights_cls())
 
         if self.config["seq_parallel"]:
