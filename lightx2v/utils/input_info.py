@@ -146,86 +146,31 @@ class I2IInputInfo:
     aspect_ratio: str = field(default_factory=str)
 
 
-def set_input_info(args):
-    if args.task == "t2v":
-        input_info = T2VInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            save_result_path=args.save_result_path,
-            return_result_tensor=args.return_result_tensor,
-        )
-    elif args.task == "i2v":
-        input_info = I2VInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            image_path=args.image_path,
-            save_result_path=args.save_result_path,
-            return_result_tensor=args.return_result_tensor,
-        )
-    elif args.task == "flf2v":
-        input_info = Flf2vInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            image_path=args.image_path,
-            last_frame_path=args.last_frame_path,
-            save_result_path=args.save_result_path,
-            return_result_tensor=args.return_result_tensor,
-        )
-    elif args.task == "vace":
-        input_info = VaceInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            src_ref_images=args.src_ref_images,
-            src_video=args.src_video,
-            src_mask=args.src_mask,
-            save_result_path=args.save_result_path,
-            return_result_tensor=args.return_result_tensor,
-        )
-    elif args.task == "s2v":
-        input_info = S2VInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            image_path=args.image_path,
-            audio_path=args.audio_path,
-            save_result_path=args.save_result_path,
-            return_result_tensor=args.return_result_tensor,
-        )
-        if hasattr(args, "overlap_frame"):
-            input_info.overlap_frame = args.overlap_frame
-        if hasattr(args, "overlap_latent"):
-            input_info.overlap_latent = args.overlap_latent
-
-    elif args.task == "animate":
-        input_info = AnimateInputInfo(
-            seed=args.seed,
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            image_path=args.image_path,
-            src_pose_path=args.src_pose_path,
-            src_face_path=args.src_face_path,
-            src_ref_images=args.src_ref_images,
-            src_bg_path=args.src_bg_path,
-            src_mask_path=args.src_mask_path,
-            save_result_path=args.save_result_path,
-            return_result_tensor=args.return_result_tensor,
-        )
-    elif args.task == "t2i":
-        input_info = T2IInputInfo(seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio)
-    elif args.task == "i2i":
-        input_info = I2IInputInfo(
-            seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, image_path=args.image_path, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio
-        )
+def init_empty_input_info(task):
+    if task == "t2v":
+        return T2VInputInfo()
+    elif task == "i2v":
+        return I2VInputInfo()
+    elif task == "flf2v":
+        return Flf2vInputInfo()
+    elif task == "vace":
+        return VaceInputInfo()
+    elif task == "s2v":
+        return S2VInputInfo()
+    elif task == "animate":
+        return AnimateInputInfo()
+    elif task == "t2i":
+        return T2IInputInfo()
+    elif task == "i2i":
+        return I2IInputInfo()
     else:
-        raise ValueError(f"Unsupported task: {args.task}")
+        raise ValueError(f"Unsupported task: {task}")
 
-    if hasattr(args, "target_shape"):
-        input_info.target_shape = args.target_shape
-    return input_info
+
+def update_input_info_from_dict(input_info, data):
+    for key in input_info.__dataclass_fields__:
+        if key in data:
+            setattr(input_info, key, data[key])
 
 
 def get_all_input_info_keys():

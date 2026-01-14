@@ -21,7 +21,7 @@ from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # 
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
-from lightx2v.utils.input_info import set_input_info
+# from lightx2v.utils.input_info import set_input_info
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
