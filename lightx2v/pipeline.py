@@ -89,7 +89,7 @@ class LightX2VPipeline:
             "wan2.2_animate",
         ]:
             self.vae_stride = (4, 8, 8)
-            if self.model_cls.startswith("wan2.2_moe"):
+            if self.model_cls.startswith("wan2.2"):
                 self.use_image_encoder = False
         elif self.model_cls in ["wan2.2"]:
             self.vae_stride = (4, 16, 16)
@@ -98,7 +98,7 @@ class LightX2VPipeline:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
 
-        if model_cls in ["qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511", "qwen-image-2512"]:
+        if model_cls in ["qwen-image", "qwen-image-2512", "qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
             self.CONDITION_IMAGE_SIZE = 147456
             self.USE_IMAGE_ID_IN_PROMPT = True
             if model_cls == "qwen-image-edit":
@@ -230,6 +230,7 @@ class LightX2VPipeline:
         text_encoder_quantized_ckpt=False,
         image_encoder_quantized_ckpt=False,
         quant_scheme="fp8-sgl",
+        text_encoder_quant_scheme=None,
     ):
         self.dit_quantized = dit_quantized
         self.dit_quant_scheme = quant_scheme
@@ -248,6 +249,13 @@ class LightX2VPipeline:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = quant_scheme
+        elif self.model_cls in ["qwen_image"]:
+            self.qwen25vl_quantized = text_encoder_quantized
+            self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
+            if text_encoder_quant_scheme is not None:
+                self.qwen25vl_quant_scheme = text_encoder_quant_scheme
+            else:
+                self.qwen25vl_quant_scheme = quant_scheme
 
     def enable_offload(
         self,
