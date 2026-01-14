@@ -15,7 +15,7 @@ from loguru import logger
 import lightx2v
 from lightx2v.deploy.common.utils import class_try_catch_async
 from lightx2v.infer import init_runner  # noqa
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import init_empty_input_info
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
@@ -44,7 +44,7 @@ class BaseWorker:
         self.out_video_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
         torch.set_grad_enabled(False)
         self.runner = RUNNER_REGISTER[config["model_cls"]](config)
-        self.input_info = set_input_info(args)
+        self.input_info = init_empty_input_info(args.task)
 
     def update_input_info(self, kwargs):
         for k, v in kwargs.items():
