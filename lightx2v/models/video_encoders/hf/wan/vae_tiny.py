@@ -75,11 +75,11 @@ class WanVAE_tiny(nn.Module):
 
     @torch.no_grad()
     def encode_video(self, vid):
-        return self.taehv.encode_video(vid)
+        return self.taehv.encode_video(vid, parallel=False)
 
     @torch.no_grad()
     def decode_video(self, vid_enc):
-        return self.taehv.decode_video(vid_enc)
+        return self.taehv.decode_video(vid_enc, parallel=False)
 
 
 class Wan2_2_VAE_tiny(nn.Module):
@@ -209,8 +209,8 @@ class Wan2_2_VAE_tiny(nn.Module):
 
     @torch.no_grad()
     def encode_video(self, vid):
-        return self.taehv.encode_video(vid)
+        return self.taehv.encode_video(vid, parallel=False)
 
     @torch.no_grad()
     def decode_video(self, vid_enc):
-        return self.taehv.decode_video(vid_enc)
+        return self.taehv.decode_video(vid_enc, parallel=False)
