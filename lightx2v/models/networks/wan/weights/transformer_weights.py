@@ -9,7 +9,7 @@ from lightx2v.utils.registry_factory import (
 
 
 class WanTransformerWeights(WeightModule):
-    def __init__(self, config, lazy_load_path=None):
+    def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
@@ -37,15 +37,22 @@ class WanTransformerWeights(WeightModule):
                 for i in range(self.blocks_num)
             ]
         )
-        self.register_offload_buffers(config, lazy_load_path)
+        self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
         self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
-        self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
+        self.add_module(
+            "head",
+            MM_WEIGHT_REGISTER["Default"](
+                "head.head.weight",
+                "head.head.bias",
+                lora_prefix="diffusion_model.head",
+            ),
+        )
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
-    def register_offload_buffers(self, config, lazy_load_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path):
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
@@ -116,6 +123,7 @@ class WanTransformerWeights(WeightModule):
                                 block_prefix="blocks",
                                 lazy_load=self.lazy_load,
                                 lazy_load_path=lazy_load_path,
+                                lora_path=lora_path,
                             ).compute_phases
                             for i in range(2)
                         ]
@@ -146,6 +154,7 @@ class WanTransformerAttentionBlock(WeightModule):
         block_prefix="blocks",
         lazy_load=False,
         lazy_load_path=None,
+        lora_path=None,
     ):
         super().__init__()
         self.block_index = block_index
@@ -174,6 +183,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
+                    lora_path,
                 ),
                 WanCrossAttention(
                     block_index,
@@ -185,6 +195,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
+                    lora_path,
                 ),
                 WanFFN(
                     block_index,
@@ -196,6 +207,7 @@ class WanTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
+                    lora_path,
                 ),
             ]
         )
@@ -215,6 +227,7 @@ class WanSelfAttention(WeightModule):
         create_cpu_buffer=False,
         lazy_load=False,
         lazy_load_file=None,
+        lora_path=None,
     ):
         super().__init__()
         self.block_index = block_index
@@ -231,6 +244,7 @@ class WanSelfAttention(WeightModule):
         else:
             self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
 
+        block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
             "modulation",
             TENSOR_REGISTER["Default"](
@@ -256,6 +270,8 @@ class WanSelfAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
 
@@ -268,6 +284,8 @@ class WanSelfAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -279,6 +297,8 @@ class WanSelfAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -290,6 +310,8 @@ class WanSelfAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -300,6 +322,8 @@ class WanSelfAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -310,6 +334,8 @@ class WanSelfAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         attention_weights_cls = ATTN_WEIGHT_REGISTER[self.config["self_attn_1_type"]]
@@ -392,6 +418,7 @@ class WanCrossAttention(WeightModule):
         create_cpu_buffer=False,
         lazy_load=False,
         lazy_load_file=None,
+        lora_path=None,
     ):
         super().__init__()
         self.block_index = block_index
@@ -406,6 +433,7 @@ class WanCrossAttention(WeightModule):
         else:
             self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
 
+        block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
             "norm3",
             LN_WEIGHT_REGISTER["Default"](
@@ -415,6 +443,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -426,6 +456,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -437,6 +469,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -448,6 +482,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -459,6 +495,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -469,6 +507,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -479,6 +519,8 @@ class WanCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())
@@ -493,6 +535,8 @@ class WanCrossAttention(WeightModule):
                     create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
+                    lora_prefix=block_lora_prefix,
+                    lora_path=lora_path,
                 ),
             )
             self.add_module(
@@ -504,6 +548,8 @@ class WanCrossAttention(WeightModule):
                     create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
+                    lora_prefix=block_lora_prefix,
+                    lora_path=lora_path,
                 ),
             )
             self.add_module(
@@ -514,6 +560,8 @@ class WanCrossAttention(WeightModule):
                     create_cpu_buffer,
                     self.lazy_load,
                     self.lazy_load_file,
+                    lora_prefix=block_lora_prefix,
+                    lora_path=lora_path,
                 ),
             )
             self.add_module("cross_attn_2", ATTN_WEIGHT_REGISTER[self.config["cross_attn_2_type"]]())
@@ -531,6 +579,7 @@ class WanFFN(WeightModule):
         create_cpu_buffer=False,
         lazy_load=False,
         lazy_load_file=None,
+        lora_path=None,
     ):
         super().__init__()
         self.block_index = block_index
@@ -540,7 +589,7 @@ class WanFFN(WeightModule):
         self.quant_method = config.get("quant_method", None)
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-
+        block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
             "norm2",
             LN_WEIGHT_REGISTER["Default"](),
@@ -555,6 +604,8 @@ class WanFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -566,6 +617,8 @@ class WanFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
             ),
         )
 

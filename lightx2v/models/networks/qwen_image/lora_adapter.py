@@ -34,7 +34,7 @@ class QwenImageLoraWrapper:
             tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in f.keys()}
         return tensor_dict
 
-    def apply_lora(self, lora_name, alpha=1.0):
+    def apply_lora(self, lora_name, strength=1.0):
         if lora_name not in self.lora_metadata:
             logger.info(f"LoRA {lora_name} not found. Please load it first.")
 
@@ -43,16 +43,14 @@ class QwenImageLoraWrapper:
             return False
 
         lora_weights = self._load_lora_file(self.lora_metadata[lora_name]["path"])
-
         weight_dict = self.model.original_weight_dict
         self.lora_loader.apply_lora(
             weight_dict=weight_dict,
             lora_weights=lora_weights,
-            alpha=alpha,
-            strength=alpha,
+            strength=strength,
         )
         self.model._apply_weights(weight_dict)
 
-        logger.info(f"Applied LoRA: {lora_name} with alpha={alpha}")
+        logger.info(f"Applied LoRA: {lora_name} with strength={strength}")
         del lora_weights
         return True

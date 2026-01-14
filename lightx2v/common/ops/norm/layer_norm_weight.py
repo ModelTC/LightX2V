@@ -1,20 +1,30 @@
-import os
-import re
 from abc import ABCMeta, abstractmethod
-from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .triton_ops import norm_infer
 
 
 class LNWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(
+        self,
+        weight_name=None,
+        bias_name=None,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
         self.weight_name = weight_name
         self.bias_name = bias_name
         self.eps = eps
@@ -26,195 +36,236 @@ class LNWeightTemplate(metaclass=ABCMeta):
         self.config = {}
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
+        self.lora_prefix = lora_prefix
+        self.lora_path = lora_path
+        self.has_lora_branch = False
+        self.has_diff = False
+        self._get_base_attrs_mapping()
+        self._get_lora_attr_mapping()
+
+    def _get_base_attrs_mapping(self):
+        self.base_attrs = []
+        if self.weight_name is not None:
+            self.base_attrs.append((self.weight_name, "weight", False))
+        else:
+            self.weight = None
+        if self.bias_name is not None:
+            self.base_attrs.append((self.bias_name, "bias", False))
+        else:
+            self.bias = None
+
+    def _get_lora_attr_mapping(self):
+        if self.weight_name is not None:
+            _, _, _, self.weight_diff_name, self.bias_diff_name = build_lora_and_diff_names(self.weight_name, self.lora_prefix)
+            self.lora_attrs = {
+                "weight_diff": "weight_diff_name",
+                "bias_diff": "bias_diff_name",
+            }
+        else:
+            self.weight_diff_name = None
+            self.bias_diff_name = None
+            self.lora_attrs = {}
+
+    def _get_actual_weight(self):
+        if self.weight is None:
+            return None
+        if not hasattr(self, "weight_diff"):
+            return self.weight
+        return self.weight + self.weight_diff
+
+    def _get_actual_bias(self):
+        if self.bias is None:
+            return None
+        if not hasattr(self, "bias_diff"):
+            return self.bias
+        return self.bias + self.bias_diff
 
     def load(self, weight_dict):
-        if self.create_cuda_buffer:
-            self._load_cuda_buffers(weight_dict)
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            self.weight = device_tensors.get("weight")
+            self.bias = device_tensors.get("bias")
+            self.pin_weight = pin_tensors.get("weight")
+            self.pin_bias = pin_tensors.get("bias")
+        elif self.create_cuda_buffer:
+            result = create_cuda_buffers(
+                self.base_attrs,
+                weight_dict,
+                self.lazy_load,
+                self.lazy_load_file,
+                use_infer_dtype=True,
+            )
+            self.weight_cuda_buffer = result.get("weight")
+            self.bias_cuda_buffer = result.get("bias")
         elif self.create_cpu_buffer:
-            self._load_cpu_pin_buffers()
-        else:
-            self._load_default_tensors(weight_dict)
-
-    def _load_default_tensors(self, weight_dict):
-        if not self.lazy_load and self.weight_name is not None:
-            device = weight_dict[self.weight_name].device
-            if device.type == "cpu":
-                weight_tensor = weight_dict[self.weight_name]
-                self.pin_weight = self._create_cpu_pin_tensor(weight_tensor)
-                bias_tensor = weight_dict[self.bias_name] if self.bias_name is not None else None
-                self.pin_bias = self._create_cpu_pin_tensor(bias_tensor) if bias_tensor is not None else None
-                self.bias = None
-                del weight_dict[self.weight_name]
-            else:
-                self.weight = weight_dict[self.weight_name]
-                self.bias = weight_dict[self.bias_name] if self.bias_name is not None else None
-        else:
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, use_infer_dtype=True)
+            self.pin_weight = result.get("weight")
+            self.pin_bias = result.get("bias")
             self.weight = None
             self.bias = None
 
-    def _get_tensor(self, name, weight_dict=None, use_infer_dtype=False):
-        if name is None:
-            return None
-        if self.lazy_load:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{name.split('.')[1]}.safetensors")
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-                tensor = lazy_load_file.get_tensor(name)
-                if use_infer_dtype:
-                    tensor = tensor.to(self.infer_dtype)
-        else:
-            tensor = weight_dict[name]
-        return tensor
-
-    def _create_cpu_pin_tensor(self, tensor):
-        if tensor is None:
-            return None
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
-
-    def _load_cuda_buffers(self, weight_dict):
-        weight_tensor = self._get_tensor(self.weight_name, weight_dict, use_infer_dtype=self.lazy_load)
-        if weight_tensor is not None:
-            self.weight_cuda_buffer = weight_tensor.to(AI_DEVICE)
-
-        bias_tensor = self._get_tensor(self.bias_name, weight_dict, use_infer_dtype=self.lazy_load)
-        if bias_tensor is not None:
-            self.bias_cuda_buffer = bias_tensor.to(AI_DEVICE)
-
-    def _load_cpu_pin_buffers(self):
-        weight_tensor = self._get_tensor(self.weight_name, use_infer_dtype=True)
-        if weight_tensor is not None:
-            self.pin_weight = self._create_cpu_pin_tensor(weight_tensor)
-        else:
-            self.weight = None
-
-        bias_tensor = self._get_tensor(self.bias_name, use_infer_dtype=True)
-        if bias_tensor is not None:
-            self.pin_bias = self._create_cpu_pin_tensor(bias_tensor)
-        else:
-            self.bias = None
-            self.pin_bias = None
-
-    @abstractmethod
-    def apply(self, input_tensor):
-        pass
+    def register_diff(self, weight_dict):
+        if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
+            if self.weight_diff_name is not None and self.weight_diff_name in weight_dict:
+                self.weight_diff = weight_dict[self.weight_diff_name]
+                self.has_diff = True
+                logger.debug(f"Register Diff to {self.weight_name}")
+            if self.bias_diff_name is not None and self.bias_diff_name in weight_dict:
+                self.bias_diff = weight_dict[self.bias_diff_name]
+                self.has_diff = True
+                logger.debug(f"Register Diff to {self.bias_name}")
 
     def set_config(self, config=None):
         if config is not None:
             self.config = config
 
-    def to_cuda(self, non_blocking=False):
-        if hasattr(self, "pin_weight") and self.pin_weight is not None:
-            self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
-        else:
-            self.weight = None
-        if hasattr(self, "pin_bias") and self.pin_bias is not None:
-            self.bias = self.pin_bias.to(AI_DEVICE, non_blocking=non_blocking)
-        else:
-            self.bias = None
-
-    def to_cpu(self, non_blocking=False):
-        if hasattr(self, "pin_weight") and self.pin_weight is not None:
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
-            if self.bias is not None:
-                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
-        elif hasattr(self, "weight") and self.weight is not None:
-            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-            if hasattr(self, "bias") and self.bias is not None:
-                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
-
     def state_dict(self, destination=None):
-        if destination is None:
-            destination = {}
-        if self.weight_name is not None:
-            destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
-        if self.bias_name is not None:
-            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
-        return destination
+        return state_dict(self, self.base_attrs, self.lora_attrs, destination)
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
-        if self.weight_name is not None:
-            if self.is_post_adapter:
-                assert adapter_block_index is not None
-                weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            else:
-                weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
+        return load_state_dict(
+            self,
+            self.base_attrs,
+            self.lora_attrs,
+            destination,
+            block_index,
+            adapter_block_index,
+        )
 
-            if weight_name not in destination:
-                self.weight = None
-                return
-            self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
-        else:
-            self.weight = None
-
-        if self.bias_name is not None:
-            bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-            self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
-        else:
-            self.bias = None
+    def load_lora_state_dict_from_disk(self, block_index):
+        self.weight_diff_name = resolve_block_name(self.weight_diff_name, block_index)
+        self.bias_diff_name = resolve_block_name(self.bias_diff_name, block_index)
+        with safe_open(self.lora_path, framework="pt", device="cpu") as lora_load_file:
+            for lora_attr, lora_attr_name in self.lora_attrs.items():
+                if getattr(self, lora_attr_name) in lora_load_file.keys():
+                    setattr(
+                        self,
+                        lora_attr,
+                        getattr(self, lora_attr).copy_(
+                            lora_load_file.get_tensor(getattr(self, lora_attr_name)),
+                            non_blocking=True,
+                        ),
+                    )
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
         if self.weight_name is not None:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
-            if self.is_post_adapter:
-                self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            else:
-                self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-
+            if self.has_lora_branch or self.has_diff:
+                self.load_lora_state_dict_from_disk(block_index)
+            self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+            lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
+            if self.bias_name is not None:
+                self.bias_name = resolve_block_name(
+                    self.bias_name,
+                    block_index,
+                    adapter_block_index,
+                    self.is_post_adapter,
+                )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
                 self.pin_weight = self.pin_weight.copy_(weight_tensor)
+                if self.bias_name is not None:
+                    bias_tensor = lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
+                    self.pin_bias = self.pin_bias.copy_(bias_tensor)
+                else:
+                    self.pin_bias = None
             del weight_tensor
+        else:
+            self.weight = None
+            self.bias = None
 
-        if self.bias_name is not None:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
-            if self.is_post_adapter:
-                assert adapter_block_index is not None
-                self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1)
-            else:
-                self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
+    def to_cuda(self, non_blocking=False):
+        move_attr_to_cuda(self, self.base_attrs, self.lora_attrs, non_blocking)
 
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-                bias_tensor = lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
-                self.pin_bias.copy_(bias_tensor)
-            del bias_tensor
+    def to_cpu(self, non_blocking=False):
+        move_attr_to_cpu(self, self.base_attrs, self.lora_attrs, non_blocking)
+
+    @abstractmethod
+    def apply(self, input_tensor):
+        pass
 
 
 @LN_WEIGHT_REGISTER("Default")
 class LNWeight(LNWeightTemplate):
-    def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(
+        self,
+        weight_name=None,
+        bias_name=None,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def apply(self, input_tensor):
         if self.sensitive_layer_dtype != self.infer_dtype:
-            input_tensor = torch.nn.functional.layer_norm(
+            output_tensor = torch.nn.functional.layer_norm(
                 input_tensor.float(),
                 (input_tensor.shape[-1],),
-                self.weight,
-                self.bias,
+                (self._get_actual_weight()),
+                (self._get_actual_bias()),
                 self.eps,
             ).to(self.infer_dtype)
         else:
-            input_tensor = torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), self.weight, self.bias, self.eps)
+            output_tensor = torch.nn.functional.layer_norm(
+                input_tensor,
+                (input_tensor.shape[-1],),
+                (self._get_actual_weight()),
+                (self._get_actual_bias()),
+                self.eps,
+            )
 
-        return input_tensor
+        return output_tensor
 
 
 @LN_WEIGHT_REGISTER("Triton")
 class LNWeight(LNWeightTemplate):
-    def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(
+        self,
+        weight_name=None,
+        bias_name=None,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def apply(self, input_tensor):
-        input_tensor = norm_infer(input_tensor, self.weight, self.bias, self.eps)
-        return input_tensor
+        output_tensor = norm_infer(
+            input_tensor,
+            (self._get_actual_weight()),
+            self._get_actual_bias(),
+            self.eps,
+        )
+        return output_tensor

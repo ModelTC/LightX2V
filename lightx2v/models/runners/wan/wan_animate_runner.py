@@ -17,8 +17,7 @@ except ImportError:
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
-from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -388,20 +387,12 @@ class WanAnimateRunner(WanRunner):
         return clip_encoder_out
 
     def load_transformer(self):
-        model = WanAnimateModel(
-            self.config["model_path"],
-            self.config,
-            self.init_device,
-        )
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            lora_wrapper = WanLoraWrapper(model)
-            for lora_config in self.config.lora_configs:
-                lora_path = lora_config["path"]
-                strength = lora_config.get("strength", 1.0)
-                lora_name = lora_wrapper.load_lora(lora_path)
-                lora_wrapper.apply_lora(lora_name, strength)
-                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-
+        wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = WanAnimateModel(**wan_model_kwargs)
+        else:
+            model = build_wan_model_with_lora(WanAnimateModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         motion_encoder, face_encoder = self.load_encoders()
         model.set_animate_encoders(motion_encoder, face_encoder)
         return model
