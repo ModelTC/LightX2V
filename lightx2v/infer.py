@@ -123,6 +123,7 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
+    parser.add_argument("--aspect_ratio", type=str, default="16:9")
 
     args = parser.parse_args()
     validate_task_arguments(args)

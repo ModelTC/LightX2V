@@ -323,7 +323,7 @@ class LongCatImageRunner(DefaultRunner):
             logger.info(f"LongCat Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        if self.input_info.aspect_ratio and not self.config.get("_auto_resize", False):
+        if self.input_info.aspect_ratio:
             if self.input_info.aspect_ratio in as_maps:
                 logger.info(f"LongCat Image Runner got aspect ratio: {self.input_info.aspect_ratio}")
                 width, height = as_maps[self.input_info.aspect_ratio]
