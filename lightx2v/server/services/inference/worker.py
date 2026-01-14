@@ -3,7 +3,6 @@ import os
 from typing import Any, Dict
 
 import torch
-from easydict import EasyDict
 from loguru import logger
 
 from lightx2v.infer import init_runner

@@ -181,6 +181,12 @@ def update_input_info_from_dict(input_info, data):
             setattr(input_info, key, data[key])
 
 
+def update_input_info_from_object(input_info, obj):
+    for key in input_info.__dataclass_fields__:
+        if hasattr(obj, key):
+            setattr(input_info, key, getattr(obj, key))
+
+
 def get_all_input_info_keys():
     all_keys = set()
 
