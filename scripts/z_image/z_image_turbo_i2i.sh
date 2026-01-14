@@ -19,5 +19,4 @@ python -m lightx2v.infer \
 --image_path ${lightx2v_path}/assets/inputs/imgs/sketch-mountains-input.jpg \
 --save_result_path ${lightx2v_path}/save_results/z_image_turbo_i2i.png \
 --seed 42 \
---strength 0.6 \
 --aspect_ratio "1:1"

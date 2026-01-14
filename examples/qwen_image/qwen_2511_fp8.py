@@ -27,7 +27,15 @@ pipe = LightX2VPipeline(
 #     vae_offload=False,
 # )
 
-pipe.enable_quantize(dit_quantized=True, dit_quantized_ckpt="lightx2v/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning.safetensors", quant_scheme="fp8-sgl")
+# Load fp8 distilled weights (and int4 Qwen2_5 vl model (optional))
+pipe.enable_quantize(
+    dit_quantized=True,
+    dit_quantized_ckpt="lightx2v/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_4steps_v1.0.safetensors",
+    quant_scheme="fp8-sgl",
+    # text_encoder_quantized=True,
+    # text_encoder_quantized_ckpt="lightx2v/Encoders/GPTQModel/Qwen25-VL-4bit-GPTQ",
+    # text_encoder_quant_scheme="int4"
+)
 
 # Create generator manually with specified parameters
 pipe.create_generator(

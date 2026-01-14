@@ -1,12 +1,11 @@
-import os
-import re
 from abc import ABCMeta, abstractmethod
-from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
+from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -18,7 +17,18 @@ except ImportError:
 
 
 class RMSWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
         self.weight_name = weight_name
         self.eps = eps
         self.create_cuda_buffer = create_cuda_buffer
@@ -29,116 +39,140 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.config = {}
+        self.lora_prefix = lora_prefix
+        self.lora_path = lora_path
+        self.has_lora_branch = False
+        self.has_diff = False
+        self._get_base_attrs_mapping()
+        self._get_lora_attr_mapping()
+
+    def _get_base_attrs_mapping(self):
+        self.base_attrs = []
+        self.base_attrs.append((self.weight_name, "weight", False))
+
+    def _get_lora_attr_mapping(self):
+        _, _, _, self.weight_diff_name, _ = build_lora_and_diff_names(self.weight_name, self.lora_prefix)
+        self.lora_attrs = {
+            "weight_diff": "weight_diff_name",
+        }
+        self.weight_diff = torch.tensor(0.0, dtype=GET_DTYPE(), device=AI_DEVICE)
+
+    def _get_actual_weight(self):
+        if not hasattr(self, "weight_diff"):
+            return self.weight
+        return self.weight + self.weight_diff
+
+    def register_diff(self, weight_dict):
+        if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
+            if self.weight_diff_name in weight_dict:
+                self.weight_diff = weight_dict[self.weight_diff_name]
+                logger.debug(f"Register Diff to {self.weight_name}")
 
     def load(self, weight_dict):
-        if self.create_cuda_buffer:
-            self._load_cuda_buffer(weight_dict)
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            self.weight = device_tensors.get("weight")
+            self.pin_weight = pin_tensors.get("weight")
+        elif self.create_cuda_buffer:
+            result = create_cuda_buffers(
+                self.base_attrs,
+                weight_dict,
+                self.lazy_load,
+                self.lazy_load_file,
+                use_infer_dtype=True,
+            )
+            self.weight_cuda_buffer = result.get("weight")
         elif self.create_cpu_buffer:
-            self._load_cpu_pin_buffer()
-        else:
-            self._load_default_tensors(weight_dict)
-
-    def _load_default_tensors(self, weight_dict):
-        if not self.lazy_load:
-            device = weight_dict[self.weight_name].device
-            if device.type == "cpu":
-                weight_tensor = weight_dict[self.weight_name]
-                self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
-                del weight_dict[self.weight_name]
-            else:
-                self.weight = weight_dict[self.weight_name]
-
-    def _get_weight_tensor(self, weight_dict=None, use_infer_dtype=False):
-        if self.lazy_load:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-                tensor = lazy_load_file.get_tensor(self.weight_name)
-                if use_infer_dtype:
-                    tensor = tensor.to(self.infer_dtype)
-        else:
-            tensor = weight_dict[self.weight_name]
-        return tensor
-
-    def _create_cpu_pin_weight(self, tensor):
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
-
-    def _load_cuda_buffer(self, weight_dict):
-        weight_tensor = self._get_weight_tensor(weight_dict, use_infer_dtype=self.lazy_load)
-        self.weight_cuda_buffer = weight_tensor.to(AI_DEVICE)
-
-    def _load_cpu_pin_buffer(self):
-        weight_tensor = self._get_weight_tensor(use_infer_dtype=True)
-        self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
-
-    @abstractmethod
-    def apply(self, input_tensor):
-        pass
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, use_infer_dtype=True)
+            self.pin_weight = result.get("weight")
+            self.weight = None
 
     def set_config(self, config=None):
         if config is not None:
             self.config = config
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
+        move_attr_to_cuda(self, self.base_attrs, self.lora_attrs, non_blocking)
 
     def to_cpu(self, non_blocking=False):
-        if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
-        else:
-            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
+        move_attr_to_cpu(self, self.base_attrs, self.lora_attrs, non_blocking)
 
     def state_dict(self, destination=None):
-        if destination is None:
-            destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
-        return destination
+        return state_dict(self, self.base_attrs, self.lora_attrs, destination)
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            assert adapter_block_index is not None
-            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-        else:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
+        return load_state_dict(
+            self,
+            self.base_attrs,
+            self.lora_attrs,
+            destination,
+            block_index,
+            adapter_block_index,
+        )
 
-        if weight_name not in destination:
-            self.weight = None
-            return
-        self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
+    def load_lora_state_dict_from_disk(self, block_index):
+        self.weight_diff_name = resolve_block_name(self.weight_diff_name, block_index)
+        with safe_open(self.lora_path, framework="pt", device="cpu") as lora_load_file:
+            for lora_attr, lora_attr_name in self.lora_attrs.items():
+                if getattr(self, lora_attr_name) in lora_load_file.keys():
+                    setattr(
+                        self,
+                        lora_attr,
+                        getattr(self, lora_attr).copy_(
+                            lora_load_file.get_tensor(getattr(self, lora_attr_name)),
+                            non_blocking=True,
+                        ),
+                    )
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-        else:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-        if Path(self.lazy_load_file).is_file():
-            lazy_load_file_path = self.lazy_load_file
-        else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+        if self.has_lora_branch or self.has_diff:
+            self.load_lora_state_dict_from_disk(block_index)
+        self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+        lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
             self.pin_weight = self.pin_weight.copy_(weight_tensor)
         del weight_tensor
 
+    @abstractmethod
+    def apply(self, input_tensor):
+        pass
+
 
 @RMS_WEIGHT_REGISTER("Default")
 class RMSWeight(RMSWeightTemplate):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
     def apply(self, input_tensor):
         if GET_SENSITIVE_DTYPE() != GET_DTYPE():
-            input_tensor = self._norm(input_tensor).type_as(input_tensor) * self.weight
+            input_tensor = self._norm(input_tensor).type_as(input_tensor) * (self._get_actual_weight())
         else:
-            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * self.weight
+            input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * (self._get_actual_weight())
         return input_tensor
 
 
@@ -153,31 +187,64 @@ class RMSWeightSgl(RMSWeight):
         lazy_load_file=None,
         is_post_adapter=False,
         eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def apply(self, input_tensor):
         if sgl_kernel is not None and self.sensitive_layer_dtype == self.infer_dtype:
             input_tensor = input_tensor.contiguous()
             orig_shape = input_tensor.shape
             input_tensor = input_tensor.view(-1, orig_shape[-1])
-            input_tensor = sgl_kernel.rmsnorm(input_tensor, self.weight, self.eps).view(orig_shape)
+            input_tensor = sgl_kernel.rmsnorm(input_tensor, (self._get_actual_weight()), self.eps).view(orig_shape)
         else:
             # sgl_kernel is not available or dtype!=torch.bfloat16/float16, fallback to default implementation
             if self.sensitive_layer_dtype != self.infer_dtype:
                 input_tensor = input_tensor * torch.rsqrt(input_tensor.float().pow(2).mean(-1, keepdim=True) + self.eps).to(self.infer_dtype)
-                input_tensor = (input_tensor * self.weight).to(self.infer_dtype)
+                input_tensor = (input_tensor * (self._get_actual_weight())).to(self.infer_dtype)
             else:
                 input_tensor = input_tensor * torch.rsqrt(input_tensor.pow(2).mean(-1, keepdim=True) + self.eps)
-                input_tensor = input_tensor * self.weight
+                input_tensor = input_tensor * (self._get_actual_weight())
 
         return input_tensor
 
 
 @RMS_WEIGHT_REGISTER("fp32_variance")
 class RMSWeightFP32(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def apply(self, input_tensor):
         input_dtype = input_tensor.dtype
@@ -187,7 +254,7 @@ class RMSWeightFP32(RMSWeight):
         if self.weight.dtype in [torch.float16, torch.bfloat16]:
             hidden_states = hidden_states.to(self.weight.dtype)
         if self.weight is not None:
-            hidden_states = hidden_states * self.weight
+            hidden_states = hidden_states * (self._get_actual_weight())
         hidden_states = hidden_states.to(input_dtype)
 
         return hidden_states
@@ -195,14 +262,35 @@ class RMSWeightFP32(RMSWeight):
 
 @RMS_WEIGHT_REGISTER("self_forcing")
 class RMSWeightSF(RMSWeight):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
     def apply(self, x):
-        return self._norm(x.float()).type_as(x) * self.weight
+        return self._norm(x.float()).type_as(x) * (self._get_actual_weight())
 
 
 @RMS_WEIGHT_REGISTER("one-pass")
@@ -216,8 +304,20 @@ class RMSWeightOnePass(RMSWeight):
         lazy_load_file=None,
         is_post_adapter=False,
         eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
-        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
 
     def apply(self, input_tensor):
-        return rms_norm_kernel(input_tensor, self.weight, self.eps)
+        return rms_norm_kernel(input_tensor, (self._get_actual_weight()), self.eps)

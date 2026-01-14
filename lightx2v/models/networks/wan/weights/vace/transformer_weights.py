@@ -10,8 +10,8 @@ from lightx2v.utils.registry_factory import (
 
 
 class WanVaceTransformerWeights(WanTransformerWeights):
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, lazy_load_path=None, lora_path=None):
+        super().__init__(config, lazy_load_path, lora_path)
         self.patch_size = (1, 2, 2)
         self.register_offload_buffers(config)
         self.vace_blocks = WeightModuleList(

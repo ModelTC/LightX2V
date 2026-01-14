@@ -13,6 +13,7 @@ This document introduces how to use LightX2V for video generation, including bas
   - [Model Quantization](#model-quantization)
   - [Parallel Inference](#parallel-inference)
   - [Feature Caching](#feature-caching)
+  - [LoRA Support](#lora-support)
   - [Lightweight VAE](#lightweight-vae)
 
 ## 🔧 Environment Setup
@@ -240,6 +241,45 @@ pipe.enable_cache(
 ```
 
 **Coefficient Reference:** Refer to configuration files in `configs/caching` or `configs/hunyuan_video_15/cache` directories
+
+### LoRA Support
+
+Supports loading distilled LoRA weights, which can significantly accelerate inference.
+
+**Usage Examples:**
+
+```python
+# Qwen-Image Single LoRA Example
+pipe.enable_lora(
+    [
+        {"path": "/path/to/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors", "strength": 1.0},
+    ],
+    lora_dynamic_apply=False,
+)
+
+# Wan2.2 Multiple LoRAs Example
+pipe.enable_lora(
+    [
+        {"name": "high_noise_model", "path": "/path/to/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
+        {"name": "low_noise_model", "path": "/path/to/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
+    ],
+    lora_dynamic_apply=False,
+)
+```
+
+**Parameter Description:**
+- **`lora_configs`**: List of LoRA configurations, each containing:
+  - **`path`**: Path to LoRA weight file (required)
+  - **`name`**: LoRA name (optional, used when multiple LoRAs are needed, e.g., Wan2.2)
+  - **`strength`**: LoRA strength, default is 1.0
+- **`lora_dynamic_apply`**: Whether to dynamically apply LoRA weights
+  - `False` (default): Merge LoRA weights during loading, faster inference but uses more memory
+  - `True`: Dynamically apply LoRA weights during inference, saves memory but slower
+
+**LoRA Model Downloads:**
+- **Wan-2.1 LoRA**: Download from [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
+- **Wan-2.2 LoRA**: Download from [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
+- **Qwen-Image LoRA**: Download from [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) or [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)
 
 ### Lightweight VAE
 
