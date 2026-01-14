@@ -204,13 +204,59 @@ class LongCatImageTransformerModel:
         latents = self.scheduler.latents
 
         if self.config.get("enable_cfg", True):
-            # ==================== CFG Processing ====================
-            noise_pred_cond = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
-            noise_pred_uncond = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+            # Check if CFG parallel should be used
+            # Note: I2I task may have different sequence lengths for positive/negative prompts,
+            # which is not yet supported in CFG parallel mode
+            use_cfg_parallel = self.config.get("cfg_parallel", False)
+            if use_cfg_parallel and hasattr(self.scheduler, "input_image_latents") and self.scheduler.input_image_latents is not None:
+                # I2I task: check if sequence lengths match
+                if hasattr(self.scheduler, "image_rotary_emb") and hasattr(self.scheduler, "negative_image_rotary_emb"):
+                    pos_len = self.scheduler.image_rotary_emb[0].shape[0]
+                    neg_len = self.scheduler.negative_image_rotary_emb[0].shape[0]
+                    if pos_len != neg_len:
+                        from lightx2v.utils.utils import logger
+                        if dist.get_rank() == 0:
+                            logger.warning(
+                                f"CFG parallel disabled for I2I task due to sequence length mismatch "
+                                f"(positive: {pos_len}, negative: {neg_len}). Falling back to sequential CFG."
+                            )
+                        use_cfg_parallel = False
 
-            # Apply CFG with optional renormalization
-            noise_pred = self.scheduler.apply_cfg(noise_pred_cond, noise_pred_uncond)
-            self.scheduler.noise_pred = noise_pred
+            if use_cfg_parallel:
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+
+                if cfg_p_rank == 0:
+                    noise_pred = self._infer_cond_uncond(
+                        latents,
+                        inputs["text_encoder_output"]["prompt_embeds"],
+                        infer_condition=True
+                    )
+                else:
+                    noise_pred = self._infer_cond_uncond(
+                        latents,
+                        inputs["text_encoder_output"]["negative_prompt_embeds"],
+                        infer_condition=False
+                    )
+
+                noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
+                dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
+                noise_pred_cond = noise_pred_list[0]   # cfg_p_rank == 0
+                noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
+
+                # Apply CFG with optional renormalization
+                noise_pred = self.scheduler.apply_cfg(noise_pred_cond, noise_pred_uncond)
+                self.scheduler.noise_pred = noise_pred
+            else:
+                # ==================== CFG Sequential Processing ====================
+                noise_pred_cond = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                noise_pred_uncond = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+
+                # Apply CFG with optional renormalization
+                noise_pred = self.scheduler.apply_cfg(noise_pred_cond, noise_pred_uncond)
+                self.scheduler.noise_pred = noise_pred
         else:
             # ==================== No CFG Processing ====================
             noise_pred = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
