@@ -237,12 +237,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 enable_head_parallel=self.enable_head_parallel,
-                model_cls=self.config["model_cls"],
             )
         else:
-            attn_out = weights.self_attention.apply(
-                q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen, model_cls=self.config["model_cls"]
-            )
+            attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
 
         img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn

@@ -31,9 +31,10 @@ pipe.enable_offload(
 # Load distilled LoRA weights
 pipe.enable_lora(
     [
-        {"name": "high_noise_model", "path": "/path/to/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
-        {"name": "low_noise_model", "path": "/path/to/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
-    ]
+        {"name": "high_noise_model", "path": "lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
+        {"name": "low_noise_model", "path": "lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
+    ],
+    lora_dynamic_apply=False,  # Support inference with LoRA weights, save memory but slower, default is False
 )
 
 # Create generator with specified parameters

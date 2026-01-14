@@ -216,7 +216,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 enable_head_parallel=self.enable_head_parallel,
-                model_cls=self.config["model_cls"],
                 img_first=False,
             )
         else:
@@ -228,7 +227,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_qkv,
                 max_seqlen_q=img_qkv_len,
                 max_seqlen_kv=img_qkv_len,
-                model_cls="qwen_image",
             )
 
         # Split attention outputs back

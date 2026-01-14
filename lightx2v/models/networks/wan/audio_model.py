@@ -21,10 +21,10 @@ class WanAudioModel(WanModel):
     post_weight_class = WanPostWeights
     transformer_weight_class = WanAudioTransformerWeights
 
-    def __init__(self, model_path, config, device):
+    def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         self.config = config
         self._load_adapter_ckpt()
-        super().__init__(model_path, config, device)
+        super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
 
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:

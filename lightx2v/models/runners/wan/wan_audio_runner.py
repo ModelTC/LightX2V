@@ -19,8 +19,7 @@ from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
-from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.server.metrics import monitor_cli
@@ -742,18 +741,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return {"video": None, "audio": None}
 
     def load_transformer(self):
-        """Load transformer with LoRA support"""
-        base_model = WanAudioModel(self.config["model_path"], self.config, self.init_device)
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
-            lora_wrapper = WanLoraWrapper(base_model)
-            for lora_config in self.config["lora_configs"]:
-                lora_path = lora_config["path"]
-                strength = lora_config.get("strength", 1.0)
-                lora_name = lora_wrapper.load_lora(lora_path)
-                lora_wrapper.apply_lora(lora_name, strength)
-                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-
-        return base_model
+        wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = WanAudioModel(**wan_model_kwargs)
+        else:
+            model = build_wan_model_with_lora(WanAudioModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
+        return model
 
     def load_audio_encoder(self):
         audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))

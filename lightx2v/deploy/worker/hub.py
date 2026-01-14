@@ -84,17 +84,18 @@ class BaseWorker:
         if "aspect_ratio" in self.input_info.__dataclass_fields__:
             self.input_info.aspect_ratio = params.get("aspect_ratio", "")
 
-        if "custom_shape" in self.input_info.__dataclass_fields__:
-            self.input_info.custom_shape = params.get("custom_shape", [])
-
-            # assign custom_shape to t2v task
-            if self.is_t2v_task() and len(self.input_info.custom_shape) == 2:
-                height, width = self.input_info.custom_shape
-                if (width <= 1280 and height <= 720 and width >= 256 and height >= 256) or (width <= 720 and height <= 1280 and width >= 256 and height >= 256):
-                    self.runner.set_config({"target_height": height, "target_width": width})
-                    logger.info(f"Set target_height={height}, target_width={width} for t2v task")
-                else:
-                    logger.warning(f"Custom shape {width}x{height} is too large or too smallfor t2v task, will use default shape")
+        if "target_shape" in self.input_info.__dataclass_fields__:
+            if self.is_t2v_task():
+                custom_shape = params.get("custom_shape", [])
+                if len(custom_shape) == 2:
+                    height, width = int(custom_shape[0]), int(custom_shape[1])
+                    if (width <= 1280 and height <= 720 and width >= 256 and height >= 256) or (width <= 720 and height <= 1280 and width >= 256 and height >= 256):
+                        self.input_info.target_shape = [height, width]
+                        logger.info(f"Set target_height={height}, target_width={width} for t2v task")
+                    else:
+                        logger.warning(f"Custom shape {width}x{height} is too large or too smallfor t2v task, will use default shape")
+            else:
+                self.input_info.target_shape = params.get("custom_shape", [])
 
     async def prepare_input_image(self, params, inputs, tmp_dir, data_manager):
         input_image_path = inputs.get("input_image", "")

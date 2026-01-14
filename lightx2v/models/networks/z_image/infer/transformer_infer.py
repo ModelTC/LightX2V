@@ -80,7 +80,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 attention_module=block_weight.attention.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
-                model_cls=self.config["model_cls"],
                 img_first=False,
             )
         else:
@@ -92,7 +91,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 cu_seqlens_kv=cu_seqlens,
                 max_seqlen_q=total_seq_len,
                 max_seqlen_kv=total_seq_len,
-                model_cls="z_image",
             )
 
         output = block_weight.attention.to_out[0].apply(hidden_states_out)
