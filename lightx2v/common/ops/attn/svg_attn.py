@@ -291,6 +291,7 @@ def get_attention_mask(mask_name, sample_mse_max_row, context_length, num_frame,
     attention_mask = attention_mask[:sample_mse_max_row].cuda()
     return attention_mask
 
+
 def diagonal_band_mask_from_sparsity(
     block_num: int,
     sparsity: float,

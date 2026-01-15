@@ -1,13 +1,13 @@
-import torch
-import torch.nn.functional as F
 from abc import ABC, abstractmethod
 
+import torch
+import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER
 
 from .nbhd_attn import generate_nbhd_mask
-from .svg_attn import get_attention_mask, diagonal_band_mask_from_sparsity, wan_sparse_head_placement, wan_hidden_states_placement
+from .svg_attn import diagonal_band_mask_from_sparsity, get_attention_mask, wan_hidden_states_placement, wan_sparse_head_placement
 from .utils.sla_util import get_block_map
 
 
@@ -47,7 +47,6 @@ class SlaMaskGenerator(GeneralMaskGenerator):
 
 @SPARSE_MASK_GENERATOR_REGISTER("nbhd_mask_generator")
 class NbhdMaskGenerator(GeneralMaskGenerator):
-
     seqlen = None
     mask = None
 
@@ -73,17 +72,16 @@ class NbhdMaskGenerator(GeneralMaskGenerator):
 
 @SPARSE_MASK_GENERATOR_REGISTER("svg_mask_generator")
 class SvgMaskGenerator(GeneralMaskGenerator):
-
     seqlen = None
     attention_masks = None
     mask = None
 
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
-        self.sample_mse_max_row=self.sparse_setting.get("svg_sample_mse_max_row", 10000)
-        self.num_sampled_rows=self.sparse_setting.get("svg_num_sampled_rows", 64)
-        self.context_length=self.sparse_setting.get("svg_context_length", 0)
-        self.sparsity=self.sparse_setting.get("svg_sparsity", 0.75)
+        self.sample_mse_max_row = self.sparse_setting.get("svg_sample_mse_max_row", 10000)
+        self.num_sampled_rows = self.sparse_setting.get("svg_num_sampled_rows", 64)
+        self.context_length = self.sparse_setting.get("svg_context_length", 0)
+        self.sparsity = self.sparse_setting.get("svg_sparsity", 0.75)
         self.block_size = self.k_block_size
         self.best_model_idx = None
         self.head_num = None
@@ -137,7 +135,7 @@ class SvgMaskGenerator(GeneralMaskGenerator):
         self.head_dim = head_dim
 
         q_out, k_out, v_out = torch.zeros_like(q), torch.zeros_like(k), torch.zeros_like(v)
-        
+
         wan_sparse_head_placement(q, k, v, q_out, k_out, v_out, self.best_mask_idx, self.context_length, self.attnmap_frame_num, seqlen // self.attnmap_frame_num)
 
         q_out = q_out.transpose(1, 2).squeeze(0)
@@ -157,7 +155,6 @@ class SvgMaskGenerator(GeneralMaskGenerator):
 
         restore_out = restore_out.transpose(1, 2).reshape(seqlen, -1)
         return restore_out
-        
 
     def __call__(self, q, k):
         self.prepare_mask(q)
