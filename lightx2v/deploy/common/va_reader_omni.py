@@ -142,6 +142,8 @@ class ChatAdapter:
         self.reset_prev = False
         self.status = "blank"
         self.immediate_switch = 0
+        self.image_switch = ""
+        self.action_switch = ""
         self.model_runner = model_runner
 
     def launch_chat_server(self):
@@ -178,6 +180,22 @@ class ChatAdapter:
         if self.model_runner is not None:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner pause signal set to True")
+
+    def set_image_switch(self, image_path):
+        logger.warning(f"Setting image switch: {image_path}")
+        self.image_switch = image_path
+        # only blank status can be paused immediately
+        if self.model_runner is not None and self.status == "blank":
+            self.model_runner.pause_signal = True
+            logger.warning(f"Model runner set pause signal for image switch & blank status")
+
+    def set_action_switch(self, prompt):
+        logger.warning(f"Setting action switch: {prompt}")
+        self.action_switch = prompt
+        # only blank status can be paused immediately
+        if self.model_runner is not None and self.status == "blank":
+            self.model_runner.pause_signal = True
+            logger.warning(f"Model runner set pause signal for action switch & blank status")
 
     def recv_loop(self):
         while True:
@@ -243,7 +261,7 @@ class ChatAdapter:
 
     def get_audio(self, fetch_duration) -> (bytes, AudioInfo):
         bytes_count = self.has_voice(fetch_duration)
-        if bytes_count is False:
+        if bytes_count is False or self.audio_info is None:
             return None
         pcm_data = self.audio_buffer.get(bytes_count)
 
@@ -429,7 +447,7 @@ class OmniVAReader:
     def get_fetch_duration(self):
         fetch_duration = self.segment_duration
         # after immediate switch, reset prev seg chunk
-        if self.chat_adapter.reset_prev:
+        if self.chat_adapter is not None and self.chat_adapter.reset_prev:
             self.prev_seg_chunk = None
             self.chat_adapter.reset_prev = False
             logger.warning(f"Reset prev seg chunk")
@@ -462,7 +480,7 @@ class OmniVAReader:
                     audio_data, valid_duration = self.prepare_audio_data(None)
             except Exception as e:
                 logger.warning(f"Failed to get voice segment: {e}")
-                return None
+                return None, 0
         if self.world_size > 1:
             audio_data = self.braodcast_audio_data(audio_data)
             valid_duration = self.braodcast_valid_duration(valid_duration)
@@ -471,21 +489,49 @@ class OmniVAReader:
 
     def get_immediate_switch(self):
         if self.rank == self.target_rank:
-            if self.chat_adapter.immediate_switch == 1:
+            if self.chat_adapter is not None and self.chat_adapter.immediate_switch == 1:
                 self.immediate_switch_tensor.fill_(1)
                 # reset immediate switch
                 self.chat_adapter.immediate_switch = 0
             else:
                 self.immediate_switch_tensor.fill_(0)
-        dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
-        immediate_switch = self.immediate_switch_tensor.item()
-        return immediate_switch
+        if self.world_size > 1:
+            dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
+        return self.immediate_switch_tensor.item()
 
     def get_image_switch(self):
-        return None
+        data = "" if self.chat_adapter is None else self.chat_adapter.image_switch
+        image_switch = self.broadcast_data(data)
+        # reset image switch
+        if self.chat_adapter is not None:
+            self.chat_adapter.image_switch = ""
+        return image_switch
 
     def get_action_switch(self):
-        return None
+        data = "" if self.chat_adapter is None else self.chat_adapter.action_switch
+        action_switch = self.broadcast_data(data)
+        # reset action switch
+        if self.chat_adapter is not None:
+            self.chat_adapter.action_switch = ""
+        return action_switch
+
+    def broadcast_data(self, data):
+        if self.world_size <= 1:
+            return data
+        if self.rank == self.target_rank:
+            val = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            T = torch.frombuffer(bytearray(val), dtype=torch.uint8).to(device="cuda")
+            S = torch.tensor([T.shape[0]], dtype=torch.int32).to(device="cuda")
+        else:
+            S = torch.zeros(1, dtype=torch.int32, device="cuda")
+        dist.broadcast(S, src=self.target_rank)
+        if self.rank != self.target_rank:
+            T = torch.zeros(S.item(), dtype=torch.uint8, device="cuda")
+        dist.broadcast(T, src=self.target_rank)
+        if self.rank != self.target_rank:
+            val = T.cpu().numpy().tobytes()
+            data = json.loads(val.decode("utf-8"))
+        return data
 
     def stop(self):
         self.model_runner = None

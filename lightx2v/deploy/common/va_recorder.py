@@ -356,8 +356,26 @@ class VARecorder:
         duration = 1.0
         frames = int(self.fps * duration)
         samples = int(self.sample_rate * (frames / self.fps))
-        self.pub_livestream(torch.zeros((frames, height, width, 3), dtype=torch.float16), torch.zeros(samples, dtype=torch.float16))
+        tensor = torch.zeros((frames, height, width, 3), dtype=torch.float16)
+        self.pub_livestream(tensor, torch.zeros(samples, dtype=torch.float16))
         time.sleep(duration)
+
+    def config_video_padding(self):
+        pass
+
+    def padding_video_frames(self, frames: torch.Tensor):
+        return frames
+
+    def try_init_sockets(self, max_try=10):
+        for i in range(max_try):
+            try:
+                self.init_sockets()
+                return True
+            except OSError:
+                self.audio_port = pseudo_random(32000, 40000)
+                self.video_port = self.audio_port + 1
+                logger.warning(f"Failed to initialize sockets {i + 1}/{max_try}: {traceback.format_exc()}")
+                logger.warning(f"change port to {self.audio_port} and {self.video_port}, retry ...")
 
     def set_video_size(self, width: int, height: int):
         if self.width is not None and self.height is not None:
@@ -365,7 +383,8 @@ class VARecorder:
             return
         self.width = width
         self.height = height
-        self.init_sockets()
+        self.config_video_padding()
+        self.try_init_sockets()
         if self.livestream_url.startswith("rtmp://"):
             self.start_ffmpeg_process_rtmp()
         elif self.livestream_url.startswith("http"):
@@ -393,7 +412,7 @@ class VARecorder:
 
         self.set_video_size(width, height)
         self.audio_queue.put(audios)
-        self.video_queue.put(images)
+        self.video_queue.put(self.padding_video_frames(images))
         logger.info(f"Published {N} frames and {M} audio samples")
 
         self.stoppable_t = time.time() + M / self.sample_rate + 3
@@ -415,7 +434,7 @@ class VARecorder:
         for i in range(0, N, self.slice_frame):
             end_frame = i + self.slice_frame
             can_truncate = valid_frames < end_frame
-            img = images[i:end_frame]
+            img = self.padding_video_frames(images[i:end_frame])
             aud = audios[i * self.audio_samples_per_frame : end_frame * self.audio_samples_per_frame]
             gen = gen_video[:, :, (end_frame - self.prev_frame) : end_frame]
             rets.append((img, aud, gen, can_truncate))

@@ -1,21 +1,17 @@
-import argparse
+import gc
 import json
 import os
-import gc
-import numpy as np
+
 import torch
-import torch.distributed as dist
-import torchaudio as ta
 from loguru import logger
 
+from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.infer import init_runner  # noqa
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
-
-from lightx2v.deploy.common.va_controller import VAController
 
 
 class ParallelModelRunner:
