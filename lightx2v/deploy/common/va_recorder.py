@@ -460,6 +460,8 @@ class VARecorder:
             self.stream_buffer = self.stream_buffer[:size]
             logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
             if len(self.stream_buffer) > 0:
+                # after truncate, set the last segment can not be truncated
+                self.stream_buffer[-1][3] = False
                 return self.stream_buffer[-1][2]  # return the last video tensor
             else:
                 return None

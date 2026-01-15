@@ -177,15 +177,16 @@ class ChatAdapter:
         self.reset_prev = True
         self.status = status
         self.immediate_switch = 1
-        if self.model_runner is not None:
+        # only no action switch can be paused immediately
+        if self.model_runner is not None and self.action_switch != "":
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner pause signal set to True")
 
     def set_image_switch(self, image_path):
         logger.warning(f"Setting image switch: {image_path}")
         self.image_switch = image_path
-        # only blank status can be paused immediately
-        if self.model_runner is not None and self.status == "blank":
+        # only blank status and no action switch can be paused immediately
+        if self.model_runner is not None and self.status == "blank" and self.action_switch != "":
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner set pause signal for image switch & blank status")
 
