@@ -316,6 +316,7 @@ def align_args(args):
     args.save_result_path = ""
     args.return_result_tensor = False
     args.is_live = True
+    args.aspect_ratio = "16:9"
 
 
 # =========================
