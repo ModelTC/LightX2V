@@ -294,6 +294,7 @@ def get_attention_mask(mask_name, sample_mse_max_row, context_length, num_frame,
 
 def diagonal_band_mask_from_sparsity(
     block_num: int,
+    block_num_per_frame: int,
     sparsity: float,
     device="cpu",
 ):
@@ -302,6 +303,11 @@ def diagonal_band_mask_from_sparsity(
 
     idx = torch.arange(block_num, device=device)
     mask = torch.abs(idx[:, None] - idx[None, :]) <= k
+    sink = idx[None, :] <= block_num_per_frame
+    mask = mask | sink
+
+    actual_sparsity = 1 - mask.float().mean().item()
+    logger.info(f"Diagonal Band Mask: block_num={block_num}, block_num_per_frame={block_num_per_frame}, sparsity={sparsity}, actual_sparsity={actual_sparsity}")
 
     return mask
 

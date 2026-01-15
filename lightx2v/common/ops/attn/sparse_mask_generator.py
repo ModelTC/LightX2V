@@ -95,7 +95,8 @@ class SvgMaskGenerator(GeneralMaskGenerator):
         frame_size = seqlen // self.attnmap_frame_num
         SvgMaskGenerator.attention_masks = [get_attention_mask(mask_name, self.sample_mse_max_row, self.context_length, self.attnmap_frame_num, frame_size) for mask_name in ["spatial", "temporal"]]
         block_num = (seqlen + self.block_size - 1) // self.block_size
-        mask = diagonal_band_mask_from_sparsity(block_num, self.sparsity, device=q.device)
+        block_num_per_frame = block_num // self.attnmap_frame_num
+        mask = diagonal_band_mask_from_sparsity(block_num, block_num_per_frame, self.sparsity, device=q.device)
         SvgMaskGenerator.mask = mask.unsqueeze(0).repeat(head_num, 1, 1)
         SvgMaskGenerator.seqlen = seqlen
 
