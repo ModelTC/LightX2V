@@ -13,9 +13,7 @@ pipe = LightX2VPipeline(
 )
 
 # Create generator from config JSON file
-pipe.create_generator(
-    config_json="/workspace/configs/longcat_image/longcat_image_i2i.json"
-)
+pipe.create_generator(config_json="/workspace/configs/longcat_image/longcat_image_i2i.json")
 
 # Generation parameters
 seed = 43

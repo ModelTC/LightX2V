@@ -215,11 +215,9 @@ class LongCatImageTransformerModel:
                     neg_len = self.scheduler.negative_image_rotary_emb[0].shape[0]
                     if pos_len != neg_len:
                         from lightx2v.utils.utils import logger
+
                         if dist.get_rank() == 0:
-                            logger.warning(
-                                f"CFG parallel disabled for I2I task due to sequence length mismatch "
-                                f"(positive: {pos_len}, negative: {neg_len}). Falling back to sequential CFG."
-                            )
+                            logger.warning(f"CFG parallel disabled for I2I task due to sequence length mismatch (positive: {pos_len}, negative: {neg_len}). Falling back to sequential CFG.")
                         use_cfg_parallel = False
 
             if use_cfg_parallel:
@@ -229,21 +227,13 @@ class LongCatImageTransformerModel:
                 cfg_p_rank = dist.get_rank(cfg_p_group)
 
                 if cfg_p_rank == 0:
-                    noise_pred = self._infer_cond_uncond(
-                        latents,
-                        inputs["text_encoder_output"]["prompt_embeds"],
-                        infer_condition=True
-                    )
+                    noise_pred = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
                 else:
-                    noise_pred = self._infer_cond_uncond(
-                        latents,
-                        inputs["text_encoder_output"]["negative_prompt_embeds"],
-                        infer_condition=False
-                    )
+                    noise_pred = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
 
                 noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
                 dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
-                noise_pred_cond = noise_pred_list[0]   # cfg_p_rank == 0
+                noise_pred_cond = noise_pred_list[0]  # cfg_p_rank == 0
                 noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
 
                 # Apply CFG with optional renormalization
