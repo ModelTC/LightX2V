@@ -123,6 +123,7 @@ class T2IInputInfo:
     prompt: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
@@ -137,6 +138,7 @@ class I2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
@@ -215,10 +217,23 @@ def set_input_info(args):
             return_result_tensor=args.return_result_tensor,
         )
     elif args.task == "t2i":
-        input_info = T2IInputInfo(seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio)
+        input_info = T2IInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            save_result_path=args.save_result_path,
+            aspect_ratio=args.aspect_ratio,
+            return_result_tensor=args.return_result_tensor,
+        )
     elif args.task == "i2i":
         input_info = I2IInputInfo(
-            seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, image_path=args.image_path, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image_path=args.image_path,
+            save_result_path=args.save_result_path,
+            aspect_ratio=args.aspect_ratio,
+            return_result_tensor=args.return_result_tensor,
         )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
