@@ -313,8 +313,8 @@ class LongCatImageRunner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.custom_shape) == 2:
-            height, width = self.input_info.custom_shape
+        if len(self.input_info.target_shape) == 2:
+            height, width = self.input_info.target_shape
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
                 width, height = int(width * scale), int(height * scale)
