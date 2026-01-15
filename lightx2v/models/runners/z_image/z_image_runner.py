@@ -239,15 +239,16 @@ class ZImageRunner(DefaultRunner):
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
-    def set_target_shape(self):
-        if self.config.get("custom_shape", None) is not None:
-            parts = self.config["custom_shape"].split(",")
-            height = int(parts[0].strip())
-            width = int(parts[1].strip())
-        elif self.config.get("aspect_ratio", None) is not None:
-            width, height = ASPECT_RATIO_MAP[self.config["aspect_ratio"]]
+    def get_input_target_shape(self):
+        if self.input_info.target_shape and len(self.input_info.target_shape) == 2:
+            return self.input_info.target_shape
+        elif self.input_info.aspect_ratio:
+            return ASPECT_RATIO_MAP[self.input_info.aspect_ratio]
         else:
             raise NotImplementedError
+
+    def set_target_shape(self):
+        height, width = self.get_input_target_shape()
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -264,14 +265,7 @@ class ZImageRunner(DefaultRunner):
                 raise ValueError(f"target_shape must be 4D [B, C, H, W], got {len(self.input_info.target_shape)}D: {self.input_info.target_shape}")
             _, _, latent_height, latent_width = self.input_info.target_shape
         else:
-            if self.config.get("custom_shape", None) is not None:
-                parts = self.config["custom_shape"].split(",")
-                height = int(parts[0].strip())
-                width = int(parts[1].strip())
-            elif self.config.get("aspect_ratio", None) is not None:
-                width, height = ASPECT_RATIO_MAP[self.config["aspect_ratio"]]
-            else:
-                raise NotImplementedError
+            height, width = self.get_input_target_shape()
 
             vae_scale_factor = self.config["vae_scale_factor"]
             latent_height = 2 * (int(height) // (vae_scale_factor * 2))

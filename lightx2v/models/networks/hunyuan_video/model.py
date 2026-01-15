@@ -37,7 +37,6 @@ class HunyuanVideo15Model(CompiledMethodsMixin):
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
             assert self.config.get("dit_quant_scheme", "Default") in [
-                "Default-Force-FP32",
                 "fp8-vllm",
                 "int8-vllm",
                 "fp8-q8f",

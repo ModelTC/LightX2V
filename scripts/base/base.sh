@@ -16,6 +16,7 @@ export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
 export TOKENIZERS_PARALLELISM=false
 # set expandable_segments to True to avoid OOM
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # =====================================================================================
 # ⚠️  IMPORTANT CONFIGURATION PARAMETERS - READ CAREFULLY AND MODIFY WITH CAUTION ⚠️

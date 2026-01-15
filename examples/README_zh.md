@@ -13,6 +13,7 @@
   - [模型量化 (Quantization)](#模型量化-quantization)
   - [并行推理 (Parallel Inference)](#并行推理-parallel-inference)
   - [特征缓存 (Cache)](#特征缓存-cache)
+  - [LoRA 支持](#lora-支持)
   - [轻量 VAE (Light VAE)](#轻量-vae-light-vae)
 
 ## 🔧 环境安装
@@ -240,6 +241,45 @@ pipe.enable_cache(
 ```
 
 **系数参考：** 可参考 `configs/caching` 或 `configs/hunyuan_video_15/cache` 目录下的配置文件
+
+### LoRA 支持
+
+支持加载蒸馏 LoRA 权重，可显著加速推理。
+
+**使用示例：**
+
+```python
+# Qwen-Image 单 LoRA 示例
+pipe.enable_lora(
+    [
+        {"path": "/path/to/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors", "strength": 1.0},
+    ],
+    lora_dynamic_apply=False,
+)
+
+# Wan2.2 多 LoRA 示例
+pipe.enable_lora(
+    [
+        {"name": "high_noise_model", "path": "/path/to/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
+        {"name": "low_noise_model", "path": "/path/to/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
+    ],
+    lora_dynamic_apply=False,
+)
+```
+
+**参数说明：**
+- **`lora_configs`**: LoRA 配置列表，每个配置包含：
+  - **`path`**: LoRA 权重文件路径（必需）
+  - **`name`**: LoRA 名称（可选，用于需要多个 LoRA 的情况，如 Wan2.2）
+  - **`strength`**: LoRA 强度，默认为 1.0
+- **`lora_dynamic_apply`**: 是否动态应用 LoRA 权重
+  - `False`（默认）: 在加载时合并 LoRA 权重，推理速度快但占用更多内存
+  - `True`: 在推理时动态应用 LoRA 权重，节省内存但速度较慢
+
+**LoRA 模型下载：**
+- **Wan-2.1 LoRA**: 从 [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models) 下载
+- **Wan-2.2 LoRA**: 从 [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models) 下载
+- **Qwen-Image LoRA**: 从 [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) 或 [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) 下载
 
 ### 轻量 VAE (Light VAE)
 
