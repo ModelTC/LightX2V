@@ -8,5 +8,5 @@
     "cfg_renorm_min": 0.0,
     "axes_dims_rope": [16, 56, 56],
     "dit_quant_scheme": "Default",
-    "rms_norm_type": "Default"   
+    "rms_norm_type": "Default"
 }
