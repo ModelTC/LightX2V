@@ -437,7 +437,7 @@ class VARecorder:
             img = self.padding_video_frames(images[i:end_frame])
             aud = audios[i * self.audio_samples_per_frame : end_frame * self.audio_samples_per_frame]
             gen = gen_video[:, :, (end_frame - self.prev_frame) : end_frame]
-            rets.append((img, aud, gen, can_truncate))
+            rets.append([img, aud, gen, can_truncate])
 
         with self.stream_buffer_lock:
             origin_size = len(self.stream_buffer)
