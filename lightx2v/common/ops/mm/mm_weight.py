@@ -149,7 +149,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                 return bias
             return bias + self.bias_diff
         else:
-            if self.bias is None:
+            if not hasattr(self, "bias") or self.bias is None:
                 return None
             if not hasattr(self, "bias_diff"):
                 return self.bias
