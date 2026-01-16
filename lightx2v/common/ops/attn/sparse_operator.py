@@ -33,8 +33,8 @@ class SlaTritonOperator:
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
         v = v.unsqueeze(0).transpose(1, 2).contiguous()
 
-        # (H, Q_block_num, K_block_num) -> (B, H, Q_block_num, K_block_num)
-        mask = mask.unsqueeze(0).int()
+        # (B, H, Q_block_num, K_block_num)
+        mask = mask.int()
         topk = int(mask.sum(dim=-1).max().item())
         lut = torch.topk(mask, topk, dim=-1, sorted=False).indices
 
@@ -79,6 +79,8 @@ class MagiOperator:
         **kwargs,
     ):
         seqlen, head_num, head_dim = q.shape
+        # (B, H, Q_block_num, K_block_num) -> (H, Q_block_num, K_block_num)
+        mask = mask.squeeze(0)
         q_ranges, k_ranges = self.generate_qk_ranges(mask, self.q_block_size, self.k_block_size, seqlen)
         attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
 
