@@ -313,8 +313,8 @@ class LongCatImageRunner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.custom_shape) == 2:
-            height, width = self.input_info.custom_shape
+        if len(self.input_info.target_shape) == 2:
+            height, width = self.input_info.target_shape
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
                 width, height = int(width * scale), int(height * scale)
@@ -323,7 +323,7 @@ class LongCatImageRunner(DefaultRunner):
             logger.info(f"LongCat Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        if self.input_info.aspect_ratio:
+        if self.input_info.aspect_ratio and not self.config.get("_auto_resize", False):
             if self.input_info.aspect_ratio in as_maps:
                 logger.info(f"LongCat Image Runner got aspect ratio: {self.input_info.aspect_ratio}")
                 width, height = as_maps[self.input_info.aspect_ratio]
@@ -334,18 +334,25 @@ class LongCatImageRunner(DefaultRunner):
         return (width, height)
 
     def set_target_shape(self):
-        custom_shape = self.get_custom_shape()
-        if custom_shape is not None:
-            width, height = custom_shape
+        # For I2I task, use dimensions from _preprocess_image() if already set
+        task = self.config.get("task", "t2i")
+        if task == "i2i" and hasattr(self.input_info, "auto_width") and self.input_info.auto_width:
+            width = self.input_info.auto_width
+            height = self.input_info.auto_height
         else:
-            calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
-            multiple_of = self.config.get("vae_scale_factor", 8) * 2
-            width = calculated_width // multiple_of * multiple_of
-            height = calculated_height // multiple_of * multiple_of
+            custom_shape = self.get_custom_shape()
+            if custom_shape is not None:
+                width, height = custom_shape
+            else:
+                calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
+                multiple_of = self.config.get("vae_scale_factor", 8) * 2
+                width = calculated_width // multiple_of * multiple_of
+                height = calculated_height // multiple_of * multiple_of
+
+            self.input_info.auto_width = width
+            self.input_info.auto_height = height
 
         logger.info(f"LongCat Image Runner set target shape: {width}x{height}")
-        self.input_info.auto_width = width
-        self.input_info.auto_height = height
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
