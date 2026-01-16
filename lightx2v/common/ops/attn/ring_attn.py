@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.utils.envs import *
-from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -42,21 +41,7 @@ class RingAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(
-        self,
-        q,
-        k,
-        v,
-        slice_qkv_len,
-        cu_seqlens_qkv,
-        attention_module=None,
-        attention_type="flash_attn2",
-        seq_p_group=None,
-        use_fp8_comm=False,
-        use_kv_fusion=False,
-        enable_head_parallel=False,
-        **kwargs,
-    ):
+    def apply(self, q, k, v, img_qkv_len, cu_seqlens_qkv, attention_module=None, attention_type="flash_attn2", seq_p_group=None, use_fp8_comm=False, enable_head_parallel=False, **kwargs):
         """
         执行 Ring 注意力机制，结合图像和文本的查询、键和值。
 
@@ -71,13 +56,13 @@ class RingAttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        assert not use_fp8_comm, "RingAttn can't support fp8 comm now."
         assert not enable_head_parallel, "RingAttn can't support head parallel mode."
 
         # 获取当前进程的排名和全局进程数
         cur_rank = dist.get_rank(seq_p_group)
         world_size = dist.get_world_size(seq_p_group)
 
-        img_qkv_len = slice_qkv_len
         if len(cu_seqlens_qkv) == 3:
             txt_qkv_len = cu_seqlens_qkv[1] - img_qkv_len  # 文本查询、键和值的长度
             txt_mask_len = cu_seqlens_qkv[2] - img_qkv_len  # 文本掩码长度
@@ -100,7 +85,6 @@ class RingAttnWeight(AttnWeightTemplate):
         k = k.unsqueeze(0)
         v = v.unsqueeze(0)
 
-        heads, hidden_dims = k.shape[-2], k.shape[-1]
         img_q, img_k, img_v = q[:, :img_qkv_len, :, :].contiguous(), k[:, :img_qkv_len, :, :].contiguous(), v[:, :img_qkv_len, :, :].contiguous()
         txt_q, txt_k, txt_v = (
             q[:, img_qkv_len : img_qkv_len + txt_qkv_len, :, :].contiguous(),
@@ -108,78 +92,31 @@ class RingAttnWeight(AttnWeightTemplate):
             v[:, img_qkv_len : img_qkv_len + txt_qkv_len, :, :].contiguous(),
         )
 
-        out, lse, next_k, next_v, next_kv = None, None, None, None, None
+        out, lse, next_k, next_v = None, None, None, None
 
         if len(cu_seqlens_qkv) == 3:
             q = torch.cat((img_q, txt_q), dim=1)
         k = img_k
         v = img_v
 
-        if use_kv_fusion:
-            kv = torch.stack([img_k, img_v], dim=0).reshape(2, img_qkv_len, heads, hidden_dims).contiguous()
-            txt_kv = torch.stack([txt_k, txt_v], dim=0).reshape(2, txt_qkv_len, heads, hidden_dims).contiguous()
-            original_dtype = kv.dtype
-            original_shape = kv.shape
-        else:
-            original_dtype = k.dtype
-            original_shape = k.shape
-
         for step in range(world_size):
             if step + 1 != world_size:
-                if use_fp8_comm:
-                    if use_kv_fusion:
-                        kv_fp8, kv_scale = quant_fp8_vllm(kv.reshape(-1, hidden_dims))
-                        kv_fp8 = kv_fp8.reshape(original_shape)
-                        kv_scale = kv_scale.reshape(original_shape[0], original_shape[1], original_shape[2], 1)
-                        next_kv_fp8 = RING_COMM.send_recv(kv_fp8)
-                        next_kv_scale = RING_COMM.send_recv(kv_scale)
-                    else:
-                        k_fp8, k_scale = quant_fp8_vllm(k.reshape(-1, hidden_dims))
-                        v_fp8, v_scale = quant_fp8_vllm(v.reshape(-1, hidden_dims))
-                        k_fp8 = k_fp8.reshape(original_shape)
-                        v_fp8 = v_fp8.reshape(original_shape)
-                        k_scale = k_scale.reshape(original_shape[0], original_shape[1], original_shape[2], 1)
-                        v_scale = v_scale.reshape(original_shape[0], original_shape[1], original_shape[2], 1)
-                        next_k_fp8 = RING_COMM.send_recv(k_fp8)
-                        next_k_scale = RING_COMM.send_recv(k_scale)
-                        next_v_fp8 = RING_COMM.send_recv(v_fp8)
-                        next_v_scale = RING_COMM.send_recv(v_scale)
-                    RING_COMM.commit()
-                else:
-                    if use_kv_fusion:
-                        next_kv = RING_COMM.send_recv(kv)
-                    else:
-                        next_k = RING_COMM.send_recv(k)
-                        next_v = RING_COMM.send_recv(v)
-                    RING_COMM.commit()
+                next_k = RING_COMM.send_recv(k)
+                next_v = RING_COMM.send_recv(v)
+                RING_COMM.commit()
 
             if step + 1 == world_size:
-                if use_kv_fusion:
-                    next_kv = torch.cat((kv, txt_kv), dim=1)
-                else:
-                    k = torch.cat((k, txt_k), dim=1)
-                    v = torch.cat((v, txt_v), dim=1)
+                k = torch.cat((k, txt_k), dim=1)
+                v = torch.cat((v, txt_v), dim=1)
 
-            if use_kv_fusion:
-                block_out, block_lse = self.ring_attn_sub_kv_fusion(q, kv)
-            else:
-                block_out, block_lse = self.ring_attn_sub(q, k, v)
+            block_out, block_lse = self.ring_attn_sub(q, k, v)
+
             out, lse = self.update_out_and_lse(out, lse, block_out, block_lse)
 
             if step + 1 != world_size:
                 RING_COMM.wait()
-                if use_fp8_comm:
-                    if use_kv_fusion:
-                        kv = dequant_fp8_vllm(next_kv_fp8, next_kv_scale, original_dtype)
-                    else:
-                        k = dequant_fp8_vllm(next_k_fp8, next_k_scale, original_dtype)
-                        v = dequant_fp8_vllm(next_v_fp8, next_v_scale, original_dtype)
-                else:
-                    if use_kv_fusion:
-                        kv = next_kv
-                    else:
-                        k = next_k
-                        v = next_v
+                k = next_k
+                v = next_v
 
         attn1 = out.to(GET_DTYPE()).squeeze(0).reshape(img_qkv_len + txt_qkv_len, -1)
 
@@ -202,24 +139,6 @@ class RingAttnWeight(AttnWeightTemplate):
             attn1 = torch.cat([attn1, attn2], dim=0)
 
         return attn1
-
-    def ring_attn_sub_kv_fusion(self, q, kv, dropout_p=0.0, softmax_scale=None, causal=False, window_size=(-1, -1), softcap=0.0, alibi_slopes=None, return_softmax=False):
-        if softmax_scale is None:
-            softmax_scale = q.shape[-1] ** (-0.5)
-        block_out, block_lse, _, _ = flash_attn.flash_attn_interface._flash_attn_forward(
-            q,
-            kv[:1, :, :, :],
-            kv[1:, :, :, :],
-            dropout_p=dropout_p,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size_left=window_size[0],
-            window_size_right=window_size[1],
-            softcap=softcap,
-            alibi_slopes=alibi_slopes,
-            return_softmax=return_softmax,
-        )
-        return block_out, block_lse
 
     def ring_attn_sub(self, q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, window_size=(-1, -1), softcap=0.0, alibi_slopes=None, return_softmax=False):
         if softmax_scale is None:
