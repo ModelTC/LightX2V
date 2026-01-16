@@ -120,7 +120,6 @@ class FlexBlockOperator:
         self.q_block_size = 128
         self.k_block_size = 128
 
-
     def __call__(
         self,
         q,
@@ -155,10 +154,8 @@ class FlexBlockOperator:
         return out.reshape(max_seqlen_q, -1)
 
 
-
 @SPARSE_OPERATOR_REGISTER("flashinfer_operator")
 class FlashinferOperator:
-
     sparse_wrapper = None
     mask = None
 
@@ -168,7 +165,6 @@ class FlashinferOperator:
         if FlashinferOperator.sparse_wrapper is None:
             float_workspace_buffer = torch.empty(1024 * 1024 * 1024, dtype=torch.uint8, device=AI_DEVICE)
             FlashinferOperator.sparse_wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(float_workspace_buffer, backend="fa2")
-
 
     def __call__(
         self,
@@ -187,10 +183,10 @@ class FlashinferOperator:
         mask = mask.squeeze(0)
         if FlashinferOperator.mask is None or not torch.equal(mask, FlashinferOperator.mask):
             _, q_block_num, k_block_num = mask.shape
-            block_row_sz=torch.ones(q_block_num, dtype=torch.int32, device=q.device) * self.q_block_size
+            block_row_sz = torch.ones(q_block_num, dtype=torch.int32, device=q.device) * self.q_block_size
             block_row_sz[-1] = seqlen - self.q_block_size * (q_block_num - 1)
             block_row_sz = block_row_sz.unsqueeze(0).repeat(head_num, 1)
-            block_col_sz=torch.ones(k_block_num, dtype=torch.int32, device=k.device) * self.k_block_size
+            block_col_sz = torch.ones(k_block_num, dtype=torch.int32, device=k.device) * self.k_block_size
             block_col_sz[-1] = seqlen - self.k_block_size * (k_block_num - 1)
             block_col_sz = block_col_sz.unsqueeze(0).repeat(head_num, 1)
             FlashinferOperator.sparse_wrapper.plan(
@@ -211,4 +207,3 @@ class FlashinferOperator:
         out = out.transpose(0, 1)
 
         return out.reshape(max_seqlen_q, -1)
-
