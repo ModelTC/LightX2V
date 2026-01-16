@@ -42,7 +42,13 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
         # Generate sparse mask
         mask = self.mask_generator(q, k)
 
+        # reorg
+        q, k, v = self.mask_generator.reorg(q, k, v)
+
         # Apply sparse operator
         out = self.operator(q, k, v, mask, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_kv, max_seqlen_q=max_seqlen_q, max_seqlen_kv=max_seqlen_kv, **kwargs)
+
+        # restore
+        out = self.mask_generator.restore(out)
 
         return out
