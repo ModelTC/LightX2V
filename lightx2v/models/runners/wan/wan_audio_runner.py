@@ -708,6 +708,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     try:
                         # reset pause signal
                         self.pause_signal = False
+                        self.can_pause = valid_duration <= 1e-5
                         self.init_run_segment(segment_idx, audio_array)
                         self.check_stop()
                         latents = self.run_segment(segment_idx)

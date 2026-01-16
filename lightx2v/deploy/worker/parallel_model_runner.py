@@ -109,6 +109,10 @@ class ParallelModelRunner:
     def pause_signal(self):
         return self.clip_runners[self.cur_name].pause_signal
 
+    @property
+    def can_pause(self):
+        return self.clip_runners[self.cur_name].can_pause
+
     @stop_signal.setter
     def stop_signal(self, value):
         self.clip_runners[self.cur_name].stop_signal = value
@@ -116,6 +120,10 @@ class ParallelModelRunner:
     @pause_signal.setter
     def pause_signal(self, value):
         self.clip_runners[self.cur_name].pause_signal = value
+
+    @can_pause.setter
+    def can_pause(self, value):
+        self.clip_runners[self.cur_name].can_pause = value
 
     def _switch_model(self, name):
         assert name in self.clip_runners, f"Clip {name} not found"
@@ -127,7 +135,8 @@ class ParallelModelRunner:
                 if input_info is not None:
                     runner.input_info = copy.deepcopy(input_info)
                 runner.inputs = runner.run_input_encoder()
-                logger.info(f"Clip {name} input encoder run successfully!")
+                runner.can_pause = False
+                logger.info(f"Clip {name} input encoder end, latent_shape: {runner.input_info.latent_shape}, target_shape: {runner.input_info.target_shape}")
 
     def _change_image_path(self, image_path):
         for runner in self.clip_runners.values():
@@ -171,7 +180,8 @@ class ParallelModelRunner:
                 runner.video_segment_num = 10000000
                 runner.init_run()
                 runner.init_run_segment(0, audio_array)
-                runner.run_segment(0)
+                latents = runner.run_segment(0)
+                logger.info(f"warmup {name} end, latents shape: {latents.shape}")
 
     def _update_prompt(self, prompt):
         runner = self.clip_runners[self.cur_name]
@@ -222,7 +232,6 @@ class ParallelModelRunner:
                     # person perform some actions
                     elif control.action == "perform_action":
                         self._switch_model("f2v_clip")
-                        logger.warning(f"runner switch to f2v_clip for perform action: {control.data}")
                         self._update_prompt(control.data)
 
                     # bufferd stream is enough, sleep for a while
@@ -236,7 +245,7 @@ class ParallelModelRunner:
                     )
                     # for f2v clip, even audio is blank, should not truncate this frames
                     if self.cur_name == "f2v_clip":
-                        valid_duration = self._segment_duration
+                        valid_duration = self._segment_duration - self._prev_duration
                     if audio_array is None:
                         fail_count += 1
                         logger.warning(f"Failed to get audio chunk {fail_count} times")
@@ -246,9 +255,10 @@ class ParallelModelRunner:
 
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
                     try:
-                        logger.info(f"stream segment end2end {segment_idx} start with {self.cur_name}...")
+                        # logger.debug(f"stream segment end2end {segment_idx} start with {self.cur_name}, audio_array shape: {audio_array.shape}, valid_duration: {valid_duration}")
                         # reset pause signal
                         self.pause_signal = False
+                        self.can_pause = valid_duration <= 1e-5
                         self._set_va_controller(va_controller)
                         self.init_run_segment(segment_idx, audio_array)
                         self.check_stop()
@@ -261,7 +271,6 @@ class ParallelModelRunner:
                         # one action map one f2v_clip segment infer
                         if self.cur_name == "f2v_clip":
                             self._switch_model("s2v_clip")
-                            logger.warning(f"f2v_clip success, switch to s2v_clip")
                     except Exception as e:
                         if "pause_signal, pause running" in str(e):
                             logger.warning(f"model infer audio pause: {e}, should continue")

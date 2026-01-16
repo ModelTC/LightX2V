@@ -178,7 +178,7 @@ class ChatAdapter:
         self.status = status
         self.immediate_switch = 1
         # only no action switch can be paused immediately
-        if self.model_runner is not None and self.action_switch != "":
+        if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner pause signal set to True")
 
@@ -186,7 +186,7 @@ class ChatAdapter:
         logger.warning(f"Setting image switch: {image_path}")
         self.image_switch = image_path
         # only blank status and no action switch can be paused immediately
-        if self.model_runner is not None and self.status == "blank" and self.action_switch != "":
+        if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner set pause signal for image switch & blank status")
 
@@ -194,7 +194,7 @@ class ChatAdapter:
         logger.warning(f"Setting action switch: {prompt}")
         self.action_switch = prompt
         # only blank status can be paused immediately
-        if self.model_runner is not None and self.status == "blank":
+        if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner set pause signal for action switch & blank status")
 
@@ -457,14 +457,24 @@ class OmniVAReader:
             fetch_duration -= self.prev_duration
         return fetch_duration
 
+    def change_segment_duration(self, segment_duration):
+        if segment_duration is None or self.segment_duration == segment_duration:
+            return
+        if self.rank == self.target_rank:
+            logger.warning(f"segment duration changed: {self.segment_duration} -> {segment_duration}")
+        self.segment_duration = segment_duration
+        self.all_seg_sample_count = int(self.segment_duration * self.sample_rate)
+        chunk_size = int(self.segment_duration * self.sample_rate) * 2
+        self.audio_tensor = torch.zeros(chunk_size, dtype=torch.uint8, device="cuda")
+        if self.chat_adapter is not None:
+            self.chat_adapter.seg_duration = segment_duration
+
     def get_audio_segment(self, fetch_duration: float = None, prev_duration: float = None):
         audio_data = None
         valid_duration = 0
         if prev_duration is not None and self.prev_duration != prev_duration:
             raise ValueError(f"prev_duration {prev_duration} != {self.prev_duration}")
-        if fetch_duration is not None and self.segment_duration != fetch_duration:
-            logger.warning(f"segment duration changed: {self.segment_duration} -> {fetch_duration}")
-            self.segment_duration = fetch_duration
+        self.change_segment_duration(fetch_duration)
 
         if self.rank == self.target_rank:
             try:
