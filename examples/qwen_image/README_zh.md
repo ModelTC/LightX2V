@@ -33,8 +33,8 @@ git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V/scripts/qwen_image
 
 # 运行下面的脚本之前，都需要将脚本中的lightx2v_path和model_path替换为实际路径
-# 例如：export lightx2v_path=/home/user/LightX2V
-# 例如：export model_path=/home/user/models/Qwen-Image-Edit-2511
+# 例如：lightx2v_path=/home/user/LightX2V
+# 例如：model_path=/home/user/models/Qwen-Image-Edit-2511
 ```
 
 文生图模型

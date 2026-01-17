@@ -2,7 +2,7 @@
 
 # System management interface: cnmon
 
-# set path and first
+# set path firstly
 lightx2v_path=
 model_path=
 

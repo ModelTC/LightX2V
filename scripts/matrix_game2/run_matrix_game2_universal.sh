@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# set path and first
+# set path firstly
 lightx2v_path=path to Lightx2v
 model_path=path to Skywork/Matrix-Game-2.0
 

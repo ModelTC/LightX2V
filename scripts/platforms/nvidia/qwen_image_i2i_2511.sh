@@ -2,7 +2,7 @@
 
 # System management interface: nvidia-smi
 
-# set path and first
+# set path firstly
 lightx2v_path=
 model_path=
 

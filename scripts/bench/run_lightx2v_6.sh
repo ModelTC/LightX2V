@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# set path and first
+# set path firstly
 lightx2v_path=/path/to/lightx2v
 model_path=/path/to/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v
 # model_path=/path/to/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v

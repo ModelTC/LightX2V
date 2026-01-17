@@ -3,11 +3,10 @@ import os
 from typing import Any, Dict
 
 import torch
-from easydict import EasyDict
 from loguru import logger
 
 from lightx2v.infer import init_runner
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.set_config import set_config, set_parallel_config
 
 from ..distributed_utils import DistributedManager
@@ -43,6 +42,8 @@ class TorchrunInferenceWorker:
             self.runner = init_runner(config)
             logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed")
 
+            self.input_info = init_empty_input_info(args.task)
+
             return True
 
         except Exception as e:
@@ -69,11 +70,10 @@ class TorchrunInferenceWorker:
                 else:
                     logger.warning(f"Target FPS {target_fps} is set, but video frame interpolation is not configured")
 
-            task_data = EasyDict(task_data)
-            input_info = set_input_info(task_data)
+            update_input_info_from_dict(self.input_info, task_data)
 
             self.runner.set_config(task_data)
-            self.runner.run_pipeline(input_info)
+            self.runner.run_pipeline(self.input_info)
 
             await asyncio.sleep(0)
 
