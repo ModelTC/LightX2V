@@ -62,9 +62,9 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
-        return self.apply_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv, model_cls)
+        return self.apply_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv, **kwargs)
 
     def apply_triton(
         self,
@@ -75,7 +75,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
@@ -98,7 +98,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
@@ -157,7 +157,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         # (L, H, D) -> (B, H, L, D)
         q_block_map, k_block_map = q.unsqueeze(0).transpose(1, 2), k.unsqueeze(0).transpose(1, 2)
@@ -168,7 +168,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         seqlen, head_num, head_dim = q.shape
 
         q_ranges, k_ranges = self.generate_qk_ranges(sparse_map[0], self.BLKQ, self.BLKK, seqlen)
-        attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device=q.device)
+        attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
 
         q = q.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
         k = k.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)

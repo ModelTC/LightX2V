@@ -8,7 +8,7 @@ from lightx2v.utils.registry_factory import (
 
 
 class QwenImageTransformerWeights(WeightModule):
-    def __init__(self, config, lazy_load_path=None):
+    def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
@@ -31,10 +31,10 @@ class QwenImageTransformerWeights(WeightModule):
             )
             for i in range(self.blocks_num)
         )
-        self.register_offload_buffers(config, lazy_load_path)
+        self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", blocks)
 
-    def register_offload_buffers(self, config, lazy_load_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path):
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
@@ -70,6 +70,7 @@ class QwenImageTransformerWeights(WeightModule):
                                 "transformer_blocks",
                                 lazy_load=self.lazy_load,
                                 lazy_load_path=lazy_load_path,
+                                lora_path=lora_path,
                             )
                             for i in range(self.offload_blocks_num)
                         ]
@@ -95,15 +96,7 @@ class QwenImageTransformerWeights(WeightModule):
                     self.offload_phase_cpu_buffers = WeightModuleList(
                         [
                             QwenImageTransformerAttentionBlock(
-                                i,
-                                self.task,
-                                self.mm_type,
-                                self.config,
-                                False,
-                                True,
-                                "transformer_blocks",
-                                lazy_load=self.lazy_load,
-                                lazy_load_path=lazy_load_path,
+                                i, self.task, self.mm_type, self.config, False, True, "transformer_blocks", lazy_load=self.lazy_load, lazy_load_path=lazy_load_path, lora_path=lora_path
                             ).compute_phases
                             for i in range(2)
                         ]
@@ -124,6 +117,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
         block_prefix="transformer_blocks",
         lazy_load=False,
         lazy_load_path=None,
+        lora_path=None,
     ):
         super().__init__()
         self.block_index = block_index
@@ -148,6 +142,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer=create_cpu_buffer,
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
+                    lora_path=lora_path,
                 ),
                 QwenImageTxtAttention(
                     block_index=block_index,
@@ -159,6 +154,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer=create_cpu_buffer,
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
+                    lora_path=lora_path,
                 ),
                 QwenImageCrossAttention(
                     block_index=block_index,
@@ -170,6 +166,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer=create_cpu_buffer,
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
+                    lora_path=lora_path,
                 ),
                 QwenImageFFN(
                     block_index=block_index,
@@ -181,6 +178,7 @@ class QwenImageTransformerAttentionBlock(WeightModule):
                     create_cpu_buffer=create_cpu_buffer,
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
+                    lora_path=lora_path,
                 ),
             ]
         )
@@ -200,6 +198,7 @@ class QwenImageImgAttention(WeightModule):
         create_cpu_buffer,
         lazy_load,
         lazy_load_file,
+        lora_path,
     ):
         super().__init__()
         self.block_index = block_index
@@ -241,6 +240,8 @@ class QwenImageImgAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         # to_k
@@ -253,6 +254,8 @@ class QwenImageImgAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         # to_v
@@ -265,6 +268,8 @@ class QwenImageImgAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
 
@@ -314,6 +319,7 @@ class QwenImageTxtAttention(WeightModule):
         create_cpu_buffer,
         lazy_load,
         lazy_load_file,
+        lora_path,
     ):
         super().__init__()
         self.block_index = block_index
@@ -355,6 +361,8 @@ class QwenImageTxtAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         # add_k_proj
@@ -367,6 +375,8 @@ class QwenImageTxtAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         # add_v_proj
@@ -379,6 +389,8 @@ class QwenImageTxtAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
 
@@ -428,6 +440,7 @@ class QwenImageCrossAttention(WeightModule):
         create_cpu_buffer,
         lazy_load,
         lazy_load_file,
+        lora_path,
     ):
         super().__init__()
         self.block_index = block_index
@@ -448,6 +461,8 @@ class QwenImageCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         # to_add_out
@@ -460,6 +475,8 @@ class QwenImageCrossAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
 
@@ -484,18 +501,7 @@ class QwenImageCrossAttention(WeightModule):
 
 
 class QwenImageFFN(WeightModule):
-    def __init__(
-        self,
-        block_index,
-        block_prefix,
-        task,
-        mm_type,
-        config,
-        create_cuda_buffer,
-        create_cpu_buffer,
-        lazy_load,
-        lazy_load_file,
-    ):
+    def __init__(self, block_index, block_prefix, task, mm_type, config, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, lora_path):
         super().__init__()
         self.block_index = block_index
         self.mm_type = mm_type
@@ -523,6 +529,8 @@ class QwenImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -534,6 +542,8 @@ class QwenImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
 
@@ -555,6 +565,8 @@ class QwenImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -566,6 +578,8 @@ class QwenImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
 

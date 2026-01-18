@@ -22,6 +22,7 @@ class ImageGenerationService(BaseGenerationService):
         try:
             task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
             task_data["task_id"] = message.task_id
+            task_data["target_shape"] = message.target_shape
 
             if hasattr(message, "aspect_ratio"):
                 task_data["aspect_ratio"] = message.aspect_ratio

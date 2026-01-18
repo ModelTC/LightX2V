@@ -12,6 +12,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -89,7 +90,7 @@ class LightX2VPipeline:
             "wan2.2_animate",
         ]:
             self.vae_stride = (4, 8, 8)
-            if self.model_cls.startswith("wan2.2_moe"):
+            if self.model_cls.startswith("wan2.2"):
                 self.use_image_encoder = False
         elif self.model_cls in ["wan2.2"]:
             self.vae_stride = (4, 16, 16)
@@ -98,7 +99,7 @@ class LightX2VPipeline:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
 
-        if model_cls in ["qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511", "qwen-image-2512"]:
+        if model_cls in ["qwen-image", "qwen-image-2512", "qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
             self.CONDITION_IMAGE_SIZE = 147456
             self.USE_IMAGE_ID_IN_PROMPT = True
             if model_cls == "qwen-image-edit":
@@ -113,6 +114,8 @@ class LightX2VPipeline:
                 self.prompt_template_encode_start_idx = 34
         elif self.model_cls in ["z_image"]:
             self.model_cls = "z_image"
+        elif model_cls in ["longcat_image", "longcat-image"]:
+            self.model_cls = "longcat_image"
 
     def create_generator(
         self,
@@ -181,7 +184,7 @@ class LightX2VPipeline:
         self.target_video_length = num_frames
         self.sample_guide_scale = guidance_scale
         self.sample_shift = sample_shift
-        if self.sample_guide_scale == 1:
+        if self.sample_guide_scale == 1 or (self.model_cls == "z_image" and self.sample_guide_scale == 0):
             self.enable_cfg = False
         else:
             self.enable_cfg = True
@@ -195,7 +198,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image"]:
             self.attn_type = attn_mode
 
     def set_infer_config_json(self, config_json):
@@ -211,7 +214,7 @@ class LightX2VPipeline:
         vae_path=None,
         tae_path=None,
     ):
-        assert self.model_cls != "qwen_image"
+        assert self.model_cls not in ["qwen_image", "longcat_image"]
         self.use_lightvae = use_lightvae
         self.use_tae = use_tae
         self.vae_path = vae_path
@@ -230,6 +233,7 @@ class LightX2VPipeline:
         text_encoder_quantized_ckpt=False,
         image_encoder_quantized_ckpt=False,
         quant_scheme="fp8-sgl",
+        text_encoder_quant_scheme=None,
     ):
         self.dit_quantized = dit_quantized
         self.dit_quant_scheme = quant_scheme
@@ -248,6 +252,13 @@ class LightX2VPipeline:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = quant_scheme
+        elif self.model_cls in ["qwen_image"]:
+            self.qwen25vl_quantized = text_encoder_quantized
+            self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
+            if text_encoder_quant_scheme is not None:
+                self.qwen25vl_quant_scheme = text_encoder_quant_scheme
+            else:
+                self.qwen25vl_quant_scheme = quant_scheme
 
     def enable_offload(
         self,
@@ -281,7 +292,7 @@ class LightX2VPipeline:
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload
-        elif self.model_cls == "qwen_image":
+        elif self.model_cls in ["qwen_image", "longcat_image"]:
             self.qwen25vl_cpu_offload = text_encoder_offload
 
     def enable_compile(
@@ -301,8 +312,9 @@ class LightX2VPipeline:
             [960, 960],
         ]
 
-    def enable_lora(self, lora_configs):
+    def enable_lora(self, lora_configs, lora_dynamic_apply=False):
         self.lora_configs = lora_configs
+        self.lora_dynamic_apply = lora_dynamic_apply
 
     def enable_cache(
         self,
@@ -351,6 +363,7 @@ class LightX2VPipeline:
         src_video=None,
         src_mask=None,
         return_result_tensor=False,
+        target_shape=[],
     ):
         # Run inference (following LightX2V pattern)
         self.seed = seed
@@ -364,6 +377,7 @@ class LightX2VPipeline:
         self.negative_prompt = negative_prompt
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
+        self.target_shape = target_shape
         seed_all(self.seed)
         input_info = set_input_info(self)
         self.runner.run_pipeline(input_info)

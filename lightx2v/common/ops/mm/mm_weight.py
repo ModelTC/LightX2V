@@ -1,9 +1,8 @@
-import os
 import re
 from abc import ABCMeta, abstractmethod
-from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.common.ops.mm.triton_kernels import (
@@ -14,6 +13,7 @@ from lightx2v.common.ops.mm.triton_kernels import (
     int8_gemm_triton,
     int8_quantize_triton,
 )
+from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
 from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tensor
@@ -103,6 +103,8 @@ class MMWeightTemplate(metaclass=ABCMeta):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         self.weight_name = weight_name
         self.bias_name = bias_name
@@ -112,6 +114,102 @@ class MMWeightTemplate(metaclass=ABCMeta):
         self.lazy_load_file = lazy_load_file
         self.is_post_adapter = is_post_adapter
         self.config = {}
+        self.lora_prefix = lora_prefix
+        self.lora_path = lora_path
+        self.has_lora_branch = False
+        self.has_diff = False
+        self._get_base_attrs_mapping()
+        self._get_lora_attr_mapping()
+
+    def _get_base_attrs_mapping(self):
+        self.base_attrs = [
+            (self.weight_name, "weight", True),
+        ]
+        if self.bias_name is not None:
+            self.base_attrs.append((self.bias_name, "bias", False))
+
+    def _get_lora_attr_mapping(self):
+        self.lora_down_name, self.lora_up_name, self.lora_alpha_name, self.weight_diff_name, self.bias_diff_name = build_lora_and_diff_names(self.weight_name, self.lora_prefix)
+        self.lora_attrs = {
+            "lora_alpha": "lora_alpha_name",
+            "lora_down": "lora_down_name",
+            "lora_up": "lora_up_name",
+            "weight_diff": "weight_diff_name",
+            "bias_diff": "bias_diff_name",
+        }
+
+    def _get_actual_weight(self):
+        if not hasattr(self, "weight_diff"):
+            return self.weight
+        return self.weight + self.weight_diff
+
+    def _get_actual_bias(self, bias=None):
+        if bias is not None:
+            if not hasattr(self, "bias_diff"):
+                return bias
+            return bias + self.bias_diff
+        else:
+            if not hasattr(self, "bias") or self.bias is None:
+                return None
+            if not hasattr(self, "bias_diff"):
+                return self.bias
+            return self.bias + self.bias_diff
+
+    def apply_lora(self, input_tensor):
+        h = torch.mm(input_tensor, self.lora_down.t())
+        out = torch.mm(h, self.lora_up.t())
+        return self.lora_strength * self.lora_scale * out
+
+    def set_config(self, config={}):
+        self.config = config
+
+    def register_diff(self, weight_dict):
+        if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
+            if self.weight_diff_name in weight_dict:
+                self.has_diff = True
+                self.weight_diff = weight_dict[self.weight_diff_name].t()
+                logger.debug(f"Register Diff to {self.weight_name}")
+            if self.bias_diff_name in weight_dict:
+                self.has_diff = True
+                self.bias_diff = weight_dict[self.bias_diff_name]
+                logger.debug(f"Register Diff to {self.bias_name}")
+
+    def register_lora(self, weight_dict, lora_strength=1):
+        if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
+            if self.lora_down_name in weight_dict:
+                self.has_lora_branch = True
+                self.lora_down = weight_dict[self.lora_down_name]
+                self.lora_up = weight_dict[self.lora_up_name]
+                self.lora_strength = lora_strength
+                if self.lora_alpha_name in weight_dict:
+                    self.lora_alpha = weight_dict[self.lora_alpha_name]
+                    self.lora_scale = self.lora_alpha / self.lora_down.shape[0]
+                else:
+                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
+
+    def state_dict(self, destination=None):
+        return state_dict(self, self.base_attrs, self.lora_attrs, destination)
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        return load_state_dict(self, self.base_attrs, self.lora_attrs, destination, block_index, adapter_block_index)
+
+    def load_lora_state_dict_from_disk(self, block_index):
+        self.lora_alpha_name = resolve_block_name(self.lora_alpha_name, block_index)
+        self.lora_down_name = resolve_block_name(self.lora_down_name, block_index)
+        self.lora_up_name = resolve_block_name(self.lora_up_name, block_index)
+        self.weight_diff_name = resolve_block_name(self.weight_diff_name, block_index)
+        self.bias_diff_name = resolve_block_name(self.bias_diff_name, block_index)
+        with safe_open(self.lora_path, framework="pt", device="cpu") as lora_load_file:
+            for lora_attr, lora_attr_name in self.lora_attrs.items():
+                if getattr(self, lora_attr_name) in lora_load_file.keys():
+                    setattr(self, lora_attr, getattr(self, lora_attr).copy_(lora_load_file.get_tensor(getattr(self, lora_attr_name)), non_blocking=True))
+
+    def to_cuda(self, non_blocking=False):
+        move_attr_to_cuda(self, self.base_attrs, self.lora_attrs, non_blocking)
+
+    def to_cpu(self, non_blocking=False):
+        move_attr_to_cpu(self, self.base_attrs, self.lora_attrs, non_blocking)
 
     @abstractmethod
     def load(self, weight_dict):
@@ -120,30 +218,6 @@ class MMWeightTemplate(metaclass=ABCMeta):
     @abstractmethod
     def apply(self):
         pass
-
-    def set_config(self, config={}):
-        self.config = config
-
-    def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
-        if hasattr(self, "pin_weight_scale"):
-            self.weight_scale = self.pin_weight_scale.to(AI_DEVICE, non_blocking=non_blocking)
-        if hasattr(self, "pin_bias") and self.pin_bias is not None:
-            self.bias = self.pin_bias.to(AI_DEVICE, non_blocking=non_blocking)
-
-    def to_cpu(self, non_blocking=False):
-        if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
-            if hasattr(self, "weight_scale_name"):
-                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
-            if self.bias is not None:
-                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
-        else:
-            self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-            if hasattr(self, "weight_scale"):
-                self.weight_scale = self.weight_scale.to("cpu", non_blocking=non_blocking)
-            if hasattr(self, "bias") and self.bias is not None:
-                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
 
 
 @MM_WEIGHT_REGISTER("Default")
@@ -157,6 +231,8 @@ class MMWeight(MMWeightTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -166,119 +242,51 @@ class MMWeight(MMWeightTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
 
     def load(self, weight_dict):
-        if self.create_cuda_buffer:
-            self._load_cuda_buffers(weight_dict)
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            self.weight = device_tensors.get("weight")
+            self.bias = device_tensors.get("bias")
+            self.pin_weight = pin_tensors.get("weight")
+            self.pin_bias = pin_tensors.get("bias")
+        elif self.create_cuda_buffer:
+            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file)
+            self.weight_cuda_buffer = result.get("weight")
+            self.bias_cuda_buffer = result.get("bias")
         elif self.create_cpu_buffer:
-            self._load_cpu_pin_buffers()
-        else:
-            self._load_default_tensors(weight_dict)
-
-    def _get_source_tensor(self, source_name, weight_dict=None):
-        if self.lazy_load:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(
-                    self.lazy_load_file,
-                    f"block_{source_name.split('.')[1]}.safetensors",
-                )
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-                return lazy_load_file.get_tensor(source_name)
-        return weight_dict[source_name]
-
-    def _create_pin_tensor(self, tensor, transpose=False):
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
-        pin_tensor = pin_tensor.copy_(tensor)
-        if transpose:
-            pin_tensor = pin_tensor.t()
-        del tensor
-        return pin_tensor
-
-    def _load_cuda_buffers(self, weight_dict):
-        self.weight_cuda_buffer = self._get_source_tensor(self.weight_name, weight_dict).t().to(AI_DEVICE)
-        if self.bias_name is not None:
-            self.bias_cuda_buffer = self._get_source_tensor(self.bias_name, weight_dict).to(AI_DEVICE)
-
-    def _load_cpu_pin_buffers(self):
-        if self.lazy_load:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(
-                    self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
-                )
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
-                self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
-
-                if self.bias_name is not None:
-                    bias_tensor = lazy_load_file.get_tensor(self.bias_name)
-                    self.pin_bias = self._create_pin_tensor(bias_tensor)
-                else:
-                    self.bias = None
-                    self.pin_bias = None
-
-    def _load_default_tensors(self, weight_dict):
-        if not self.lazy_load:
-            device = weight_dict[self.weight_name].device
-            if device.type == "cpu":
-                weight_tensor = weight_dict[self.weight_name]
-                self.pin_weight = self._create_pin_tensor(weight_tensor, transpose=True)
-
-                if self.bias_name is not None:
-                    bias_tensor = weight_dict[self.bias_name]
-                    self.pin_bias = self._create_pin_tensor(bias_tensor)
-                else:
-                    self.bias = None
-                    self.pin_bias = None
-                del weight_dict[self.weight_name]
-            else:
-                self.weight = weight_dict[self.weight_name].t()
-                self.bias = weight_dict[self.bias_name] if self.bias_name is not None else None
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file)
+            self.pin_weight = result.get("weight")
+            self.pin_bias = result.get("bias")
+            self.weight = None
+            self.bias = None
 
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
         device = input_tensor.device
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
-        if self.bias is None:
-            return torch.mm(input_tensor, self.weight, out=output_tensor)
-        return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
 
-    def state_dict(self, destination=None):
-        if destination is None:
-            destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
-        if self.bias_name is not None:
-            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
-        return destination
+        if not self.has_lora_branch:
+            if hasattr(self, "bias") and self.bias is not None:
+                return torch.addmm(self._get_actual_bias(), input_tensor, self._get_actual_weight(), out=output_tensor)
+            return torch.mm(input_tensor, self._get_actual_weight(), out=output_tensor)
+        else:
+            if hasattr(self, "bias") and self.bias is not None:
+                return torch.addmm(self._get_actual_bias(), input_tensor, self._get_actual_weight(), out=output_tensor) + self.apply_lora(input_tensor)
+            return torch.mm(input_tensor, self._get_actual_weight(), out=output_tensor) + self.apply_lora(input_tensor)
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            assert adapter_block_index is not None
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-        else:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-
+        if self.has_lora_branch or self.has_diff:
+            self.load_lora_state_dict_from_disk(block_index)
+        self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
         if self.bias_name is not None:
-            if self.is_post_adapter:
-                assert adapter_block_index is not None
-                self.bias_name = re.sub(
-                    r"\.\d+",
-                    lambda m: f".{adapter_block_index}",
-                    self.bias_name,
-                    count=1,
-                )
-            else:
-                self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-        if Path(self.lazy_load_file).is_file():
-            lazy_load_file_path = self.lazy_load_file
-        else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            self.bias_name = resolve_block_name(self.bias_name, block_index, adapter_block_index, self.is_post_adapter)
+
+        lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
             self.pin_weight = self.pin_weight.copy_(weight_tensor)
@@ -288,64 +296,6 @@ class MMWeight(MMWeightTemplate):
                 bias_tensor = lazy_load_file.get_tensor(self.bias_name)
                 self.pin_bias.copy_(bias_tensor)
                 del bias_tensor
-
-    def load_state_dict(self, destination, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            assert adapter_block_index is not None
-            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-        else:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-
-        if weight_name not in destination:
-            self.weight = None
-            return
-
-        self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
-
-        if self.bias_name is not None:
-            if self.is_post_adapter:
-                assert adapter_block_index is not None
-                bias_name = re.sub(
-                    r"\.\d+",
-                    lambda m: f".{adapter_block_index}",
-                    self.bias_name,
-                    count=1,
-                )
-            else:
-                bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-            self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
-        else:
-            self.bias = None
-
-
-@MM_WEIGHT_REGISTER("Default-Force-FP32")
-class MMWeightForceFP32(MMWeight):
-    def __init__(
-        self,
-        weight_name,
-        bias_name,
-        create_cuda_buffer=False,
-        create_cpu_buffer=False,
-        lazy_load=False,
-        lazy_load_file=None,
-        is_post_adapter=False,
-    ):
-        super().__init__(
-            weight_name,
-            bias_name,
-            create_cuda_buffer,
-            create_cpu_buffer,
-            lazy_load,
-            lazy_load_file,
-            is_post_adapter,
-        )
-
-    def load(self, weight_dict):
-        if not self.lazy_load:
-            super().load(weight_dict)
-            self.weight = self.weight.to(torch.float32)
-            if hasattr(self, "bias") and self.bias is not None:
-                self.bias = self.bias.to(torch.float32)
 
 
 class MMWeightQuantTemplate(MMWeightTemplate):
@@ -358,6 +308,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -367,6 +319,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.weight_scale_name = self.weight_name.removesuffix(".weight") + ".weight_scale"
         self.load_func = None
@@ -376,12 +330,22 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         self.lazy_load_file = lazy_load_file
         self.infer_dtype = GET_DTYPE()
         self.bias_force_fp32 = False
+        self.scale_force_fp32 = False
+        self._update_base_attrs()
+
+    def _update_base_attrs(self):
+        self.base_attrs = [(self.weight_name, "weight", False), (self.weight_scale_name, "weight_scale", False)]
+        if self.bias_name is not None:
+            self.base_attrs.append((self.bias_name, "bias", False))
 
     # =========================
     # weight load functions
     # =========================
     def load(self, weight_dict):
         self.load_quantized(weight_dict)
+        self.post_process()
+
+    def post_process(self):
         if self.weight_need_transpose:
             if hasattr(self, "weight") and self.weight is not None:
                 self.weight = self.weight.t()
@@ -389,156 +353,46 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.pin_weight = self.pin_weight.t()
             if hasattr(self, "weight_cuda_buffer") and self.weight_cuda_buffer is not None:
                 self.weight_cuda_buffer = self.weight_cuda_buffer.t()
+        if hasattr(self, "bias") and self.bias is not None:
+            if self.bias_force_fp32:
+                self.bias = self.bias.to(torch.float32)
+            else:
+                self.bias = self.bias.to(self.infer_dtype)
+        if hasattr(self, "pin_bias") and self.pin_bias is not None:
+            if self.bias_force_fp32:
+                self.pin_bias = self.pin_bias.to(torch.float32)
+            else:
+                self.pin_bias = self.pin_bias.to(self.infer_dtype)
+        if self.bias_force_fp32 and hasattr(self, "bias_diff"):
+            self.bias_diff = self.bias_diff.to(torch.float32)
+        if self.scale_force_fp32:
+            if hasattr(self, "weight_scale") and self.weight_scale is not None:
+                self.weight_scale = self.weight_scale.to(torch.float32)
+            if hasattr(self, "pin_weight_scale") and self.pin_weight_scale is not None:
+                self.pin_weight_scale = self.pin_weight_scale.to(torch.float32)
 
     def load_quantized(self, weight_dict):
-        if self.create_cuda_buffer:
-            self._load_cuda_buffers(weight_dict)
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            self.weight = device_tensors.get("weight")
+            self.weight_scale = device_tensors.get("weight_scale")
+            self.bias = device_tensors.get("bias")
+            self.pin_weight = pin_tensors.get("weight")
+            self.pin_weight_scale = pin_tensors.get("weight_scale")
+            self.pin_bias = pin_tensors.get("bias")
+        elif self.create_cuda_buffer:
+            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
+            self.weight_cuda_buffer = result.get("weight")
+            self.weight_scale_cuda_buffer = result.get("weight_scale")
+            self.bias_cuda_buffer = result.get("bias")
         elif self.create_cpu_buffer:
-            self._load_cpu_pin_buffers()
-        else:
-            self._load_default_tensors(weight_dict)
-
-    def _load_cuda_buffers(self, weight_dict):
-        if self.lazy_load:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(
-                    self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
-                )
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
-                self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
-                self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
-        else:
-            source = weight_dict
-            self.weight_cuda_buffer, self.weight_scale_cuda_buffer = self._get_cuda_tensor_pair(source, self.lazy_load)
-            self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, self.lazy_load)
-
-    def _get_cuda_tensor_pair(self, source, is_lazy):
-        if is_lazy:
-            weight = source.get_tensor(self.weight_name).to(AI_DEVICE)
-            scale = source.get_tensor(self.weight_scale_name).float().to(AI_DEVICE)
-        else:
-            weight = source[self.weight_name].to(AI_DEVICE)
-            scale = source[self.weight_scale_name].float().to(AI_DEVICE)
-        return weight, scale
-
-    def _get_cuda_bias_tensor(self, source, is_lazy):
-        if self.bias_name is None:
-            return None
-        if is_lazy:
-            bias = source.get_tensor(self.bias_name)
-            dtype = self.infer_dtype
-        else:
-            bias = source[self.bias_name]
-            dtype = bias.dtype
-        if self.bias_force_fp32:
-            bias = bias.to(torch.float32)
-        else:
-            bias = bias.to(dtype)
-        return bias.to(AI_DEVICE)
-
-    def _load_cpu_pin_buffers(self):
-        self.pin_weight, self.pin_weight_scale = self._get_cpu_pin_tensor_pair(self.lazy_load_file, is_lazy=True)
-        self.pin_bias = self._get_cpu_pin_bias_tensor(self.lazy_load_file, is_lazy=True)
-        self.bias = None
-
-    def _get_cpu_pin_tensor_pair(self, source, is_lazy):
-        if is_lazy:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(
-                    self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
-                )
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
-                weight_tensor = source.get_tensor(self.weight_name)
-                scale_tensor = source.get_tensor(self.weight_scale_name)
-                scale_dtype = torch.float
-                pin_weight = self._create_pin_tensor(weight_tensor)
-                pin_scale = self._create_pin_tensor(scale_tensor, scale_dtype)
-        else:
-            weight_tensor = source[self.weight_name]
-            scale_tensor = source[self.weight_scale_name]
-            scale_dtype = torch.float
-            pin_weight = self._create_pin_tensor(weight_tensor)
-            pin_scale = self._create_pin_tensor(scale_tensor, scale_dtype)
-        return pin_weight, pin_scale
-
-    def _get_cpu_pin_bias_tensor(self, source, is_lazy):
-        if self.bias_name is None:
-            return None
-        if is_lazy:
-            if Path(self.lazy_load_file).is_file():
-                lazy_load_file_path = self.lazy_load_file
-            else:
-                lazy_load_file_path = os.path.join(
-                    self.lazy_load_file,
-                    f"block_{self.weight_name.split('.')[1]}.safetensors",
-                )
-            with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
-                bias_tensor = source.get_tensor(self.bias_name)
-                if not self.bias_force_fp32:
-                    bias_tensor = bias_tensor.to(self.infer_dtype)
-                if self.bias_force_fp32:
-                    bias_tensor = bias_tensor.to(torch.float32)
-                return self._create_pin_tensor(bias_tensor)
-        else:
-            bias_tensor = source[self.bias_name]
-            if self.bias_force_fp32:
-                bias_tensor = bias_tensor.to(torch.float32)
-            return self._create_pin_tensor(bias_tensor)
-
-    def _create_pin_tensor(self, tensor, dtype=None):
-        dtype = dtype or tensor.dtype
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
-
-    def _load_default_tensors(self, weight_dict):
-        if not self.lazy_load:
-            self.weight, self.weight_scale, self.pin_weight, self.pin_weight_scale = self._get_device_tensor_pair(weight_dict)
-            self._load_default_bias(weight_dict)
-        else:
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
+            self.pin_weight = result.get("weight")
+            self.pin_weight_scale = result.get("weight_scale")
+            self.pin_bias = result.get("bias")
+            self.weight = None
+            self.weight_scale = None
             self.bias = None
-            self.pin_bias = None
-
-    def _get_device_tensor_pair(self, source):
-        device = source[self.weight_name].device
-        if device.type == "cpu":
-            pin_weight, pin_scale = self._get_cpu_pin_tensor_pair(source, is_lazy=False)
-            return None, None, pin_weight, pin_scale
-        else:
-            return (
-                source[self.weight_name],
-                source[self.weight_scale_name].float(),
-                None,
-                None,
-            )
-
-    def _load_default_bias(self, source):
-        if self.bias_name is None:
-            self.bias = None
-            self.pin_bias = None
-            self.bias_cuda_buffer = None
-            return
-
-        if self.create_cuda_buffer:
-            self.bias_cuda_buffer = self._get_cuda_bias_tensor(source, is_lazy=False)
-            self.bias = None
-            self.pin_bias = None
-        else:
-            bias_tensor = source[self.bias_name].float() if self.bias_force_fp32 else source[self.bias_name]
-            device = bias_tensor.device
-            if device.type == "cpu":
-                self.pin_bias = self._get_cpu_pin_bias_tensor(source, is_lazy=False)
-                self.bias = None
-            else:
-                self.bias = bias_tensor
-                self.pin_bias = None
 
     def load_fp8_perchannel_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
@@ -597,6 +451,33 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight, self.weight_scale = self.per_block_cast_to_fp8(self.weight)
         else:
             self.load_quantized(weight_dict)
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        if self.has_lora_branch or self.has_diff:
+            self.load_lora_state_dict_from_disk(block_index)
+        self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.weight_scale_name = resolve_block_name(self.weight_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        if self.bias_name is not None:
+            self.bias_name = resolve_block_name(self.bias_name, block_index, adapter_block_index, self.is_post_adapter)
+
+        lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            if self.weight_need_transpose:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
+            else:
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+
+            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+            del weight_tensor
+
+            weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
+            self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
+            del weight_scale_tensor
+
+            if self.bias_name is not None:
+                bias_tensor = lazy_load_file.get_tensor(self.bias_name)
+                self.pin_bias.copy_(bias_tensor)
+                del bias_tensor
 
     def per_block_cast_to_fp8(self, x):
         assert x.dim() == 2
@@ -675,87 +556,6 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         )
         return input_tensor_quant, input_tensor_scale
 
-    def state_dict(self, destination=None):
-        if destination is None:
-            destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
-        if self.bias_name is not None:
-            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
-        destination[self.weight_scale_name] = self.pin_weight_scale if hasattr(self, "pin_weight_scale") else self.weight_scale
-        return destination
-
-    def load_state_dict(self, destination, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            weight_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.weight_scale_name,
-                count=1,
-            )
-        else:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-            weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
-
-        if weight_name not in destination:
-            self.weight = None
-            return
-
-        self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
-        self.weight_scale = self.weight_scale_cuda_buffer.copy_(destination[weight_scale_name], non_blocking=True)
-
-        if self.bias_name is not None:
-            bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-            self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
-        else:
-            self.bias = None
-
-    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            self.weight_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.weight_scale_name,
-                count=1,
-            )
-        else:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-            self.weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
-
-        if self.bias_name is not None:
-            if self.is_post_adapter:
-                assert adapter_block_index is not None
-                self.bias_name = re.sub(
-                    r"\.\d+",
-                    lambda m: f".{adapter_block_index}",
-                    self.bias_name,
-                    count=1,
-                )
-            else:
-                self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-        if Path(self.lazy_load_file).is_file():
-            lazy_load_file_path = self.lazy_load_file
-        else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
-        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            if self.weight_need_transpose:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
-            else:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
-
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
-            del weight_tensor
-
-            weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
-            self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
-            del weight_scale_tensor
-
-            if self.bias_name is not None:
-                bias_tensor = lazy_load_file.get_tensor(self.bias_name)
-                self.pin_bias.copy_(bias_tensor)
-                del bias_tensor
-
 
 @MM_WEIGHT_REGISTER("fp8-vllm")
 class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
@@ -777,6 +577,8 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -786,10 +588,13 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_fp8_perchannel_sym
-        self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
+        self.weight_need_transpose = True
+        self.scale_force_fp32 = True
 
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])
@@ -804,8 +609,10 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self.bias if self.bias is not None else None,
+            self._get_actual_bias().to(self.infer_dtype),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -829,6 +636,8 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -838,10 +647,13 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_int8_perchannel_sym
-        self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        self.weight_need_transpose = True
+        self.scale_force_fp32 = True
 
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])
@@ -856,8 +668,10 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self.bias if self.bias is not None else None,
+            self._get_actual_bias().to(self.infer_dtype),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -880,6 +694,8 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -889,6 +705,8 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_mxfp4
         self.weight_need_transpose = False
@@ -907,8 +725,10 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self._get_actual_bias(),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -931,6 +751,8 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -940,6 +762,8 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_mxfp6
         self.weight_need_transpose = False
@@ -958,8 +782,10 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self._get_actual_bias(),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -982,6 +808,8 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -991,6 +819,8 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_mxfp8
         self.weight_need_transpose = False
@@ -1009,8 +839,10 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             alpha=self.alpha,
-            bias=self.bias,
+            bias=self._get_actual_bias(),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1033,6 +865,8 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1042,14 +876,16 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
         )
         self.load_func = self.load_nvfp4
         self.input_absmax_name = self.weight_name.replace(".weight", ".input_absmax")
         self.weight_global_scale_name = self.weight_name + "_global_scale"
         self.input_global_scale_name = self.weight_name.replace(".weight", ".input_global_scale")
         self.alpha_name = self.weight_name.replace(".weight", ".alpha")
-        self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_nvfp4
+        self.weight_need_transpose = False
 
     def load_quantized(self, weight_dict):
         if self.create_cuda_buffer:
@@ -1088,7 +924,7 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
 
     def _get_cuda_tensor_pair(self, source, is_lazy):
         if is_lazy:
-            if source.get_tensor(self.input_absmax_name) is not None:
+            if self.input_absmax_name in source.keys():
                 input_absmax = source.get_tensor(self.input_absmax_name)
                 input_global_scale = (2688.0 / input_absmax).to(torch.float32).to(AI_DEVICE)
                 weight_global_scale = source.get_tensor(self.weight_global_scale_name).to(AI_DEVICE)
@@ -1149,7 +985,7 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 weight_tensor = source.get_tensor(self.weight_name)
                 scale_tensor = source.get_tensor(self.weight_scale_name)
-                if source.get_tensor(self.input_absmax_name) is not None:
+                if self.input_absmax_name in source.keys():
                     input_absmax = source.get_tensor(self.input_absmax_name)
                     input_global_scale = (2688.0 / input_absmax).to(torch.float32)
                     weight_global_scale = source.get_tensor(self.weight_global_scale_name)
@@ -1335,31 +1171,10 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         return destination
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            weight_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.weight_scale_name,
-                count=1,
-            )
-            input_global_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.input_global_scale_name,
-                count=1,
-            )
-            alpha_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.alpha_name,
-                count=1,
-            )
-        else:
-            weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-            weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
-            input_global_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.input_global_scale_name, count=1)
-            alpha_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.alpha_name, count=1)
+        weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+        weight_scale_name = resolve_block_name(self.weight_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        input_global_scale_name = resolve_block_name(self.input_global_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        alpha_name = resolve_block_name(self.alpha_name, block_index, adapter_block_index, self.is_post_adapter)
 
         if weight_name not in destination:
             self.weight = None
@@ -1370,53 +1185,21 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         self.input_global_scale = self.input_global_scale_cuda_buffer.copy_(destination[input_global_scale_name], non_blocking=True)
         self.alpha = self.alpha_cuda_buffer.copy_(destination[alpha_name], non_blocking=True)
         if self.bias_name is not None:
-            bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
+            bias_name = resolve_block_name(self.bias_name, block_index, adapter_block_index, self.is_post_adapter)
             self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
         else:
             self.bias = None
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
-        if self.is_post_adapter:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
-            self.weight_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.weight_scale_name,
-                count=1,
-            )
-            self.input_global_scale_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.input_global_scale_name,
-                count=1,
-            )
-            self.alpha_name = re.sub(
-                r"\.\d+",
-                lambda m: f".{adapter_block_index}",
-                self.alpha_name,
-                count=1,
-            )
-        else:
-            self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
-            self.weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
-            self.input_global_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.input_global_scale_name, count=1)
-            self.alpha_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.alpha_name, count=1)
+        self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.weight_scale_name = resolve_block_name(self.weight_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.input_global_scale_name = resolve_block_name(self.input_global_scale_name, block_index, adapter_block_index, self.is_post_adapter)
+        self.alpha_name = resolve_block_name(self.alpha_name, block_index, adapter_block_index, self.is_post_adapter)
 
         if self.bias_name is not None:
-            if self.is_post_adapter:
-                assert adapter_block_index is not None
-                self.bias_name = re.sub(
-                    r"\.\d+",
-                    lambda m: f".{adapter_block_index}",
-                    self.bias_name,
-                    count=1,
-                )
-            else:
-                self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
-        if Path(self.lazy_load_file).is_file():
-            lazy_load_file_path = self.lazy_load_file
-        else:
-            lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
+            self.bias_name = resolve_block_name(self.bias_name, block_index, adapter_block_index, self.is_post_adapter)
+
+        lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
             if self.weight_need_transpose:
                 weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
@@ -1429,19 +1212,6 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
             self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
             del weight_scale_tensor
-
-            input_global_scale_tensor = lazy_load_file.get_tensor(self.input_global_scale_name)
-            self.pin_input_global_scale = self.pin_input_global_scale.copy_(input_global_scale_tensor)
-            del input_global_scale_tensor
-
-            alpha_tensor = lazy_load_file.get_tensor(self.alpha_name)
-            self.pin_alpha = self.pin_alpha.copy_(alpha_tensor)
-            del alpha_tensor
-
-            if self.bias_name is not None:
-                bias_tensor = lazy_load_file.get_tensor(self.bias_name)
-                self.pin_bias.copy_(bias_tensor)
-                del bias_tensor
 
 
 @MM_WEIGHT_REGISTER("Calib")
@@ -1462,6 +1232,8 @@ class MMCalibNvfp4(MMWeight):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1471,6 +1243,8 @@ class MMCalibNvfp4(MMWeight):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.running_absmax = None
         self.count = 0
@@ -1490,9 +1264,9 @@ class MMCalibNvfp4(MMWeight):
         self.count = self.count + 1
 
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
-        if self.bias is None:
-            return torch.mm(input_tensor, self.weight, out=output_tensor)
-        return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
+        if hasattr(self, "bias") and self.bias is not None:
+            return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
+        return torch.mm(input_tensor, self.weight, out=output_tensor)
 
 
 @MM_WEIGHT_REGISTER("fp8-q8f")
@@ -1515,6 +1289,8 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1524,10 +1300,13 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
+        self.scale_force_fp32 = True
         if ops is not None:
             self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         else:
@@ -1538,11 +1317,13 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         output_tensor = fp8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias.float() if self.bias is not None else None,
+            self._get_actual_bias(),
             input_tensor_scale.float(),
             self.weight_scale,
             out_dtype=self.infer_dtype,
         )
+        if self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1566,6 +1347,8 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1575,10 +1358,13 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
+        self.scale_force_fp32 = True
         if ops is not None:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
         else:
@@ -1589,12 +1375,14 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         output_tensor = q8_linear(
             input_tensor_quant,
             self.weight,
-            self.bias.float() if self.bias is not None else None,
+            self._get_actual_bias(),
             input_tensor_scale.float(),
             self.weight_scale,
             fuse_gelu=False,
             out_dtype=self.infer_dtype,
         )
+        if self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1618,6 +1406,8 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1627,10 +1417,12 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_fp8_perchannel_sym
-        self.weight_need_transpose = False
         self.act_quant_func = fp8_quantize_triton
+        self.weight_need_transpose = False
         self.bias_force_fp32 = True
 
     def apply(self, input_tensor):
@@ -1639,7 +1431,7 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
             output_tensor = fp8_gemm_bias_triton(
                 input_tensor_quant,
                 self.weight,
-                self.bias.float() if self.bias is not None else None,
+                self._get_actual_bias(),
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
@@ -1652,6 +1444,8 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
             )
+        if self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1675,6 +1469,8 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1684,10 +1480,12 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_int8_perchannel_sym
-        self.weight_need_transpose = False
         self.act_quant_func = int8_quantize_triton
+        self.weight_need_transpose = False
         self.bias_force_fp32 = True
 
     def apply(self, input_tensor):
@@ -1696,7 +1494,7 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             output_tensor = int8_gemm_bias_triton(
                 input_tensor_quant,
                 self.weight,
-                self.bias.float() if self.bias is not None else None,
+                self._get_actual_bias(),
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
@@ -1709,6 +1507,8 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
             )
+        if self.has_lora_branch:
+            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
 
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
@@ -1733,6 +1533,8 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1742,6 +1544,8 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_fp8_perblock128_sym
         self.weight_need_transpose = False
@@ -1760,7 +1564,9 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
             output_tensor,
         )
         if hasattr(self, "bias") and self.bias is not None:
-            output_tensor.add_(self.bias)
+            output_tensor.add_(self._get_actual_bias())
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1784,6 +1590,8 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1793,9 +1601,12 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
-        self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = True
+        self.scale_force_fp32 = True
+        self.load_func = self.load_fp8_perchannel_sym
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_sgl
 
     def apply(self, input_tensor):
@@ -1806,8 +1617,10 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self.bias if self.bias is not None else None,
+            self._get_actual_bias().to(self.infer_dtype),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1831,6 +1644,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1840,10 +1655,13 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_int8_perchannel_sym
-        self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        self.weight_need_transpose = True
+        self.scale_force_fp32 = True
 
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])
@@ -1858,8 +1676,10 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self.bias if self.bias is not None else None,
+            self._get_actual_bias().to(self.infer_dtype),
         )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1883,6 +1703,8 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1892,23 +1714,28 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_fp8_perchannel_sym
-        self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_torchao
+        self.weight_need_transpose = True
+        self.scale_force_fp32 = True
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_fp8_perchannel_sym_torchao(input_tensor)
-        out = torch._scaled_mm(
+        output_tensor = torch._scaled_mm(
             input_tensor_quant,
             self.weight,
-            scale_a=input_tensor_scale,
+            scale_a=input_tensor_scale.float(),
             scale_b=self.weight_scale.t(),
-            bias=self.bias,
+            bias=self._get_actual_bias().to(self.infer_dtype),
             out_dtype=self.infer_dtype,
             use_fast_accum=True,
         )
-        return out
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
+        return output_tensor
 
 
 @MM_WEIGHT_REGISTER("int8-torchao")
@@ -1931,6 +1758,8 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1940,6 +1769,8 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = True
@@ -1956,8 +1787,10 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
             output_dtype=self.infer_dtype,
         )
         if self.bias is not None:
-            output_tensor.add_(self.bias)
+            output_tensor.add_(self._get_actual_bias())
 
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
 
 
@@ -1971,6 +1804,8 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -1980,6 +1815,8 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
 
     def load(self, weight_dict):
@@ -2079,7 +1916,9 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
 
     def apply(self, input_tensor):
         weight, bias = self.cast_bias_weight(input_tensor)
-        return torch.nn.functional.linear(input_tensor, weight, bias)
+        if self.has_lora_branch:
+            return torch.nn.functional.linear(input_tensor, weight, self._get_actual_bias(bias)) + self.apply_lora(input_tensor)
+        return torch.nn.functional.linear(input_tensor, weight, self._get_actual_bias(bias))
 
 
 @MM_WEIGHT_REGISTER("gguf-BF16")
@@ -2166,6 +2005,8 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         lazy_load=False,
         lazy_load_file=None,
         is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
     ):
         super().__init__(
             weight_name,
@@ -2175,6 +2016,8 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
             lazy_load,
             lazy_load_file,
             is_post_adapter,
+            lora_prefix,
+            lora_path,
         )
         self.load_func = self.load_quantized
 
@@ -2209,5 +2052,7 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
             -1,
         )
         if hasattr(self, "bias") and self.bias is not None:
-            output_tensor.add_(self.bias)
+            output_tensor.add_(self._get_actual_bias())
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
         return output_tensor

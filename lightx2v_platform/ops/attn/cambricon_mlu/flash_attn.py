@@ -17,7 +17,7 @@ class MluFlashAttnWeight(AttnWeightTemplate):
         self.config = {}
         assert tmo is not None, "torch_mlu_ops is not installed."
 
-    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, model_cls=None, **kwds):
+    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, **kwds):
         if len(q.shape) == 3:
             bs = 1
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)

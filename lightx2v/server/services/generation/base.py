@@ -100,6 +100,7 @@ class BaseGenerationService(ABC):
         try:
             task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
             task_data["task_id"] = message.task_id
+            task_data["target_shape"] = message.target_shape
 
             if stop_event.is_set():
                 logger.info(f"Task {message.task_id} cancelled before processing")

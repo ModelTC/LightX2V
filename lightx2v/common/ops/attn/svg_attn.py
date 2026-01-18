@@ -292,6 +292,26 @@ def get_attention_mask(mask_name, sample_mse_max_row, context_length, num_frame,
     return attention_mask
 
 
+def diagonal_band_mask_from_sparsity(
+    block_num: int,
+    block_num_per_frame: int,
+    sparsity: float,
+    device="cpu",
+):
+    k = int(round(block_num * (1 - sparsity) / 2))
+    k = max(0, min(k, block_num - 1))
+
+    idx = torch.arange(block_num, device=device)
+    mask = torch.abs(idx[:, None] - idx[None, :]) <= k
+    sink = idx[None, :] <= block_num_per_frame
+    mask = mask | sink
+
+    actual_sparsity = 1 - mask.float().mean().item()
+    logger.info(f"Diagonal Band Mask: block_num={block_num}, block_num_per_frame={block_num_per_frame}, sparsity={sparsity}, actual_sparsity={actual_sparsity}")
+
+    return mask
+
+
 @ATTN_WEIGHT_REGISTER("svg_attn")
 class SvgAttnWeight(AttnWeightTemplate):
     head_num = None
@@ -347,7 +367,7 @@ class SvgAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         q = q.unsqueeze(0).transpose(1, 2)
         k = k.unsqueeze(0).transpose(1, 2)
@@ -365,7 +385,7 @@ class SvgAttnWeight(AttnWeightTemplate):
             q, k, v, query_out, key_out, value_out, best_mask_idx, self.context_length, self.attnmap_frame_num, seq_len // self.attnmap_frame_num
         )
 
-        hidden_states = self.sparse_attention(query_out, key_out, value_out)
+        hidden_states = self.sparse_attention(query_out, key_out, value_out, block_mask=self.block_mask)
         wan_hidden_states_placement(hidden_states, output_hidden_states, best_mask_idx, self.context_length, self.attnmap_frame_num, seq_len // self.attnmap_frame_num)
 
         return output_hidden_states.reshape(bs, num_heads, seq_len, dim).transpose(1, 2).reshape(bs * seq_len, -1)

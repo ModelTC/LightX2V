@@ -22,13 +22,13 @@ class ZImagePreInfer:
         self.scheduler = scheduler
 
     def infer(self, weights, hidden_states, encoder_hidden_states):
+        patch_size = self.config.get("patch_size", 2)
+        f_patch_size = self.config.get("f_patch_size", 1)
+
         if hidden_states.dim() == 4:
-            patch_size = self.config.get("patch_size", 2)
-            hidden_states = patchify(hidden_states, patch_size=patch_size, f_patch_size=1)
+            hidden_states = patchify(hidden_states, patch_size=patch_size, f_patch_size=f_patch_size)
 
         batch_size, num_tokens, patch_dim = hidden_states.shape
-        patch_size = self.config.get("patch_size", 2)
-        f_patch_size = 1
 
         original_shape = self.scheduler.input_info.target_shape
         if len(original_shape) >= 2:
