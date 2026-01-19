@@ -1,0 +1,42 @@
+{
+    "infer_steps": 4,
+    "target_fps": 16,
+    "video_duration": 20,
+    "audio_sr": 16000,
+    "target_video_length": 81,
+    "resize_mode": "fixed_shape",
+    "fixed_shape": [
+        832,
+        480
+    ],
+    "self_attn_1_type": "sage_attn3",
+    "cross_attn_1_type": "sage_attn3",
+    "cross_attn_2_type": "sage_attn3",
+    "sample_guide_scale": 1,
+    "sample_shift": 5,
+    "enable_cfg": false,
+    "use_31_block": false,
+    "cpu_offload": false,
+    "offload_granularity": "block",
+    "offload_ratio": 1,
+    "t5_cpu_offload": true,
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8-sgl",
+    "clip_cpu_offload": true,
+    "clip_quantized": false,
+    "audio_encoder_cpu_offload": true,
+    "audio_adapter_cpu_offload": true,
+    "adapter_quantized": true,
+    "adapter_quant_scheme": "fp8-sgl",
+    "vae_cpu_offload": true,
+    "use_tiling_vae": false,
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ring",
+        "seq_p_fp8_comm": true,
+        "seq_p_head_parallel": true,
+        "seq_p_tensor_fusion": false
+    }
+}
