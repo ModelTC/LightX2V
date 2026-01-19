@@ -70,7 +70,6 @@ def set_config(args):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-                print(model_config)
 
             if config["model_cls"] == "z_image":
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
