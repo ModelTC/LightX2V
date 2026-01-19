@@ -22,9 +22,9 @@ from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # 
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_object
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
+from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
 
 
@@ -117,6 +117,8 @@ class LightX2VPipeline:
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 
+        self.input_info = init_empty_input_info(self.task)
+
     def create_generator(
         self,
         attn_mode="flash_attn2",
@@ -156,7 +158,7 @@ class LightX2VPipeline:
             )
 
         config = set_config(self)
-        print_config(config)
+        print(config)
         self.runner = self._init_runner(config)
         logger.info(f"Initializing {self.model_cls} runner for {self.task} task...")
         logger.info(f"Model path: {self.model_path}")
@@ -379,8 +381,8 @@ class LightX2VPipeline:
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
         seed_all(self.seed)
-        input_info = set_input_info(self)
-        self.runner.run_pipeline(input_info)
+        update_input_info_from_object(self.input_info, self)
+        self.runner.run_pipeline(self.input_info)
         logger.info("Video generated successfully!")
         logger.info(f"Video Saved in {save_result_path}")
 

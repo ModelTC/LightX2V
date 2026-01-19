@@ -246,8 +246,6 @@ class QwenImageRunner(DefaultRunner):
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def get_custom_shape(self):
-        if self.config["task"] == "i2i":
-            return None
         default_aspect_ratios = {
             "16:9": [1664, 928],
             "9:16": [928, 1664],
@@ -271,11 +269,12 @@ class QwenImageRunner(DefaultRunner):
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        if self.input_info.aspect_ratio in as_maps:
-            logger.info(f"Qwen Image Runner got aspect ratio: {self.input_info.aspect_ratio}")
-            width, height = as_maps[self.input_info.aspect_ratio]
+        aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
+        if aspect_ratio in as_maps:
+            logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
+            width, height = as_maps[aspect_ratio]
             return (width, height)
-        logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
+        logger.warning(f"Invalid aspect ratio: {aspect_ratio}, not in {as_maps.keys()}")
 
         return None
 
