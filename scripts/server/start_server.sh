@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/ddc/yong/LightX2V
-model_path=/data/nvme0/models/Wan-AI/Wan2.1-T2V-1.3B
+lightx2v_path=
+model_path=
 
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -16,6 +16,7 @@ python -m lightx2v.server \
 --task t2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/wan/wan_t2v.json \
+--host 0.0.0.0 \
 --port 8000
 
 echo "Service stopped"
