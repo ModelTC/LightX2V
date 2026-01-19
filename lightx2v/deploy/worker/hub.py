@@ -14,6 +14,7 @@ from loguru import logger
 
 import lightx2v
 from lightx2v.deploy.common.utils import class_try_catch_async
+from lightx2v.deploy.worker.parallel_model_runner import ParallelModelRunner
 from lightx2v.infer import init_runner  # noqa
 from lightx2v.utils.input_info import init_empty_input_info
 from lightx2v.utils.profiler import *
@@ -31,20 +32,35 @@ def init_tools_preprocess():
 class BaseWorker:
     @ProfilingContext4DebugL1("Init Worker Worker Cost:")
     def __init__(self, args):
+        with open(args.config_json, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg.get("clip_configs", None) is not None:
+            runner, is_parallel = self.init_parallel_model(args)
+        else:
+            runner, is_parallel = self.init_single_model(args)
+        self.rank = 0
+        self.world_size = 1
+        if is_parallel:
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
+        # same as va_recorder rank
+        self.out_video_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
+        self.runner = runner
+        self.input_info = init_empty_input_info(args.task)
+
+    def init_parallel_model(self, args):
+        runner = ParallelModelRunner(args)
+        return runner, runner.is_parallel
+
+    def init_single_model(self, args):
         config = set_config(args)
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         seed_all(args.seed)
-        self.rank = 0
-        self.world_size = 1
         if config["parallel"]:
-            self.rank = dist.get_rank()
-            self.world_size = dist.get_world_size()
             set_parallel_config(config)
-        # same as va_recorder rank
-        self.out_video_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
         torch.set_grad_enabled(False)
-        self.runner = RUNNER_REGISTER[config["model_cls"]](config)
-        self.input_info = init_empty_input_info(args.task)
+        runner = RUNNER_REGISTER[config["model_cls"]](config)
+        return runner, config["parallel"]
 
     def update_input_info(self, kwargs):
         for k, v in kwargs.items():

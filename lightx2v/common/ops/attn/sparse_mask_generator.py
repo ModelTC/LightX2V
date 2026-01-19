@@ -41,8 +41,8 @@ class SlaMaskGenerator(GeneralMaskGenerator):
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
         sparse_map, lut, topk = get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
-        # return: [H, Q_block_num, K_block_num]
-        return sparse_map[0]
+        # return: [B, H, Q_block_num, K_block_num]
+        return sparse_map
 
 
 @SPARSE_MASK_GENERATOR_REGISTER("nbhd_mask_generator")
@@ -63,8 +63,8 @@ class NbhdMaskGenerator(GeneralMaskGenerator):
         block_num = (seqlen + self.block_size - 1) // self.block_size
         block_num_per_frame = seqlen / self.attnmap_frame_num / self.block_size
         mask = generate_nbhd_mask(block_num_per_frame, block_num, self.attnmap_frame_num, coefficient=self.coefficient, min_width=self.min_width, device=q.device)
-        mask = mask.unsqueeze(0).repeat(head_num, 1, 1)
-        # return: [H, Q_block_num, K_block_num]
+        mask = mask[None, None, :, :].repeat(1, head_num, 1, 1)
+        # return: [B, H, Q_block_num, K_block_num]
         NbhdMaskGenerator.seqlen = seqlen
         NbhdMaskGenerator.mask = mask
         return mask
@@ -97,7 +97,7 @@ class SvgMaskGenerator(GeneralMaskGenerator):
         block_num = (seqlen + self.block_size - 1) // self.block_size
         block_num_per_frame = block_num // self.attnmap_frame_num
         mask = diagonal_band_mask_from_sparsity(block_num, block_num_per_frame, self.sparsity, device=q.device)
-        SvgMaskGenerator.mask = mask.unsqueeze(0).repeat(head_num, 1, 1)
+        SvgMaskGenerator.mask = mask[None, None, :, :].repeat(1, head_num, 1, 1)
         SvgMaskGenerator.seqlen = seqlen
 
     def sample_mse(self, query, key, value):
@@ -159,5 +159,5 @@ class SvgMaskGenerator(GeneralMaskGenerator):
 
     def __call__(self, q, k):
         self.prepare_mask(q)
-        # return: [H, Q_block_num, K_block_num]
+        # return: [B, H, Q_block_num, K_block_num]
         return self.mask

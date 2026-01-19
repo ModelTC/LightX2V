@@ -136,7 +136,7 @@ class X264VARecorder:
             self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
             self.schedule_thread.start()
 
-    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor):
+    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor, valid_duration=1e9):
         N, height, width, C = images.shape
         M = audios.reshape(-1).shape[0]
         assert N % self.slice_frame == 0, "Video frames must be divisible by slice_frame"
