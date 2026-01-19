@@ -138,14 +138,14 @@ class LightLLMKernelTextEncoder:
 
         try:
             if self.use_rmsnorm_kernel:
-                from lightllm.models.llama.triton_kernel.rmsnorm import rmsnorm_forward
+                from lightx2v.utils.triton_kernels.rmsnorm import rmsnorm_forward
 
                 self._rmsnorm_kernel = rmsnorm_forward
                 self._replace_rmsnorm_with_kernel()
                 logger.info("  ✓ RMSNorm kernel integrated")
 
             if self.use_ffn_kernel:
-                from lightllm.models.llama.triton_kernel.silu_and_mul import silu_and_mul_fwd
+                from lightx2v.utils.triton_kernels.silu_and_mul import silu_and_mul_fwd
 
                 self._silu_mul_kernel = silu_and_mul_fwd
                 self._replace_ffn_with_kernel()
