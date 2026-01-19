@@ -12,6 +12,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -113,6 +114,8 @@ class LightX2VPipeline:
                 self.prompt_template_encode_start_idx = 34
         elif self.model_cls in ["z_image"]:
             self.model_cls = "z_image"
+        elif model_cls in ["longcat_image", "longcat-image"]:
+            self.model_cls = "longcat_image"
 
         self.input_info = init_empty_input_info(self.task)
 
@@ -197,7 +200,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image"]:
             self.attn_type = attn_mode
 
     def set_infer_config_json(self, config_json):
@@ -213,7 +216,7 @@ class LightX2VPipeline:
         vae_path=None,
         tae_path=None,
     ):
-        assert self.model_cls != "qwen_image"
+        assert self.model_cls not in ["qwen_image", "longcat_image"]
         self.use_lightvae = use_lightvae
         self.use_tae = use_tae
         self.vae_path = vae_path
@@ -291,7 +294,7 @@ class LightX2VPipeline:
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload
-        elif self.model_cls == "qwen_image":
+        elif self.model_cls in ["qwen_image", "longcat_image"]:
             self.qwen25vl_cpu_offload = text_encoder_offload
 
     def enable_compile(

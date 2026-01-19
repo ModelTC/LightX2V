@@ -6,7 +6,7 @@ from .radial_attn import RadialAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2Weight, SageAttn3Weight
 from .sla_attn import SlaAttnWeight
-from .sparse_mask_generator import NbhdMaskGenerator, SlaMaskGenerator
+from .sparse_mask_generator import NbhdMaskGenerator, SlaMaskGenerator, SvgMaskGenerator
 from .sparse_operator import MagiOperator, SlaTritonOperator
 from .spassage_attn import SageAttnWeight
 from .svg2_attn import Svg2AttnWeight
