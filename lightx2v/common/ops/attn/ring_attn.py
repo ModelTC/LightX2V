@@ -244,6 +244,7 @@ class RingAttnWeight(AttnWeightTemplate):
             out, lse = _update_out_and_lse(out, lse, block_out, block_lse)
         return out, lse
 
+
 class RingAttnHelper:
     """辅助函数类，处理 Ring Attention 中的量化、通信和反量化逻辑"""
 
