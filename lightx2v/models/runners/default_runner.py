@@ -90,6 +90,8 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_s2v
         elif self.config["task"] == "t2av":
             self.run_input_encoder = self._run_input_encoder_local_t2av
+        elif self.config["task"] == "i2av":
+            self.run_input_encoder = self._run_input_encoder_local_i2av
         self.config.lock()  # lock config to avoid modification
         if self.config.get("compile", False) and hasattr(self.model, "compile"):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
@@ -288,17 +290,6 @@ class DefaultRunner(BaseRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
-        text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
-        return {
-            "text_encoder_output": text_encoder_output,
-            "image_encoder_output": None,
-        }
-
-    @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_t2av(self):
-        self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
         torch_device_module.empty_cache()
         gc.collect()

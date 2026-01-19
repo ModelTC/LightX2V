@@ -66,7 +66,7 @@ def main():
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "t2av"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "t2av", "i2av"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
@@ -78,7 +78,12 @@ def main():
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
-
+    parser.add_argument(
+        "--images",
+        type=str,
+        default="",
+        help="Image conditioning for I2AV task. Format: 'path1:frame_idx1:strength1,path2:frame_idx2:strength2'. Example: 'cat.jpg:0:1.0,dog.jpg:60:0.8'",
+    )
     # [Warning] For vace task, need refactor.
     parser.add_argument(
         "--src_ref_images",

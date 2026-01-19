@@ -337,6 +337,8 @@ class LTX2Scheduler(BaseScheduler):
         initial_video_latent: Optional[torch.Tensor] = None,
         initial_audio_latent: Optional[torch.Tensor] = None,
         noise_scale: float = 1.0,
+        video_denoise_mask: Optional[torch.Tensor] = None,
+        audio_denoise_mask: Optional[torch.Tensor] = None,
     ):
         """
         Prepare scheduler for inference.
@@ -345,15 +347,11 @@ class LTX2Scheduler(BaseScheduler):
             seed: Random seed for noise generation
             video_latent_shape: Shape of video latents
             audio_latent_shape: Shape of audio latents
-            video_context_p: Positive video context embeddings
-            video_context_n: Negative video context embeddings
-            audio_context_p: Positive audio context embeddings
-            audio_context_n: Negative audio context embeddings
-            transformer: X0Model transformer instance
             initial_video_latent: Optional initial video latent (for conditioning)
             initial_audio_latent: Optional initial audio latent (for conditioning)
             noise_scale: Scale factor for noise
-            dtype: Data type for latents
+            video_denoise_mask: Optional denoise mask for video (unpatchified)
+            audio_denoise_mask: Optional denoise mask for audio (unpatchified)
         """
         # Initialize generator
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
@@ -365,6 +363,8 @@ class LTX2Scheduler(BaseScheduler):
             initial_video_latent=initial_video_latent,
             initial_audio_latent=initial_audio_latent,
             noise_scale=noise_scale,
+            video_denoise_mask=video_denoise_mask,
+            audio_denoise_mask=audio_denoise_mask,
         )
 
         # Generate sigma schedule (needs unpatchified latent for token count calculation)

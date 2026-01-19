@@ -30,26 +30,32 @@ class LTX2VideoVAE:
         checkpoint_path: str,
         device: torch.device,
         dtype: torch.dtype = torch.bfloat16,
+        load_encoder: bool = True,
     ):
         self.checkpoint_path = checkpoint_path
         self.device = device
         self.dtype = dtype
+        self.load_encoder_flag = load_encoder
         self.loader = SafetensorsModelStateDictLoader()
+        self.encoder = None
+        self.decoder = None
         self.load()
 
     def load(self) -> tuple[VideoEncoder | None, VideoDecoder | None]:
         config = self.loader.metadata(self.checkpoint_path)
-        encoder = VideoEncoderConfigurator.from_config(config)
-        state_dict_obj = self.loader.load(
-            self.checkpoint_path,
-            sd_ops=VAE_ENCODER_COMFY_KEYS_FILTER,
-            device=self.device,
-        )
-        state_dict = state_dict_obj.sd
-        if self.dtype is not None:
-            state_dict = {key: value.to(dtype=self.dtype) for key, value in state_dict.items()}
-        encoder.load_state_dict(state_dict, strict=False, assign=True)
-        self.encoder = encoder.to(self.device).eval()
+
+        if self.load_encoder_flag:
+            encoder = VideoEncoderConfigurator.from_config(config)
+            state_dict_obj = self.loader.load(
+                self.checkpoint_path,
+                sd_ops=VAE_ENCODER_COMFY_KEYS_FILTER,
+                device=self.device,
+            )
+            state_dict = state_dict_obj.sd
+            if self.dtype is not None:
+                state_dict = {key: value.to(dtype=self.dtype) for key, value in state_dict.items()}
+            encoder.load_state_dict(state_dict, strict=False, assign=True)
+            self.encoder = encoder.to(self.device).eval()
 
         decoder = VideoDecoderConfigurator.from_config(config)
         state_dict_obj = self.loader.load(

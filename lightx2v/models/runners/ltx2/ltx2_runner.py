@@ -9,6 +9,7 @@ from lightx2v.models.schedulers.ltx2.scheduler import LTX2Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
+from lightx2v.utils.ltx2_media_io import load_image_conditioning
 from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -22,14 +23,14 @@ class LTX2Runner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
 
+    def init_scheduler(self):
+        self.scheduler = LTX2Scheduler(self.config)
+
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
         self.video_vae, self.audio_vae = self.load_vae()
-        # self.image_encoder = self.load_image_encoder()
-        # self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
-        # self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
 
     def load_transformer(self):
         wan_model_kwargs = {
@@ -64,11 +65,7 @@ class LTX2Runner(DefaultRunner):
             vae_device = torch.device(AI_DEVICE)
 
         # Video VAE
-        video_vae = LTX2VideoVAE(
-            checkpoint_path=self.config["dit_original_ckpt"],
-            device=vae_device,
-            dtype=GET_DTYPE(),
-        )
+        video_vae = LTX2VideoVAE(checkpoint_path=self.config["dit_original_ckpt"], device=vae_device, dtype=GET_DTYPE(), load_encoder=self.config["task"] == "i2av")
 
         # Audio VAE
         audio_vae = LTX2AudioVAE(
@@ -101,8 +98,125 @@ class LTX2Runner(DefaultRunner):
 
         return video_latent_shape, audio_latent_shape
 
-    def init_scheduler(self):
-        self.scheduler = LTX2Scheduler(self.config)
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_t2av(self):
+        self.video_denoise_mask = None
+        self.initial_video_latent = None
+        self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
+        text_encoder_output = self.run_text_encoder(self.input_info)
+        torch_device_module.empty_cache()
+        gc.collect()
+        return {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": None,
+        }
+
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_i2av(self):
+        self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
+        text_encoder_output = self.run_text_encoder(self.input_info)
+        # Prepare image conditioning if provided
+        logger.info(f"🖼️  I2AV mode: processing {len(self.input_info.images)} image conditioning(s)")
+        self.video_denoise_mask, self.initial_video_latent = self._prepare_image_conditioning()
+        torch_device_module.empty_cache()
+        gc.collect()
+
+        return {
+            "text_encoder_output": text_encoder_output,
+        }
+
+    def _prepare_image_conditioning(self):
+        """
+        Prepare image conditioning by loading images and encoding them to latents.
+
+        Returns:
+            tuple: (video_denoise_mask, initial_video_latent)
+                - video_denoise_mask: Mask indicating which frames to denoise (unpatchified, shape [1, F, H, W])
+                - initial_video_latent: Initial latent with conditioned frames (unpatchified, shape [C, F, H, W])
+        """
+        logger.info(f"🖼️  Preparing {len(self.input_info.images)} image conditioning(s)")
+
+        # Get latent shape
+        C, F, H, W = self.input_info.video_latent_shape
+        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
+        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
+
+        # Initialize denoise mask (1 = denoise, 0 = keep original)
+        # Shape: [1, F, H, W]
+        video_denoise_mask = torch.ones(
+            1,
+            F,
+            H,
+            W,
+            dtype=torch.float32,
+            device=AI_DEVICE,
+        )
+
+        # Initialize initial latent as zeros
+        initial_video_latent = torch.zeros(
+            C,
+            F,
+            H,
+            W,
+            dtype=GET_DTYPE(),
+            device=AI_DEVICE,
+        )
+
+        # Process each image conditioning
+        for image_path, frame_idx, strength in self.input_info.images:
+            logger.info(f"  📷 Loading image: {image_path} for frame {frame_idx} with strength {strength}")
+
+            # Load and preprocess image
+            image = load_image_conditioning(
+                image_path=image_path,
+                height=target_height,
+                width=target_width,
+                dtype=GET_DTYPE(),
+                device=AI_DEVICE,
+            )
+
+            # Encode image to latent space
+            # image shape: [1, C, 1, H, W]
+            with torch.no_grad():
+                encoded_latent = self.video_vae.encode(image)
+
+            # Remove batch dimension: [1, C, 1, H_latent, W_latent] -> [C, 1, H_latent, W_latent]
+            encoded_latent = encoded_latent.squeeze(0)
+
+            # Verify frame index is valid
+            if frame_idx < 0 or frame_idx >= F:
+                logger.warning(f"⚠️  Frame index {frame_idx} out of range [0, {F - 1}], skipping")
+                continue
+
+            # Get the latent frame index by converting pixel frame to latent frame
+            # For LTX2, temporal compression is 8x, so latent_frame_idx = (frame_idx - 1) // 8 + 1 for frame_idx > 0
+            # or 0 for frame_idx == 0
+            if frame_idx == 0:
+                latent_frame_idx = 0
+            else:
+                latent_frame_idx = (frame_idx - 1) // self.config["vae_scale_factors"][0] + 1
+
+            if latent_frame_idx >= F:
+                logger.warning(f"⚠️  Latent frame index {latent_frame_idx} out of range [0, {F - 1}], skipping")
+                continue
+
+            # Set the latent at the specified frame
+            # encoded_latent shape: [C, 1, H_latent, W_latent]
+            initial_video_latent[:, latent_frame_idx : latent_frame_idx + 1, :, :] = encoded_latent
+
+            # Update denoise mask based on strength
+            # strength = 1.0 means keep original (don't denoise)
+            # strength = 0.0 means fully denoise
+            video_denoise_mask[:, latent_frame_idx, :, :] = 1.0 - strength
+
+            logger.info(f"  ✓ Encoded image to latent frame {latent_frame_idx}")
+
+        torch_device_module.empty_cache()
+        gc.collect()
+
+        logger.info(f"✓ Image conditioning prepared successfully")
+
+        return video_denoise_mask, initial_video_latent
 
     @ProfilingContext4DebugL1(
         "Run Text Encoder",
@@ -136,6 +250,30 @@ class LTX2Runner(DefaultRunner):
 
         return text_encoder_output
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Decoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
+        metrics_labels=["LTX2Runner"],
+    )
+    def run_vae_decoder(self, v_latent, a_latent):
+        """Decode video and audio latents to frames and waveform."""
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.video_vae, self.audio_vae = self.load_vae()
+
+        # Decode video latents (returns iterator)
+        video = self.video_vae.decode(v_latent.unsqueeze(0).to(GET_DTYPE()))
+        # Decode audio latents
+        audio = self.audio_vae.decode(a_latent.unsqueeze(0).to(GET_DTYPE()))
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.video_vae
+            del self.audio_vae
+            torch_device_module.empty_cache()
+            gc.collect()
+
+        return video, audio
+
     def init_run(self):
         self.gen_video_final = None
         self.get_video_segment_num()
@@ -144,10 +282,14 @@ class LTX2Runner(DefaultRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
+        # Image conditioning (if any) is already prepared in run_input_encoder
+        # and stored in self.video_denoise_mask and self.initial_video_latent
         self.model.scheduler.prepare(
             seed=self.input_info.seed,
             video_latent_shape=self.input_info.video_latent_shape,
             audio_latent_shape=self.input_info.audio_latent_shape,
+            initial_video_latent=self.initial_video_latent,
+            video_denoise_mask=self.video_denoise_mask,
         )
 
     @ProfilingContext4DebugL2("Run DiT")
@@ -233,27 +375,3 @@ class LTX2Runner(DefaultRunner):
             torch_device_module.empty_cache()
 
         return self.model.scheduler.video_latent_state.latent, self.model.scheduler.audio_latent_state.latent
-
-    @ProfilingContext4DebugL1(
-        "Run VAE Decoder",
-        recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
-        metrics_labels=["LTX2Runner"],
-    )
-    def run_vae_decoder(self, v_latent, a_latent):
-        """Decode video and audio latents to frames and waveform."""
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.video_vae, self.audio_vae = self.load_vae()
-
-        # Decode video latents (returns iterator)
-        video = self.video_vae.decode(v_latent.unsqueeze(0).to(GET_DTYPE()))
-        # Decode audio latents
-        audio = self.audio_vae.decode(a_latent.unsqueeze(0).to(GET_DTYPE()))
-
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.video_vae
-            del self.audio_vae
-            torch_device_module.empty_cache()
-            gc.collect()
-
-        return video, audio

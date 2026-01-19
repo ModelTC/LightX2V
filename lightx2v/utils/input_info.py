@@ -160,6 +160,48 @@ class T2AVInputInfo:
     target_shape: list = field(default_factory=list)
 
 
+@dataclass
+class I2AVInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # Image conditioning: list of (image_path, frame_idx, strength) tuples
+    # frame_idx: which frame to replace with the image (0-indexed)
+    # strength: conditioning strength (0.0-1.0, typically 1.0 for full replacement)
+    images: list = field(default_factory=list)  # list[tuple[str, int, float]]
+    # shape related
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+
+
+def parse_images_arg(images_str: str) -> list:
+    if not images_str or images_str.strip() == "":
+        return []
+
+    result = []
+    for item in images_str.split(","):
+        parts = item.strip().split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid image conditioning format: '{item}'. Expected format: 'image_path:frame_idx:strength'")
+
+        image_path = parts[0].strip()
+        try:
+            frame_idx = int(parts[1].strip())
+            strength = float(parts[2].strip())
+        except ValueError as e:
+            raise ValueError(f"Invalid image conditioning format: '{item}'. frame_idx must be int, strength must be float. Error: {e}")
+
+        if strength < 0.0 or strength > 1.0:
+            raise ValueError(f"Invalid strength value {strength} for image '{image_path}'. Strength must be between 0.0 and 1.0.")
+
+        result.append((image_path, frame_idx, strength))
+
+    return result
+
+
 def set_input_info(args):
     if args.task == "t2v":
         input_info = T2VInputInfo(
@@ -239,6 +281,15 @@ def set_input_info(args):
             seed=args.seed,
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
+        )
+    elif args.task == "i2av":
+        input_info = I2AVInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            images=parse_images_arg(args.images),
             save_result_path=args.save_result_path,
             return_result_tensor=args.return_result_tensor,
         )
