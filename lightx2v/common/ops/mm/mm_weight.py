@@ -2054,3 +2054,90 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
+
+
+@MM_WEIGHT_REGISTER("fp8-pertensor")
+class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path,
+        )
+        self.load_func = self.load_fp8_pertensor_sym
+        self.act_quant_func = self.act_quant_fp8_pertensor_sym
+        self.weight_need_transpose = True
+        self.scale_force_fp32 = True
+
+    def _update_base_attrs(self):
+        super()._update_base_attrs()
+        self.input_scale_name = self.weight_name.removesuffix(".weight") + ".input_scale"
+        self.base_attrs.append((self.input_scale_name, "input_scale", False))
+
+    def load_quantized(self, weight_dict):
+        super().load_quantized(weight_dict)
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            self.input_scale = device_tensors.get("input_scale")
+            self.pin_input_scale = pin_tensors.get("input_scale")
+        elif self.create_cuda_buffer:
+            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
+            self.input_scale_cuda_buffer = result.get("input_scale")
+        elif self.create_cpu_buffer:
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
+            self.pin_input_scale = result.get("input_scale")
+            self.input_scale = None
+
+    def post_process(self):
+        super().post_process()
+        if self.scale_force_fp32:
+            if hasattr(self, "input_scale") and self.input_scale is not None:
+                self.input_scale = self.input_scale.to(torch.float32)
+            if hasattr(self, "pin_input_scale") and self.pin_input_scale is not None:
+                self.pin_input_scale = self.pin_input_scale.to(torch.float32)
+
+    def load_fp8_pertensor_sym(self, weight_dict):
+        if self.config.get("weight_auto_quant", False):
+            raise NotImplementedError
+        else:
+            self.load_quantized(weight_dict)
+
+    def act_quant_fp8_pertensor_sym(self, x):
+        quantized = torch.clamp(x / self.input_scale, -448, 448).to(torch.float8_e4m3fn)
+        return quantized
+
+    def apply(self, input_tensor):
+        shape = (input_tensor.shape[0], self.weight.shape[1])
+        dtype = input_tensor.dtype
+        device = input_tensor.device
+        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        input_tensor_quant = self.act_quant_func(input_tensor)
+        output_tensor = torch._scaled_mm(
+            input_tensor_quant,
+            self.weight,
+            scale_a=self.input_scale,
+            scale_b=self.weight_scale.reshape(1),
+            bias=self._get_actual_bias().to(dtype) if self.bias is not None else None,
+            out_dtype=dtype,
+            use_fast_accum=True,
+        )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
+        return output_tensor

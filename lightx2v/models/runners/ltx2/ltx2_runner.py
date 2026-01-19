@@ -42,14 +42,33 @@ class LTX2Runner(DefaultRunner):
         if not lora_configs:
             model = LTX2Model(**wan_model_kwargs)
         else:
-            pass
+            raise NotImplementedError
         return model
 
     def load_text_encoder(self):
+        # offload config
+        text_encoder_offload = self.config.get("gemma_cpu_offload", self.config.get("cpu_offload", False))
+        if text_encoder_offload:
+            text_encoder_device = torch.device("cpu")
+        else:
+            text_encoder_device = torch.device(AI_DEVICE)
+
+        if "dit_original_ckpt" in self.config:
+            ckpt_path = self.config["dit_original_ckpt"]
+        elif "dit_quantized_ckpt" in self.config:
+            ckpt_path = self.config["dit_quantized_ckpt"]
+        else:
+            ckpt_path = os.path.join(self.config["model_path"], "transformer")
+
+        if "gemma_original_ckpt" in self.config:
+            gemma_ckpt = self.config["gemma_original_ckpt"]
+        else:
+            gemma_ckpt = self.config["model_path"]
+
         text_encoder = LTX2TextEncoder(
-            checkpoint_path=self.config["dit_original_ckpt"],
-            gemma_root=self.config["gemma_original_ckpt"],
-            device="cuda",
+            checkpoint_path=ckpt_path,
+            gemma_root=gemma_ckpt,
+            device=text_encoder_device,
             dtype=torch.bfloat16,
         )
         text_encoders = [text_encoder]
@@ -64,12 +83,19 @@ class LTX2Runner(DefaultRunner):
         else:
             vae_device = torch.device(AI_DEVICE)
 
+        if "dit_original_ckpt" in self.config:
+            ckpt_path = self.config["dit_original_ckpt"]
+        elif "dit_quantized_ckpt" in self.config:
+            ckpt_path = self.config["dit_quantized_ckpt"]
+        else:
+            ckpt_path = os.path.join(self.config["model_path"], "transformer")
+
         # Video VAE
-        video_vae = LTX2VideoVAE(checkpoint_path=self.config["dit_original_ckpt"], device=vae_device, dtype=GET_DTYPE(), load_encoder=self.config["task"] == "i2av")
+        video_vae = LTX2VideoVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), load_encoder=self.config["task"] == "i2av")
 
         # Audio VAE
         audio_vae = LTX2AudioVAE(
-            checkpoint_path=self.config["dit_original_ckpt"],
+            checkpoint_path=ckpt_path,
             device=vae_device,
             dtype=GET_DTYPE(),
         )

@@ -20,12 +20,13 @@ class LTX2TransformerWeights(WeightModule):
             self.mm_type = "Calib"
             assert not config["cpu_offload"]
         self.lazy_load = self.config.get("lazy_load", False)
+        self.skip_fp8_block_index = self.config.get("skip_fp8_block_index", [])
         self.blocks = WeightModuleList(
             [
                 LTX2TransformerBlock(
                     block_index=i,
                     task=self.task,
-                    mm_type=self.mm_type,
+                    mm_type=self.mm_type if i not in self.skip_fp8_block_index else "Default",
                     config=self.config,
                     create_cuda_buffer=False,
                     create_cpu_buffer=False,

@@ -15,6 +15,8 @@
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "av_ca_timestep_scale_multiplier": 1000,
-    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev.safetensors",
-    "gemma_original_ckpt": "/data/nvme0/gushiqiao/models/official_models/LTX-2/"
+    "dit_quantized_ckpt": "/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev-fp8.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-pertensor",
+    "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47]
 }

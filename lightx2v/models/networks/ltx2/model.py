@@ -49,6 +49,7 @@ class LTX2Model(CompiledMethodsMixin):
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
             assert self.config.get("dit_quant_scheme", "Default") in [
+                "fp8-pertensor",
                 "fp8-triton",
                 "int8-triton",
                 "fp8-vllm",

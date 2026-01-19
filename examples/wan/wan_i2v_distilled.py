@@ -1,25 +1,18 @@
 """
-Wan2.2 distilled model image-to-video generation example.
-This example demonstrates how to use LightX2V with Wan2.2 distilled model for I2V generation.
+Wan2.2 distilled model text-to-video generation example.
+This example demonstrates how to use LightX2V with Wan2.2 distilled model for T2V generation.
 """
 
 from lightx2v import LightX2VPipeline
 
-# Initialize pipeline for Wan2.2 distilled I2V task
-# For wan2.1, use model_cls="wan2.1_distill"
-pipe = LightX2VPipeline(
-    model_path="/path/to/wan2.2/Wan2.2-I2V-A14B",
-    model_cls="wan2.2_moe_distill",
-    task="i2v",
-    # Distilled weights: For wan2.1, only need to specify dit_original_ckpt="/path/to/wan2.1_i2v_720p_lightx2v_4step.safetensors"
-    low_noise_original_ckpt="/path/to/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
-    high_noise_original_ckpt="/path/to/wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030.safetensors",
-)
+pipe = LightX2VPipeline(model_path="/data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-T2V-A14B", model_cls="wan2.2_moe_distill", task="t2v")
 
-# Alternative: create generator from config JSON file
-# pipe.create_generator(
-#     config_json="../configs/wan22/wan_moe_i2v_distill.json"
-# )
+
+pipe.enable_quantize(
+    dit_quantized=True,
+    high_noise_quantized_ckpt="/data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-T2V-A14B-disilled/wan2.2_t2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step_1217.safetensors",
+    low_noise_quantized_ckpt="/data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-T2V-A14B-disilled/wan2.2_t2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step_1217.safetensors",
+)
 
 # Enable offloading to significantly reduce VRAM usage
 # Suitable for RTX 30/40/50 consumer GPUs
@@ -31,7 +24,6 @@ pipe.enable_offload(
     vae_offload=False,
 )
 
-# Create generator manually with specified parameters
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=4,
@@ -43,14 +35,12 @@ pipe.create_generator(
 )
 
 seed = 42
-prompt = "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
+prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-save_result_path = "/path/to/save_results/output.mp4"
-image_path = "/path/to/img_0.jpg"
+save_result_path = "./output.mp4"
 
 pipe.generate(
     seed=seed,
-    image_path=image_path,
     prompt=prompt,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
