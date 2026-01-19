@@ -53,8 +53,7 @@ class SageAttn2Weight(AttnWeightTemplate):
             k,
             v,
             tensor_layout="NHD",
-        )
-        x = x.view(bs * max_seqlen_q, -1)
+        ).view(bs * max_seqlen_q, -1)
         return x
 
 
