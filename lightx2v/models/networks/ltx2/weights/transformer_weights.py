@@ -21,6 +21,7 @@ class LTX2TransformerWeights(WeightModule):
             assert not config["cpu_offload"]
         self.lazy_load = self.config.get("lazy_load", False)
         self.skip_fp8_block_index = self.config.get("skip_fp8_block_index", [])
+        self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.blocks = WeightModuleList(
             [
                 LTX2TransformerBlock(
@@ -38,6 +39,29 @@ class LTX2TransformerWeights(WeightModule):
             ]
         )
         self.add_module("blocks", self.blocks)
+
+    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+        if config["cpu_offload"]:
+            if config["offload_granularity"] == "block":
+                self.offload_blocks_num = 2
+                self.offload_block_cuda_buffers = WeightModuleList(
+                    [
+                        LTX2TransformerBlock(
+                            block_index=i,
+                            task=self.task,
+                            mm_type=self.mm_type if i not in self.skip_fp8_block_index else "Default",
+                            config=self.config,
+                            create_cuda_buffer=True,
+                            create_cpu_buffer=False,
+                            block_prefix="transformer_blocks",
+                            lazy_load=self.lazy_load,
+                            lazy_load_path=lazy_load_path,
+                        )
+                        for i in range(self.offload_blocks_num)
+                    ]
+                )
+                self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
+                self.offload_phase_cuda_buffers = None
 
 
 class LTX2TransformerBlock(WeightModule):

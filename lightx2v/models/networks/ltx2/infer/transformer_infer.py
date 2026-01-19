@@ -91,175 +91,192 @@ class LTX2TransformerInfer:
         return ffn_phase.net_2.apply(x)
 
     @torch.no_grad()
+    def infer_block(self, block, vx, ax, pre_infer_out: LTX2PreInferModuleOutput):
+        """
+        Perform inference for a single transformer block.
+
+        Args:
+            block: Single LTX2TransformerBlock instance
+            vx: Video hidden states
+            ax: Audio hidden states
+            pre_infer_out: LTX2PreInferModuleOutput from pre-inference
+
+        Returns:
+            Tuple of (vx, ax) after processing this block
+        """
+        # Video self-attention and cross-attention
+        vshift_msa, vscale_msa, vgate_msa = self._get_ada_values(
+            block.scale_shift_table.tensor,
+            pre_infer_out.video_args.timesteps,
+            slice(0, 3),
+        )
+        norm_vx = rms_norm(vx) * (1 + vscale_msa) + vshift_msa
+        vx = (
+            vx
+            + self._infer_attn(
+                attn_phase=block.compute_phases[0],
+                x=norm_vx,
+                pe=pre_infer_out.video_args.positional_embeddings,
+                is_audio=False,
+            )
+            * vgate_msa
+        )
+
+        vx = vx + self._infer_attn(
+            attn_phase=block.compute_phases[1],
+            x=rms_norm(vx),
+            context=pre_infer_out.video_args.context,
+            is_audio=False,
+        )
+
+        del vshift_msa, vscale_msa, vgate_msa
+
+        # Audio self-attention and cross-attention
+        ashift_msa, ascale_msa, agate_msa = self._get_ada_values(
+            block.audio_scale_shift_table.tensor,
+            pre_infer_out.audio_args.timesteps,
+            slice(0, 3),
+        )
+
+        norm_ax = rms_norm(ax) * (1 + ascale_msa) + ashift_msa
+        ax = (
+            ax
+            + self._infer_attn(
+                attn_phase=block.compute_phases[2],
+                x=norm_ax,
+                pe=pre_infer_out.audio_args.positional_embeddings,
+                is_audio=True,
+            )
+            * agate_msa
+        )
+
+        ax = ax + self._infer_attn(
+            attn_phase=block.compute_phases[3],
+            x=rms_norm(ax),
+            context=pre_infer_out.audio_args.context,
+            is_audio=True,
+        )
+
+        del ashift_msa, ascale_msa, agate_msa
+
+        # Audio-video cross-attention
+        vx_norm3 = rms_norm(vx)
+        ax_norm3 = rms_norm(ax)
+
+        # Get audio scale-shift values
+        (
+            scale_ca_audio_hidden_states_a2v,
+            shift_ca_audio_hidden_states_a2v,
+            scale_ca_audio_hidden_states_v2a,
+            shift_ca_audio_hidden_states_v2a,
+            gate_out_v2a,
+        ) = self._get_av_ca_ada_values(
+            block.scale_shift_table_a2v_ca_audio.tensor,
+            pre_infer_out.audio_args.cross_scale_shift_timestep,
+            pre_infer_out.audio_args.cross_gate_timestep,
+        )
+
+        # Get video scale-shift values
+        (
+            scale_ca_video_hidden_states_a2v,
+            shift_ca_video_hidden_states_a2v,
+            scale_ca_video_hidden_states_v2a,
+            shift_ca_video_hidden_states_v2a,
+            gate_out_a2v,
+        ) = self._get_av_ca_ada_values(
+            block.scale_shift_table_a2v_ca_video.tensor,
+            pre_infer_out.video_args.cross_scale_shift_timestep,
+            pre_infer_out.video_args.cross_gate_timestep,
+        )
+
+        # Audio-to-video cross-attention
+        vx_scaled = vx_norm3 * (1 + scale_ca_video_hidden_states_a2v) + shift_ca_video_hidden_states_a2v
+        ax_scaled = ax_norm3 * (1 + scale_ca_audio_hidden_states_a2v) + shift_ca_audio_hidden_states_a2v
+
+        vx = (
+            vx
+            + self._infer_attn(
+                attn_phase=block.compute_phases[4],
+                x=vx_scaled,
+                context=ax_scaled,
+                pe=pre_infer_out.video_args.cross_positional_embeddings,
+                k_pe=pre_infer_out.audio_args.cross_positional_embeddings,
+                is_audio=True,
+            )
+            * gate_out_a2v
+        )
+
+        # Video-to-audio cross-attention
+        ax_scaled = ax_norm3 * (1 + scale_ca_audio_hidden_states_v2a) + shift_ca_audio_hidden_states_v2a
+        vx_scaled = vx_norm3 * (1 + scale_ca_video_hidden_states_v2a) + shift_ca_video_hidden_states_v2a
+        ax = (
+            ax
+            + self._infer_attn(
+                attn_phase=block.compute_phases[5],
+                x=ax_scaled,
+                context=vx_scaled,
+                pe=pre_infer_out.audio_args.cross_positional_embeddings,
+                k_pe=pre_infer_out.video_args.cross_positional_embeddings,
+                is_audio=True,
+            )
+            * gate_out_v2a
+        )
+
+        del gate_out_a2v, gate_out_v2a
+        del (
+            scale_ca_video_hidden_states_a2v,
+            shift_ca_video_hidden_states_a2v,
+            scale_ca_audio_hidden_states_a2v,
+            shift_ca_audio_hidden_states_a2v,
+            scale_ca_video_hidden_states_v2a,
+            shift_ca_video_hidden_states_v2a,
+            scale_ca_audio_hidden_states_v2a,
+            shift_ca_audio_hidden_states_v2a,
+        )
+
+        # Video feed-forward
+        vshift_mlp, vscale_mlp, vgate_mlp = self._get_ada_values(
+            block.scale_shift_table.tensor,
+            pre_infer_out.video_args.timesteps,
+            slice(3, None),
+        )
+        vx_scaled = rms_norm(vx) * (1 + vscale_mlp) + vshift_mlp
+        vx = vx + self._infer_ffn(block.compute_phases[6], vx_scaled) * vgate_mlp
+        del vshift_mlp, vscale_mlp, vgate_mlp
+
+        # Audio feed-forward
+        ashift_mlp, ascale_mlp, agate_mlp = self._get_ada_values(
+            block.audio_scale_shift_table.tensor,
+            pre_infer_out.audio_args.timesteps,
+            slice(3, None),
+        )
+        ax_scaled = rms_norm(ax) * (1 + ascale_mlp) + ashift_mlp
+        ax = ax + self._infer_ffn(block.compute_phases[7], ax_scaled) * agate_mlp
+        del ashift_mlp, ascale_mlp, agate_mlp
+
+        if self.clean_cuda_cache:
+            torch.cuda.empty_cache()
+
+        return vx, ax
+
     def infer(self, weights, pre_infer_out: LTX2PreInferModuleOutput):
         """
-        Perform transformer block inference.
+        Perform transformer blocks inference.
 
         Args:
             weights: LTX2TransformerWeights instance
             pre_infer_out: LTX2PreInferModuleOutput from pre-inference
 
         Returns:
-            Tuple of (video_x, audio_x) after transformer blocks
+            Tuple of (video_x, audio_x, video_timestep, audio_timestep) after transformer blocks
         """
         vx = pre_infer_out.video_args.x
         ax = pre_infer_out.audio_args.x
 
-        # Process transformer blocks
+        # Process all transformer blocks
         for block_idx in range(self.blocks_num):
             block = weights.blocks[block_idx]
-
-            # Video self-attention and cross-attention
-            vshift_msa, vscale_msa, vgate_msa = self._get_ada_values(
-                block.scale_shift_table.tensor,
-                pre_infer_out.video_args.timesteps,
-                slice(0, 3),
-            )
-            norm_vx = rms_norm(vx) * (1 + vscale_msa) + vshift_msa
-            vx = (
-                vx
-                + self._infer_attn(
-                    attn_phase=block.compute_phases[0],
-                    x=norm_vx,
-                    pe=pre_infer_out.video_args.positional_embeddings,
-                    is_audio=False,
-                )
-                * vgate_msa
-            )
-
-            vx = vx + self._infer_attn(
-                attn_phase=block.compute_phases[1],
-                x=rms_norm(vx),
-                context=pre_infer_out.video_args.context,
-                is_audio=False,
-            )
-
-            del vshift_msa, vscale_msa, vgate_msa
-
-            # Audio self-attention and cross-attention
-            ashift_msa, ascale_msa, agate_msa = self._get_ada_values(
-                block.audio_scale_shift_table.tensor,
-                pre_infer_out.audio_args.timesteps,
-                slice(0, 3),
-            )
-
-            norm_ax = rms_norm(ax) * (1 + ascale_msa) + ashift_msa
-            ax = (
-                ax
-                + self._infer_attn(
-                    attn_phase=block.compute_phases[2],
-                    x=norm_ax,
-                    pe=pre_infer_out.audio_args.positional_embeddings,
-                    is_audio=True,
-                )
-                * agate_msa
-            )
-
-            ax = ax + self._infer_attn(
-                attn_phase=block.compute_phases[3],
-                x=rms_norm(ax),
-                context=pre_infer_out.audio_args.context,
-                is_audio=True,
-            )
-
-            del ashift_msa, ascale_msa, agate_msa
-
-            # Audio-video cross-attention
-            vx_norm3 = rms_norm(vx)
-            ax_norm3 = rms_norm(ax)
-
-            # Get audio scale-shift values
-            (
-                scale_ca_audio_hidden_states_a2v,
-                shift_ca_audio_hidden_states_a2v,
-                scale_ca_audio_hidden_states_v2a,
-                shift_ca_audio_hidden_states_v2a,
-                gate_out_v2a,
-            ) = self._get_av_ca_ada_values(
-                block.scale_shift_table_a2v_ca_audio.tensor,
-                pre_infer_out.audio_args.cross_scale_shift_timestep,
-                pre_infer_out.audio_args.cross_gate_timestep,
-            )
-
-            # Get video scale-shift values
-            (
-                scale_ca_video_hidden_states_a2v,
-                shift_ca_video_hidden_states_a2v,
-                scale_ca_video_hidden_states_v2a,
-                shift_ca_video_hidden_states_v2a,
-                gate_out_a2v,
-            ) = self._get_av_ca_ada_values(
-                block.scale_shift_table_a2v_ca_video.tensor,
-                pre_infer_out.video_args.cross_scale_shift_timestep,
-                pre_infer_out.video_args.cross_gate_timestep,
-            )
-
-            # Audio-to-video cross-attention
-            vx_scaled = vx_norm3 * (1 + scale_ca_video_hidden_states_a2v) + shift_ca_video_hidden_states_a2v
-            ax_scaled = ax_norm3 * (1 + scale_ca_audio_hidden_states_a2v) + shift_ca_audio_hidden_states_a2v
-
-            vx = (
-                vx
-                + self._infer_attn(
-                    attn_phase=block.compute_phases[4],
-                    x=vx_scaled,
-                    context=ax_scaled,
-                    pe=pre_infer_out.video_args.cross_positional_embeddings,
-                    k_pe=pre_infer_out.audio_args.cross_positional_embeddings,
-                    is_audio=True,
-                )
-                * gate_out_a2v
-            )
-
-            # Video-to-audio cross-attention
-            ax_scaled = ax_norm3 * (1 + scale_ca_audio_hidden_states_v2a) + shift_ca_audio_hidden_states_v2a
-            vx_scaled = vx_norm3 * (1 + scale_ca_video_hidden_states_v2a) + shift_ca_video_hidden_states_v2a
-            ax = (
-                ax
-                + self._infer_attn(
-                    attn_phase=block.compute_phases[5],
-                    x=ax_scaled,
-                    context=vx_scaled,
-                    pe=pre_infer_out.audio_args.cross_positional_embeddings,
-                    k_pe=pre_infer_out.video_args.cross_positional_embeddings,
-                    is_audio=True,
-                )
-                * gate_out_v2a
-            )
-
-            del gate_out_a2v, gate_out_v2a
-            del (
-                scale_ca_video_hidden_states_a2v,
-                shift_ca_video_hidden_states_a2v,
-                scale_ca_audio_hidden_states_a2v,
-                shift_ca_audio_hidden_states_a2v,
-                scale_ca_video_hidden_states_v2a,
-                shift_ca_video_hidden_states_v2a,
-                scale_ca_audio_hidden_states_v2a,
-                shift_ca_audio_hidden_states_v2a,
-            )
-            # Video feed-forward
-            vshift_mlp, vscale_mlp, vgate_mlp = self._get_ada_values(
-                block.scale_shift_table.tensor,
-                pre_infer_out.video_args.timesteps,
-                slice(3, None),
-            )
-            vx_scaled = rms_norm(vx) * (1 + vscale_mlp) + vshift_mlp
-            vx = vx + self._infer_ffn(block.compute_phases[6], vx_scaled) * vgate_mlp
-            del vshift_mlp, vscale_mlp, vgate_mlp
-
-            # Audio feed-forward
-            ashift_mlp, ascale_mlp, agate_mlp = self._get_ada_values(
-                block.audio_scale_shift_table.tensor,
-                pre_infer_out.audio_args.timesteps,
-                slice(3, None),
-            )
-            ax_scaled = rms_norm(ax) * (1 + ascale_mlp) + ashift_mlp
-            ax = ax + self._infer_ffn(block.compute_phases[7], ax_scaled) * agate_mlp
-            del ashift_mlp, ascale_mlp, agate_mlp
-
-            if self.clean_cuda_cache:
-                torch.cuda.empty_cache()
+            vx, ax = self.infer_block(block, vx, ax, pre_infer_out)
 
         return vx, ax, pre_infer_out.video_args.embedded_timestep, pre_infer_out.audio_args.embedded_timestep
 

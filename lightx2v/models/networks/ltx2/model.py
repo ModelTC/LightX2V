@@ -7,9 +7,9 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-# from lightx2v.models.networks.wan.infer.offload.transformer_infer import (
-#     WanOffloadTransformerInfer,
-# )
+from lightx2v.models.networks.ltx2.infer.offload.transformer_infer import (
+    LTX2OffloadTransformerInfer,
+)
 from lightx2v.models.networks.ltx2.infer.post_infer import LTX2PostInfer
 from lightx2v.models.networks.ltx2.infer.pre_infer import LTX2PreInfer
 from lightx2v.models.networks.ltx2.infer.transformer_infer import (
@@ -88,7 +88,7 @@ class LTX2Model(CompiledMethodsMixin):
     def _init_infer_class(self):
         self.pre_infer_class = LTX2PreInfer
         self.post_infer_class = LTX2PostInfer
-        self.transformer_infer_class = LTX2TransformerInfer  # if not self.cpu_offload else WanOffloadTransformerInfer
+        self.transformer_infer_class = LTX2TransformerInfer if not self.cpu_offload else LTX2OffloadTransformerInfer
 
     def _should_load_weights(self):
         """Determine if current rank should load weights from disk."""
@@ -385,10 +385,12 @@ class LTX2Model(CompiledMethodsMixin):
     def to_cpu(self):
         self.pre_weight.to_cpu()
         self.transformer_weights.to_cpu()
+        self.post_weight.to_cpu()
 
     def to_cuda(self):
         self.pre_weight.to_cuda()
         self.transformer_weights.to_cuda()
+        self.post_weight.to_cuda()
 
     @torch.no_grad()
     def infer(self, inputs):
@@ -397,24 +399,27 @@ class LTX2Model(CompiledMethodsMixin):
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
+                self.post_weight.to_cuda()
 
         if self.config["enable_cfg"]:
             if self.config["cfg_parallel"]:
-                # # ==================== CFG Parallel Processing ====================
-                # cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-                # assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
-                # cfg_p_rank = dist.get_rank(cfg_p_group)
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+                if cfg_p_rank == 0:
+                    v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+                else:
+                    v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
 
-                # if cfg_p_rank == 0:
-                #     noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
-                # else:
-                #     noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
-
-                # noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
-                # dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
-                # noise_pred_cond = noise_pred_list[0]  # cfg_p_rank == 0
-                # noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
+                v_noise_pred_list = [torch.zeros_like(v_noise_pred) for _ in range(2)]
+                a_noise_pred_list = [torch.zeros_like(a_noise_pred) for _ in range(2)]
+                dist.all_gather(v_noise_pred_list, v_noise_pred, group=cfg_p_group)
+                dist.all_gather(a_noise_pred_list, a_noise_pred, group=cfg_p_group)
+                v_noise_pred_cond = v_noise_pred_list[0]  # cfg_p_rank == 0
+                v_noise_pred_uncond = v_noise_pred_list[1]  # cfg_p_rank == 1
+                a_noise_pred_cond = a_noise_pred_list[0]  # cfg_p_rank == 0
+                a_noise_pred_uncond = a_noise_pred_list[1]  # cfg_p_rank == 1
                 pass
             else:
                 # ==================== CFG Processing ====================
@@ -434,7 +439,7 @@ class LTX2Model(CompiledMethodsMixin):
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
+                self.post_weight.to_cpu()
 
     @compiled_method()
     @torch.no_grad()

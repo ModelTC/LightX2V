@@ -10,6 +10,9 @@ from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.av_encoder import (
 )
 from lightx2v.models.input_encoders.hf.ltx2.gemma.tokenizer import LTXVGemmaTokenizer
 from lightx2v.utils.ltx2_utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def _find_matching_dir(root_path: str, pattern: str) -> str:
@@ -46,6 +49,7 @@ class LTX2TextEncoder:
         gemma_root: str,
         device: torch.device,
         dtype: torch.dtype = torch.bfloat16,
+        cpu_offload: bool = False,
     ):
         """
         Initialize the simplified text encoder loader.
@@ -60,6 +64,7 @@ class LTX2TextEncoder:
         self.gemma_root = gemma_root
         self.device = device
         self.dtype = dtype
+        self.cpu_offload = cpu_offload
         self.loader = SafetensorsModelStateDictLoader()
         self.text_encoder = self.load()
 
@@ -129,10 +134,14 @@ class LTX2TextEncoder:
         Returns:
             List of tuples, each containing (v_context, a_context) tensors for each prompt.
         """
+        if self.cpu_offload:
+            self.text_encoder = self.text_encoder.to(AI_DEVICE)
         result = []
         for prompt in prompts:
             v_context, a_context, _ = self.text_encoder(prompt)
             result.append((v_context, a_context))
+        if self.cpu_offload:
+            self.text_encoder = self.text_encoder.to("cpu")
         return result
 
     def infer(

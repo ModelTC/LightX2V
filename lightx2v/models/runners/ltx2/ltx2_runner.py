@@ -70,6 +70,7 @@ class LTX2Runner(DefaultRunner):
             gemma_root=gemma_ckpt,
             device=text_encoder_device,
             dtype=torch.bfloat16,
+            cpu_offload=text_encoder_offload,
         )
         text_encoders = [text_encoder]
         return text_encoders
@@ -91,14 +92,10 @@ class LTX2Runner(DefaultRunner):
             ckpt_path = os.path.join(self.config["model_path"], "transformer")
 
         # Video VAE
-        video_vae = LTX2VideoVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), load_encoder=self.config["task"] == "i2av")
+        video_vae = LTX2VideoVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), load_encoder=self.config["task"] == "i2av", cpu_offload=vae_offload)
 
         # Audio VAE
-        audio_vae = LTX2AudioVAE(
-            checkpoint_path=ckpt_path,
-            device=vae_device,
-            dtype=GET_DTYPE(),
-        )
+        audio_vae = LTX2AudioVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), cpu_offload=vae_offload)
 
         return video_vae, audio_vae
 
