@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# set path and first
+# set path firstly
 lightx2v_path=
 model_path= # path to Wan2.1-T2V-1.3B
 sf_model_path= # path to gdhe17/Self-Forcing

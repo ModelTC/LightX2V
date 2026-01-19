@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# set path and first
-export lightx2v_path=
-export model_path=
+# set path firstly
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=0
 

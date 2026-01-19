@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# set path and first
-export lightx2v_path=/path/to/LightX2V
-export model_path=/path/to/Qwen/Qwen-Image-Layered
+# set path firstly
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen/Qwen-Image-Layered
 # add the latest diffusers to PYTHONPATH
 export PYTHONPATH=$PYTHONPATH:/path/to/diffusers/src/
 
