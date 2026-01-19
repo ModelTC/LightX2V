@@ -4,7 +4,7 @@
     "text_len": 512,
     "target_height": 512,
     "target_width": 768,
-    "attn_type": "torch_sdpa",
+    "attn_type": "sage_attn2",
     "sample_guide_scale": 4,
     "sample_shift": 8,
     "enable_cfg": true,
@@ -15,5 +15,5 @@
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "av_ca_timestep_scale_multiplier": 1000,
-    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev.safetensors"
+    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
 }
