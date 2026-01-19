@@ -54,7 +54,7 @@ class RingAttnWeight(AttnWeightTemplate):
         attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
-        use_kv_fusion=False,
+        use_tensor_fusion=False,
         enable_head_parallel=False,
         **kwargs,
     ):
@@ -74,6 +74,7 @@ class RingAttnWeight(AttnWeightTemplate):
         """
         assert not enable_head_parallel, "RingAttn can't support head parallel mode."
 
+        use_kv_fusion = use_tensor_fusion
         # 获取当前进程的排名和全局进程数
         cur_rank = dist.get_rank(seq_p_group)
         world_size = dist.get_world_size(seq_p_group)
