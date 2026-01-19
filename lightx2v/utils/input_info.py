@@ -146,6 +146,20 @@ class I2IInputInfo:
     aspect_ratio: str = field(default_factory=str)
 
 
+@dataclass
+class T2AVInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    audio_latent_shape: list = field(default_factory=list)
+    video_latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+
+
 def set_input_info(args):
     if args.task == "t2v":
         input_info = T2VInputInfo(
@@ -219,6 +233,14 @@ def set_input_info(args):
     elif args.task == "i2i":
         input_info = I2IInputInfo(
             seed=args.seed, prompt=args.prompt, negative_prompt=args.negative_prompt, image_path=args.image_path, save_result_path=args.save_result_path, aspect_ratio=args.aspect_ratio
+        )
+    elif args.task == "t2av":
+        input_info = T2AVInputInfo(
+            seed=args.seed,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            save_result_path=args.save_result_path,
+            return_result_tensor=args.return_result_tensor,
         )
     else:
         raise ValueError(f"Unsupported task: {args.task}")
