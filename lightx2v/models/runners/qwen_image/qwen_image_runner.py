@@ -65,10 +65,10 @@ class QwenImageRunner(DefaultRunner):
         if self.is_layered:
             self.layers = self.config.get("layers", 4)
         self.resolution = self.config.get("resolution", 1024)
-        
+
         # Text encoder type: "lightllm_service", "lightllm_kernel", or default (baseline)
         self.text_encoder_type = config.get("text_encoder_type", "baseline")
-        
+
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
 
@@ -91,7 +91,7 @@ class QwenImageRunner(DefaultRunner):
 
     def load_text_encoder(self):
         """Load text encoder based on text_encoder_type configuration.
-        
+
         Supported types:
         - "lightllm_service": LightLLM HTTP service mode
         - "lightllm_kernel": HuggingFace model with Triton kernel optimizations
@@ -101,19 +101,21 @@ class QwenImageRunner(DefaultRunner):
         encoder_config = self.config.copy()
         lightllm_config = self.config.get("lightllm_config", {})
         encoder_config.update(lightllm_config)
-        
+
         if self.text_encoder_type == "lightllm_service":
             from lightx2v.models.input_encoders.lightllm import LightLLMServiceTextEncoder
+
             logger.info("Loading LightLLM service-based text encoder")
             text_encoder = LightLLMServiceTextEncoder(encoder_config)
         elif self.text_encoder_type == "lightllm_kernel":
             from lightx2v.models.input_encoders.lightllm import LightLLMKernelTextEncoder
+
             logger.info("Loading LightLLM Kernel-optimized text encoder")
             text_encoder = LightLLMKernelTextEncoder(encoder_config)
         else:  # baseline or default
             logger.info("Loading HuggingFace baseline text encoder")
             text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
-        
+
         text_encoders = [text_encoder]
         return text_encoders
 
