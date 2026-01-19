@@ -3,38 +3,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-
-def apply_rotary_emb(x, freqs_cis, sequence_dim=1):
-    """Apply rotary position embedding to query/key tensors.
-
-    Follows the diffusers implementation for LongCat/Flux.
-
-    Args:
-        x: Input tensor [B, H, S, D] where H=heads, S=seq_len, D=head_dim
-        freqs_cis: Tuple of (cos, sin) each [S, D]
-        sequence_dim: Which dimension contains sequence (1 or 2)
-
-    Returns:
-        Tensor with rotary embedding applied [B, H, S, D]
-    """
-    cos, sin = freqs_cis  # [S, D]
-    if sequence_dim == 2:
-        cos = cos[None, None, :, :]
-        sin = sin[None, None, :, :]
-    elif sequence_dim == 1:
-        cos = cos[None, :, None, :]
-        sin = sin[None, :, None, :]
-    else:
-        raise ValueError(f"`sequence_dim={sequence_dim}` but should be 1 or 2.")
-
-    cos, sin = cos.to(x.device), sin.to(x.device)
-
-    # Split into real and imaginary parts (interleaved format)
-    x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, H, S, D//2]
-    x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
-
-    out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
-    return out
+from .utils import apply_longcat_rope_with_flashinfer, apply_longcat_rope_with_torch
 
 
 class LongCatImageTransformerInfer(BaseTransformerInfer):
@@ -57,6 +26,14 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
             self.enable_head_parallel = False
+
+        # RoPE function selection
+        rope_funcs = {
+            "flashinfer": apply_longcat_rope_with_flashinfer,
+            "torch": apply_longcat_rope_with_torch,
+        }
+        rope_type = config.get("rope_type", "flashinfer")
+        self.apply_rope_func = rope_funcs.get(rope_type, apply_longcat_rope_with_torch)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -156,9 +133,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         key = torch.cat([txt_key, img_key], dim=0)
         value = torch.cat([txt_value, img_value], dim=0)
 
-        # Apply rotary embedding: [L, H, D] -> [1, L, H, D] -> apply rope -> [L, H, D]
-        query = apply_rotary_emb(query.unsqueeze(0), image_rotary_emb, sequence_dim=1).squeeze(0)
-        key = apply_rotary_emb(key.unsqueeze(0), image_rotary_emb, sequence_dim=1).squeeze(0)
+        # Apply rotary embedding: [L, H, D]
+        query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
@@ -267,9 +243,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         query = block_weights.norm_q.apply(query)
         key = block_weights.norm_k.apply(key)
 
-        # Apply rotary embedding: [L, H, D] -> [1, L, H, D] -> apply rope -> [L, H, D]
-        query = apply_rotary_emb(query.unsqueeze(0), image_rotary_emb, sequence_dim=1).squeeze(0)
-        key = apply_rotary_emb(key.unsqueeze(0), image_rotary_emb, sequence_dim=1).squeeze(0)
+        # Apply rotary embedding: [L, H, D]
+        query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
