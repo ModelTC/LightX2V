@@ -64,10 +64,12 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
             self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
             self.enable_head_parallel = False
+            self.seq_p_tensor_fusion = False
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
@@ -220,6 +222,7 @@ class WanTransformerInfer(BaseTransformerInfer):
                 attention_type=self.self_attn_1_type,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
+                use_tensor_fusion=self.seq_p_tensor_fusion,
                 enable_head_parallel=self.enable_head_parallel,
                 **attn_running_args,
             )

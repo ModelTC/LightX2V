@@ -19,14 +19,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
-ASPECT_RATIO_MAP = {
-    "16:9": [1664, 928],
-    "9:16": [928, 1664],
-    "1:1": [1328, 1328],
-    "4:3": [1472, 1140],
-    "3:4": [768, 1024],
-}
-
 
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
@@ -240,12 +232,37 @@ class ZImageRunner(DefaultRunner):
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def get_input_target_shape(self):
-        if self.input_info.target_shape and len(self.input_info.target_shape) == 2:
-            return self.input_info.target_shape
-        elif self.input_info.aspect_ratio:
-            return ASPECT_RATIO_MAP[self.input_info.aspect_ratio]
-        else:
-            raise NotImplementedError
+        default_aspect_ratios = {
+            "16:9": [1664, 928],
+            "9:16": [928, 1664],
+            "1:1": [1328, 1328],
+            "4:3": [1472, 1140],
+            "3:4": [768, 1024],
+        }
+        as_maps = self.config.get("aspect_ratios", {})
+        as_maps.update(default_aspect_ratios)
+        max_size = self.config.get("max_custom_size", 1664)
+        min_size = self.config.get("min_custom_size", 256)
+
+        if len(self.input_info.target_shape) == 2:
+            height, width = self.input_info.target_shape
+            height, width = int(height), int(width)
+            if width > max_size or height > max_size:
+                scale = max_size / max(width, height)
+                width, height = int(width * scale), int(height * scale)
+                logger.warning(f"Custom shape is too large, scaled to {width}x{height}")
+            width, height = max(width, min_size), max(height, min_size)
+            logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
+            return (width, height)
+
+        aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
+        if aspect_ratio in as_maps:
+            logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
+            width, height = as_maps[aspect_ratio]
+            return (width, height)
+        logger.warning(f"Invalid aspect ratio: {aspect_ratio}, not in {as_maps.keys()}")
+
+        raise NotImplementedError
 
     def set_target_shape(self):
         height, width = self.get_input_target_shape()

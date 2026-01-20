@@ -50,6 +50,15 @@ def set_config(args):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
+        if os.path.exists(os.path.join(config["model_path"], "config.json")):
+            with open(os.path.join(config["model_path"], "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        if os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
+            with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
