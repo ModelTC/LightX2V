@@ -144,8 +144,7 @@ class LightX2VPipeline:
         resize_mode=None,
         audio_fps=24000,
         double_precision_rope=True,
-        rmsnorm_type="torch",
-        modulate_with_rmsnorm_type="torch",
+        norm_modulate_backend="torch",
     ):
         self.resize_mode = resize_mode
         if config_json is not None:
@@ -167,8 +166,7 @@ class LightX2VPipeline:
                 denoising_step_list,
                 audio_fps,
                 double_precision_rope,
-                rmsnorm_type,
-                modulate_with_rmsnorm_type,
+                norm_modulate_backend,
             )
 
         config = set_config(self)
@@ -195,8 +193,7 @@ class LightX2VPipeline:
         denoising_step_list,
         audio_fps,
         double_precision_rope,
-        rmsnorm_type,
-        modulate_with_rmsnorm_type,
+        norm_modulate_backend,
     ):
         self.infer_steps = infer_steps
         self.target_width = width
@@ -222,8 +219,7 @@ class LightX2VPipeline:
             self.cross_attn_2_type = attn_mode
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2"]:
             self.attn_type = attn_mode
-        self.rmsnorm_type = rmsnorm_type
-        self.modulate_with_rmsnorm_type = modulate_with_rmsnorm_type
+        self.norm_modulate_backend = norm_modulate_backend
 
     def set_infer_config_json(self, config_json):
         logger.info(f"Loading infer config from {config_json}")

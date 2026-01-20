@@ -5,6 +5,18 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+from lightx2v.models.networks.wan.infer.triton_ops import fuse_scale_shift_kernel as wan_fuse_scale_shift_kernel
+
+
+def fuse_scale_shift_kernel(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    block_l: int = 128,
+    block_c: int = 128,
+):
+    return wan_fuse_scale_shift_kernel(x, scale.unsqueeze(0), shift.unsqueeze(0), block_l=block_l, block_c=block_c).squeeze(0)
+
 
 @triton.jit
 def _fused_rmsnorm_modulate_kernel(

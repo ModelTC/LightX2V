@@ -12,8 +12,12 @@ def rmsnorm_torch_naive(x, weight=None, bias=None, eps=1e-6):
     return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
 
 
+def modulate_torch_naive(x, scale, shift):
+    return x * (1 + scale) + shift
+
+
 def modulate_with_rmsnorm_torch_naive(x, scale, shift, weight=None, bias=None, eps=1e-6):
-    return (x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)) * (1 + scale) + shift
+    return modulate_torch_naive(rmsnorm_torch_naive(x), scale, shift)
 
 
 def get_timestep_embedding(
