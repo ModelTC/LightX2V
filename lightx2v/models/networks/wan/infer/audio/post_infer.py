@@ -7,11 +7,15 @@ from lightx2v.utils.envs import *
 class WanAudioPostInfer(WanPostInfer):
     def __init__(self, config):
         super().__init__(config)
+        self.config = config
 
     @torch.no_grad()
     def infer(self, x, pre_infer_out):
         t, h, w = pre_infer_out.grid_sizes.tuple
-        grid_sizes = (t - 1, h, w)
+        if self.config.get("f2v_process", False):
+            grid_sizes = (t, h, w)
+        else:
+            grid_sizes = (t - 1, h, w)
 
         x = self.unpatchify(x, grid_sizes)
 
