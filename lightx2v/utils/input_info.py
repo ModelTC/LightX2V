@@ -154,6 +154,42 @@ class I2IInputInfo:
     aspect_ratio: str = field(default_factory=str)
 
 
+@dataclass
+class T2AVInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    audio_latent_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+
+
+@dataclass
+class I2AVInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # Image conditioning: list of (image_path, frame_idx, strength) tuples
+    # frame_idx: which frame to replace with the image (0-indexed)
+    # strength: conditioning strength (0.0-1.0, typically 1.0 for full replacement)
+    images: list = field(default_factory=list)  # list[tuple[str, int, float]]
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+
+
 def init_empty_input_info(task):
     if task == "t2v":
         return T2VInputInfo()
@@ -171,6 +207,10 @@ def init_empty_input_info(task):
         return T2IInputInfo()
     elif task == "i2i":
         return I2IInputInfo()
+    elif task == "t2av":
+        return T2AVInputInfo()
+    elif task == "i2av":
+        return I2AVInputInfo()
     else:
         raise ValueError(f"Unsupported task: {task}")
 

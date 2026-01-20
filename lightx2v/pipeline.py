@@ -6,13 +6,16 @@
 # os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 
 import json
+import os
 
+os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 import torch
 import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -22,7 +25,7 @@ from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # 
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
-from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_object
+from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
@@ -98,6 +101,9 @@ class LightX2VPipeline:
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
+        elif self.model_cls in ["ltx2"]:
+            self.num_channels_latents = 128
+            self.audio_mel_bins = 16
 
         if model_cls in ["qwen-image", "qwen-image-2512", "qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
             self.CONDITION_IMAGE_SIZE = 147456
@@ -136,6 +142,10 @@ class LightX2VPipeline:
         config_json=None,
         rope_type="torch",
         resize_mode=None,
+        audio_fps=24000,
+        double_precision_rope=True,
+        rmsnorm_type="torch",
+        modulate_with_rmsnorm_type="torch",
     ):
         self.resize_mode = resize_mode
         if config_json is not None:
@@ -155,6 +165,10 @@ class LightX2VPipeline:
                 boundary,
                 boundary_step_index,
                 denoising_step_list,
+                audio_fps,
+                double_precision_rope,
+                rmsnorm_type,
+                modulate_with_rmsnorm_type,
             )
 
         config = set_config(self)
@@ -179,6 +193,10 @@ class LightX2VPipeline:
         boundary,
         boundary_step_index,
         denoising_step_list,
+        audio_fps,
+        double_precision_rope,
+        rmsnorm_type,
+        modulate_with_rmsnorm_type,
     ):
         self.infer_steps = infer_steps
         self.target_width = width
@@ -196,12 +214,16 @@ class LightX2VPipeline:
         self.boundary = boundary
         self.boundary_step_index = boundary_step_index
         self.denoising_step_list = denoising_step_list
+        self.audio_fps = audio_fps
+        self.double_precision_rope = double_precision_rope
         if self.model_cls.startswith("wan"):
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2"]:
             self.attn_type = attn_mode
+        self.rmsnorm_type = rmsnorm_type
+        self.modulate_with_rmsnorm_type = modulate_with_rmsnorm_type
 
     def set_infer_config_json(self, config_json):
         logger.info(f"Loading infer config from {config_json}")
@@ -236,6 +258,7 @@ class LightX2VPipeline:
         image_encoder_quantized_ckpt=False,
         quant_scheme="fp8-sgl",
         text_encoder_quant_scheme=None,
+        skip_fp8_block_index=[0, 43, 44, 45, 46, 47],
     ):
         self.dit_quantized = dit_quantized
         self.dit_quant_scheme = quant_scheme
@@ -261,6 +284,8 @@ class LightX2VPipeline:
                 self.qwen25vl_quant_scheme = text_encoder_quant_scheme
             else:
                 self.qwen25vl_quant_scheme = quant_scheme
+        elif self.model_cls in ["ltx2"]:
+            self.skip_fp8_block_index = skip_fp8_block_index
 
     def enable_offload(
         self,
@@ -272,7 +297,7 @@ class LightX2VPipeline:
     ):
         self.cpu_offload = cpu_offload
         self.offload_granularity = offload_granularity
-        self.vae_offload = vae_offload
+        self.vae_cpu_offload = vae_offload
         if self.model_cls in [
             "wan2.1",
             "wan2.1_distill",
@@ -296,6 +321,8 @@ class LightX2VPipeline:
             self.byt5_cpu_offload = image_encoder_offload
         elif self.model_cls in ["qwen_image", "longcat_image"]:
             self.qwen25vl_cpu_offload = text_encoder_offload
+        elif self.model_cls == "ltx2":
+            self.gemma_cpu_offload = text_encoder_offload
 
     def enable_compile(
         self,
@@ -359,6 +386,7 @@ class LightX2VPipeline:
         negative_prompt,
         save_result_path,
         image_path=None,
+        images=None,
         last_frame_path=None,
         audio_path=None,
         src_ref_images=None,
@@ -370,6 +398,7 @@ class LightX2VPipeline:
         # Run inference (following LightX2V pattern)
         self.seed = seed
         self.image_path = image_path
+        self.images = images
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
         self.src_ref_images = src_ref_images
@@ -380,9 +409,10 @@ class LightX2VPipeline:
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
+        input_info = init_empty_input_info(self.task)
         seed_all(self.seed)
-        update_input_info_from_object(self.input_info, self)
-        self.runner.run_pipeline(self.input_info)
+        update_input_info_from_dict(input_info, self)
+        self.runner.run_pipeline(input_info)
         logger.info("Video generated successfully!")
         logger.info(f"Video Saved in {save_result_path}")
 

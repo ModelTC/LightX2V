@@ -9,6 +9,7 @@ from lightx2v.common.ops import *
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -60,11 +61,12 @@ def main():
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
             "z_image",
+            "ltx2",
         ],
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "t2av", "i2av"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
@@ -76,7 +78,12 @@ def main():
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
-
+    parser.add_argument(
+        "--images",
+        type=str,
+        default="",
+        help="Image conditioning for I2AV task. Format: 'path1:frame_idx1:strength1,path2:frame_idx2:strength2'. Example: 'cat.jpg:0:1.0,dog.jpg:60:0.8'",
+    )
     # [Warning] For vace task, need refactor.
     parser.add_argument(
         "--src_ref_images",
