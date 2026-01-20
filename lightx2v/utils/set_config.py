@@ -112,7 +112,8 @@ def set_config(args):
     if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
         config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
         if config["model_cls"] in ["seko_talk", "wan2.2_animate"]:
-            config["attnmap_frame_num"] += 1
+            if not config.get("f2v_process", False):
+                config["attnmap_frame_num"] += 1
             config["padding_multiple"] = config["attnmap_frame_num"]
 
     # Load diffusers vae config
