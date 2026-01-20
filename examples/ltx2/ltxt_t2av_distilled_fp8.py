@@ -1,6 +1,6 @@
 from lightx2v import LightX2VPipeline
 
-pipe = LightX2VPipeline(model_path="Lightricks/LTX-2/", model_cls="ltx2", task="t2av")
+pipe = LightX2VPipeline(model_path="Lightricks/LTX-2", model_cls="ltx2", task="t2av")
 
 pipe.enable_quantize(
     dit_quantized=True,
@@ -27,8 +27,7 @@ pipe.create_generator(
     fps=24,
     audio_fps=24000,
     double_precision_rope=True,
-    rmsnorm_type="triton",  # "torch",
-    modulate_with_rmsnorm_type="triton",  # "torch"
+    norm_modulate_backend="triton",  # "torch"
 )
 
 seed = 42

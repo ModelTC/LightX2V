@@ -20,8 +20,7 @@ pipe.create_generator(
     fps=24,
     audio_fps=24000,
     double_precision_rope=True,
-    rmsnorm_type="triton",  # "torch",
-    modulate_with_rmsnorm_type="triton",  # "torch"
+    norm_modulate_backend="triton",  # "torch"
 )
 
 seed = 42
