@@ -279,7 +279,7 @@ class LTX2Attention(WeightModule):
         self.lazy_load_file = lazy_load_file
         self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
 
-        block_lora_prefix = "diffusion_model.blocks"
+        block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
 
         self.add_module("attn_func", ATTN_WEIGHT_REGISTER[self.config["attn_type"]]())
@@ -384,7 +384,7 @@ class LTX2FFN(WeightModule):
         self.quant_method = config.get("quant_method", None)
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-        block_lora_prefix = "diffusion_model.blocks"
+        block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
 
         self.add_module(

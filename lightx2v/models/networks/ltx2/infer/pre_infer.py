@@ -24,11 +24,11 @@ class LTX2PreInfer:
         self.audio_attention_head_dim = self.config.get("audio_attention_head_dim", 64)
         self.audio_inner_dim = self.audio_num_attention_heads * self.audio_attention_head_dim
         self.audio_cross_attention_dim = self.config["audio_cross_attention_dim"]
-        self.audio_positional_embedding_max_pos = [20]
+        self.audio_positional_embedding_max_pos = [config["audio_pos_embed_max_pos"]]
 
         # Common config
         self.timestep_scale_multiplier = self.config["timestep_scale_multiplier"]
-        self.av_ca_timestep_scale_multiplier = self.config.get("av_ca_timestep_scale_multiplier", 1)
+        self.av_ca_timestep_scale_multiplier = self.config["cross_attn_timestep_scale_multiplier"]
         self.double_precision_rope = self.config.get("double_precision_rope", False)
 
     def set_scheduler(self, scheduler):

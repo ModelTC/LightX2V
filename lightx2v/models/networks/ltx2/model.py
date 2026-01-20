@@ -44,7 +44,7 @@ class LTX2Model(CompiledMethodsMixin):
         self.remove_keys = ["text_embedding_projection", "audio_vae", "vae", "vocoder", "model.diffusion_model.audio_embeddings_connector", "model.diffusion_model.video_embeddings_connector"]
         self.lazy_load = self.config.get("lazy_load", False)
         if self.lazy_load:
-            self.remove_keys.extend(["blocks."])
+            self.remove_keys.extend(["diffusion_model.transformer_blocks."])
 
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
@@ -107,16 +107,7 @@ class LTX2Model(CompiledMethodsMixin):
 
     def _should_init_empty_model(self):
         if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):
-            if self.model_type in ["wan2.1"]:
-                return True
-            if self.model_type in ["wan2.2_moe_high_noise"]:
-                for lora_config in self.config["lora_configs"]:
-                    if lora_config["name"] == "high_noise_model":
-                        return True
-            if self.model_type in ["wan2.2_moe_low_noise"]:
-                for lora_config in self.config["lora_configs"]:
-                    if lora_config["name"] == "low_noise_model":
-                        return True
+            return True
         return False
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
@@ -199,10 +190,6 @@ class LTX2Model(CompiledMethodsMixin):
 
         weight_dict = {}
         for safetensor_path in safetensors_files:
-            if self.config.get("adapter_model_path", None) is not None:
-                if self.config["adapter_model_path"] == safetensor_path:
-                    continue
-
             with safe_open(safetensor_path, framework="pt") as f:
                 logger.info(f"Loading weights from {safetensor_path}")
                 for k in f.keys():
@@ -420,7 +407,6 @@ class LTX2Model(CompiledMethodsMixin):
                 v_noise_pred_uncond = v_noise_pred_list[1]  # cfg_p_rank == 1
                 a_noise_pred_cond = a_noise_pred_list[0]  # cfg_p_rank == 0
                 a_noise_pred_uncond = a_noise_pred_list[1]  # cfg_p_rank == 1
-                pass
             else:
                 # ==================== CFG Processing ====================
                 v_noise_pred_cond, a_noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)

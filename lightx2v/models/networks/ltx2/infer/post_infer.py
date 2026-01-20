@@ -9,10 +9,8 @@ This module handles output processing including:
 
 import torch
 
-
-def rms_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Apply RMS normalization."""
-    return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
+from lightx2v.models.networks.ltx2.infer.triton_ops import fused_rmsnorm_modulate
+from lightx2v.models.networks.ltx2.infer.utils import modulate_with_rmsnorm_torch_naive
 
 
 def to_denoised(
@@ -47,6 +45,10 @@ class LTX2PostInfer:
         """
         self.config = config
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
+        if config.get("modulate_with_rmsnorm", "triton") == "triton":
+            self.modulate_with_rmsnorm_func = fused_rmsnorm_modulate
+        else:
+            self.modulate_with_rmsnorm_func = modulate_with_rmsnorm_torch_naive
 
     def set_scheduler(self, scheduler):
         """Set the scheduler for inference."""
@@ -123,13 +125,7 @@ class LTX2PostInfer:
         # Result shape: [seq_len, 2, hidden_dim]
         scale_shift_values = scale_shift_table[None, :, :].to(device=x.device, dtype=x.dtype) + embedded_timestep[:, None, :]
         shift, scale = scale_shift_values[:, 0], scale_shift_values[:, 1]
-
-        # Output normalization (RMSNorm, no learnable params)
-        x = rms_norm(x)
-
-        # Apply scale-shift
-        x = x * (1 + scale) + shift
-
+        x = self.modulate_with_rmsnorm_func(x, scale, shift, weight=None, bias=None, eps=1e-6)
         # Output projection
         x = proj_out.apply(x)
 

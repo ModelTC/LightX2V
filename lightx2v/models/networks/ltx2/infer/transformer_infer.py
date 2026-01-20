@@ -11,12 +11,9 @@ This module handles transformer block inference including:
 import torch
 
 from lightx2v.models.networks.ltx2.infer.module_io import LTX2PreInferModuleOutput
-from lightx2v.models.networks.ltx2.infer.utils import LTXRopeType, apply_rotary_emb
-
-
-def rms_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Apply RMS normalization."""
-    return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
+from lightx2v.models.networks.ltx2.infer.triton_ops import fused_rmsnorm_modulate
+from lightx2v.models.networks.ltx2.infer.utils import LTXRopeType, apply_rotary_emb, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
+from lightx2v.models.networks.wan.infer.triton_ops import norm_infer
 
 
 class LTX2TransformerInfer:
@@ -34,13 +31,22 @@ class LTX2TransformerInfer:
             config: Model configuration dictionary
         """
         self.config = config
-        self.rope_type = LTXRopeType.SPLIT
+        self.rope_type = LTXRopeType(config["rope_type"])
         self.blocks_num = config.get("num_layers", 48)
         self.v_num_heads = config.get("num_attention_heads", 32)
         self.v_head_dim = config.get("attention_head_dim", 128)
         self.a_num_heads = config.get("audio_num_attention_heads", 32)
         self.a_head_dim = config.get("audio_attention_head_dim", 64)
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
+        if config.get("rmsnorm_type", "triton") == "triton":
+            self.norm_infer_func = norm_infer
+        else:
+            self.norm_infer_func = rmsnorm_torch_naive
+
+        if config.get("modulate_with_rmsnorm", "triton") == "triton":
+            self.modulate_with_rmsnorm_func = fused_rmsnorm_modulate
+        else:
+            self.modulate_with_rmsnorm_func = modulate_with_rmsnorm_torch_naive
 
     def set_scheduler(self, scheduler):
         """Set the scheduler for inference."""
@@ -110,7 +116,9 @@ class LTX2TransformerInfer:
             pre_infer_out.video_args.timesteps,
             slice(0, 3),
         )
-        norm_vx = rms_norm(vx) * (1 + vscale_msa) + vshift_msa
+
+        norm_vx = self.modulate_with_rmsnorm_func(vx, vscale_msa, vshift_msa, weight=None, bias=None, eps=1e-6)
+        # norm_vx = self.norm_infer_func(vx, weight=None, bias=None, eps=1e-6) * (1 + vscale_msa) + vshift_msa
         vx = (
             vx
             + self._infer_attn(
@@ -124,7 +132,7 @@ class LTX2TransformerInfer:
 
         vx = vx + self._infer_attn(
             attn_phase=block.compute_phases[1],
-            x=rms_norm(vx),
+            x=self.norm_infer_func(vx, weight=None, bias=None, eps=1e-6),
             context=pre_infer_out.video_args.context,
             is_audio=False,
         )
@@ -138,7 +146,8 @@ class LTX2TransformerInfer:
             slice(0, 3),
         )
 
-        norm_ax = rms_norm(ax) * (1 + ascale_msa) + ashift_msa
+        norm_ax = self.modulate_with_rmsnorm_func(ax, ascale_msa, ashift_msa, weight=None, bias=None, eps=1e-6)
+        # norm_ax = self.norm_infer_func(ax, weight=None, bias=None, eps=1e-6) * (1 + ascale_msa) + ashift_msa
         ax = (
             ax
             + self._infer_attn(
@@ -152,7 +161,7 @@ class LTX2TransformerInfer:
 
         ax = ax + self._infer_attn(
             attn_phase=block.compute_phases[3],
-            x=rms_norm(ax),
+            x=self.norm_infer_func(ax, weight=None, bias=None, eps=1e-6),
             context=pre_infer_out.audio_args.context,
             is_audio=True,
         )
@@ -160,8 +169,8 @@ class LTX2TransformerInfer:
         del ashift_msa, ascale_msa, agate_msa
 
         # Audio-video cross-attention
-        vx_norm3 = rms_norm(vx)
-        ax_norm3 = rms_norm(ax)
+        vx_norm3 = self.norm_infer_func(vx, weight=None, bias=None, eps=1e-6)
+        ax_norm3 = self.norm_infer_func(ax, weight=None, bias=None, eps=1e-6)
 
         # Get audio scale-shift values
         (
@@ -240,7 +249,8 @@ class LTX2TransformerInfer:
             pre_infer_out.video_args.timesteps,
             slice(3, None),
         )
-        vx_scaled = rms_norm(vx) * (1 + vscale_mlp) + vshift_mlp
+        vx_scaled = self.modulate_with_rmsnorm_func(vx, vscale_mlp, vshift_mlp, weight=None, bias=None, eps=1e-6)
+        # vx_scaled = self.norm_infer_func(vx, weight=None, bias=None, eps=1e-6) * (1 + vscale_mlp) + vshift_mlp
         vx = vx + self._infer_ffn(block.compute_phases[6], vx_scaled) * vgate_mlp
         del vshift_mlp, vscale_mlp, vgate_mlp
 
@@ -250,7 +260,8 @@ class LTX2TransformerInfer:
             pre_infer_out.audio_args.timesteps,
             slice(3, None),
         )
-        ax_scaled = rms_norm(ax) * (1 + ascale_mlp) + ashift_mlp
+        ax_scaled = self.modulate_with_rmsnorm_func(ax, ascale_mlp, ashift_mlp, weight=None, bias=None, eps=1e-6)
+        # ax_scaled = self.norm_infer_func(ax, weight=None, bias=None, eps=1e-6) * (1 + ascale_mlp) + ashift_mlp
         ax = ax + self._infer_ffn(block.compute_phases[7], ax_scaled) * agate_mlp
         del ashift_mlp, ascale_mlp, agate_mlp
 

@@ -8,6 +8,14 @@ import torch
 from einops import rearrange
 
 
+def rmsnorm_torch_naive(x, weight=None, bias=None, eps=1e-6):
+    return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
+
+
+def modulate_with_rmsnorm_torch_naive(x, scale, shift, weight=None, bias=None, eps=1e-6):
+    return (x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)) * (1 + scale) + shift
+
+
 def get_timestep_embedding(
     timesteps,
     embedding_dim=256,
