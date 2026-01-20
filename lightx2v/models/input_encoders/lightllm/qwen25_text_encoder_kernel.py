@@ -1,16 +1,12 @@
 """
-LightLLM Kernel-Optimized Text Encoder
-
-Hybrid approach that uses HuggingFace model structure with selectively replaced
-LightLLM Triton kernels for maximum performance while maintaining precision.
+Kernel-Optimized Text Encoder
 
 Key optimizations:
 1. Flash Attention (No-Padding) - ~40% of inference time
 2. Fused RMSNorm - frequent operation
-3. Fused SiLU+Mul - FFN activation
 
 Performance target:
-- Speed: 1.29x faster than Baseline (73ms vs 94.5ms)
+- Speed: 1.13x faster than Baseline (81.23ms vs 92.23ms)
 - Precision: >0.99 cosine similarity
 - Memory: Similar to Lite (~125MB VRAM)
 
@@ -70,14 +66,12 @@ class LightLLMKernelTextEncoder:
         # Kernel optimization flags
         self.use_flash_attention_kernel = config.get("use_flash_attention_kernel", True)
         self.use_rmsnorm_kernel = config.get("use_rmsnorm_kernel", True)
-        self.use_ffn_kernel = config.get("use_ffn_kernel", True)
 
-        logger.info(f"Initializing LightLLM Kernel-Optimized Text Encoder")
+        logger.info(f"Initializing Kernel-Optimized Text Encoder")
         logger.info(f"  Model Path: {self.model_path}")
         logger.info(f"  Device: {self.device}")
         logger.info(f"  Flash Attention: {self.use_flash_attention_kernel}")
         logger.info(f"  RMSNorm Kernel: {self.use_rmsnorm_kernel}")
-        logger.info(f"  FFN Kernel: {self.use_ffn_kernel}")
 
         self.load()
 
@@ -123,38 +117,29 @@ class LightLLMKernelTextEncoder:
 
         logger.info(f"  ✓ Model loaded with {attn_impl}")
 
-        # 4. Apply kernel optimizations (RMSNorm, RoPE, FFN)
+        # 4. Apply kernel optimizations (RMSNorm)
         self._apply_kernel_optimizations()
 
         self._is_loaded = True
 
     def _apply_kernel_optimizations(self):
-        """Apply LightLLM kernel optimizations to the model"""
+        """Apply kernel optimizations to the model"""
         logger.info("Applying kernel optimizations...")
 
         # Flash Attention is already loaded with the model
         if self.use_flash_attention_kernel:
             logger.info("  ✓ Flash Attention 2 (loaded with model)")
 
-        try:
             if self.use_rmsnorm_kernel:
-                from lightx2v.utils.triton_kernels.rmsnorm import rmsnorm_forward
+                try:
+                    from sgl_kernel.elementwise import rmsnorm
 
-                self._rmsnorm_kernel = rmsnorm_forward
-                self._replace_rmsnorm_with_kernel()
-                logger.info("  ✓ RMSNorm kernel integrated")
-
-            if self.use_ffn_kernel:
-                from lightx2v.utils.triton_kernels.silu_and_mul import silu_and_mul_fwd
-
-                self._silu_mul_kernel = silu_and_mul_fwd
-                self._replace_ffn_with_kernel()
-                logger.info("  ✓ FFN kernel integrated")
-
-        except ImportError as e:
-            logger.warning(f"Failed to import LightLLM kernels: {e}")
-            self.use_rmsnorm_kernel = False
-            self.use_ffn_kernel = False
+                    self._rmsnorm_kernel = rmsnorm
+                    self._replace_rmsnorm_with_kernel()
+                    logger.info("  ✓ RMSNorm kernel integrated (from sgl_kernel)")
+                except ImportError as e:
+                    logger.warning(f"  ✗ Failed to import sgl_kernel: {e}. RMSNorm optimization disabled.")
+                    self.use_rmsnorm_kernel = False
 
     def _replace_rmsnorm_with_kernel(self):
         """Replace RMSNorm layers with fused kernel"""
@@ -176,7 +161,11 @@ class LightLLMKernelTextEncoder:
                 self.kernel_fn = kernel_fn
 
             def forward(self, hidden_states):
-                return self.kernel_fn(hidden_states, self.weight, self.variance_epsilon)
+                orig_shape = hidden_states.shape
+                # Reshape to (-1, hidden_dim) as sgl_kernel expects 2D
+                x_2d = hidden_states.view(-1, orig_shape[-1])
+                out_2d = self.kernel_fn(x_2d, self.weight, self.variance_epsilon)
+                return out_2d.view(orig_shape)
 
         # Replace all RMSNorm layers
         def replace_rmsnorm_recursive(module, parent_name=""):
@@ -195,70 +184,6 @@ class LightLLMKernelTextEncoder:
 
         replace_rmsnorm_recursive(self.model)
         logger.info(f"    Replaced {replaced_count} RMSNorm layers with kernel version")
-
-    def _replace_ffn_with_kernel(self):
-        """Replace FFN activation with fused SiLU+Mul kernel"""
-        # Fix: Use correct MLP classes for Qwen2.5-VL model
-        mlp_classes = []
-
-        # Qwen2MLP (for text model layers)
-        try:
-            from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP
-
-            mlp_classes.append(Qwen2MLP)
-        except ImportError:
-            pass
-
-        # Qwen2_5_VLMLP (for visual encoder layers) - THIS IS THE KEY FIX!
-        try:
-            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLMLP
-
-            mlp_classes.append(Qwen2_5_VLMLP)
-        except ImportError:
-            pass
-
-        if not mlp_classes:
-            logger.warning("Could not import any MLP class, skipping FFN optimization")
-            return
-
-        logger.info(f"    Detecting MLP classes: {[c.__name__ for c in mlp_classes]}")
-
-        replaced_count = 0
-        kernel_fn = self._silu_mul_kernel
-
-        class OptimizedMLP(nn.Module):
-            def __init__(self, original_mlp, kernel_fn):
-                super().__init__()
-                self.gate_proj = original_mlp.gate_proj
-                self.up_proj = original_mlp.up_proj
-                self.down_proj = original_mlp.down_proj
-                self.kernel_fn = kernel_fn
-
-            def forward(self, hidden_states):
-                gate = self.gate_proj(hidden_states)
-                up = self.up_proj(hidden_states)
-                gate_up = torch.cat([gate, up], dim=-1)
-                intermediate = torch.empty_like(gate)
-                self.kernel_fn(gate_up, intermediate)
-                return self.down_proj(intermediate)
-
-        def replace_mlp_recursive(module, parent_name=""):
-            nonlocal replaced_count
-            for name, child in module.named_children():
-                full_name = f"{parent_name}.{name}" if parent_name else name
-
-                if any(isinstance(child, mlp_cls) for mlp_cls in mlp_classes):
-                    try:
-                        optimized = OptimizedMLP(child, kernel_fn)
-                        setattr(module, name, optimized)
-                        replaced_count += 1
-                    except Exception as e:
-                        logger.debug(f"Failed to replace {full_name}: {e}")
-                else:
-                    replace_mlp_recursive(child, full_name)
-
-        replace_mlp_recursive(self.model)
-        logger.info(f"    Replaced {replaced_count} MLP layers with kernel version")
 
     def _extract_masked_hidden(self, hidden_states: torch.Tensor, mask: torch.Tensor):
         """Extract valid hidden states (consistent with HF baseline)"""
