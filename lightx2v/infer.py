@@ -20,7 +20,7 @@ from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
@@ -130,7 +130,7 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
-    parser.add_argument("--aspect_ratio", type=str, default="16:9")
+    parser.add_argument("--aspect_ratio", type=str, default="")
 
     args = parser.parse_args()
     validate_task_arguments(args)
@@ -139,6 +139,8 @@ def main():
 
     # set config
     config = set_config(args)
+    # init input_info
+    input_info = init_empty_input_info(args.task)
 
     if config["parallel"]:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
@@ -148,8 +150,11 @@ def main():
     print_config(config)
 
     with ProfilingContext4DebugL1("Total Cost"):
+        # init runner
         runner = init_runner(config)
-        input_info = set_input_info(args)
+        # start to infer
+        data = args.__dict__
+        update_input_info_from_dict(input_info, data)
         runner.run_pipeline(input_info)
 
     # Clean up distributed process group

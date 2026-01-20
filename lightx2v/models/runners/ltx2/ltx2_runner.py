@@ -18,6 +18,31 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def parse_images_arg(images_str: str) -> list:
+    if not images_str or images_str.strip() == "":
+        return []
+
+    result = []
+    for item in images_str.split(","):
+        parts = item.strip().split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid image conditioning format: '{item}'. Expected format: 'image_path:frame_idx:strength'")
+
+        image_path = parts[0].strip()
+        try:
+            frame_idx = int(parts[1].strip())
+            strength = float(parts[2].strip())
+        except ValueError as e:
+            raise ValueError(f"Invalid image conditioning format: '{item}'. frame_idx must be int, strength must be float. Error: {e}")
+
+        if strength < 0.0 or strength > 1.0:
+            raise ValueError(f"Invalid strength value {strength} for image '{image_path}'. Strength must be between 0.0 and 1.0.")
+
+        result.append((image_path, frame_idx, strength))
+
+    return result
+
+
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
     def __init__(self, config):
@@ -53,9 +78,9 @@ class LTX2Runner(DefaultRunner):
         else:
             text_encoder_device = torch.device(AI_DEVICE)
 
-        if "dit_original_ckpt" in self.config:
+        if self.config.get("dit_original_ckpt", None) is not None:
             ckpt_path = self.config["dit_original_ckpt"]
-        elif "dit_quantized_ckpt" in self.config:
+        elif self.config.get("dit_quantized_ckpt", None) is not None:
             ckpt_path = self.config["dit_quantized_ckpt"]
         else:
             ckpt_path = os.path.join(self.config["model_path"], "transformer")
@@ -84,9 +109,9 @@ class LTX2Runner(DefaultRunner):
         else:
             vae_device = torch.device(AI_DEVICE)
 
-        if "dit_original_ckpt" in self.config:
+        if self.config.get("dit_original_ckpt", None) is not None:
             ckpt_path = self.config["dit_original_ckpt"]
-        elif "dit_quantized_ckpt" in self.config:
+        elif self.config.get("dit_quantized_ckpt", None) is not None:
             ckpt_path = self.config["dit_quantized_ckpt"]
         else:
             ckpt_path = os.path.join(self.config["model_path"], "transformer")
@@ -186,7 +211,8 @@ class LTX2Runner(DefaultRunner):
         )
 
         # Process each image conditioning
-        for image_path, frame_idx, strength in self.input_info.images:
+        images = parse_images_arg(self.input_info.images)
+        for image_path, frame_idx, strength in images:
             logger.info(f"  📷 Loading image: {image_path} for frame {frame_idx} with strength {strength}")
 
             # Load and preprocess image

@@ -43,7 +43,7 @@ class LTX2TransformerInfer:
         else:
             self.norm_infer_func = rmsnorm_torch_naive
 
-        if config.get("modulate_with_rmsnorm", "triton") == "triton":
+        if config.get("modulate_with_rmsnorm_type", "triton") == "triton":
             self.modulate_with_rmsnorm_func = fused_rmsnorm_modulate
         else:
             self.modulate_with_rmsnorm_func = modulate_with_rmsnorm_torch_naive

@@ -6,7 +6,7 @@
     "target_width": 768,
     "attn_type": "sage_attn2",
     "sample_guide_scale": 4,
-    "sample_shift": 8,
+    "sample_shift": [2.05, 0.95],
     "enable_cfg": true,
     "cpu_offload": false,
     "num_channels_latents": 128,
@@ -14,6 +14,5 @@
     "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
-    "av_ca_timestep_scale_multiplier": 1000,
-    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
+    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev.safetensors"
 }

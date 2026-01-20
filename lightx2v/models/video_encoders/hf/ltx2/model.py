@@ -90,10 +90,11 @@ class LTX2VideoVAE:
     ) -> Iterator[torch.Tensor]:
         if self.cpu_offload:
             self.decoder = self.decoder.to(AI_DEVICE)
-        out = decode_video(latent, self.decoder, tiling_config, generator)
-        if self.cpu_offload:
-            self.decoder = self.decoder.to("cpu")
-        return out
+        try:
+            yield from decode_video(latent, self.decoder, tiling_config, generator)
+        finally:
+            if self.cpu_offload:
+                self.decoder = self.decoder.to("cpu")
 
 
 class LTX2AudioVAE:

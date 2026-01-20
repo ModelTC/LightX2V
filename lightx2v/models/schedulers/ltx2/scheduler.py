@@ -283,12 +283,12 @@ class LTX2Scheduler(BaseScheduler):
                 - terminal: Terminal sigma value (default: 0.1)
         """
         super().__init__(config)
-        self.infer_steps = config.get("infer_steps", 50)
+        self.infer_steps = config["infer_steps"]
         self.cfg_guidance_scale = config.get("cfg_guidance_scale", 1.0)
 
         # Sigma scheduler configuration
-        self.max_shift = config.get("max_shift", 2.05)
-        self.base_shift = config.get("base_shift", 0.95)
+        self.max_shift = config["sample_shift"][0]
+        self.base_shift = config["sample_shift"][1]
         self.stretch = config.get("stretch", True)
         self.terminal = config.get("terminal", 0.1)
 
