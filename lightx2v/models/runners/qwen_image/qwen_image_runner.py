@@ -45,12 +45,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = qwen_module(**model_kwargs)
         lora_wrapper = QwenImageLoraWrapper(model)
-        for lora_config in lora_configs:
-            lora_path = lora_config["path"]
-            strength = lora_config.get("strength", 1.0)
-            lora_name = lora_wrapper.load_lora(lora_path)
-            lora_wrapper.apply_lora(lora_name, strength)
-            logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        lora_wrapper.apply_lora(lora_configs)
     return model
 
 

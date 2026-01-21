@@ -54,14 +54,9 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = wan_module(**model_kwargs)
         lora_wrapper = WanLoraWrapper(model)
-        for lora_config in lora_configs:
-            if "name" in lora_config and lora_config["name"] != model_type:
-                continue
-            lora_path = lora_config["path"]
-            strength = lora_config.get("strength", 1.0)
-            lora_name = lora_wrapper.load_lora(lora_path, lora_name=lora_config.get("name"))
-            lora_wrapper.apply_lora(lora_name, strength)
-            logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        if model_type in ["high_noise_model", "low_noise_model"]:
+            lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
+        lora_wrapper.apply_lora(lora_configs, model_type=model_type)
     return model
 
 
