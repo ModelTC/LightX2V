@@ -609,7 +609,7 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self._get_actual_bias().to(self.infer_dtype),
+            self._get_actual_bias(),
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
@@ -668,7 +668,7 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self._get_actual_bias().to(self.infer_dtype),
+            self._get_actual_bias(),
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
@@ -1617,7 +1617,7 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self._get_actual_bias().to(self.infer_dtype),
+            self._get_actual_bias(),
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
@@ -1676,7 +1676,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             input_tensor_scale,
             self.weight_scale,
             self.infer_dtype,
-            self._get_actual_bias().to(self.infer_dtype),
+            self._get_actual_bias(),
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
@@ -1729,7 +1729,7 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
             self.weight,
             scale_a=input_tensor_scale.float(),
             scale_b=self.weight_scale.t(),
-            bias=self._get_actual_bias().to(self.infer_dtype),
+            bias=self._get_actual_bias(),
             out_dtype=self.infer_dtype,
             use_fast_accum=True,
         )
@@ -2136,7 +2136,7 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
             self.weight,
             scale_a=self.input_scale,
             scale_b=self.weight_scale.reshape(1),
-            bias=self._get_actual_bias().to(dtype) if self.bias is not None else None,
+            bias=self._get_actual_bias(),
             out_dtype=dtype,
             use_fast_accum=True,
         )
