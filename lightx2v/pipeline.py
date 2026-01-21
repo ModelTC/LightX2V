@@ -1,14 +1,5 @@
-# please do not set envs in this file, it will be imported by the __init__.py file
-# os.environ["TOKENIZERS_PARALLELISM"] = "false"
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-# os.environ["DTYPE"] = "BF16"
-# os.environ["SENSITIVE_LAYER_DTYPE"] = "None"
-# os.environ["PROFILING_DEBUG_LEVEL"] = "2"
-
 import json
-import os
 
-os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 import torch
 import torch.distributed as dist
 from loguru import logger
