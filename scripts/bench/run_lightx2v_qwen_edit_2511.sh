@@ -6,7 +6,8 @@ lightx2v_path=
 
 model_path=/path/to/Qwen/Qwen-Image-Edit-2511
 
-image_path=${lightx2v_path}/assets/inputs/imgs/cat.png
+# https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/cat.png
+image_path=/path/to/cat.png
 
 config_json=${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511.json
 
