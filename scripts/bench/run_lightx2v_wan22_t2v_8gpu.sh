@@ -6,7 +6,7 @@ lightx2v_path=
 
 model_path=/path/to/Wan-AI/Wan2.2-T2V-A14B
 
-config_json=config_json=${lightx2v_path}/configs/dist_infer/wan22_moe_t2v_cfg_ulysses.json
+config_json=${lightx2v_path}/configs/dist_infer/wan22_moe_t2v_cfg_ulysses.json
 
 model_cls=wan2.2_moe
 
