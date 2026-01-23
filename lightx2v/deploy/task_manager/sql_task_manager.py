@@ -622,7 +622,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
                     worker_name = cand["worker_name"]
                     task, subs = await self.load(conn, task_id, worker_name=worker_name)
                     assert len(subs) == 1, f"task {task_id} has multiple subtasks: {subs} with worker_name: {worker_name}"
-                    if task["status"] in [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]:
+                    if task["status"] in FinishedStatus:
                         continue
 
                     self.mark_subtask_change(records, subs[0], subs[0]["status"], TaskStatus.RUNNING)
@@ -682,7 +682,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
                     pre = subs[0]["worker_identity"]
                     assert pre == worker_identity, f"worker identity not matched: {pre} vs {worker_identity}"
 
-                assert status in [TaskStatus.SUCCEED, TaskStatus.FAILED], f"invalid finish status: {status}"
+                assert status in FinishedStatus, f"invalid finish status: {status}"
                 for sub in subs:
                     if sub["status"] not in FinishedStatus:
                         if should_running and sub["status"] != TaskStatus.RUNNING:
@@ -702,6 +702,10 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 if task["status"] == TaskStatus.CANCEL:
                     self.metrics_commit(records)
                     return TaskStatus.CANCEL
+
+                if task["status"] == TaskStatus.REJECT:
+                    self.metrics_commit(records)
+                    return TaskStatus.REJECT
 
                 running_subs = []
                 failed_sub = False

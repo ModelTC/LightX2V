@@ -14,10 +14,11 @@ class TaskStatus(Enum):
     SUCCEED = 4
     FAILED = 5
     CANCEL = 6
+    REJECT = 7
 
 
 ActiveStatus = [TaskStatus.CREATED, TaskStatus.PENDING, TaskStatus.RUNNING]
-FinishedStatus = [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]
+FinishedStatus = [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL, TaskStatus.REJECT]
 
 
 class BaseTaskManager:
