@@ -53,7 +53,7 @@ class LTX2PreInfer:
             max_pos=max_pos,
             use_middle_indices_grid=use_middle_indices_grid,
             num_attention_heads=num_attention_heads,
-            rope_type=LTXRopeType.SPLIT,
+            rope_type="split",
             freq_grid_generator=freq_grid_generator,
         )
         return pe

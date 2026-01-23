@@ -19,7 +19,7 @@ from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa:
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
-from lightx2v.utils.utils import seed_all
+from lightx2v.utils.utils import seed_all, validate_config_paths
 
 
 def dict_like(cls):
@@ -161,8 +161,9 @@ class LightX2VPipeline:
             )
 
         config = set_config(self)
-        print(config)
+        validate_config_paths(config)
         self.runner = self._init_runner(config)
+        print(self.runner.config)
         logger.info(f"Initializing {self.model_cls} runner for {self.task} task...")
         logger.info(f"Model path: {self.model_path}")
         logger.info("LightGenerator initialized successfully!")
@@ -373,7 +374,7 @@ class LightX2VPipeline:
         negative_prompt,
         save_result_path,
         image_path=None,
-        images=None,
+        image_strength=None,
         last_frame_path=None,
         audio_path=None,
         src_ref_images=None,
@@ -383,9 +384,10 @@ class LightX2VPipeline:
         target_shape=[],
     ):
         # Run inference (following LightX2V pattern)
+        # Note: image_path supports comma-separated paths for multiple images
+        # image_strength can be a scalar (float/int) or a list matching the number of images
         self.seed = seed
         self.image_path = image_path
-        self.images = images
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
         self.src_ref_images = src_ref_images
@@ -396,6 +398,8 @@ class LightX2VPipeline:
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
+        self.image_strength = image_strength
+
         input_info = init_empty_input_info(self.task)
         seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
