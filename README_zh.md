@@ -39,6 +39,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年1月20日:** 🚀 我们支持了[LTX-2](https://huggingface.co/Lightricks/LTX-2)音频-视频生成模型，包含CFG并行、block级别offload、FP8 per-tensor量化等先进特性。使用示例可参考[examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2)和[scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2)。
+
 - **2026年1月6日:** 🚀 我们更新了[Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512)和[Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)的8步的CFG/步数蒸馏模型。可以在[Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)和[Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning)下载对应的权重进行使用。使用教程参考[这里](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。
 
 - **2026年1月6日:** 🚀 支持燧原 Enflame S60 (GCU) 的部署。
@@ -199,6 +201,7 @@ pipe.generate(
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
+- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)

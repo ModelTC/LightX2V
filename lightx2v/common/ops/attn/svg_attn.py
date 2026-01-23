@@ -292,6 +292,26 @@ def get_attention_mask(mask_name, sample_mse_max_row, context_length, num_frame,
     return attention_mask
 
 
+def diagonal_band_mask_from_sparsity(
+    block_num: int,
+    block_num_per_frame: int,
+    sparsity: float,
+    device="cpu",
+):
+    k = int(round(block_num * (1 - sparsity) / 2))
+    k = max(0, min(k, block_num - 1))
+
+    idx = torch.arange(block_num, device=device)
+    mask = torch.abs(idx[:, None] - idx[None, :]) <= k
+    sink = idx[None, :] <= block_num_per_frame
+    mask = mask | sink
+
+    actual_sparsity = 1 - mask.float().mean().item()
+    logger.info(f"Diagonal Band Mask: block_num={block_num}, block_num_per_frame={block_num_per_frame}, sparsity={sparsity}, actual_sparsity={actual_sparsity}")
+
+    return mask
+
+
 @ATTN_WEIGHT_REGISTER("svg_attn")
 class SvgAttnWeight(AttnWeightTemplate):
     head_num = None

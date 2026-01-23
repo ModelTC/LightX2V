@@ -1,0 +1,15 @@
+{
+    "infer_steps": 50,
+    "aspect_ratio": "16:9",
+    "attn_type": "flash_attn3",
+    "enable_cfg": true,
+    "sample_guide_scale": 4.0,
+    "enable_cfg_renorm": true,
+    "cfg_renorm_min": 0.0,
+    "axes_dims_rope": [16, 56, 56],
+    "dit_quant_scheme": "Default",
+    "rms_norm_type": "sgl-kernel",
+    "parallel": {
+        "cfg_p_size": 2
+    }
+}

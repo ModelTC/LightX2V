@@ -50,6 +50,15 @@ def set_config(args):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
+        if os.path.exists(os.path.join(config["model_path"], "config.json")):
+            with open(os.path.join(config["model_path"], "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        if os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
+            with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -100,10 +109,11 @@ def set_config(args):
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
-    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "ltx2"]:
         config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
         if config["model_cls"] in ["seko_talk", "wan2.2_animate"]:
-            config["attnmap_frame_num"] += 1
+            if not config.get("f2v_process", False):
+                config["attnmap_frame_num"] += 1
             config["padding_multiple"] = config["attnmap_frame_num"]
 
     # Load diffusers vae config
@@ -120,16 +130,29 @@ def set_config(args):
 
 def set_parallel_config(config):
     if config["parallel"]:
-        cfg_p_size = config["parallel"].get("cfg_p_size", 1)
-        seq_p_size = config["parallel"].get("seq_p_size", 1)
-        assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size * seq_p_size must be equal to world_size"
-        config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+        tensor_p_size = config["parallel"].get("tensor_p_size", 1)
 
-        if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
-            config["seq_parallel"] = True
+        if tensor_p_size > 1:
+            # Tensor parallel only: 1D mesh
+            assert tensor_p_size == dist.get_world_size(), f"tensor_p_size ({tensor_p_size}) must be equal to world_size ({dist.get_world_size()})"
+            config["device_mesh"] = init_device_mesh(AI_DEVICE, (tensor_p_size,), mesh_dim_names=("tensor_p",))
+            config["tensor_parallel"] = True
+            config["seq_parallel"] = False
+            config["cfg_parallel"] = False
+        else:
+            # Original 2D mesh for cfg_p and seq_p
+            cfg_p_size = config["parallel"].get("cfg_p_size", 1)
+            seq_p_size = config["parallel"].get("seq_p_size", 1)
+            assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) must be equal to world_size ({dist.get_world_size()})"
+            config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+            config["tensor_parallel"] = False
 
-        if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
-            config["cfg_parallel"] = True
+            if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
+                config["seq_parallel"] = True
+
+            if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
+                config["cfg_parallel"] = True
+
         # warmup dist
         _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
         dist.all_reduce(_a)

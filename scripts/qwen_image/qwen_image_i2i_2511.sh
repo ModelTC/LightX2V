@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# set path and first
-export lightx2v_path=
-export model_path=
+# set path firstly
+lightx2v_path=/data/nvme1/yongyang/ddc/yong/LightX2V
+model_path=/data/nvme1/models/qwen-image-edit-release-251130
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=5
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -14,8 +14,8 @@ python -m lightx2v.infer \
     --task i2i \
     --model_path $model_path \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511.json \
-    --prompt "Make the girl from Image 1 wear the black dress from Image 2 and sit in the pose from Image 3." \
+    --prompt "Change the person to a standing position, bending over to hold the dog's front paws." \
     --negative_prompt " " \
-    --image_path "1.png,2.png,3.png" \
+    --image_path "/data/nvme1/yongyang/ddc/lightx2v_examples/i2i/1/img1.png" \
     --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i_2511.png \
     --seed 0

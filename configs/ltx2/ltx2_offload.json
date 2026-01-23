@@ -1,0 +1,20 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 121,
+    "target_height": 512,
+    "target_width": 768,
+    "attn_type": "sage_attn2",
+    "sample_guide_scale": 4,
+    "sample_shift": [2.05, 0.95],
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "vae_cpu_offload": false,
+    "num_channels_latents": 128,
+    "fps": 24,
+    "audio_fps": 24000,
+    "audio_mel_bins":16,
+    "double_precision_rope": true,
+    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors",
+    "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47]
+}

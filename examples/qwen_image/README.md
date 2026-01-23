@@ -33,8 +33,8 @@ git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V/scripts/qwen_image
 
 # Before running the scripts below, you need to replace lightx2v_path and model_path in the scripts with actual paths
-# For example: export lightx2v_path=/home/user/LightX2V
-# For example: export model_path=/home/user/models/Qwen-Image-Edit-2511
+# For example: lightx2v_path=/home/user/LightX2V
+# For example: model_path=/home/user/models/Qwen-Image-Edit-2511
 ```
 
 Text-to-Image Models
