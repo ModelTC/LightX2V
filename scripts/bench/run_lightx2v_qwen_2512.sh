@@ -16,6 +16,9 @@ prompt="A futuristic cyberpunk city at night, neon lights reflecting on wet stre
 
 negative_prompt=" "
 
+gpus=1
+ts=$(date +"%y%m%d%H%M%S")
+
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
@@ -28,6 +31,4 @@ python -m lightx2v.infer \
 --config_json ${config_json} \
 --prompt "${prompt}" \
 --negative_prompt "${negative_prompt}" \
---image_path ${image_path} \
---audio_path ${audio_path} \
 --save_result_path ${lightx2v_path}/save_results/${model_cls}_${task}_gpu${gpus}_${ts}.png
