@@ -368,6 +368,7 @@ class QwenImageRunner(DefaultRunner):
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def run_pipeline(self, input_info):
+        tic = time.perf_counter()
         self.input_info = input_info
 
         self.inputs = self.run_input_encoder()
@@ -394,4 +395,6 @@ class QwenImageRunner(DefaultRunner):
         gc.collect()
 
         # Return (images, audio) - audio is None for default runner
+        toc = time.perf_counter()
+        logger.info(f"qwen image runner end2end: {toc - tic:.4f} seconds")
         return images, None
