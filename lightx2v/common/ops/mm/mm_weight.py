@@ -2,6 +2,7 @@ import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
@@ -91,6 +92,8 @@ try:
     import marlin_cuda_quant
 except ImportError:
     marlin_cuda_quant = None
+
+import torch.distributed as dist
 
 
 class MMWeightTemplate(metaclass=ABCMeta):
@@ -2143,3 +2146,96 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
+
+
+@MM_WEIGHT_REGISTER("TensorParallel")
+class MMWeightTP(MMWeightTemplate):
+    """
+    Tensor Parallel wrapper for any MMWeight type.
+
+    This is a generic wrapper that can wrap any MMWeight implementation (Default, fp8, int8, etc.)
+    and add tensor parallelism support by:
+    1. Handling weight splitting in load() method
+    2. Adding all-reduce for row-wise split in apply() method
+
+    Supports column-wise and row-wise weight splitting:
+    - Column split: weight [in_dim, out_dim] -> [in_dim, out_dim/tp_size] per rank
+    - Row split: weight [in_dim, out_dim] -> [in_dim/tp_size, out_dim] per rank
+    """
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        mm_type="Default",
+        tp_group=None,
+        tp_rank=0,
+        tp_size=1,
+        split_dim="col",
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path,
+        )
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+        self.split_dim = split_dim  # "col" for column split, "row" for row split
+        assert split_dim in ["col", "row"], f"split_dim must be 'col' or 'row', got {split_dim}"
+
+        self._mm = MM_WEIGHT_REGISTER.get(mm_type, MMWeight)(
+            weight_name=weight_name,
+            bias_name=bias_name,
+            create_cuda_buffer=create_cuda_buffer,
+            create_cpu_buffer=create_cpu_buffer,
+            lazy_load=lazy_load,
+            lazy_load_file=lazy_load_file,
+            is_post_adapter=is_post_adapter,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+        )
+        self._row_split_bias = None
+
+    def load(self, weight_dict):
+        """Load weights using internal MMWeight's load method.
+
+        Note: Weights in weight_dict are already split by _load_weights_from_rank0.
+        The format is [out_dim/tp_size, in_dim] for column split or [out_dim, in_dim/tp_size] for row split.
+        MMWeight.load will handle the transposition via create_default_tensors.
+
+        For row split, bias is not split and should be added after all-reduce.
+        We temporarily remove bias from _mm to prevent it from being added before all-reduce.
+        """
+        self._mm.load(weight_dict)
+        if self.split_dim == "row" and self.bias_name is not None and self.bias_name in weight_dict:
+            self._row_split_bias = self._mm.bias.clone()
+            self._mm.bias = None
+
+    def apply(self, input_tensor):
+        """Apply matrix multiplication with tensor parallel support."""
+        # Use internal MMWeight's apply method (handles fp8, int8, etc.)
+        # For row split, _mm.bias is None, so bias won't be added here
+        output = self._mm.apply(input_tensor)
+
+        # For row split, need all-reduce to combine results from all ranks
+        if self.split_dim == "row" and self.tp_size > 1 and self.tp_group is not None:
+            dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
+            # Add bias after all-reduce (bias is not split for row split)
+            if self._row_split_bias is not None:
+                output = output + self._row_split_bias
+
+        return output

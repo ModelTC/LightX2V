@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=
-model_path=
+lightx2v_path=/data/nvme0/gushiqiao/models/code/LightX2V
+model_path=/data/nvme0/gushiqiao/models/official_models/Wan2.1-I2V-14B-720P
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
-python -m lightx2v.infer \
+torchrun --nproc_per_node=4 -m lightx2v.infer \
 --model_cls wan2.1 \
 --task i2v \
 --model_path $model_path \

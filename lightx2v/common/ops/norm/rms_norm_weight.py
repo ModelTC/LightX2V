@@ -1,6 +1,7 @@
 from abc import ABCMeta, abstractmethod
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
@@ -173,6 +174,65 @@ class RMSWeight(RMSWeightTemplate):
             input_tensor = self._norm(input_tensor).type_as(input_tensor) * (self._get_actual_weight())
         else:
             input_tensor = self._norm(input_tensor.float()).type_as(input_tensor) * (self._get_actual_weight())
+        return input_tensor
+
+
+@RMS_WEIGHT_REGISTER("TensorParallel")
+class RMSWeightTP(RMSWeightTemplate):
+    """
+    RMSNorm weight module with tensor parallelism support.
+
+    The weight is split along the hidden dimension to match the split QKV outputs.
+    """
+
+    def __init__(
+        self,
+        weight_name,
+        tp_group=None,
+        tp_rank=0,
+        tp_size=1,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+
+    def apply(self, input_tensor):
+        local_sum = input_tensor.pow(2).sum(-1, keepdim=True)
+
+        # All-reduce to get global sum
+        if self.tp_size > 1 and self.tp_group is not None:
+            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=self.tp_group)
+
+        # Compute global mean: global_sum / hidden_dim
+        hidden_dim = input_tensor.shape[-1] * self.tp_size
+        global_mean = local_sum / hidden_dim
+
+        # Apply normalization with global mean
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            input_tensor = input_tensor * torch.rsqrt(global_mean.float() + self.eps).to(self.infer_dtype)
+            input_tensor = (input_tensor * self._get_actual_weight()).to(self.infer_dtype)
+        else:
+            input_tensor = input_tensor * torch.rsqrt(global_mean + self.eps)
+            input_tensor = input_tensor * self._get_actual_weight()
         return input_tensor
 
 

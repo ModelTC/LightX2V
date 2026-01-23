@@ -176,12 +176,9 @@ class I2AVInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
-    # Image conditioning: list of (image_path, frame_idx, strength) tuples
-    # frame_idx: which frame to replace with the image (0-indexed)
-    # strength: conditioning strength (0.0-1.0, typically 1.0 for full replacement)
-    images: list = field(default_factory=list)  # list[tuple[str, int, float]]
     # shape related
     resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)

@@ -21,7 +21,7 @@ class WanDistillRunner(WanRunner):
         if not lora_configs:
             model = WanDistillModel(**wan_model_kwargs)
         else:
-            model = build_wan_model_with_lora(WanModel, self.config, wan_model_kwargs, lora_configs, model_typ="wan2.1")
+            model = build_wan_model_with_lora(WanModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
 
     def init_scheduler(self):

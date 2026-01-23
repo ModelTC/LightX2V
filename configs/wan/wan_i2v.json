@@ -9,5 +9,9 @@
     "sample_guide_scale": 5,
     "sample_shift": 3,
     "enable_cfg": true,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses"
+    }
 }

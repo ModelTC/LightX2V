@@ -1,6 +1,8 @@
 import gc
+import os
 
 import torch
+import torch.distributed as dist
 
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.ltx2.model import LTX2Model
@@ -16,31 +18,6 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-def parse_images_arg(images_str: str) -> list:
-    if not images_str or images_str.strip() == "":
-        return []
-
-    result = []
-    for item in images_str.split(","):
-        parts = item.strip().split(":")
-        if len(parts) != 3:
-            raise ValueError(f"Invalid image conditioning format: '{item}'. Expected format: 'image_path:frame_idx:strength'")
-
-        image_path = parts[0].strip()
-        try:
-            frame_idx = int(parts[1].strip())
-            strength = float(parts[2].strip())
-        except ValueError as e:
-            raise ValueError(f"Invalid image conditioning format: '{item}'. frame_idx must be int, strength must be float. Error: {e}")
-
-        if strength < 0.0 or strength > 1.0:
-            raise ValueError(f"Invalid strength value {strength} for image '{image_path}'. Strength must be between 0.0 and 1.0.")
-
-        result.append((image_path, frame_idx, strength))
-
-    return result
 
 
 @RUNNER_REGISTER("ltx2")
@@ -100,6 +77,13 @@ class LTX2Runner(DefaultRunner):
         text_encoders = [text_encoder]
         return text_encoders
 
+    def get_vae_parallel(self):
+        if isinstance(self.config.get("parallel", False), bool):
+            return self.config.get("parallel", False)
+        if isinstance(self.config.get("parallel", False), dict):
+            return self.config.get("parallel", {}).get("vae_parallel", True)
+        return False
+
     def load_vae(self):
         """Load video and audio VAE decoders."""
         # offload config
@@ -117,7 +101,15 @@ class LTX2Runner(DefaultRunner):
             ckpt_path = os.path.join(self.config["model_path"], "transformer")
 
         # Video VAE
-        video_vae = LTX2VideoVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), load_encoder=self.config["task"] == "i2av", cpu_offload=vae_offload)
+        video_vae = LTX2VideoVAE(
+            checkpoint_path=ckpt_path,
+            device=vae_device,
+            dtype=GET_DTYPE(),
+            load_encoder=self.config["task"] == "i2av",
+            use_tiling=self.config.get("use_tiling_vae", False),
+            cpu_offload=vae_offload,
+            parallel=self.get_vae_parallel(),
+        )
 
         # Audio VAE
         audio_vae = LTX2AudioVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), cpu_offload=vae_offload)
@@ -163,9 +155,7 @@ class LTX2Runner(DefaultRunner):
     def _run_input_encoder_local_i2av(self):
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
-        # Prepare image conditioning if provided
-        logger.info(f"🖼️  I2AV mode: processing {len(self.input_info.images)} image conditioning(s)")
-        self.video_denoise_mask, self.initial_video_latent = self._prepare_image_conditioning()
+        self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
         torch_device_module.empty_cache()
         gc.collect()
 
@@ -173,7 +163,13 @@ class LTX2Runner(DefaultRunner):
             "text_encoder_output": text_encoder_output,
         }
 
-    def _prepare_image_conditioning(self):
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+        metrics_labels=["LTX2Runner"],
+    )
+    def run_vae_encoder(self):
         """
         Prepare image conditioning by loading images and encoding them to latents.
 
@@ -182,8 +178,6 @@ class LTX2Runner(DefaultRunner):
                 - video_denoise_mask: Mask indicating which frames to denoise (unpatchified, shape [1, F, H, W])
                 - initial_video_latent: Initial latent with conditioned frames (unpatchified, shape [C, F, H, W])
         """
-        logger.info(f"🖼️  Preparing {len(self.input_info.images)} image conditioning(s)")
-
         # Get latent shape
         C, F, H, W = self.input_info.video_latent_shape
         target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
@@ -211,8 +205,12 @@ class LTX2Runner(DefaultRunner):
         )
 
         # Process each image conditioning
-        images = parse_images_arg(self.input_info.images)
-        for image_path, frame_idx, strength in images:
+        image_paths = self.input_info.image_path.split(",")  # image_path1,image_path2,image_path3
+        for frame_idx, image_path in enumerate(image_paths):
+            if not isinstance(self.input_info.image_strength, list):
+                strength = self.input_info.image_strength
+            else:
+                strength = self.input_info.image_strength[frame_idx]
             logger.info(f"  📷 Loading image: {image_path} for frame {frame_idx} with strength {strength}")
 
             # Load and preprocess image
@@ -224,12 +222,9 @@ class LTX2Runner(DefaultRunner):
                 device=AI_DEVICE,
             )
 
-            # Encode image to latent space
-            # image shape: [1, C, 1, H, W]
             with torch.no_grad():
                 encoded_latent = self.video_vae.encode(image)
 
-            # Remove batch dimension: [1, C, 1, H_latent, W_latent] -> [C, 1, H_latent, W_latent]
             encoded_latent = encoded_latent.squeeze(0)
 
             # Verify frame index is valid
