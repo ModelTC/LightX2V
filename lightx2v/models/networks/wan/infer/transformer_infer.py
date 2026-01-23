@@ -1,7 +1,6 @@
 from functools import partial
 
 import torch
-import torch.distributed as dist
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
@@ -193,7 +192,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        print(dist.get_rank(), "qkv", q.shape, k.shape, v.shape)
+
         q, k = self.apply_rope_func(q, k, cos_sin)
 
         img_qkv_len = q.shape[0]
@@ -227,7 +226,6 @@ class WanTransformerInfer(BaseTransformerInfer):
                 enable_head_parallel=self.enable_head_parallel,
                 **attn_running_args,
             )
-            print(dist.get_rank(), "attn_out", attn_out.shape)
         else:
             attn_out = phase.self_attn_1.apply(
                 q=q,

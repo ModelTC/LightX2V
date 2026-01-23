@@ -483,9 +483,7 @@ class WanModel(CompiledMethodsMixin):
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
         if self.config["seq_parallel"]:
-            print(dist.get_rank(), pre_infer_out.x.shape)
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
-            print(dist.get_rank(), pre_infer_out.x.shape)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
