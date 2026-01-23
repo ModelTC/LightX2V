@@ -80,13 +80,13 @@ class AutoencoderKLQwenImageVAE:
             latents = latents.permute(0, 2, 1, 3, 4).view(-1, c, 1, h, w)
             image = self.model.decode(latents, return_dict=False)[0]  # (b f) c 1 h w
             image = image.squeeze(2)
-            image = self.image_processor.postprocess(image, output_type="pil")
+            image = self.image_processor.postprocess(image, output_type="pt" if input_info.return_result_tensor else "pil")
             images = []
             for bidx in range(b):
                 images.append(image[bidx * f : (bidx + 1) * f])
         else:
             images = self.model.decode(latents, return_dict=False)[0][:, :, 0]
-            images = self.image_processor.postprocess(images, output_type="pil")
+            images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
             torch_device_module.empty_cache()

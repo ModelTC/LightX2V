@@ -129,6 +129,7 @@ class T2IInputInfo:
     prompt: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
@@ -144,6 +145,7 @@ class I2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)

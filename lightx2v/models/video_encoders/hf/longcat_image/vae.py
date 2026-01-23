@@ -106,7 +106,7 @@ class LongCatImageVAE:
 
         # Decode - latents is now [B, 16, H, W]
         images = self.model.decode(latents, return_dict=False)[0]
-        images = self.image_processor.postprocess(images, output_type="pil")
+        images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
 
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
