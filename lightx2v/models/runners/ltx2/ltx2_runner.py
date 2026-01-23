@@ -77,13 +77,6 @@ class LTX2Runner(DefaultRunner):
         text_encoders = [text_encoder]
         return text_encoders
 
-    def get_vae_parallel(self):
-        if isinstance(self.config.get("parallel", False), bool):
-            return self.config.get("parallel", False)
-        if isinstance(self.config.get("parallel", False), dict):
-            return self.config.get("parallel", {}).get("vae_parallel", True)
-        return False
-
     def load_vae(self):
         """Load video and audio VAE decoders."""
         # offload config
@@ -108,7 +101,6 @@ class LTX2Runner(DefaultRunner):
             load_encoder=self.config["task"] == "i2av",
             use_tiling=self.config.get("use_tiling_vae", False),
             cpu_offload=vae_offload,
-            parallel=self.get_vae_parallel(),
         )
 
         # Audio VAE

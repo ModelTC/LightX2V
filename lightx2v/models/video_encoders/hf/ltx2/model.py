@@ -36,16 +36,12 @@ class LTX2VideoVAE:
         load_encoder: bool = True,
         use_tiling: bool = False,
         cpu_offload: bool = False,
-        parallel: bool = False,
-        use_2d_split: bool = True,
     ):
         self.checkpoint_path = checkpoint_path
         self.device = device
         self.dtype = dtype
         self.load_encoder_flag = load_encoder
         self.use_tiling = use_tiling
-        self.parallel = parallel
-        self.use_2d_split = use_2d_split
         self.loader = SafetensorsModelStateDictLoader()
         self.encoder = None
         self.decoder = None
