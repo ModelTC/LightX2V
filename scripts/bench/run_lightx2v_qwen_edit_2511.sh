@@ -6,6 +6,8 @@ lightx2v_path=
 
 model_path=/path/to/Qwen/Qwen-Image-Edit-2511
 
+image_path=${lightx2v_path}/assets/inputs/imgs/cat.png
+
 config_json=${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511.json
 
 model_cls=qwen_image
@@ -31,4 +33,5 @@ python -m lightx2v.infer \
 --config_json ${config_json} \
 --prompt "${prompt}" \
 --negative_prompt "${negative_prompt}" \
+--image_path ${image_path} \
 --save_result_path ${lightx2v_path}/save_results/${model_cls}_${task}_gpu${gpus}_${ts}.png
