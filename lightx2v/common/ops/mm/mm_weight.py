@@ -191,6 +191,20 @@ class MMWeightTemplate(metaclass=ABCMeta):
                     self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
                 logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
 
+    def update_lora(self, weight_dict, lora_strength=1):
+        if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
+            if self.lora_down_name in weight_dict:
+                self.has_lora_branch = True
+                self.lora_down.copy_(weight_dict[self.lora_down_name])
+                self.lora_up.copy_(weight_dict[self.lora_up_name])
+                self.lora_strength = lora_strength
+                if self.lora_alpha_name in weight_dict:
+                    self.lora_alpha.copy_(weight_dict[self.lora_alpha_name])
+                    self.lora_scale.copy_(self.lora_alpha / self.lora_down.shape[0])
+                else:
+                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                logger.debug(f"Update LoRA to {self.weight_name}")
+
     def state_dict(self, destination=None):
         return state_dict(self, self.base_attrs, self.lora_attrs, destination)
 

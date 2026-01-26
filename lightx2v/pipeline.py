@@ -346,6 +346,13 @@ class LightX2VPipeline:
         self.lora_configs = lora_configs
         self.lora_dynamic_apply = lora_dynamic_apply
 
+    def switch_lora(self, lora_path: str, strength: float = 1.0):
+        logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+        if not self.lora_dynamic_apply:
+            logger.error("LoRA dynamic apply is not enabled. Please enable it first.")
+            return
+        self.runner.switch_lora(lora_path, strength)
+
     def enable_cache(
         self,
         cache_method="Tea",

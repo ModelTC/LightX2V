@@ -477,6 +477,38 @@ class DefaultRunner(BaseRunner):
             monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video_final
 
+    def switch_lora(self, lora_path: str, strength: float = 1.0):
+        """
+        Switch LoRA weights dynamically by calling weight modules' update_lora method.
+
+        This method allows switching LoRA weights at runtime without reloading the model.
+        It calls the model's _update_lora method, which updates LoRA weights in pre_weight,
+        transformer_weights, and post_weight modules.
+
+        Args:
+            lora_path: Path to the LoRA safetensors file
+            strength: LoRA strength (default: 1.0)
+
+        Returns:
+            bool: True if LoRA was successfully switched, False otherwise
+        """
+        if not hasattr(self, "model") or self.model is None:
+            logger.error("Model not loaded. Please load model first.")
+            return False
+
+        if not hasattr(self.model, "_update_lora"):
+            logger.error("Model does not support LoRA switching")
+            return False
+
+        try:
+            logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+            self.model._update_lora(lora_path, strength)
+            logger.info("LoRA switched successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to switch LoRA: {e}")
+            return False
+
     def __del__(self):
         if hasattr(self, "model"):
             del self.model

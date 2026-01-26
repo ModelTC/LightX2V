@@ -41,6 +41,15 @@ class WeightModule:
             if hasattr(parameter, "register_lora"):
                 parameter.register_lora(weight_dict, strength)
 
+    def update_lora(self, weight_dict, strength):
+        for _, module in self._modules.items():
+            if hasattr(module, "update_lora"):
+                module.update_lora(weight_dict, strength)
+
+        for _, parameter in self._parameters.items():
+            if hasattr(parameter, "update_lora"):
+                parameter.update_lora(weight_dict, strength)
+
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
