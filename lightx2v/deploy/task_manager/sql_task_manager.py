@@ -709,11 +709,37 @@ class PostgresSQLTaskManager(BaseTaskManager):
 
                 running_subs = []
                 failed_sub = False
+                reject_sub = False
                 for sub in subtasks:
                     if sub["status"] not in FinishedStatus:
                         running_subs.append(sub)
                     if sub["status"] == TaskStatus.FAILED:
                         failed_sub = True
+                    if sub["status"] == TaskStatus.REJECT:
+                        reject_sub = True
+
+                if reject_sub:
+                    if task["status"] != TaskStatus.REJECT:
+                        self.mark_task_end(records, task, TaskStatus.REJECT)
+                        await self.update_task(
+                            conn,
+                            task_id,
+                            status=TaskStatus.REJECT,
+                            extra_info=task["extra_info"],
+                            src_status=task["status"],
+                        )
+                    for sub in running_subs:
+                        self.mark_subtask_change(records, sub, sub["status"], TaskStatus.REJECT, fail_msg="other subtask reject")
+                        await self.update_subtask(
+                            conn,
+                            task_id,
+                            sub["worker_name"],
+                            status=TaskStatus.REJECT,
+                            extra_info=sub["extra_info"],
+                            src_status=sub["status"],
+                        )
+                    self.metrics_commit(records)
+                    return TaskStatus.FAILED
 
                 # some subtask failed, we should fail all other subtasks
                 if failed_sub:
