@@ -23,7 +23,7 @@ ts=$(date +"%y%m%d%H%M%S")
 source ${lightx2v_path}/scripts/base/base.sh
 
 torchrun --nproc_per_node=${gpus} -m lightx2v.infer \
---target_shape 1280 720 \
+--target_shape 720 1280 \
 --seed 42 \
 --model_cls ${model_cls} \
 --task ${task} \
@@ -31,4 +31,4 @@ torchrun --nproc_per_node=${gpus} -m lightx2v.infer \
 --config_json ${config_json} \
 --prompt "${prompt}" \
 --negative_prompt "${negative_prompt}" \
---save_result_path ${lightx2v_path}/save_results/${model_cls}_${task}_gpu${gpus}_${ts}.png
+--save_result_path ${lightx2v_path}/save_results/${model_cls}_${task}_gpu${gpus}_${ts}.mp4
