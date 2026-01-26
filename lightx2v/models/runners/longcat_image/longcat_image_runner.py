@@ -399,7 +399,7 @@ class LongCatImageRunner(DefaultRunner):
 
         if not input_info.return_result_tensor:
             image = images[0]
-            image.save(f"{input_info.save_result_path}")
+            image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator

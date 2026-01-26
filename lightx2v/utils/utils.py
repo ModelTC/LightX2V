@@ -120,9 +120,9 @@ def wan_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
         Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
         Note: The returned tensor is the same object as input (modified in-place)
     """
-    
+
     vae_output.add_(1.0).mul_(0.5).clamp_(0.0, 1.0)
-    
+
     if vae_output.ndim == 5:
         # Video: [B, C, T, H, W] -> [B, T, H, W, C]
         vae_output = vae_output.permute(0, 2, 3, 4, 1)
@@ -131,6 +131,18 @@ def wan_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
     else:
         # Image: [B, C, H, W] -> [B, H, W, C]
         return vae_output.permute(0, 2, 3, 1).cpu()
+
+
+def diffusers_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
+    """
+    Convert Diffusers VAE decoder output to ComfyUI Image format
+    Image processor for VAE, return tensor in range [0, 1] when do_denormalize is True.
+
+    ref: https://github.com/huggingface/diffusers/blob/main/src/diffusers/image_processor.py#L744
+
+    """
+    return vae_output.permute(0, 2, 3, 1).cpu()
+
 
 def save_to_video(
     images: torch.Tensor,
