@@ -8,7 +8,7 @@ model_path = "/path/to/Qwen/Qwen-Image-2512"
 sys.path.append(lightx2v_path)
 os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 
-from lightx2v import LightX2VPipeline # noqa: E402
+from lightx2v import LightX2VPipeline  # noqa: E402
 
 ts = datetime.now().strftime("%y%m%d%H%M")
 
