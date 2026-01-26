@@ -50,13 +50,13 @@ Text-to-Image Models
 bash qwen_image_t2i_2512.sh
 
 # Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires modify the lora_configs path in config_json file
-bash qwen_image_t2i_2512_lora.sh
+bash qwen_image_t2i_2512_distill.sh
 
 # Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 8 steps, requires modify the dit_quantized_ckpt path in config_json file
 bash qwen_image_t2i_2512_distill_fp8.sh
 ```
 
-Note 1: In the scripts qwen_image_t2i_2512_lora.sh and qwen_image_t2i_2512_distill_fp8.sh, the model_path parameter shall be consistent with that in qwen_image_t2i_2512.sh, and it refers to the local path of the Qwen-Image-2512 model for all these scripts.
+Note 1: In the scripts qwen_image_t2i_2512_distill.sh、qwen_image_t2i_2512_distill_fp8.sh, the model_path parameter shall be consistent with that in qwen_image_t2i_2512.sh, and it refers to the local path of the Qwen-Image-2512 model for all these scripts.
 
 Note 2: The config_json file to be modified is located in the directory LightX2V/configs/qwen_image, lora_configs and dit_quantized_ckpt respectively refer to the local paths of the distilled model being used.
 
@@ -67,7 +67,7 @@ Image Editing Models
 bash qwen_image_i2i_2511.sh
 
 # Inference with 2511 image editing step-distilled model, default is 8 steps, requires modify the lora_configs path in config_json file
-bash qwen_image_i2i_2511_lora.sh
+bash qwen_image_i2i_2511_distill.sh
 
 # Inference with 2511 image editing step-distilled + FP8 quantized model, default is 8 steps, requires modify the dit_quantized_ckpt path in config_json file
 bash qwen_image_i2i_2511_distill_fp8.sh
@@ -101,10 +101,19 @@ python -m lightx2v.infer \
 --save_result_path ${lightx2v_path}/save_results/qwen_image_t2i_2512.png \
 --seed 42
 ```
+`source ${lightx2v_path}/scripts/base/base.sh` sets some basic environment variables.
 
 `--model_cls qwen_image` specifies using the qwen_image model.
 
 `--task t2i` specifies the t2i task.
+
+`--model_path` specifies the model path.
+
+`--config_json` specifies the config file path.
+
+`--prompt` specifies the prompt.
+
+`--negative_prompt` specifies the negative prompt.
 
 The content of qwen_image_t2i_2512.json is as follows:
 ```
@@ -118,6 +127,8 @@ The content of qwen_image_t2i_2512.json is as follows:
     "sample_guide_scale": 4.0
 }
 ```
+`infer_steps`: Number of inference steps.
+
 `aspect_ratio` specifies the aspect ratio of the target image.
 
 `prompt_template_encode` specifies the template used for prompt encoding.
@@ -126,6 +137,54 @@ The content of qwen_image_t2i_2512.json is as follows:
 
 `attn_type` specifies the attention layers inside the qwen model. Here, flash_attn3 is used, which is only supported on Hopper architecture GPUs (H100, H20, etc.). For other GPUs, use flash_attn2 instead.
 
+`enable_cfg`: Whether to enable cfg. Set to true here, meaning two inferences will be performed: one with the prompt and one with the negative prompt, for better results but increased inference time.
+
+`sample_guide_scale` specifies CFG guidance strength, controls the intensity of CFG effect.
+
+qwen_image_t2i_2512_distill.json内容如下：
+```
+{
+    "infer_steps": 8,
+    "aspect_ratio": "16:9",
+    "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 34,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 4.0,
+    "lora_configs": [
+        {
+          "path": "lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-8steps-V1.0-fp32.safetensors",
+          "strength": 1.0
+        }
+      ]
+}
+```
+`infer_steps` number of inference steps.This is a distilled model, and the inference steps have been distilled to 8 steps.
+
+`enable_cfg` whether to enable CFG. For models that have undergone CFG distillation, set this parameter to false.
+
+`lora_configs` specifies the LoRA weight configuration, and the path needs to be modified to the actual local path.
+
+qwen_image_t2i_2512_distill_fp8.json内容如下：
+```
+{
+    "infer_steps": 8,
+    "aspect_ratio": "16:9",
+    "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 34,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 4.0,
+    "dit_quantized": true,
+    "dit_quantized_ckpt": "lightx2v/Qwen-Image-2512-Lightning/qwen_image_2512_fp8_e4m3fn_scaled_8steps_v1.0.safetensors",
+    "dit_quant_scheme": "fp8-sgl"
+}
+```
+`dit_quantized`	whether to enable DIT quantization; setting it to True means performing quantization processing on the core DIT module of the model.
+
+`dit_quantized_ckpt` specifies the DIT quantized weight path, which specifies the local path of the DIT weight file after FP8 quantization.
+
+`dit_quant_scheme` the DIT quantization scheme, which specifies the quantization type as "fp8-sgl" (FP8 single-granularity quantization).
 
 ### Start Service to Generate Image
 
@@ -162,7 +221,7 @@ Run the `qwen_2511_fp8.py` script, which uses a model optimized with step distil
 cd examples/qwen_image/
 
 # Environment variables need to be set before running.
-export PYTHONPATH=/data1/yongyang/huangli/LightX2V
+export PYTHONPATH=/home/user/LightX2V
 
 # Before running, you need to modify the paths in the script to the actual paths, including: model_path, dit_quantized_ckpt, image_path, save_result_path
 python qwen_2511_fp8.py

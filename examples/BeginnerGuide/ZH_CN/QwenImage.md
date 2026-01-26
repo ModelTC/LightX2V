@@ -1,10 +1,10 @@
 # 从Qwen Image体验T2I与I2I
+
 本文档包含 Qwen Image 和 Qwen Image Edit 模型的使用示例。
 
 其中文生图模型使用的是Qwen-Image-2512，图像编辑模型使用的是Qwen-Image-Edit-2511，都为目前最新的模型。
 
 ## 准备环境
-
 
 请参考[01.PrepareEnv](01.PrepareEnv.md)
 
@@ -50,13 +50,13 @@ cd LightX2V/scripts/qwen_image
 bash qwen_image_t2i_2512.sh
 
 # 推理2512文生图步数蒸馏模型，默认是8步，需要修改config_json文件中的lora_configs的路径
-bash qwen_image_t2i_2512_lora.sh
+bash qwen_image_t2i_2512_distill.sh
 
 # 推理2512文生图步数蒸馏+FP8量化模型，默认是8步，需要修改config_json文件中的dit_quantized_ckpt的路径
 bash qwen_image_t2i_2512_distill_fp8.sh
 ```
 
-注意1：在qwen_image_t2i_2512_lora.sh、qwen_image_t2i_2512_distill_fp8.sh脚本中，model_path与qwen_image_t2i_2512.sh保持一致，都为Qwen-Image-2512模型的本地路径
+注意1：在qwen_image_t2i_2512_distill.sh、qwen_image_t2i_2512_distill_fp8.sh脚本中，model_path与qwen_image_t2i_2512.sh保持一致，都为Qwen-Image-2512模型的本地路径
 
 注意2：需要修改的config_json文件在LightX2V/configs/qwen_image中，lora_configs、dit_quantized_ckpt分别为所使用蒸馏模型的本地路径
 
@@ -67,7 +67,7 @@ bash qwen_image_t2i_2512_distill_fp8.sh
 bash qwen_image_i2i_2511.sh
 
 # 推理2511图像编辑步数蒸馏模型，默认是8步，需要修改config_json文件中的lora_configs的路径
-bash qwen_image_i2i_2511_lora.sh
+bash qwen_image_i2i_2511_distill.sh
 
 # 推理2511图像编辑步数蒸馏+FP8量化模型，默认是8步，需要修改config_json文件中的dit_quantized_ckpt的路径
 bash qwen_image_i2i_2511_distill_fp8.sh
@@ -101,10 +101,19 @@ python -m lightx2v.infer \
 --save_result_path ${lightx2v_path}/save_results/qwen_image_t2i_2512.png \
 --seed 42
 ```
+`source ${lightx2v_path}/scripts/base/base.sh` 设置一些基础的环境变量
 
 `--model_cls qwen_image` 表示使用qwen_image模型
 
 `--task t2i` 表示使用t2i任务
+
+`--model_path` 表示模型的路径
+
+`--config_json` 表示配置文件的路径
+
+`--prompt` 表示提示词
+
+`--negative_prompt` 表示负向提示词
 
 qwen_image_t2i_2512.json内容如下
 ```
@@ -118,6 +127,8 @@ qwen_image_t2i_2512.json内容如下
     "sample_guide_scale": 4.0
 }
 ```
+`infer_steps` 表示推理的步数
+
 `aspect_ratio` 表示目标图片的宽高比
 
 `prompt_template_encode` 表示提示词编码的模板
@@ -126,6 +137,54 @@ qwen_image_t2i_2512.json内容如下
 
 `attn_type` 表示模型内部的注意力层算子的类型，这里使用flash_attn3，仅限于Hopper架构的显卡(H100, H20等)，其他显卡可以使用flash_attn2进行替代
 
+`enable_cfg` 表示是否启用cfg，这里设置为true，表示会推理两次，第一次使用正向提示词，第二次使用负向提示词，这样可以得到更好的效果，但是会增加推理时间
+
+`sample_guide_scale` 表示 CFG 引导强度，控制 CFG 的作用力度
+
+qwen_image_t2i_2512_distill.json内容如下：
+```
+{
+    "infer_steps": 8,
+    "aspect_ratio": "16:9",
+    "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 34,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 4.0,
+    "lora_configs": [
+        {
+          "path": "lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-8steps-V1.0-fp32.safetensors",
+          "strength": 1.0
+        }
+      ]
+}
+```
+`infer_steps` 表示推理的步数，这是蒸馏模型，推理步数蒸馏成8步
+
+`enable_cfg` 表示是否启用cfg，已经做了CFG蒸馏的模型，设置为false
+
+`lora_configs` 表示Lora权重配置，需修改路径为本地实际路径
+
+qwen_image_t2i_2512_distill_fp8.json内容如下：
+```
+{
+    "infer_steps": 8,
+    "aspect_ratio": "16:9",
+    "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 34,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 4.0,
+    "dit_quantized": true,
+    "dit_quantized_ckpt": "lightx2v/Qwen-Image-2512-Lightning/qwen_image_2512_fp8_e4m3fn_scaled_8steps_v1.0.safetensors",
+    "dit_quant_scheme": "fp8-sgl"
+}
+```
+`dit_quantized`	表示是否启用 DIT 量化，设置为True表示对模型核心的 DIT 模块做量化处理
+
+`dit_quantized_ckpt` 表示 DIT 量化权重路径，指定 FP8 量化后的 DIT 权重文件的本地路径
+
+`dit_quant_scheme` 表示 DIT 量化方案，指定量化类型为 "fp8-sgl"（FP8 单粒度量化）
 
 ### 启动服务生成图片
 
@@ -162,7 +221,7 @@ python post.py
 cd examples/qwen_image/
 
 # 运行前需设置环境变量
-export PYTHONPATH=/data1/yongyang/huangli/LightX2V
+export PYTHONPATH=/home/user/LightX2V
 
 # 运行前需修改脚本中的路径为实际路径，包括：model_path、dit_quantized_ckpt、image_path、save_result_path
 python qwen_2511_fp8.py
