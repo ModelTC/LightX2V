@@ -406,5 +406,7 @@ class LongCatImageRunner(DefaultRunner):
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}
