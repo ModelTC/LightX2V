@@ -19,6 +19,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
         self.table_versions = "versions"
         self.table_shares = "shares"
         self.table_podcasts = "podcasts"
+        self.table_voice_clones = "voice_clones"
         self.pool = None
         self.metrics_monitor = metrics_monitor
         self.time_keys = ["create_t", "update_t", "ping_t", "valid_t"]
@@ -75,6 +76,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
             (1, "Init tables", self.upgrade_v1),
             (2, "Add shares table", self.upgrade_v2),
             (3, "Add podcasts table", self.upgrade_v3),
+            (4, "Add voice clones table", self.upgrade_v4),
         ]
         logger.info(f"upgrade_db: {self.db_url}")
         cur_ver = await self.query_version()
@@ -236,6 +238,33 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 return True
         except:  # noqa
             logger.error(f"upgrade_v3 error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    async def upgrade_v4(self, version, description):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                # create shares table
+                await conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.table_voice_clones} (
+                        user_id VARCHAR(256) NOT NULL,
+                        speaker_id VARCHAR(256) NOT NULL,
+                        name TEXT,
+                        create_t TIMESTAMPTZ NOT NULL,
+                        update_t TIMESTAMPTZ NOT NULL,
+                        extra_info JSONB,
+                        tag VARCHAR(64),
+                        FOREIGN KEY (user_id) REFERENCES {self.table_users}(user_id) ON DELETE CASCADE,
+                        PRIMARY KEY (user_id, speaker_id)
+                    )
+                """)
+                # update version
+                await conn.execute(f"INSERT INTO {self.table_versions} (version, description, create_t) VALUES ($1, $2, $3)", version, description, datetime.now())
+                return True
+        except:  # noqa
+            logger.error(f"upgrade_v4 error: {traceback.format_exc()}")
             return False
         finally:
             await self.release_conn(conn)
@@ -593,7 +622,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
                     worker_name = cand["worker_name"]
                     task, subs = await self.load(conn, task_id, worker_name=worker_name)
                     assert len(subs) == 1, f"task {task_id} has multiple subtasks: {subs} with worker_name: {worker_name}"
-                    if task["status"] in [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]:
+                    if task["status"] in FinishedStatus:
                         continue
 
                     self.mark_subtask_change(records, subs[0], subs[0]["status"], TaskStatus.RUNNING)
@@ -653,7 +682,7 @@ class PostgresSQLTaskManager(BaseTaskManager):
                     pre = subs[0]["worker_identity"]
                     assert pre == worker_identity, f"worker identity not matched: {pre} vs {worker_identity}"
 
-                assert status in [TaskStatus.SUCCEED, TaskStatus.FAILED], f"invalid finish status: {status}"
+                assert status in FinishedStatus, f"invalid finish status: {status}"
                 for sub in subs:
                     if sub["status"] not in FinishedStatus:
                         if should_running and sub["status"] != TaskStatus.RUNNING:
@@ -673,6 +702,10 @@ class PostgresSQLTaskManager(BaseTaskManager):
                 if task["status"] == TaskStatus.CANCEL:
                     self.metrics_commit(records)
                     return TaskStatus.CANCEL
+
+                if task["status"] == TaskStatus.REJECT:
+                    self.metrics_commit(records)
+                    return TaskStatus.REJECT
 
                 running_subs = []
                 failed_sub = False
@@ -1042,6 +1075,115 @@ class PostgresSQLTaskManager(BaseTaskManager):
             return podcasts
         except:  # noqa
             logger.error(f"list_podcasts error: {traceback.format_exc()}")
+            return []
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def insert_voice_clone_if_not_exists(self, voice_clone):
+        conn = await self.get_conn()
+        try:
+            user_id = voice_clone["user_id"]
+            speaker_id = voice_clone["speaker_id"]
+            async with conn.transaction(isolation="read_uncommitted"):
+                row = await conn.fetchrow(f"SELECT * FROM {self.table_voice_clones} WHERE user_id = $1 AND speaker_id = $2", user_id, speaker_id)
+                if row:
+                    logger.info(f"voice clone already exists: {user_id}_{speaker_id}")
+                    return True
+                self.fmt_dict(voice_clone)
+                await conn.execute(
+                    f"""
+                    INSERT INTO {self.table_voice_clones}
+                    (user_id, speaker_id, name, create_t, update_t, extra_info, tag)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    voice_clone["user_id"],
+                    voice_clone["speaker_id"],
+                    voice_clone["name"],
+                    voice_clone["create_t"],
+                    voice_clone["update_t"],
+                    voice_clone["extra_info"],
+                    voice_clone["tag"],
+                )
+                return True
+        except:  # noqa
+            logger.error(f"insert_voice_clone_if_not_exists error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def query_voice_clone(self, user_id, speaker_id):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                row = await conn.fetchrow(f"SELECT * FROM {self.table_voice_clones} WHERE user_id = $1 AND speaker_id = $2", user_id, speaker_id)
+                if row is None:
+                    return None
+                voice_clone = dict(row)
+                self.parse_dict(voice_clone)
+                return voice_clone
+        except:  # noqa
+            logger.error(f"query_voice_clone error: {traceback.format_exc()}")
+            return None
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def delete_voice_clone(self, user_id, speaker_id):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                await conn.execute(f"DELETE FROM {self.table_voice_clones} WHERE user_id = $1 AND speaker_id = $2", user_id, speaker_id)
+                return True
+        except:  # noqa
+            logger.error(f"delete_voice_clone error: {traceback.format_exc()}")
+            return False
+        finally:
+            await self.release_conn(conn)
+
+    @class_try_catch_async
+    async def list_voice_clones(self, user_id, **kwargs):
+        conn = await self.get_conn()
+        try:
+            async with conn.transaction(isolation="read_uncommitted"):
+                count = kwargs.get("count", False)
+                query = f"SELECT * FROM "
+                if count:
+                    query = f"SELECT COUNT(*) FROM "
+                    assert "limit" not in kwargs, "limit is not allowed when count is True"
+                    assert "offset" not in kwargs, "offset is not allowed when count is True"
+                param_idx = 1
+                params = [user_id]
+                conds = [f"user_id = ${param_idx}"]
+                query += self.table_voice_clones + " WHERE " + " AND ".join(conds)
+
+                if not count:
+                    sort_key = "update_t" if kwargs.get("sort_by_update_t", False) else "create_t"
+                    query += f" ORDER BY {sort_key} DESC"
+
+                if "limit" in kwargs:
+                    param_idx += 1
+                    query += f" LIMIT ${param_idx}"
+                    params.append(kwargs["limit"])
+
+                if "offset" in kwargs:
+                    param_idx += 1
+                    query += f" OFFSET ${param_idx}"
+                    params.append(kwargs["offset"])
+
+                rows = await conn.fetch(query, *params)
+                if count:
+                    return rows[0]["count"]
+
+                voice_clones = []
+                for row in rows:
+                    voice_clone = dict(row)
+                    self.parse_dict(voice_clone)
+                    voice_clones.append(voice_clone)
+                return voice_clones
+        except:  # noqa
+            logger.error(f"list_voice_clones error: {traceback.format_exc()}")
             return []
         finally:
             await self.release_conn(conn)

@@ -69,16 +69,32 @@ MODEL_CONFIG = {
         "num_layers": 40,
         "out_dim": 16,
         "text_len": 512,
-    }
+    },
+    "Qwen_Image_Edit_2511": {
+        "_class_name": "QwenImageTransformer2DModel",
+        "_diffusers_version": "0.36.0.dev0",
+        "attention_head_dim": 128,
+        "axes_dims_rope": [16, 56, 56],
+        "guidance_embeds": False,
+        "in_channels": 64,
+        "joint_attention_dim": 3584,
+        "num_attention_heads": 24,
+        "num_layers": 60,
+        "out_channels": 16,
+        "patch_size": 2,
+        "zero_cond_t": True,
+    },
 }
 # 模型列表缓存（避免每次从 HF 获取）
 HF_MODELS_CACHE = {
-    "lightx2v/Wan2.1-Distill-Models": [],
-    "lightx2v/Wan2.1-Official-Models": [],
-    "lightx2v/Wan2.2-Distill-Models": [],
-    "lightx2v/Wan2.2-Official-Models": [],
+    "lightx2v/wan2.1-Distill-Models": [],
+    "lightx2v/wan2.1-Official-Models": [],
+    "lightx2v/wan2.2-Distill-Models": [],
+    "lightx2v/wan2.2-Official-Models": [],
     "lightx2v/Encoders": [],
     "lightx2v/Autoencoders": [],
+    "lightx2v/Qwen-Image-Edit-2511-Lightning": [],
+    "Qwen/Qwen-Image-Edit-2511": [],
 }
 
 
@@ -115,10 +131,14 @@ def load_hf_models_cache():
     """从 Hugging Face 加载模型列表并缓存，如果 HF 超时或失败，则尝试使用 ModelScope"""
     import concurrent.futures
 
-    def process_files(files):
+    def process_files(files, repo_id=None):
         """处理文件列表，提取模型名称"""
         model_names = []
         seen_dirs = set()
+
+        # 对于 Qwen/Qwen-Image-Edit-2511 仓库，保留 vae 和 scheduler 目录
+        is_qwen_image_repo = repo_id == "Qwen/Qwen-Image-Edit-2511"
+
         for file in files:
             # 排除包含comfyui的文件
             if "comfyui" in file.lower():
@@ -134,8 +154,11 @@ def load_hf_models_cache():
                 top_dir = file.split("/")[0]
                 if top_dir not in seen_dirs:
                     seen_dirs.add(top_dir)
+                    # 对于 Qwen 仓库，保留 vae 和 scheduler 目录
+                    if is_qwen_image_repo and top_dir.lower() in ["vae", "scheduler"]:
+                        model_names.append(top_dir)
                     # 支持safetensors文件目录和_split分block存储目录
-                    if "_split" in top_dir or any(f.startswith(f"{top_dir}/") and f.endswith(".safetensors") for f in files):
+                    elif "_split" in top_dir or any(f.startswith(f"{top_dir}/") and f.endswith(".safetensors") for f in files):
                         model_names.append(top_dir)
         return sorted(set(model_names))
 
@@ -146,9 +169,20 @@ def load_hf_models_cache():
         files = None
         source = None
 
-        # 首先尝试从 Hugging Face 获取（带超时）
+        # 首先尝试从 ModelScope 获取
         try:
-            if HF_AVAILABLE:
+            if MS_AVAILABLE:
+                logger.info(f"Loading models from ModelScope {repo_id}...")
+                api = HubApi()
+                # ModelScope API 获取文件列表
+                model_files = api.get_model_files(model_id=repo_id, recursive=True)
+                # 提取文件路径
+                files = [file["Path"] for file in model_files if file.get("Type") == "blob"]
+                source = "ModelScope"
+                logger.info(f"Successfully loaded models from ModelScope {repo_id}")
+        except:  # noqa E722
+            # 如果 ModelScope 失败，尝试从 Hugging Face 获取（带超时）
+            if files is None and HF_AVAILABLE:
                 logger.info(f"Loading models from Hugging Face {repo_id}...")
                 api = HfApi()
 
@@ -157,21 +191,10 @@ def load_hf_models_cache():
                     future = executor.submit(list_repo_files, repo_id=repo_id, repo_type="model")
                     files = future.result(timeout=HF_TIMEOUT)
                     source = "Hugging Face"
-                    logger.info(f"Successfully loaded models from Hugging Face {repo_id}")
-        except:  # noqa E722
-            # 如果 HF 失败，尝试从 ModelScope 获取
-            if files is None and MS_AVAILABLE:
-                logger.info(f"Loading models from ModelScope {repo_id}...")
-                api = HubApi()
-                # ModelScope API 获取文件列表
-                model_files = api.get_model_files(model_id=repo_id, recursive=True)
-                # 提取文件路径
-                files = [file["Path"] for file in model_files if file.get("Type") == "blob"]
-                source = "ModelScope"
 
         # 处理文件列表
         if files:
-            model_names = process_files(files)
+            model_names = process_files(files, repo_id)
             HF_MODELS_CACHE[repo_id] = model_names
             logger.info(f"Loaded {len(HF_MODELS_CACHE[repo_id])} models from {source} {repo_id}")
         else:
@@ -201,7 +224,19 @@ def check_model_exists(model_path, model_name):
         return False
 
     model_path_full = os.path.join(model_path, model_name)
-    return os.path.exists(model_path_full)
+    # 检查是否存在（文件或目录）
+    if os.path.exists(model_path_full):
+        return True
+
+    # 额外检查：如果是 safetensors 文件，也检查同名目录（_split 目录）
+    if model_name.endswith(".safetensors"):
+        # 检查同名目录（可能是分块存储）
+        base_name = model_name.replace(".safetensors", "")
+        split_dir = os.path.join(model_path, base_name + "_split")
+        if os.path.exists(split_dir):
+            return True
+
+    return False
 
 
 def format_model_choice(model_name, model_path, status_emoji=None):
@@ -229,6 +264,41 @@ def extract_model_name(formatted_name):
     return formatted_name.strip()
 
 
+def sort_model_choices(models):
+    """根据设备能力和模型类型对模型列表排序
+
+    排序规则：
+    - 如果设备支持 fp8：fp8+split > int8+split > fp8 > int8 > 其他
+    - 如果设备不支持 fp8：int8+split > int8 > 其他
+    """
+    fp8_supported = is_fp8_supported_gpu()
+
+    def get_priority(name):
+        name_lower = name.lower()
+        if fp8_supported:
+            # fp8 设备：fp8+split > int8+split > fp8 > int8 > 其他
+            if "fp8" in name_lower and "_split" in name_lower:
+                return 0  # 最高优先级
+            elif "int8" in name_lower and "_split" in name_lower:
+                return 1
+            elif "fp8" in name_lower:
+                return 2
+            elif "int8" in name_lower:
+                return 3
+            else:
+                return 4  # 其他
+        else:
+            # 非 fp8 设备：优先 int8+split，其次 int8
+            if "int8" in name_lower and "_split" in name_lower:
+                return 0  # 最高优先级
+            elif "int8" in name_lower:
+                return 1
+            else:
+                return 2  # 其他（fp8 已经被过滤掉了）
+
+    return sorted(models, key=lambda x: (get_priority(x), x.lower()))
+
+
 def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=None):
     """获取 Diffusion 模型可选项（从 Hugging Face 和本地）
 
@@ -244,26 +314,26 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     # 根据模型类型和是否 distill 选择仓库
     if model_type == "wan2.1":
         if is_distill is True:
-            repo_id = "lightx2v/Wan2.1-Distill-Models"
+            repo_id = "lightx2v/wan2.1-Distill-Models"
         elif is_distill is False:
-            repo_id = "lightx2v/Wan2.1-Official-Models"
+            repo_id = "lightx2v/wan2.1-Official-Models"
         else:
             # 同时获取两个仓库的模型
-            repo_id_distill = "lightx2v/Wan2.1-Distill-Models"
-            repo_id_official = "lightx2v/Wan2.1-Official-Models"
+            repo_id_distill = "lightx2v/wan2.1-Distill-Models"
+            repo_id_official = "lightx2v/wan2.1-Official-Models"
             hf_models_distill = get_hf_models(repo_id_distill, prefix_filter="wan2.1") if HF_AVAILABLE else []
             hf_models_official = get_hf_models(repo_id_official, prefix_filter="wan2.1") if HF_AVAILABLE else []
             hf_models = list(set(hf_models_distill + hf_models_official))
             repo_id = None  # 标记为已获取
     else:  # wan2.2
         if is_distill is True:
-            repo_id = "lightx2v/Wan2.2-Distill-Models"
+            repo_id = "lightx2v/wan2.2-Distill-Models"
         elif is_distill is False:
-            repo_id = "lightx2v/Wan2.2-Official-Models"
+            repo_id = "lightx2v/wan2.2-Official-Models"
         else:
             # 同时获取两个仓库的模型
-            repo_id_distill = "lightx2v/Wan2.2-Distill-Models"
-            repo_id_official = "lightx2v/Wan2.2-Official-Models"
+            repo_id_distill = "lightx2v/wan2.2-Distill-Models"
+            repo_id_official = "lightx2v/wan2.2-Official-Models"
             hf_models_distill = get_hf_models(repo_id_distill, prefix_filter="wan2.2") if HF_AVAILABLE else []
             hf_models_official = get_hf_models(repo_id_official, prefix_filter="wan2.2") if HF_AVAILABLE else []
             hf_models = list(set(hf_models_distill + hf_models_official))
@@ -309,8 +379,8 @@ def get_dit_choices(model_path, model_type="wan2.1", task_type=None, is_distill=
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -331,13 +401,13 @@ def get_high_noise_choices(model_path, model_type="wan2.2", task_type=None, is_d
 
     # 根据是否 distill 选择仓库
     if is_distill is True:
-        repo_id = "lightx2v/Wan2.2-Distill-Models"
+        repo_id = "lightx2v/wan2.2-Distill-Models"
     elif is_distill is False:
-        repo_id = "lightx2v/Wan2.2-Official-Models"
+        repo_id = "lightx2v/wan2.2-Official-Models"
     else:
         # 同时获取两个仓库的模型
-        repo_id_distill = "lightx2v/Wan2.2-Distill-Models"
-        repo_id_official = "lightx2v/Wan2.2-Official-Models"
+        repo_id_distill = "lightx2v/wan2.2-Distill-Models"
+        repo_id_official = "lightx2v/wan2.2-Official-Models"
         hf_models_distill = get_hf_models(repo_id_distill, keyword_filter="high_noise") if HF_AVAILABLE else []
         hf_models_official = get_hf_models(repo_id_official, keyword_filter="high_noise") if HF_AVAILABLE else []
         hf_models = list(set(hf_models_distill + hf_models_official))
@@ -378,8 +448,8 @@ def get_high_noise_choices(model_path, model_type="wan2.2", task_type=None, is_d
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -400,13 +470,13 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
 
     # 根据是否 distill 选择仓库
     if is_distill is True:
-        repo_id = "lightx2v/Wan2.2-Distill-Models"
+        repo_id = "lightx2v/wan2.2-Distill-Models"
     elif is_distill is False:
-        repo_id = "lightx2v/Wan2.2-Official-Models"
+        repo_id = "lightx2v/wan2.2-Official-Models"
     else:
         # 同时获取两个仓库的模型
-        repo_id_distill = "lightx2v/Wan2.2-Distill-Models"
-        repo_id_official = "lightx2v/Wan2.2-Official-Models"
+        repo_id_distill = "lightx2v/wan2.2-Distill-Models"
+        repo_id_official = "lightx2v/wan2.2-Official-Models"
         hf_models_distill = get_hf_models(repo_id_distill, keyword_filter="low_noise") if HF_AVAILABLE else []
         hf_models_official = get_hf_models(repo_id_official, keyword_filter="low_noise") if HF_AVAILABLE else []
         hf_models = list(set(hf_models_distill + hf_models_official))
@@ -447,8 +517,8 @@ def get_low_noise_choices(model_path, model_type="wan2.2", task_type=None, is_di
     safetensors_dir_choices = [d for d in contents["safetensors_dirs"] if is_valid(d)]
     local_models = dir_choices + safetensors_choices + safetensors_dir_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -495,8 +565,8 @@ def get_t5_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -560,8 +630,8 @@ def get_clip_model_choices(model_path):
 
     local_models = safetensors_choices
 
-    # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
 
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
@@ -656,12 +726,138 @@ def get_vae_decoder_choices(model_path):
     local_models = safetensors_choices + dir_choices
 
     # 合并 HF 和本地模型，去重
-    all_models = sorted(set(valid_hf_models + local_models))
+    all_models = list(set(valid_hf_models + local_models))
 
     # 对于VAE解码器，只显示包含"2_1"或"2.1"的选项
     all_models = [m for m in all_models if "2_1" in m or "2.1" in m]
 
+    # 按优先级排序
+    all_models = sort_model_choices(all_models)
+
     # 格式化选项，添加下载状态（✅ 已下载，❌ 未下载）
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices if formatted_choices else [""]
+
+
+def get_qwen_image_dit_choices(model_path):
+    """获取 Qwen Image Edit Diffusion 模型可选项
+    从 lightx2v/Qwen-Image-Edit-2511-Lightning 仓库获取
+    只列出包含 qwen_image_edit_2511 且以 lightning.safetensors 结尾或 lightning_split 结尾的模型
+    """
+    fp8_supported = is_fp8_supported_gpu()
+
+    # 从 Hugging Face 仓库获取
+    repo_id = "lightx2v/Qwen-Image-Edit-2511-Lightning"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    def is_valid(name):
+        name_lower = name.lower()
+        # 过滤掉包含comfyui的文件
+        if "comfyui" in name_lower:
+            return False
+        if not fp8_supported and "fp8" in name_lower:
+            return False
+        # 必须包含 qwen_image_edit_2511
+        if "qwen_image_edit_2511" not in name_lower:
+            return False
+        # 只保留 lightning.safetensors 结尾或 lightning_split 结尾的
+        return name.endswith("lightning.safetensors") or name.endswith("_split") or "lightning_split" in name_lower
+
+    # 筛选 HF 模型
+    valid_hf_models = [m for m in hf_models if is_valid(m)]
+
+    # 检查本地已存在的模型
+    contents = scan_model_path_contents(model_path)
+    local_models = []
+    for item in contents["dirs"] + contents["files"]:
+        if is_valid(item):
+            local_models.append(item)
+
+    # 合并 HF 和本地模型，去重，并按优先级排序
+    all_models = sort_model_choices(list(set(valid_hf_models + local_models)))
+
+    # 格式化选项，添加下载状态
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices if formatted_choices else [""]
+
+
+def get_qwen_image_vae_choices(model_path):
+    """获取 Qwen Image Edit VAE 可选项
+    从 Qwen/Qwen-Image-Edit-2511 仓库获取 vae 目录
+    """
+    # 从 Hugging Face 仓库获取
+    repo_id = "Qwen/Qwen-Image-Edit-2511"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    # 只保留 vae 目录
+    valid_hf_models = [m for m in hf_models if m.lower() == "vae"]
+
+    # 检查本地已存在的模型
+    contents = scan_model_path_contents(model_path)
+    local_models = [d for d in contents["dirs"] if d.lower() == "vae"]
+
+    # 合并 HF 和本地模型，去重
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # 如果没有找到，添加默认值 "vae"
+    if not all_models:
+        all_models = ["vae"]
+
+    # 格式化选项，添加下载状态
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices
+
+
+def get_qwen_image_scheduler_choices(model_path):
+    """获取 Qwen Image Edit Scheduler 可选项
+    从 Qwen/Qwen-Image-Edit-2511 仓库获取 scheduler 目录
+    """
+    # 从 Hugging Face 仓库获取
+    repo_id = "Qwen/Qwen-Image-Edit-2511"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    # 只保留 scheduler 目录
+    valid_hf_models = [m for m in hf_models if m.lower() == "scheduler"]
+
+    # 检查本地已存在的模型
+    contents = scan_model_path_contents(model_path)
+    local_models = [d for d in contents["dirs"] if d.lower() == "scheduler"]
+
+    # 合并 HF 和本地模型，去重
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # 如果没有找到，添加默认值 "scheduler"
+    if not all_models:
+        all_models = ["scheduler"]
+
+    # 格式化选项，添加下载状态
+    formatted_choices = [format_model_choice(m, model_path) for m in all_models]
+
+    return formatted_choices
+
+
+def get_qwen25vl_encoder_choices(model_path):
+    """获取 Qwen25-VL 编码器可选项
+    从 lightx2v/Encoders 仓库获取，只需要 Qwen25-VL-4bit-GPTQ
+    """
+    # 从 Hugging Face Encoders 仓库获取
+    repo_id = "lightx2v/Encoders"
+    hf_models = get_hf_models(repo_id) if HF_AVAILABLE else []
+
+    # 只保留 Qwen25-VL-4bit-GPTQ
+    valid_hf_models = [m for m in hf_models if "qwen25-vl-4bit-gptq" in m.lower() or "qwen25_vl_4bit_gptq" in m.lower()]
+
+    # 检查本地已存在的模型
+    contents = scan_model_path_contents(model_path)
+    local_models = [d for d in contents["dirs"] if "qwen25-vl-4bit-gptq" in d.lower() or "qwen25_vl_4bit_gptq" in d.lower()]
+
+    # 合并 HF 和本地模型，去重
+    all_models = sorted(set(valid_hf_models + local_models))
+
+    # 格式化选项，添加下载状态
     formatted_choices = [format_model_choice(m, model_path) for m in all_models]
 
     return formatted_choices if formatted_choices else [""]
@@ -911,6 +1107,12 @@ def is_module_installed(module_name):
 def get_available_quant_ops():
     available_ops = []
 
+    triton_installed = is_module_installed("triton")
+    if triton_installed:
+        available_ops.append(("triton", True))
+    else:
+        available_ops.append(("triton", False))
+
     vllm_installed = is_module_installed("vllm")
     if vllm_installed:
         available_ops.append(("vllm", True))
@@ -996,10 +1198,11 @@ def cleanup_memory():
         torch.cuda.synchronize()
 
 
-def generate_unique_filename(output_dir):
+def generate_unique_filename(output_dir, is_image=False):
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(output_dir, f"{timestamp}.mp4")
+    ext = ".png" if is_image else ".mp4"
+    return os.path.join(output_dir, f"{timestamp}{ext}")
 
 
 def is_fp8_supported_gpu():
@@ -1008,15 +1211,6 @@ def is_fp8_supported_gpu():
     compute_capability = torch.cuda.get_device_capability(0)
     major, minor = compute_capability
     return (major == 8 and minor == 9) or (major >= 9)
-
-
-def is_sm120_gpu():
-    """检测是否是 sm120（计算能力 12.0）GPU"""
-    if not torch.cuda.is_available():
-        return False
-    compute_capability = torch.cuda.get_device_capability(0)
-    major, minor = compute_capability
-    return major == 12 and minor == 0
 
 
 def is_sm_greater_than_90():
@@ -1028,12 +1222,34 @@ def is_sm_greater_than_90():
     return (major, minor) > (9, 0)
 
 
-def is_ada_architecture_gpu():
+def get_gpu_generation():
+    """检测GPU系列，返回 '40' 表示40系，'30' 表示30系，None 表示其他"""
     if not torch.cuda.is_available():
-        return False
-    gpu_name = torch.cuda.get_device_name(0).upper()
-    ada_keywords = ["RTX 40", "RTX40", "4090", "4080", "4070", "4060"]
-    return any(keyword in gpu_name for keyword in ada_keywords)
+        return None
+    try:
+        import re
+
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_name_lower = gpu_name.lower()
+
+        # 检测40系显卡 (RTX 40xx, RTX 4060, RTX 4070, RTX 4080, RTX 4090等)
+        if any(keyword in gpu_name_lower for keyword in ["rtx 40", "rtx40", "geforce rtx 40"]):
+            # 进一步检查是40xx系列
+            match = re.search(r"rtx\s*40\d+|40\d+", gpu_name_lower)
+            if match:
+                return "40"
+
+        # 检测30系显卡 (RTX 30xx, RTX 3060, RTX 3070, RTX 3080, RTX 3090等)
+        if any(keyword in gpu_name_lower for keyword in ["rtx 30", "rtx30", "geforce rtx 30"]):
+            # 进一步检查是30xx系列
+            match = re.search(r"rtx\s*30\d+|30\d+", gpu_name_lower)
+            if match:
+                return "30"
+
+        return None
+    except Exception as e:
+        logger.warning(f"无法检测GPU系列: {e}")
+        return None
 
 
 def get_quantization_options(model_path):
@@ -1088,6 +1304,9 @@ def determine_model_cls(model_type, dit_name, high_noise_name):
         check_name = dit_name.lower() if dit_name else ""
         is_distill = "4step" in check_name
         return "wan2.1_distill" if is_distill else "wan2.1"
+    elif model_type == "Qwen-Image-Edit-2511":
+        # Qwen-Image-Edit-2511 使用 qwen_image 模型类
+        return "qwen_image"
     else:
         # wan2.2
         check_name = high_noise_name.lower() if high_noise_name else ""
@@ -1106,18 +1325,24 @@ def get_repo_id_for_model(model_type, is_distill, model_category="dit"):
     """根据模型类型、是否 distill 和模型类别获取对应的 Hugging Face 仓库 ID"""
     if model_category == "dit":
         if model_type == "wan2.1":
-            return "lightx2v/Wan2.1-Distill-Models" if is_distill else "lightx2v/Wan2.1-Official-Models"
+            return "lightx2v/wan2.1-Distill-Models" if is_distill else "lightx2v/wan2.1-Official-Models"
+        elif model_type == "Qwen-Image-Edit-2511":
+            return "lightx2v/Qwen-Image-Edit-2511-Lightning"
         else:  # wan2.2
-            return "lightx2v/Wan2.2-Distill-Models" if is_distill else "lightx2v/Wan2.2-Official-Models"
+            return "lightx2v/wan2.2-Distill-Models" if is_distill else "lightx2v/wan2.2-Official-Models"
     elif model_category == "high_noise" or model_category == "low_noise":
         if is_distill:
-            return "lightx2v/Wan2.2-Distill-Models"
+            return "lightx2v/wan2.2-Distill-Models"
         else:
-            return "lightx2v/Wan2.2-Official-Models"
+            return "lightx2v/wan2.2-Official-Models"
     elif model_category == "t5" or model_category == "clip":
+        return "lightx2v/Encoders"
+    elif model_category == "qwen25vl":
         return "lightx2v/Encoders"
     elif model_category == "vae":
         return "lightx2v/Autoencoders"
+    elif model_category == "qwen_image_vae" or model_category == "qwen_image_scheduler":
+        return "Qwen/Qwen-Image-Edit-2511"
     return None
 
 
@@ -1199,6 +1424,11 @@ def run_inference(
     vae_encoder_path_input,
     vae_decoder_path_input,
     image_path=None,
+    # Qwen-Image-Edit-2511 相关参数
+    qwen_image_dit_path_input=None,
+    qwen_image_vae_path_input=None,
+    qwen_image_scheduler_path_input=None,
+    qwen25vl_encoder_path_input=None,
 ):
     cleanup_memory()
 
@@ -1240,6 +1470,12 @@ def run_inference(
     model_cls = determine_model_cls(model_type_input, dit_path_input, high_noise_path_input)
     logger.info(f"自动确定 model_cls: {model_cls} (模型类型: {model_type_input})")
 
+    # Qwen-Image-Edit-2511 相关配置
+    qwen_image_dit_path_input = extract_model_name(qwen_image_dit_path_input) if qwen_image_dit_path_input else ""
+    qwen_image_vae_path_input = extract_model_name(qwen_image_vae_path_input) if qwen_image_vae_path_input else ""
+    qwen_image_scheduler_path_input = extract_model_name(qwen_image_scheduler_path_input) if qwen_image_scheduler_path_input else ""
+    qwen25vl_encoder_path_input = extract_model_name(qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else ""
+
     if model_type_input == "wan2.1":
         dit_quant_detected = detect_quant_scheme(dit_path_input)
     else:
@@ -1251,13 +1487,18 @@ def run_inference(
     if model_path_input and model_path_input.strip():
         model_path = model_path_input.strip()
 
-    model_config = MODEL_CONFIG["Wan_14b"]
+    if model_type_input == "Qwen-Image-Edit-2511":
+        model_config = MODEL_CONFIG["Qwen_Image_Edit_2511"]
+    else:
+        model_config = MODEL_CONFIG["Wan_14b"]
 
-    save_result_path = generate_unique_filename(output_dir)
+    # 根据任务类型生成输出文件名
+    is_image_output = task == "i2i"
+    save_result_path = generate_unique_filename(output_dir, is_image=is_image_output)
 
-    is_dit_quant = dit_quant_detected != "bf16"
-    is_t5_quant = t5_quant_detected != "bf16"
-    is_clip_quant = clip_quant_detected != "fp16"
+    is_dit_quant = dit_quant_detected in ["fp8", "int8"]
+    is_t5_quant = t5_quant_detected in ["fp8", "int8"]
+    is_clip_quant = clip_quant_detected in ["fp8", "int8"]
 
     dit_quantized_ckpt = None
     dit_original_ckpt = None
@@ -1272,6 +1513,9 @@ def run_inference(
         if quant_op_val == "torch":
             # torch 选项需要转换为 torchao，格式为 fp8-torchao 或 int8-torchao
             return f"{quant_detected}-torchao"
+        elif quant_op_val == "triton":
+            # triton 选项格式为 fp8-triton 或 int8-triton
+            return f"{quant_detected}-triton"
         else:
             return f"{quant_detected}-{quant_op_val}"
 
@@ -1351,11 +1595,54 @@ def run_inference(
         f"VAE 配置 - use_tae: {use_tae}, use_lightvae: {use_lightvae}, need_scaled: {need_scaled} (VAE编码器: {vae_encoder_path}, VAE解码器: {vae_decoder_path}, vae_path: {vae_path}, tae_path: {tae_path})"
     )
 
+    # Qwen-Image-Edit-2511 特定配置
+    is_qwen_image = model_cls == "qwen_image"
+    qwen_image_config = {
+        "attention_out_dim": 3072,
+        "attention_dim_head": 128,
+        "CONDITION_IMAGE_SIZE": 147456,
+        "USE_IMAGE_ID_IN_PROMPT": True,
+        "transformer_in_channels": 64,
+        "prompt_template_encode": "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        "prompt_template_encode_start_idx": 64,
+        "vae_scale_factor": 8,
+    }
+
+    if is_qwen_image:
+        # 处理 qwen_image 的 dit 模型路径
+        qwen_dit_quant_detected = detect_quant_scheme(qwen_image_dit_path_input)
+        is_qwen_dit_quant = qwen_dit_quant_detected in ["fp8", "int8"]
+        if is_qwen_dit_quant:
+            qwen_image_config["dit_quantized"] = True
+            qwen_image_config["dit_quant_scheme"] = get_quant_scheme(qwen_dit_quant_detected, quant_op)
+            qwen_image_config["dit_quantized_ckpt"] = os.path.join(model_path, qwen_image_dit_path_input) if qwen_image_dit_path_input else None
+            qwen_image_config["dit_original_ckpt"] = None
+        else:
+            qwen_image_config["dit_quantized"] = False
+            qwen_image_config["dit_quant_scheme"] = "Default"
+            qwen_image_config["dit_original_ckpt"] = os.path.join(model_path, qwen_image_dit_path_input) if qwen_image_dit_path_input else None
+            qwen_image_config["dit_quantized_ckpt"] = None
+
+        # VAE 和 Scheduler
+        qwen_image_config["vae_path"] = os.path.join(model_path, qwen_image_vae_path_input) if qwen_image_vae_path_input else None
+        qwen_image_config["scheduler_path"] = os.path.join(model_path, qwen_image_scheduler_path_input) if qwen_image_scheduler_path_input else None
+
+        # Qwen25-VL 编码器 (INT4 GPTQ)
+        qwen_image_config["qwen25vl_quantized"] = True
+        qwen_image_config["qwen25vl_quant_scheme"] = "int4"
+        qwen_image_config["qwen25vl_quantized_ckpt"] = os.path.join(model_path, qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else None
+        qwen_image_config["qwen25vl_tokenizer_path"] = os.path.join(model_path, qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else None
+        qwen_image_config["qwen25vl_processor_path"] = os.path.join(model_path, qwen25vl_encoder_path_input) if qwen25vl_encoder_path_input else None
+
+        # zero_cond_t 设置为 true（2511 的特性）
+        qwen_image_config["zero_cond_t"] = True
+        qwen_image_config["attn_type"] = attention_type
+
     config_graio = {
         "infer_steps": infer_steps,
         "target_video_length": num_frames,
-        "target_width": int(resolution.split("x")[0]),
-        "target_height": int(resolution.split("x")[1]),
+        "resolution": resolution,
+        "resize_mode": "adaptive",
         "self_attn_1_type": attention_type,
         "cross_attn_1_type": attention_type,
         "cross_attn_2_type": attention_type,
@@ -1413,7 +1700,17 @@ def run_inference(
         "boundary": 0.900,
         "use_image_encoder": False if "wan2.2" in model_cls else True,
         "rope_type": "flashinfer" if apply_rope_with_cos_sin_cache_inplace else "torch",
+        "t5_lazy_load": lazy_load,
+        "bucket_shape": {
+            "0.667": [[480, 832], [544, 960], [720, 960]],
+            "1.500": [[832, 480], [960, 544], [960, 720]],
+            "1.000": [[480, 480], [576, 576], [720, 720]],
+        },
     }
+
+    # 如果是 qwen_image 模型，覆盖相关配置
+    if is_qwen_image:
+        config_graio.update(qwen_image_config)
 
     args = argparse.Namespace(
         model_cls=model_cls,
@@ -1426,6 +1723,7 @@ def run_inference(
         image_path=image_path,
         save_result_path=save_result_path,
         return_result_tensor=False,
+        target_shape=[],
     )
 
     config = get_default_config()
@@ -1471,7 +1769,7 @@ def handle_lazy_load_change(lazy_load_enabled):
     return gr.update(value=lazy_load_enabled)
 
 
-def auto_configure(resolution):
+def auto_configure(resolution, num_frames=81, task_type=None):
     """根据机器配置和分辨率自动设置推理选项"""
     default_config = {
         "lazy_load_val": False,
@@ -1489,11 +1787,16 @@ def auto_configure(resolution):
         "use_tiling_vae_val": False,
     }
 
+    # If num_frames > 81, set rope_chunk to True regardless of resolution
+    if num_frames > 81:
+        default_config["rope_chunk_val"] = True
+
     gpu_memory = round(get_gpu_memory())
     cpu_memory = round(get_cpu_memory())
-
-    attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
-
+    if task_type == "i2i":
+        attn_priority = ["torch_sdpa", "sage_attn2", "flash_attn3", "flash_attn2"]
+    else:
+        attn_priority = ["sage_attn2", "flash_attn3", "flash_attn2", "torch_sdpa"]
     # 如果 sm > (9,0)，且 sage_attn3 可用，将其放到 sage_attn2 后面
     if is_sm_greater_than_90():
         # 检查 sage_attn3 是否可用
@@ -1513,18 +1816,17 @@ def auto_configure(resolution):
                 if "sage_attn3" not in attn_priority:
                     attn_priority.insert(0, "sage_attn3")
 
-    # 根据现有优先级顺序，把 torch 加进去放到最后
-    if is_ada_architecture_gpu():
-        quant_op_priority = ["q8f", "vllm", "sgl", "torch"]
+    # 根据GPU系列调整quant_op优先级
+    gpu_gen = get_gpu_generation()
+    if gpu_gen == "40":
+        # 40系显卡：q8f在前
+        quant_op_priority = ["q8f", "triton", "vllm", "sgl", "torch"]
+    elif gpu_gen == "30":
+        # 30系显卡：vllm在前
+        quant_op_priority = ["vllm", "triton", "q8f", "sgl", "torch"]
     else:
-        quant_op_priority = ["vllm", "sgl", "q8f", "torch"]
-
-    # 如果 sm > (9,0)，就把 torch 放到最前
-    if is_sm_greater_than_90():
-        # 将 torch 从列表中移除，然后放到最前
-        if "torch" in quant_op_priority:
-            quant_op_priority.remove("torch")
-            quant_op_priority.insert(0, "torch")
+        # 其他情况：保持原顺序
+        quant_op_priority = ["triton", "q8f", "vllm", "sgl", "torch"]
 
     for op in attn_priority:
         if dict(available_attn_ops).get(op):
@@ -1536,25 +1838,7 @@ def auto_configure(resolution):
             default_config["quant_op_val"] = dict(quant_op_choices)[op]
             break
 
-    if resolution in [
-        "1280x720",
-        "720x1280",
-        "1280x544",
-        "544x1280",
-        "1104x832",
-        "832x1104",
-        "960x960",
-    ]:
-        res = "720p"
-    elif resolution in [
-        "960x544",
-        "544x960",
-    ]:
-        res = "540p"
-    else:
-        res = "480p"
-
-    if res == "720p":
+    if resolution in ["540p", "720p"]:
         gpu_rules = [
             (80, {}),
             (40, {"cpu_offload_val": False, "t5_cpu_offload_val": True, "vae_cpu_offload_val": True, "clip_cpu_offload_val": True}),
@@ -1584,6 +1868,20 @@ def auto_configure(resolution):
             ),
             (
                 8,
+                {
+                    "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
+                    "rope_chunk_val": True,
+                    "rope_chunk_size_val": 100,
+                    "clean_cuda_cache_val": True,
+                },
+            ),
+            (
+                -1,
                 {
                     "cpu_offload_val": True,
                     "t5_cpu_offload_val": True,
@@ -1635,6 +1933,17 @@ def auto_configure(resolution):
                     "offload_granularity_val": "phase",
                 },
             ),
+            (
+                -1,
+                {
+                    "cpu_offload_val": True,
+                    "t5_cpu_offload_val": True,
+                    "vae_cpu_offload_val": True,
+                    "clip_cpu_offload_val": True,
+                    "use_tiling_vae_val": True,
+                    "offload_granularity_val": "phase",
+                },
+            ),
         ]
 
     cpu_rules = [
@@ -1642,8 +1951,16 @@ def auto_configure(resolution):
         (64, {}),
         (32, {"unload_modules_val": True}),
         (
-            8,
+            16,
             {
+                "lazy_load_val": True,
+                "unload_modules_val": True,
+            },
+        ),
+        (
+            -1,
+            {
+                "t5_lazy_load": True,
                 "lazy_load_val": True,
                 "unload_modules_val": True,
             },
@@ -1768,6 +2085,18 @@ css = """
         /* Diffusion模型容器 */
         .diffusion-model-group {
             margin-bottom: 20px !important;
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+
+        /* 移除 Gradio 组件的默认边框 */
+        .diffusion-model-group > div,
+        .diffusion-model-group .gr-group,
+        .diffusion-model-group .gr-box {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
         }
 
         /* 编码器组容器（文本编码器、图像编码器） */
@@ -1843,7 +2172,7 @@ def main():
     logger.info("模型列表缓存加载完成")
 
     with gr.Blocks(title="Lightx2v (轻量级视频推理和生成引擎)") as demo:
-        gr.Markdown(f"# 🎬 LightX2V 视频生成器")
+        gr.Markdown(f"# 🎬 LightX2V 图片/视频生成器")
         gr.HTML(f"<style>{css}</style>")
         # 主布局：左右分栏
         with gr.Row():
@@ -1863,20 +2192,20 @@ def main():
                     with gr.Row():
                         model_type_input = gr.Radio(
                             label="模型类型",
-                            choices=["wan2.1", "wan2.2"],
+                            choices=["wan2.1", "wan2.2", "Qwen-Image-Edit-2511"],
                             value="wan2.1",
-                            info="wan2.2 需要分别指定高噪模型和低噪模型",
+                            info="wan2.2 需要分别指定高噪模型和低噪模型; Qwen-Image-Edit-2511 用于图片编辑(i2i)",
                         )
                         task_type_input = gr.Radio(
                             label="任务类型",
                             choices=["i2v", "t2v"],
                             value="i2v",
-                            info="i2v: 图生视频, t2v: 文生视频",
+                            info="i2v: 图生视频, t2v: 文生视频, i2i: 图片编辑",
                         )
                         download_source_input = gr.Radio(
                             label="📥 下载源",
                             choices=["huggingface", "modelscope"] if (HF_AVAILABLE and MS_AVAILABLE) else (["huggingface"] if HF_AVAILABLE else ["modelscope"] if MS_AVAILABLE else []),
-                            value="huggingface" if HF_AVAILABLE else ("modelscope" if MS_AVAILABLE else None),
+                            value="modelscope" if MS_AVAILABLE else ("huggingface" if HF_AVAILABLE else None),
                             info="选择模型下载源",
                             visible=HF_AVAILABLE or MS_AVAILABLE,
                             elem_classes=["horizontal-radio"],
@@ -1921,8 +2250,60 @@ def main():
                             low_noise_download_btn = gr.Button("📥 下载", visible=False, size="sm", variant="secondary")
                             low_noise_download_status = gr.Markdown("", visible=False)
 
+                    # Qwen-Image-Edit-2511 专用（默认隐藏）
+                    with gr.Column(visible=False, elem_classes=["diffusion-model-group"]) as qwen_image_row:
+                        # Diffusion 模型
+                        with gr.Row():
+                            with gr.Column(scale=5):
+                                qwen_image_dit_choices_init = get_qwen_image_dit_choices(model_path)
+                                qwen_image_dit_path_input = gr.Dropdown(
+                                    label="🎨 Diffusion模型 (Qwen Image Edit)",
+                                    choices=qwen_image_dit_choices_init,
+                                    value=qwen_image_dit_choices_init[0] if qwen_image_dit_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                            with gr.Column(scale=1, min_width=150):
+                                qwen_image_dit_download_btn = gr.Button("📥 下载", visible=False, size="sm", variant="secondary")
+                        qwen_image_dit_download_status = gr.Markdown("", visible=False)
+
+                        # VAE 和 Scheduler
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                qwen_image_vae_choices_init = get_qwen_image_vae_choices(model_path)
+                                qwen_image_vae_path_input = gr.Dropdown(
+                                    label="🎞️ VAE(图片编码/解码器)",
+                                    choices=qwen_image_vae_choices_init,
+                                    value=qwen_image_vae_choices_init[0] if qwen_image_vae_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                                qwen_image_vae_download_btn = gr.Button("📥 下载", visible=False, size="sm", variant="secondary")
+                                qwen_image_vae_download_status = gr.Markdown("", visible=False)
+                            with gr.Column(scale=1):
+                                qwen_image_scheduler_choices_init = get_qwen_image_scheduler_choices(model_path)
+                                qwen_image_scheduler_path_input = gr.Dropdown(
+                                    label="⏱️ Scheduler(调度器)",
+                                    choices=qwen_image_scheduler_choices_init,
+                                    value=qwen_image_scheduler_choices_init[0] if qwen_image_scheduler_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                                qwen_image_scheduler_download_btn = gr.Button("📥 下载", visible=False, size="sm", variant="secondary")
+                                qwen_image_scheduler_download_status = gr.Markdown("", visible=False)
+
+                        # Qwen25-VL 编码器
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                qwen25vl_encoder_choices_init = get_qwen25vl_encoder_choices(model_path)
+                                qwen25vl_encoder_path_input = gr.Dropdown(
+                                    label="📝 Qwen25-VL 编码器 (INT4 GPTQ)",
+                                    choices=qwen25vl_encoder_choices_init,
+                                    value=qwen25vl_encoder_choices_init[0] if qwen25vl_encoder_choices_init else "",
+                                    allow_custom_value=True,
+                                )
+                                qwen25vl_encoder_download_btn = gr.Button("📥 下载", visible=False, size="sm", variant="secondary")
+                                qwen25vl_encoder_download_status = gr.Markdown("", visible=False)
+
                     # 文本编码器（模型 + Tokenizer）
-                    with gr.Row():
+                    with gr.Row() as t5_row:
                         with gr.Column(scale=1):
                             t5_model_choices_init = get_t5_model_choices(model_path)
                             t5_path_input = gr.Dropdown(
@@ -2016,16 +2397,20 @@ def main():
 
                     # 任务类型切换事件
                     def on_task_type_change(model_type, task_type, model_path_val):
-                        # 判断是否显示 CLIP（wan2.2 或 t2v 时不显示）
+                        # 判断是否显示 CLIP（wan2.2 或 t2v 或 i2i 时不显示）
                         show_clip = model_type == "wan2.1" and task_type == "i2v"
-                        # 判断是否显示 VAE编码器（t2v 时不显示）
-                        show_vae_encoder = task_type == "i2v"
-                        # VAE解码器始终显示
-                        show_vae_decoder = True
+                        # 判断是否显示 VAE编码器（t2v 时不显示，qwen-image-edit 有自己的 VAE）
+                        show_vae_encoder = task_type == "i2v" and model_type != "Qwen-Image-Edit-2511"
+                        # VAE解码器始终显示（qwen-image-edit 有自己的 VAE）
+                        show_vae_decoder = model_type != "Qwen-Image-Edit-2511"
+                        # 显示图片输入（i2v 和 i2i 时显示）
+                        show_image_input = task_type in ["i2v", "i2i"]
+                        # 输出标签
+                        output_label = "输出图片路径" if task_type == "i2i" else "输出视频路径"
 
                         # 根据任务类型更新模型选项
                         if model_type == "wan2.1":
-                            dit_choices = get_dit_choices(model_path_val, "wan2.1", task_type)
+                            dit_choices = get_dit_choices(model_path_val, "wan2.1", task_type if task_type != "i2i" else "i2v")
                             t5_choices = get_t5_model_choices(model_path_val)
                             clip_choices = get_clip_model_choices(model_path_val) if show_clip else []
                             vae_encoder_choices = get_vae_encoder_choices(model_path_val) if show_vae_encoder else []
@@ -2042,10 +2427,33 @@ def main():
                                 gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),  # clip_path_input
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
+                                gr.update(visible=show_image_input),  # image_input_row
+                                gr.update(label=output_label),  # save_result_path
+                            )
+                        elif model_type == "Qwen-Image-Edit-2511":
+                            # qwen-image-edit 只支持 i2i
+                            qwen_image_dit_choices = get_qwen_image_dit_choices(model_path_val)
+                            qwen_image_vae_choices = get_qwen_image_vae_choices(model_path_val)
+                            qwen_image_scheduler_choices = get_qwen_image_scheduler_choices(model_path_val)
+                            qwen25vl_encoder_choices = get_qwen25vl_encoder_choices(model_path_val)
+
+                            return (
+                                gr.update(visible=False),  # clip_row
+                                gr.update(visible=False),  # vae_encoder_col
+                                gr.update(visible=False),  # vae_decoder_col
+                                gr.update(),  # dit_path_input
+                                gr.update(),  # high_noise_path_input
+                                gr.update(),  # low_noise_path_input
+                                gr.update(),  # t5_path_input
+                                gr.update(),  # clip_path_input
+                                gr.update(),  # vae_encoder_path_input
+                                gr.update(),  # vae_decoder_path_input
+                                gr.update(visible=True),  # image_input_row (i2i 需要图片输入)
+                                gr.update(label="输出图片路径"),  # save_result_path
                             )
                         else:  # wan2.2
-                            high_noise_choices = get_high_noise_choices(model_path_val, "wan2.2", task_type)
-                            low_noise_choices = get_low_noise_choices(model_path_val, "wan2.2", task_type)
+                            high_noise_choices = get_high_noise_choices(model_path_val, "wan2.2", task_type if task_type != "i2i" else "i2v")
+                            low_noise_choices = get_low_noise_choices(model_path_val, "wan2.2", task_type if task_type != "i2i" else "i2v")
                             t5_choices = get_t5_model_choices(model_path_val)
                             vae_encoder_choices = get_vae_encoder_choices(model_path_val) if show_vae_encoder else []
                             vae_decoder_choices = get_vae_decoder_choices(model_path_val)
@@ -2058,20 +2466,55 @@ def main():
                                 gr.update(choices=high_noise_choices, value=high_noise_choices[0] if high_noise_choices else ""),  # high_noise_path_input
                                 gr.update(choices=low_noise_choices, value=low_noise_choices[0] if low_noise_choices else ""),  # low_noise_path_input
                                 gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),  # t5_path_input
+                                gr.update(),  # clip_path_input (wan2.2不使用)
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
+                                gr.update(visible=show_image_input),  # image_input_row
+                                gr.update(label=output_label),  # save_result_path
                             )
 
                     # 模型类型切换事件
                     def on_model_type_change(model_type, model_path_val, task_type):
-                        # 判断是否显示 CLIP（wan2.2 或 t2v 时不显示）
+                        # 判断是否显示 CLIP（wan2.2 或 t2v 或 qwen-image-edit 时不显示）
                         show_clip = model_type == "wan2.1" and task_type == "i2v"
-                        # 判断是否显示 VAE编码器（t2v 时不显示）
-                        show_vae_encoder = task_type == "i2v"
-                        # VAE解码器始终显示
-                        show_vae_decoder = True
+                        # 判断是否显示 VAE编码器（t2v 时不显示，qwen-image-edit 有自己的 VAE）
+                        show_vae_encoder = task_type == "i2v" and model_type != "Qwen-Image-Edit-2511"
+                        # VAE解码器始终显示（qwen-image-edit 有自己的 VAE）
+                        show_vae_decoder = model_type != "Qwen-Image-Edit-2511"
+                        # 显示文本编码器行（qwen-image-edit 有自己的编码器）
+                        show_t5_row = model_type != "Qwen-Image-Edit-2511"
 
-                        if model_type == "wan2.2":
+                        if model_type == "Qwen-Image-Edit-2511":
+                            # 更新 qwen-image-edit 的模型选项
+                            qwen_image_dit_choices = get_qwen_image_dit_choices(model_path_val)
+                            qwen_image_vae_choices = get_qwen_image_vae_choices(model_path_val)
+                            qwen_image_scheduler_choices = get_qwen_image_scheduler_choices(model_path_val)
+                            qwen25vl_encoder_choices = get_qwen25vl_encoder_choices(model_path_val)
+
+                            return (
+                                gr.update(visible=False),  # wan21_row
+                                gr.update(visible=False),  # wan22_row
+                                gr.update(visible=True),  # qwen_image_row
+                                gr.update(visible=False),  # dit_path_input (qwen-image-edit 时不使用)
+                                gr.update(),  # high_noise_path_input
+                                gr.update(),  # low_noise_path_input
+                                gr.update(visible=False),  # clip_row
+                                gr.update(visible=False),  # vae_encoder_col
+                                gr.update(visible=False),  # vae_decoder_col
+                                gr.update(visible=False),  # t5_row
+                                gr.update(),  # t5_path_input
+                                gr.update(),  # clip_path_input
+                                gr.update(),  # vae_encoder_path_input
+                                gr.update(),  # vae_decoder_path_input
+                                gr.update(visible=False),  # dit_download_btn
+                                gr.update(visible=False),  # dit_download_status
+                                gr.update(choices=qwen_image_dit_choices, value=qwen_image_dit_choices[0] if qwen_image_dit_choices else ""),  # qwen_image_dit_path_input
+                                gr.update(choices=qwen_image_vae_choices, value=qwen_image_vae_choices[0] if qwen_image_vae_choices else ""),  # qwen_image_vae_path_input
+                                gr.update(choices=qwen_image_scheduler_choices, value=qwen_image_scheduler_choices[0] if qwen_image_scheduler_choices else ""),  # qwen_image_scheduler_path_input
+                                gr.update(choices=qwen25vl_encoder_choices, value=qwen25vl_encoder_choices[0] if qwen25vl_encoder_choices else ""),  # qwen25vl_encoder_path_input
+                                gr.update(choices=["i2i"], value="i2i"),  # task_type_input 只显示 i2i
+                            )
+                        elif model_type == "wan2.2":
                             # 更新 wan2.2 的高噪和低噪模型选项
                             high_noise_choices = get_high_noise_choices(model_path_val, "wan2.2", task_type)
                             low_noise_choices = get_low_noise_choices(model_path_val, "wan2.2", task_type)
@@ -2083,18 +2526,25 @@ def main():
                             return (
                                 gr.update(visible=False),  # wan21_row
                                 gr.update(visible=True),  # wan22_row
+                                gr.update(visible=False),  # qwen_image_row
                                 gr.update(visible=False),  # dit_path_input (wan2.2 时不使用)
                                 gr.update(choices=high_noise_choices, value=high_noise_choices[0] if high_noise_choices else ""),  # high_noise_path_input
                                 gr.update(choices=low_noise_choices, value=low_noise_choices[0] if low_noise_choices else ""),  # low_noise_path_input
                                 gr.update(visible=show_clip),  # clip_row
                                 gr.update(visible=show_vae_encoder),  # vae_encoder_col
                                 gr.update(visible=show_vae_decoder),  # vae_decoder_col
+                                gr.update(visible=True),  # t5_row
                                 gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),  # t5_path_input
                                 gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),  # clip_path_input
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
                                 gr.update(visible=False),  # dit_download_btn
                                 gr.update(visible=False),  # dit_download_status
+                                gr.update(),  # qwen_image_dit_path_input
+                                gr.update(),  # qwen_image_vae_path_input
+                                gr.update(),  # qwen_image_scheduler_path_input
+                                gr.update(),  # qwen25vl_encoder_path_input
+                                gr.update(choices=["i2v", "t2v"], value=task_type if task_type in ["i2v", "t2v"] else "i2v"),  # task_type_input 只显示 i2v 和 t2v
                             )
                         else:
                             # 更新 wan2.1 的 Diffusion 模型选项
@@ -2107,18 +2557,25 @@ def main():
                             return (
                                 gr.update(visible=True),  # wan21_row
                                 gr.update(visible=False),  # wan22_row
+                                gr.update(visible=False),  # qwen_image_row
                                 gr.update(choices=dit_choices, value=dit_choices[0] if dit_choices else "", visible=True),  # dit_path_input
                                 gr.update(),  # high_noise_path_input (wan2.2 时使用)
                                 gr.update(),  # low_noise_path_input (wan2.2 时使用)
                                 gr.update(visible=show_clip),  # clip_row
                                 gr.update(visible=show_vae_encoder),  # vae_encoder_col
                                 gr.update(visible=show_vae_decoder),  # vae_decoder_col
+                                gr.update(visible=True),  # t5_row
                                 gr.update(choices=t5_choices, value=t5_choices[0] if t5_choices else ""),  # t5_path_input
                                 gr.update(choices=clip_choices, value=clip_choices[0] if clip_choices else ""),  # clip_path_input
                                 gr.update(choices=vae_encoder_choices, value=vae_encoder_choices[0] if vae_encoder_choices else ""),  # vae_encoder_path_input
                                 gr.update(choices=vae_decoder_choices, value=vae_decoder_choices[0] if vae_decoder_choices else ""),  # vae_decoder_path_input
                                 gr.update(),  # dit_download_btn (可见性由 wan21_row 控制)
                                 gr.update(),  # dit_download_status (可见性由 wan21_row 控制)
+                                gr.update(),  # qwen_image_dit_path_input
+                                gr.update(),  # qwen_image_vae_path_input
+                                gr.update(),  # qwen_image_scheduler_path_input
+                                gr.update(),  # qwen25vl_encoder_path_input
+                                gr.update(choices=["i2v", "t2v"], value=task_type if task_type in ["i2v", "t2v"] else "i2v"),  # task_type_input 只显示 i2v 和 t2v
                             )
 
                     model_type_input.change(
@@ -2127,35 +2584,25 @@ def main():
                         outputs=[
                             wan21_row,
                             wan22_row,
+                            qwen_image_row,
                             dit_path_input,
                             high_noise_path_input,
                             low_noise_path_input,
                             clip_row,
                             vae_encoder_col,
                             vae_decoder_col,
+                            t5_row,
                             t5_path_input,
                             clip_path_input,
                             vae_encoder_path_input,
                             vae_decoder_path_input,
                             dit_download_btn,
                             dit_download_status,
-                        ],
-                    )
-
-                    task_type_input.change(
-                        fn=on_task_type_change,
-                        inputs=[model_type_input, task_type_input, model_path_input],
-                        outputs=[
-                            clip_row,
-                            vae_encoder_col,
-                            vae_decoder_col,
-                            dit_path_input,
-                            high_noise_path_input,
-                            low_noise_path_input,
-                            t5_path_input,
-                            clip_path_input,
-                            vae_encoder_path_input,
-                            vae_decoder_path_input,
+                            qwen_image_dit_path_input,
+                            qwen_image_vae_path_input,
+                            qwen_image_scheduler_path_input,
+                            qwen25vl_encoder_path_input,
+                            task_type_input,
                         ],
                     )
 
@@ -2271,6 +2718,35 @@ def main():
                         else:
                             return gr.update(visible=True)
 
+                    # qwen-image-edit 相关状态更新函数
+                    def update_qwen_image_dit_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    def update_qwen_image_vae_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    def update_qwen_image_scheduler_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
+                    def update_qwen25vl_encoder_status(model_path_val, model_name):
+                        if not model_name:
+                            return gr.update(visible=False)
+                        actual_name = extract_model_name(model_name)
+                        exists = check_model_exists(model_path_val, actual_name)
+                        return gr.update(visible=not exists)
+
                     # 下载函数
                     def download_dit_model(model_path_val, model_name, model_type_val, task_type_val, download_source_val, progress=gr.Progress()):
                         if not model_name:
@@ -2374,6 +2850,51 @@ def main():
                         result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
                         btn_visible = update_low_noise_status(model_path_val, format_model_choice(actual_name, model_path_val))
                         choices = get_low_noise_choices(model_path_val, "wan2.2", task_type_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    # qwen-image-edit 下载函数
+                    def download_qwen_image_dit(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="请先选择模型"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "lightx2v/Qwen-Image-Edit-2511-Lightning"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen_image_dit_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen_image_dit_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    def download_qwen_image_vae(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="请先选择模型"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "Qwen/Qwen-Image-Edit-2511"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen_image_vae_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen_image_vae_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    def download_qwen_image_scheduler(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="请先选择模型"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "Qwen/Qwen-Image-Edit-2511"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen_image_scheduler_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen_image_scheduler_choices(model_path_val)
+                        updated_value = format_model_choice(actual_name, model_path_val)
+                        return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
+
+                    def download_qwen25vl_encoder(model_path_val, model_name, download_source_val, progress=gr.Progress()):
+                        if not model_name:
+                            return gr.update(value="请先选择模型"), gr.update(visible=False), gr.update()
+                        actual_name = extract_model_name(model_name)
+                        repo_id = "lightx2v/Encoders"
+                        result = download_model(repo_id, actual_name, model_path_val, download_source_val, progress)
+                        btn_visible = update_qwen25vl_encoder_status(model_path_val, format_model_choice(actual_name, model_path_val))
+                        choices = get_qwen25vl_encoder_choices(model_path_val)
                         updated_value = format_model_choice(actual_name, model_path_val)
                         return gr.update(value=result), btn_visible, gr.update(choices=choices, value=updated_value)
 
@@ -2487,8 +3008,71 @@ def main():
                         outputs=[vae_decoder_download_status, vae_decoder_download_btn, vae_decoder_path_input],
                     )
 
+                    # qwen-image-edit 相关事件绑定
+                    qwen_image_dit_path_input.change(
+                        fn=update_qwen_image_dit_status,
+                        inputs=[model_path_input, qwen_image_dit_path_input],
+                        outputs=[qwen_image_dit_download_btn],
+                    )
+
+                    qwen_image_vae_path_input.change(
+                        fn=update_qwen_image_vae_status,
+                        inputs=[model_path_input, qwen_image_vae_path_input],
+                        outputs=[qwen_image_vae_download_btn],
+                    )
+
+                    qwen_image_scheduler_path_input.change(
+                        fn=update_qwen_image_scheduler_status,
+                        inputs=[model_path_input, qwen_image_scheduler_path_input],
+                        outputs=[qwen_image_scheduler_download_btn],
+                    )
+
+                    qwen25vl_encoder_path_input.change(
+                        fn=update_qwen25vl_encoder_status,
+                        inputs=[model_path_input, qwen25vl_encoder_path_input],
+                        outputs=[qwen25vl_encoder_download_btn],
+                    )
+
+                    qwen_image_dit_download_btn.click(
+                        fn=download_qwen_image_dit,
+                        inputs=[model_path_input, qwen_image_dit_path_input, download_source_input],
+                        outputs=[qwen_image_dit_download_status, qwen_image_dit_download_btn, qwen_image_dit_path_input],
+                    )
+
+                    qwen_image_vae_download_btn.click(
+                        fn=download_qwen_image_vae,
+                        inputs=[model_path_input, qwen_image_vae_path_input, download_source_input],
+                        outputs=[qwen_image_vae_download_status, qwen_image_vae_download_btn, qwen_image_vae_path_input],
+                    )
+
+                    qwen_image_scheduler_download_btn.click(
+                        fn=download_qwen_image_scheduler,
+                        inputs=[model_path_input, qwen_image_scheduler_path_input, download_source_input],
+                        outputs=[qwen_image_scheduler_download_status, qwen_image_scheduler_download_btn, qwen_image_scheduler_path_input],
+                    )
+
+                    qwen25vl_encoder_download_btn.click(
+                        fn=download_qwen25vl_encoder,
+                        inputs=[model_path_input, qwen25vl_encoder_path_input, download_source_input],
+                        outputs=[qwen25vl_encoder_download_status, qwen25vl_encoder_download_btn, qwen25vl_encoder_path_input],
+                    )
+
                     # 初始化所有模型的状态
-                    def init_all_statuses(model_path_val, dit_name, high_noise_name, low_noise_name, t5_name, clip_name, vae_encoder_name, vae_decoder_name, model_type_val):
+                    def init_all_statuses(
+                        model_path_val,
+                        dit_name,
+                        high_noise_name,
+                        low_noise_name,
+                        t5_name,
+                        clip_name,
+                        vae_encoder_name,
+                        vae_decoder_name,
+                        model_type_val,
+                        qwen_image_dit_name,
+                        qwen_image_vae_name,
+                        qwen_image_scheduler_name,
+                        qwen25vl_encoder_name,
+                    ):
                         dit_btn_visible = update_dit_status(model_path_val, dit_name, model_type_val)
                         high_noise_btn_visible = update_high_noise_status(model_path_val, high_noise_name)
                         low_noise_btn_visible = update_low_noise_status(model_path_val, low_noise_name)
@@ -2498,6 +3082,11 @@ def main():
                         clip_tokenizer_dropdown_val, clip_tokenizer_btn_visible = update_clip_tokenizer_status(model_path_val)
                         vae_encoder_btn_visible = update_vae_encoder_status(model_path_val, vae_encoder_name)
                         vae_decoder_btn_visible = update_vae_decoder_status(model_path_val, vae_decoder_name)
+                        # qwen-image-edit 相关状态
+                        qwen_image_dit_btn_visible = update_qwen_image_dit_status(model_path_val, qwen_image_dit_name)
+                        qwen_image_vae_btn_visible = update_qwen_image_vae_status(model_path_val, qwen_image_vae_name)
+                        qwen_image_scheduler_btn_visible = update_qwen_image_scheduler_status(model_path_val, qwen_image_scheduler_name)
+                        qwen25vl_encoder_btn_visible = update_qwen25vl_encoder_status(model_path_val, qwen25vl_encoder_name)
                         return (
                             dit_btn_visible,
                             high_noise_btn_visible,
@@ -2510,6 +3099,10 @@ def main():
                             clip_tokenizer_btn_visible,
                             vae_encoder_btn_visible,
                             vae_decoder_btn_visible,
+                            qwen_image_dit_btn_visible,
+                            qwen_image_vae_btn_visible,
+                            qwen_image_scheduler_btn_visible,
+                            qwen25vl_encoder_btn_visible,
                         )
 
                     demo.load(
@@ -2524,6 +3117,10 @@ def main():
                             vae_encoder_path_input,
                             vae_decoder_path_input,
                             model_type_input,
+                            qwen_image_dit_path_input,
+                            qwen_image_vae_path_input,
+                            qwen_image_scheduler_path_input,
+                            qwen25vl_encoder_path_input,
                         ],
                         outputs=[
                             dit_download_btn,
@@ -2537,26 +3134,60 @@ def main():
                             clip_tokenizer_download_btn,
                             vae_encoder_download_btn,
                             vae_decoder_download_btn,
+                            qwen_image_dit_download_btn,
+                            qwen_image_vae_download_btn,
+                            qwen_image_scheduler_download_btn,
+                            qwen25vl_encoder_download_btn,
                         ],
                     )
 
                 # 输入参数区域
                 with gr.Accordion("📥 输入参数", open=True, elem_classes=["input-params"]):
                     # 图片输入（i2v 时显示）
-                    with gr.Row(visible=True) as image_input_row:
-                        image_path = gr.Image(
-                            label="输入图像",
-                            type="filepath",
-                            height=300,
+                    with gr.Column(visible=True) as image_input_row:
+                        image_files = gr.File(
+                            label="输入图像（可拖入多张图片）",
+                            file_count="multiple",
+                            file_types=["image"],
+                            height=150,
                             interactive=True,
                         )
+                        # 图片预览 Gallery
+                        image_gallery = gr.Gallery(
+                            label="已上传的图片预览",
+                            columns=4,
+                            rows=2,
+                            height=200,
+                            object_fit="contain",
+                            show_label=True,
+                        )
+                        # 将多个文件路径转换为逗号分隔的字符串
+                        image_path = gr.Textbox(
+                            label="图片路径",
+                            visible=False,
+                        )
 
-                    # 任务类型切换事件
-                    def on_task_type_change(task_type):
-                        return gr.update(visible=(task_type == "i2v"))
+                        def update_image_path_and_gallery(files):
+                            if files is None or len(files) == 0:
+                                return "", []
+                            # 提取文件路径
+                            paths = [f.name if hasattr(f, "name") else f for f in files]
+                            # 返回逗号分隔的路径和图片列表用于 Gallery 显示
+                            return ",".join(paths), paths
+
+                        image_files.change(
+                            fn=update_image_path_and_gallery,
+                            inputs=[image_files],
+                            outputs=[image_path, image_gallery],
+                        )
+
+                    # 任务类型切换事件（图片输入显示逻辑）
+                    def on_task_type_change_image(task_type):
+                        # i2v 和 i2i 时显示图片输入
+                        return gr.update(visible=(task_type in ["i2v", "i2i"]))
 
                     task_type_input.change(
-                        fn=on_task_type_change,
+                        fn=on_task_type_change_image,
                         inputs=[task_type_input],
                         outputs=[image_input_row],
                     )
@@ -2566,40 +3197,23 @@ def main():
                             prompt = gr.Textbox(
                                 label="提示词",
                                 lines=3,
-                                placeholder="描述视频内容...",
+                                placeholder="描述视频/图片内容...",
                                 max_lines=5,
                             )
                         with gr.Column():
                             negative_prompt = gr.Textbox(
                                 label="负向提示词",
                                 lines=3,
-                                placeholder="不希望出现在视频中的内容...",
+                                placeholder="不希望出现在视频/图片中的内容...",
                                 max_lines=5,
                                 value="镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
                             )
-                        with gr.Column():
+                        with gr.Column(visible=True) as resolution_col:
                             resolution = gr.Dropdown(
-                                choices=[
-                                    # 720p
-                                    ("1280x720 (16:9, 720p)", "1280x720"),
-                                    ("720x1280 (9:16, 720p)", "720x1280"),
-                                    ("1280x544 (21:9, 720p)", "1280x544"),
-                                    ("544x1280 (9:21, 720p)", "544x1280"),
-                                    ("1104x832 (4:3, 720p)", "1104x832"),
-                                    ("832x1104 (3:4, 720p)", "832x1104"),
-                                    ("960x960 (1:1, 720p)", "960x960"),
-                                    # 480p
-                                    ("960x544 (16:9, 540p)", "960x544"),
-                                    ("544x960 (9:16, 540p)", "544x960"),
-                                    ("832x480 (16:9, 480p)", "832x480"),
-                                    ("480x832 (9:16, 480p)", "480x832"),
-                                    ("832x624 (4:3, 480p)", "832x624"),
-                                    ("624x832 (3:4, 480p)", "624x832"),
-                                    ("720x720 (1:1, 480p)", "720x720"),
-                                    ("512x512 (1:1, 480p)", "512x512"),
-                                ],
-                                value="832x480",
+                                choices=["480p", "540p", "720p"],
+                                value="480p",
                                 label="最大分辨率",
+                                info="如果显存不足，可调低分辨率",
                             )
 
                         with gr.Column(scale=9):
@@ -2614,7 +3228,6 @@ def main():
                             default_dit = get_dit_choices(model_path, "wan2.1", "i2v")[0] if get_dit_choices(model_path, "wan2.1", "i2v") else ""
                             default_high_noise = get_high_noise_choices(model_path, "wan2.2", "i2v")[0] if get_high_noise_choices(model_path, "wan2.2", "i2v") else ""
                             default_is_distill = is_distill_model("wan2.1", default_dit, default_high_noise)
-
                             if default_is_distill:
                                 infer_steps = gr.Slider(
                                     label="推理步数",
@@ -2636,11 +3249,15 @@ def main():
 
                             # 当模型路径改变时，动态更新推理步数
                             def update_infer_steps(model_type, dit_path, high_noise_path):
-                                is_distill = is_distill_model(model_type, dit_path, high_noise_path)
-                                if is_distill:
-                                    return gr.update(minimum=1, maximum=100, value=4, interactive=True)
+                                # Qwen-Image-Edit-2511 (i2i) 默认 8 步
+                                if model_type == "Qwen-Image-Edit-2511":
+                                    return gr.update(minimum=1, maximum=100, value=8, interactive=True)
                                 else:
-                                    return gr.update(minimum=1, maximum=100, value=40, interactive=True)
+                                    is_distill = is_distill_model(model_type, dit_path, high_noise_path)
+                                    if is_distill:
+                                        return gr.update(minimum=1, maximum=100, value=4, interactive=True)
+                                    else:
+                                        return gr.update(minimum=1, maximum=100, value=40, interactive=True)
 
                             # 监听模型路径变化
                             dit_path_input.change(
@@ -2729,7 +3346,7 @@ def main():
                         outputs=[enable_cfg],
                     )
 
-                    with gr.Row():
+                    with gr.Row(visible=True) as fps_frames_row:
                         fps = gr.Slider(
                             label="每秒帧数(FPS)",
                             minimum=8,
@@ -2755,12 +3372,19 @@ def main():
                     )
 
             with gr.Column(scale=4):
-                with gr.Accordion("📤 生成的视频", open=True, elem_classes=["output-video"]):
+                with gr.Accordion("📤 生成的结果", open=True, elem_classes=["output-video"]) as output_accordion:
                     output_video = gr.Video(
                         label="",
                         height=600,
                         autoplay=True,
                         show_label=False,
+                        visible=True,
+                    )
+                    output_image = gr.Image(
+                        label="输出图片",
+                        height=600,
+                        show_label=False,
+                        visible=False,
                     )
 
                     infer_btn = gr.Button("🎬 生成视频", variant="primary", size="lg", elem_classes=["generate-btn"])
@@ -2777,9 +3401,94 @@ def main():
             vae_cpu_offload = gr.Checkbox(label="VAE CPU卸载", value=False, visible=False)
             use_tiling_vae = gr.Checkbox(label="VAE分块推理", value=False, visible=False)
 
+        # 任务类型切换时更新输出组件和按钮
+        def on_task_type_change_output(task_type):
+            is_i2i = task_type == "i2i"
+            btn_text = "🖼️ 生成图片" if is_i2i else "🎬 生成视频"
+            # i2i 任务时负向提示词默认为空
+            default_negative = (
+                ""
+                if is_i2i
+                else "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+            )
+            return (
+                gr.update(visible=not is_i2i),  # output_video
+                gr.update(visible=is_i2i),  # output_image
+                gr.update(value=btn_text),  # infer_btn
+                gr.update(value=default_negative),  # negative_prompt
+                gr.update(visible=not is_i2i),  # resolution_col (i2i 时隐藏分辨率)
+                gr.update(visible=not is_i2i),  # fps_frames_row (i2i 时隐藏帧数设置)
+            )
+
+        task_type_input.change(
+            fn=on_task_type_change_output,
+            inputs=[task_type_input],
+            outputs=[output_video, output_image, infer_btn, negative_prompt, resolution_col, fps_frames_row],
+        )
+
+        # 任务类型变化时更新模型选项
+        task_type_input.change(
+            fn=on_task_type_change,
+            inputs=[model_type_input, task_type_input, model_path_input],
+            outputs=[
+                clip_row,
+                vae_encoder_col,
+                vae_decoder_col,
+                dit_path_input,
+                high_noise_path_input,
+                low_noise_path_input,
+                t5_path_input,
+                clip_path_input,
+                vae_encoder_path_input,
+                vae_decoder_path_input,
+                image_input_row,
+                save_result_path,
+            ],
+        )
+
+        task_type_input.change(
+            fn=auto_configure,
+            inputs=[resolution, num_frames, task_type_input],
+            outputs=[
+                lazy_load,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                use_tiling_vae,
+            ],
+        )
+
         resolution.change(
             fn=auto_configure,
-            inputs=[resolution],
+            inputs=[resolution, num_frames, task_type_input],
+            outputs=[
+                lazy_load,
+                rope_chunk,
+                rope_chunk_size,
+                clean_cuda_cache,
+                cpu_offload,
+                offload_granularity,
+                t5_cpu_offload,
+                clip_cpu_offload,
+                vae_cpu_offload,
+                unload_modules,
+                attention_type,
+                quant_op,
+                use_tiling_vae,
+            ],
+        )
+
+        num_frames.change(
+            fn=auto_configure,
+            inputs=[resolution, num_frames, task_type_input],
             outputs=[
                 lazy_load,
                 rope_chunk,
@@ -2798,8 +3507,8 @@ def main():
         )
 
         demo.load(
-            fn=lambda res: auto_configure(res),
-            inputs=[resolution],
+            fn=lambda res, nf: auto_configure(res, nf),
+            inputs=[resolution, num_frames],
             outputs=[
                 lazy_load,
                 rope_chunk,
@@ -2817,8 +3526,20 @@ def main():
             ],
         )
 
+        # 包装推理函数，根据任务类型返回到正确的输出组件
+        def run_inference_wrapper(*args):
+            result = run_inference(*args)
+            # 获取 task_type_input 的值（第 28 个参数，索引 27）
+            task_type = args[27]
+            if task_type == "i2i":
+                # i2i 任务返回图片
+                return gr.update(), gr.update(value=result)
+            else:
+                # 视频任务返回视频
+                return gr.update(value=result), gr.update()
+
         infer_btn.click(
-            fn=run_inference,
+            fn=run_inference_wrapper,
             inputs=[
                 prompt,
                 negative_prompt,
@@ -2855,11 +3576,17 @@ def main():
                 vae_encoder_path_input,
                 vae_decoder_path_input,
                 image_path,
+                # Qwen-Image-Edit-2511 相关参数
+                qwen_image_dit_path_input,
+                qwen_image_vae_path_input,
+                qwen_image_scheduler_path_input,
+                qwen25vl_encoder_path_input,
             ],
-            outputs=output_video,
+            outputs=[output_video, output_image],
         )
 
-    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir])
+    # max_file_size: 设置上传文件大小限制，"1gb" 表示最大 1GB
+    demo.launch(share=True, server_port=args.server_port, server_name=args.server_name, inbrowser=True, allowed_paths=[output_dir], max_file_size="1gb")
 
 
 if __name__ == "__main__":

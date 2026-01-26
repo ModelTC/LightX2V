@@ -1,3 +1,4 @@
+import math
 import os
 import queue
 import socket
@@ -31,8 +32,10 @@ class VARecorder:
         sample_rate: int = 16000,
         slice_frame: int = 1,
         prev_frame: int = 1,
+        stream_config: dict = {},
     ):
         self.livestream_url = livestream_url
+        self.stream_config = stream_config
         self.fps = fps
         self.sample_rate = sample_rate
         self.audio_port = pseudo_random(32000, 40000)
@@ -358,8 +361,26 @@ class VARecorder:
         duration = 1.0
         frames = int(self.fps * duration)
         samples = int(self.sample_rate * (frames / self.fps))
-        self.pub_livestream(torch.zeros((frames, height, width, 3), dtype=torch.float16), torch.zeros(samples, dtype=torch.float16))
+        tensor = torch.zeros((frames, height, width, 3), dtype=torch.float16)
+        self.pub_livestream(tensor, torch.zeros(samples, dtype=torch.float16))
         time.sleep(duration)
+
+    def config_video_padding(self):
+        pass
+
+    def padding_video_frames(self, frames: torch.Tensor):
+        return frames
+
+    def try_init_sockets(self, max_try=10):
+        for i in range(max_try):
+            try:
+                self.init_sockets()
+                return True
+            except OSError:
+                self.audio_port = pseudo_random(32000, 40000)
+                self.video_port = self.audio_port + 1
+                logger.warning(f"Failed to initialize sockets {i + 1}/{max_try}: {traceback.format_exc()}")
+                logger.warning(f"change port to {self.audio_port} and {self.video_port}, retry ...")
 
     def set_video_size(self, width: int, height: int):
         if self.width is not None and self.height is not None:
@@ -367,7 +388,8 @@ class VARecorder:
             return
         self.width = width
         self.height = height
-        self.init_sockets()
+        self.config_video_padding()
+        self.try_init_sockets()
         if self.livestream_url.startswith("rtmp://"):
             self.start_ffmpeg_process_rtmp()
         elif self.livestream_url.startswith("http"):
@@ -395,12 +417,12 @@ class VARecorder:
 
         self.set_video_size(width, height)
         self.audio_queue.put(audios)
-        self.video_queue.put(images)
+        self.video_queue.put(self.padding_video_frames(images))
         logger.info(f"Published {N} frames and {M} audio samples")
 
         self.stoppable_t = time.time() + M / self.sample_rate + 3
 
-    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor):
+    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor, valid_duration=1e9):
         N, height, width, C = images.shape
         M = audios.reshape(-1).shape[0]
         assert N % self.slice_frame == 0, "Video frames must be divisible by slice_frame"
@@ -410,29 +432,41 @@ class VARecorder:
         if audio_frames != N:
             logger.warning(f"Video and audio frames mismatch, {N} vs {audio_frames}")
         self.set_video_size(width, height)
+        valid_frames = math.ceil(valid_duration * self.fps)
 
         # logger.info(f"Buffer stream images {images.shape} {audios.shape} {gen_video.shape}")
         rets = []
         for i in range(0, N, self.slice_frame):
             end_frame = i + self.slice_frame
-            img = images[i:end_frame]
+            can_truncate = valid_frames < end_frame
+            img = self.padding_video_frames(images[i:end_frame])
             aud = audios[i * self.audio_samples_per_frame : end_frame * self.audio_samples_per_frame]
             gen = gen_video[:, :, (end_frame - self.prev_frame) : end_frame]
-            rets.append((img, aud, gen))
+            rets.append([img, aud, gen, can_truncate])
 
         with self.stream_buffer_lock:
             origin_size = len(self.stream_buffer)
             self.stream_buffer.extend(rets)
-            logger.info(f"Buffered {origin_size} + {len(rets)} = {len(self.stream_buffer)} stream segments")
+            logger.info(f"Buffered {origin_size} + {len(rets)} = {len(self.stream_buffer)} stream segments, valid_frames: {valid_frames}")
 
     def get_buffer_stream_size(self):
         return len(self.stream_buffer)
 
-    def truncate_stream_buffer(self, size: int):
+    def truncate_stream_buffer(self, size: int, check_can_truncate: bool = True):
         with self.stream_buffer_lock:
+            # find the first frame that cannot not be truncated
+            idx = len(self.stream_buffer) - 1
+            while check_can_truncate and idx >= size and idx >= 0:
+                if not self.stream_buffer[idx][3]:
+                    logger.warning(f"can not truncate frame: {idx}, trucecate size: {size} -> {idx + 1}")
+                    size = idx + 1
+                    break
+                idx -= 1
             self.stream_buffer = self.stream_buffer[:size]
             logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
             if len(self.stream_buffer) > 0:
+                # after truncate, set the last segment can not be truncated
+                self.stream_buffer[-1][3] = False
                 return self.stream_buffer[-1][2]  # return the last video tensor
             else:
                 return None
@@ -441,6 +475,7 @@ class VARecorder:
         schedule_interval = self.slice_frame / self.fps
         logger.info(f"Schedule stream buffer with interval: {schedule_interval} seconds")
         t = None
+        fail_time = 0
         while True:
             try:
                 if self.stop_schedule:
@@ -448,7 +483,7 @@ class VARecorder:
                 img, aud, gen = None, None, None
                 with self.stream_buffer_lock:
                     if len(self.stream_buffer) > 0:
-                        img, aud, gen = self.stream_buffer.pop(0)
+                        img, aud, gen, _ = self.stream_buffer.pop(0)
 
                 if t is not None:
                     wait_secs = schedule_interval - (time.time() - t)
@@ -457,13 +492,16 @@ class VARecorder:
                 t = time.time()
 
                 if img is not None and aud is not None:
+                    fail_time = 0
                     self.audio_queue.put(aud)
                     self.video_queue.put(img)
                     # logger.info(f"Scheduled {img.shape[0]} frames and {aud.shape[0]} audio samples to publish")
                     del gen
                     self.stoppable_t = time.time() + aud.shape[0] / self.sample_rate + 3
                 else:
-                    logger.warning(f"No stream buffer to schedule")
+                    fail_time += 1
+                    if fail_time % 10 == 0:
+                        logger.warning(f"No stream buffer to schedule: {fail_time} times")
             except Exception:
                 logger.error(f"Schedule stream buffer error: {traceback.format_exc()}")
                 break

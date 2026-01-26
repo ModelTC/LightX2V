@@ -19,110 +19,23 @@ except (ImportError, OSError) as e:
 from PIL import Image, ImageCms, ImageOps
 from einops import rearrange
 from loguru import logger
-from torchvision.transforms import InterpolationMode
-from torchvision.transforms.functional import resize
 
 from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
-from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import find_torch_model_path, load_weights, vae_to_comfyui_image_inplace
+from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, vae_to_comfyui_image_inplace
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
-
-
-def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
-    assert sp_size > 0 and (sp_size & (sp_size - 1)) == 0, "sp_size must be a power of 2"
-
-    h_ratio, w_ratio = 1, 1
-    while sp_size != 1:
-        sp_size //= 2
-        if patched_h % 2 == 0:
-            patched_h //= 2
-            h_ratio *= 2
-        elif patched_w % 2 == 0:
-            patched_w //= 2
-            w_ratio *= 2
-        else:
-            if patched_h > patched_w:
-                patched_h //= 2
-                h_ratio *= 2
-            else:
-                patched_w //= 2
-                w_ratio *= 2
-    return patched_h * h_ratio, patched_w * w_ratio
-
-
-def get_crop_bbox(ori_h, ori_w, tgt_h, tgt_w):
-    tgt_ar = tgt_h / tgt_w
-    ori_ar = ori_h / ori_w
-    if abs(ori_ar - tgt_ar) < 0.01:
-        return 0, ori_h, 0, ori_w
-    if ori_ar > tgt_ar:
-        crop_h = int(tgt_ar * ori_w)
-        y0 = (ori_h - crop_h) // 2
-        y1 = y0 + crop_h
-        return y0, y1, 0, ori_w
-    else:
-        crop_w = int(ori_h / tgt_ar)
-        x0 = (ori_w - crop_w) // 2
-        x1 = x0 + crop_w
-        return 0, ori_h, x0, x1
-
-
-def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
-    """
-    frames: (C, H, W) or (T, C, H, W) or (N, C, H, W)
-    size: (H, W)
-    """
-    original_shape = frames.shape
-
-    if len(frames.shape) == 3:
-        frames = frames.unsqueeze(0)
-    elif len(frames.shape) == 4 and frames.shape[0] > 1:
-        pass
-
-    ori_h, ori_w = frames.shape[2:]
-    h, w = size
-    y0, y1, x0, x1 = get_crop_bbox(ori_h, ori_w, h, w)
-    cropped_frames = frames[:, :, y0:y1, x0:x1]
-    resized_frames = resize(cropped_frames, [h, w], InterpolationMode.BICUBIC, antialias=True)
-
-    if len(original_shape) == 3:
-        resized_frames = resized_frames.squeeze(0)
-
-    return resized_frames
-
-
-def fixed_shape_resize(img, target_height, target_width):
-    orig_height, orig_width = img.shape[-2:]
-
-    target_ratio = target_height / target_width
-    orig_ratio = orig_height / orig_width
-
-    if orig_ratio > target_ratio:
-        crop_width = orig_width
-        crop_height = int(crop_width * target_ratio)
-    else:
-        crop_height = orig_height
-        crop_width = int(crop_height / target_ratio)
-
-    cropped_img = TF.center_crop(img, [crop_height, crop_width])
-
-    resized_img = TF.resize(cropped_img, [target_height, target_width], antialias=True)
-
-    h, w = resized_img.shape[-2:]
-    return resized_img, h, w
 
 
 def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None, fixed_shape=None):
@@ -369,7 +282,11 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 class WanAudioRunner(WanRunner):  # type:ignore
     def __init__(self, config):
         super().__init__(config)
+        self.name = self.config.get("name", "WanAudioRunner")
+        self.task = self.config.get("task", "i2v")
         self.prev_frame_length = self.config.get("prev_frame_length", 5)
+        self.video_duration = self.config.get("video_duration", 5)
+
         self.frame_preprocessor = FramePreprocessorTorchVersion()
 
     def init_scheduler(self):
@@ -395,14 +312,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             audio_array = self._audio_processor.load_multi_person_audio(audio_files)
 
-        video_duration = self.config.get("video_duration", 5)
         audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_audio_len.observe(audio_len)
 
-        expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
-        if expected_frames < int(video_duration * target_fps):
-            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={video_duration}")
+        expected_frames = min(max(1, int(self.video_duration * target_fps)), audio_len)
+        if expected_frames < int(self.video_duration * target_fps):
+            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
 
         # Segment audio
         audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
@@ -677,7 +593,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         metrics_func=monitor_cli.lightx2v_run_end_run_segment_duration,
         metrics_labels=["WanAudioRunner"],
     )
-    def end_run_segment(self, segment_idx):
+    def end_run_segment(self, segment_idx, valid_duration=1e9):
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
         video_seg = self.gen_video[:, :, :useful_length].cpu()
@@ -704,7 +620,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             )
 
         if self.va_controller.recorder is not None:
-            self.va_controller.pub_livestream(video_seg, audio_seg, self.gen_video[:, :, :useful_length])
+            self.va_controller.pub_livestream(video_seg, audio_seg, self.gen_video[:, :, :useful_length], valid_duration=valid_duration)
         elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
@@ -721,7 +637,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         metrics_func=monitor_cli.lightx2v_run_end_run_segment_duration,
         metrics_labels=["WanAudioRunner"],
     )
-    def end_run_segment_stream(self, latents):
+    def end_run_segment_stream(self, latents, valid_duration=1e9):
         valid_length = self.segment.end_frame - self.segment.start_frame
         frame_segments = []
         frame_idx = 0
@@ -737,10 +653,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             audio_seg = self.segment.audio_array[:, audio_start:audio_end].sum(dim=0)
 
             if self.va_controller.recorder is not None:
-                self.va_controller.pub_livestream(video_seg, audio_seg, origin_seg[:, :, :valid_T])
+                self.va_controller.pub_livestream(video_seg, audio_seg, origin_seg[:, :, :valid_T], valid_duration=valid_duration)
 
             frame_segments.append(origin_seg)
             frame_idx += valid_T
+            cur_duration = valid_T / self.config.get("fps", 16)
+            valid_duration = max(valid_duration - cur_duration, 0)
             del video_seg, audio_seg
 
         # Update prev_video for next iteration
@@ -770,13 +688,20 @@ class WanAudioRunner(WanRunner):  # type:ignore
             while True:
                 with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
                     control = self.va_controller.next_control()
-                    if control.action == "immediate":
+                    if control.action == "blank_to_voice":
                         self.prev_video = control.data
+                    elif control.action == "switch_image":
+                        self.input_info.image_path = control.data
+                        self.inputs = self.run_input_encoder()
+                        if self.config.get("f2v_process", False):
+                            self.prev_video = self.ref_img.unsqueeze(2)
+                        else:
+                            self.prev_video = None
                     elif control.action == "wait":
                         time.sleep(0.01)
                         continue
 
-                    audio_array = self.va_controller.reader.get_audio_segment()
+                    audio_array, valid_duration = self.va_controller.reader.get_audio_segment()
                     if audio_array is None:
                         fail_count += 1
                         logger.warning(f"Failed to get audio chunk {fail_count} times")
@@ -788,16 +713,17 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     try:
                         # reset pause signal
                         self.pause_signal = False
+                        self.can_pause = valid_duration <= 1e-5
                         self.init_run_segment(segment_idx, audio_array)
                         self.check_stop()
                         latents = self.run_segment(segment_idx)
                         self.check_stop()
                         if self.config.get("use_stream_vae", False):
-                            self.end_run_segment_stream(latents)
+                            self.end_run_segment_stream(latents, valid_duration=valid_duration)
                         else:
                             self.gen_video = self.run_vae_decoder(latents)
                             self.check_stop()
-                            self.end_run_segment(segment_idx)
+                            self.end_run_segment(segment_idx, valid_duration=valid_duration)
                         segment_idx += 1
                         fail_count = 0
                     except Exception as e:
@@ -821,19 +747,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return {"video": None, "audio": None}
 
     def load_transformer(self):
-        """Load transformer with LoRA support"""
-        base_model = WanAudioModel(self.config["model_path"], self.config, self.init_device)
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
-            assert not self.config.get("dit_quantized", False)
-            lora_wrapper = WanLoraWrapper(base_model)
-            for lora_config in self.config["lora_configs"]:
-                lora_path = lora_config["path"]
-                strength = lora_config.get("strength", 1.0)
-                lora_name = lora_wrapper.load_lora(lora_path)
-                lora_wrapper.apply_lora(lora_name, strength)
-                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-
-        return base_model
+        wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = WanAudioModel(**wan_model_kwargs)
+        else:
+            model = build_wan_model_with_lora(WanAudioModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
+        return model
 
     def load_audio_encoder(self):
         audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))
@@ -881,6 +801,48 @@ class WanAudioRunner(WanRunner):  # type:ignore
             latent_w,
         ]
         return latent_shape
+
+    def run_clip(self):
+        infer_steps = self.model.scheduler.infer_steps
+
+        for step_index in range(infer_steps):
+            self.model.scheduler.step_pre(step_index=step_index)
+            self.model.infer(self.inputs)
+            self.model.scheduler.step_post()
+
+        return self.model.scheduler.latents
+
+    def run_clip_main(self):
+        self.scheduler.set_audio_adapter(self.audio_adapter)
+        self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+            self.inputs["image_encoder_output"]["vae_encoder_out"] = None
+
+        self.input_info.seed = self.input_info.seed
+        torch.manual_seed(self.input_info.seed)
+
+        if self.config.get("f2v_process", False):
+            if self.input_info.overlap_frame is None:
+                self.input_info.overlap_frame = self.ref_img.unsqueeze(2)
+
+        # 处理音频输入
+        audio_clip = self.input_info.audio_clip
+        audio_features = self.audio_encoder.infer(audio_clip)
+        audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
+        self.inputs["audio_encoder_output"] = audio_features
+        # 处理前一帧图像输入
+        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
+        # 执行dit推理
+        latents = self.run_clip()
+        # 运行vae decoder
+        gen_video = self.run_vae_decoder(latents)
+
+        return gen_video, audio_clip
+
+    def run_clip_pipeline(self, input_info):
+        self.input_info = input_info
+        self.inputs = self.run_input_encoder()
+        return self.run_clip_main()
 
 
 @RUNNER_REGISTER("wan2.2_audio")

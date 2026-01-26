@@ -32,7 +32,10 @@ class LocalTaskManager(BaseTaskManager):
         super().parse_dict(data)
         for k in ["create_t", "update_t", "ping_t", "valid_t"]:
             if k in data:
-                data[k] = str2time(data[k])
+                if isinstance(data[k], str):
+                    data[k] = str2time(data[k])
+                elif isinstance(data[k], (int, float)):
+                    data[k] = float(data[k])
 
     def save(self, task, subtasks, with_fmt=True):
         info = {"task": task, "subtasks": subtasks}
@@ -179,7 +182,7 @@ class LocalTaskManager(BaseTaskManager):
             task_id = cand["task_id"]
             worker_name = cand["worker_name"]
             task, subtasks = self.load(task_id)
-            if task["status"] in [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]:
+            if task["status"] in FinishedStatus:
                 continue
             for sub in subtasks:
                 if sub["worker_name"] == worker_name:
@@ -222,7 +225,7 @@ class LocalTaskManager(BaseTaskManager):
             pre = subs[0]["worker_identity"]
             assert pre == worker_identity, f"worker identity not matched: {pre} vs {worker_identity}"
 
-        assert status in [TaskStatus.SUCCEED, TaskStatus.FAILED], f"invalid finish status: {status}"
+        assert status in FinishedStatus, f"invalid finish status: {status}"
         for sub in subs:
             if sub["status"] not in FinishedStatus:
                 if should_running and sub["status"] != TaskStatus.RUNNING:
@@ -236,6 +239,11 @@ class LocalTaskManager(BaseTaskManager):
             self.save(task, subtasks)
             self.metrics_commit(records)
             return TaskStatus.CANCEL
+
+        if task["status"] == TaskStatus.REJECT:
+            self.save(task, subtasks)
+            self.metrics_commit(records)
+            return TaskStatus.REJECT
 
         running_subs = []
         failed_sub = False
@@ -409,6 +417,69 @@ class LocalTaskManager(BaseTaskManager):
         if "limit" in kwargs:
             sessions = sessions[: kwargs["limit"]]
         return sessions
+
+    def get_voice_clone_filename(self, user_id, speaker_id):
+        return os.path.join(self.local_dir, f"voice_clone_{user_id}_{speaker_id}.json")
+
+    def save_voice_clone(self, voice_clone, with_fmt=True):
+        if with_fmt:
+            self.fmt_dict(voice_clone)
+        out_name = self.get_voice_clone_filename(voice_clone["user_id"], voice_clone["speaker_id"])
+        with open(out_name, "w") as fout:
+            fout.write(json.dumps(voice_clone, indent=4, ensure_ascii=False))
+
+    def load_voice_clone(self, user_id, speaker_id):
+        fpath = self.get_voice_clone_filename(user_id, speaker_id)
+        data = json.load(open(fpath))
+        self.parse_dict(data)
+        return data
+
+    @class_try_catch_async
+    async def insert_voice_clone_if_not_exists(self, voice_clone):
+        user_id = voice_clone["user_id"]
+        speaker_id = voice_clone["speaker_id"]
+        fpath = self.get_voice_clone_filename(user_id, speaker_id)
+        if os.path.exists(fpath):
+            return True
+        self.save_voice_clone(voice_clone)
+        return True
+
+    @class_try_catch_async
+    async def query_voice_clone(self, user_id, speaker_id):
+        fpath = self.get_voice_clone_filename(user_id, speaker_id)
+        if not os.path.exists(fpath):
+            return None
+        data = json.load(open(fpath))
+        self.parse_dict(data)
+        return data
+
+    @class_try_catch_async
+    async def delete_voice_clone(self, user_id, speaker_id):
+        fpath = self.get_voice_clone_filename(user_id, speaker_id)
+        if not os.path.exists(fpath):
+            return None
+        os.remove(fpath)
+        return True
+
+    @class_try_catch_async
+    async def list_voice_clones(self, user_id, **kwargs):
+        voice_clones = []
+        for f in os.listdir(self.local_dir):
+            if not f.startswith(f"voice_clone_{user_id}_"):
+                continue
+            fpath = os.path.join(self.local_dir, f)
+            voice_clone = json.load(open(fpath))
+            self.parse_dict(voice_clone)
+            voice_clones.append(voice_clone)
+        if "count" in kwargs:
+            return len(voice_clones)
+        sort_key = "update_t" if kwargs.get("sort_by_update_t", False) else "create_t"
+        voice_clones = sorted(voice_clones, key=lambda x: x[sort_key], reverse=True)
+        if "offset" in kwargs:
+            voice_clones = voice_clones[kwargs["offset"] :]
+        if "limit" in kwargs:
+            voice_clones = voice_clones[: kwargs["limit"]]
+        return voice_clones
 
 
 async def test():

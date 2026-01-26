@@ -14,8 +14,8 @@ except ImportError:
     IntegerQuantizer = None
 
 
-@PLATFORM_MM_WEIGHT_REGISTER("int8-vllm")
-class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
+@PLATFORM_MM_WEIGHT_REGISTER("int8-vllm-hygon-dcu")
+class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Vllm
 

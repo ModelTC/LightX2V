@@ -253,19 +253,38 @@ pip install -v -e .
 
 #### Step 7: Install Quantization Operators (Optional)
 
-Quantization operators are used to support model quantization, which can significantly reduce memory usage and accelerate inference.
+By default, LightX2V uses Triton kernel for quantization inference, which is efficient and requires no additional dependencies. Just ensure that `triton-windows` is installed.
 
-**Install VLLM (Recommended):**
+If you need to use other quantization operators, you can install the following options:
 
-Download the corresponding wheel package from [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases) and install it.
+**1. Install Windows Version of vLLM**
+
+Download the corresponding wheel package from [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases).
+
+**Version Matching Requirements:**
+- Python version match
+- PyTorch version match
+- CUDA version match
 
 ```cmd
 # Install vLLM (please adjust according to actual filename)
 pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
 ```
 
+**2. Install q8-kernels**
+
+For RTX 40 series GPUs, it is recommended to install `q8_kernel==0.1.0`:
+
+```bash
+git clone https://github.com/KONAKONA666/q8_kernels.git
+cd q8_kernels && git submodule init && git submodule update
+python setup.py install
+```
+
+For other GPUs, it is recommended to install `q8_kernel==0.5.0`. Please refer to [LTX-Video-Q8-Kernels](https://github.com/Lightricks/LTX-Video-Q8-Kernels).
+
 > 💡 **Note**:
-> - You can skip this step if you don't need quantization functionality
+> - It is recommended to use the default Triton kernel for inference
 > - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
 > - For more quantization information, please refer to the [Quantization Documentation](method_tutorials/quantization.html)
 

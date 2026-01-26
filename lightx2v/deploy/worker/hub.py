@@ -14,8 +14,9 @@ from loguru import logger
 
 import lightx2v
 from lightx2v.deploy.common.utils import class_try_catch_async
+from lightx2v.deploy.worker.parallel_model_runner import ParallelModelRunner
 from lightx2v.infer import init_runner  # noqa
-from lightx2v.utils.input_info import set_input_info
+from lightx2v.utils.input_info import init_empty_input_info
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
@@ -31,20 +32,35 @@ def init_tools_preprocess():
 class BaseWorker:
     @ProfilingContext4DebugL1("Init Worker Worker Cost:")
     def __init__(self, args):
+        with open(args.config_json, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg.get("clip_configs", None) is not None:
+            runner, is_parallel = self.init_parallel_model(args)
+        else:
+            runner, is_parallel = self.init_single_model(args)
+        self.rank = 0
+        self.world_size = 1
+        if is_parallel:
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
+        # same as va_recorder rank
+        self.out_video_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
+        self.runner = runner
+        self.input_info = init_empty_input_info(args.task)
+
+    def init_parallel_model(self, args):
+        runner = ParallelModelRunner(args)
+        return runner, runner.is_parallel
+
+    def init_single_model(self, args):
         config = set_config(args)
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         seed_all(args.seed)
-        self.rank = 0
-        self.world_size = 1
         if config["parallel"]:
-            self.rank = dist.get_rank()
-            self.world_size = dist.get_world_size()
             set_parallel_config(config)
-        # same as va_recorder rank
-        self.out_video_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
         torch.set_grad_enabled(False)
-        self.runner = RUNNER_REGISTER[config["model_cls"]](config)
-        self.input_info = set_input_info(args)
+        runner = RUNNER_REGISTER[config["model_cls"]](config)
+        return runner, config["parallel"]
 
     def update_input_info(self, kwargs):
         for k, v in kwargs.items():
@@ -60,6 +76,26 @@ class BaseWorker:
         for k, v in params.get("processed_video_paths", {}).items():
             logger.info(f"set {k} to {v}")
             setattr(self.input_info, k, v)
+        self.input_info.last_frame_path = params.get("last_frame_path", "")
+
+        if "stream_config" in self.input_info.__dataclass_fields__:
+            self.input_info.stream_config = params.get("stream_config", {})
+
+        if "aspect_ratio" in self.input_info.__dataclass_fields__:
+            self.input_info.aspect_ratio = params.get("aspect_ratio", "")
+
+        if "target_shape" in self.input_info.__dataclass_fields__:
+            if self.is_t2v_task():
+                custom_shape = params.get("custom_shape", [])
+                if len(custom_shape) == 2:
+                    height, width = int(custom_shape[0]), int(custom_shape[1])
+                    if (width <= 1280 and height <= 720 and width >= 256 and height >= 256) or (width <= 720 and height <= 1280 and width >= 256 and height >= 256):
+                        self.input_info.target_shape = [height, width]
+                        logger.info(f"Set target_height={height}, target_width={width} for t2v task")
+                    else:
+                        logger.warning(f"Custom shape {width}x{height} is too large or too smallfor t2v task, will use default shape")
+            else:
+                self.input_info.target_shape = params.get("custom_shape", [])
 
     async def prepare_input_image(self, params, inputs, tmp_dir, data_manager):
         input_image_path = inputs.get("input_image", "")
@@ -67,10 +103,25 @@ class BaseWorker:
 
         # prepare tmp image
         if "image_path" in self.input_info.__dataclass_fields__:
-            img_data = await data_manager.load_bytes(input_image_path)
-            with open(tmp_image_path, "wb") as fout:
-                fout.write(img_data)
-            params["image_path"] = tmp_image_path
+            extra_image_inputs = params.get("extra_inputs", {}).get("input_image", [])
+
+            # for multi image input
+            if len(extra_image_inputs) > 0:
+                tmp_paths = []
+                # xxx-input_image.png -> xxx-input_image
+                base_image_path = tmp_image_path.rsplit(".", 1)[0]
+                os.makedirs(base_image_path, exist_ok=True)
+                for inp in extra_image_inputs:
+                    tmp_paths.append(os.path.join(tmp_dir, inputs[inp]))
+                    inp_data = await data_manager.load_bytes(inputs[inp])
+                    with open(tmp_paths[-1], "wb") as fout:
+                        fout.write(inp_data)
+                params["image_path"] = ",".join(tmp_paths)
+            else:
+                img_datas = await data_manager.load_bytes(input_image_path)
+                with open(tmp_image_path, "wb") as fout:
+                    fout.write(img_datas)
+                params["image_path"] = tmp_image_path
 
     async def prepare_input_video(self, params, inputs, tmp_dir, data_manager):
         if not self.is_animate_model():
@@ -104,7 +155,10 @@ class BaseWorker:
                 if k in pre_config:
                     setattr(pre_args, k, pre_config[k])
 
-            process_input_video(pre_args)
+            logger.info(f"Starting video preprocessing in thread pool (this may take a while)...")
+            await asyncio.to_thread(process_input_video, pre_args)
+            logger.info(f"Video preprocessing completed successfully")
+
             result_paths = {
                 "src_pose_path": os.path.join(processed_video_path, "src_pose.mp4"),
                 "src_face_path": os.path.join(processed_video_path, "src_face.mp4"),
@@ -119,6 +173,17 @@ class BaseWorker:
         for p in result_paths.values():
             assert os.path.exists(p), f"Input video processed result not found: {p}!"
         params["processed_video_paths"] = result_paths
+
+    async def prepare_input_last_frame(self, params, inputs, tmp_dir, data_manager):
+        input_last_frame_path = inputs.get("input_last_frame", "")
+        tmp_last_frame_path = os.path.join(tmp_dir, input_last_frame_path)
+
+        # prepare tmp last frame
+        if "last_frame_path" in self.input_info.__dataclass_fields__:
+            img_data = await data_manager.load_bytes(input_last_frame_path)
+            with open(tmp_last_frame_path, "wb") as fout:
+                fout.write(img_data)
+            params["last_frame_path"] = tmp_last_frame_path
 
     async def prepare_input_audio(self, params, inputs, tmp_dir, data_manager):
         input_audio_path = inputs.get("input_audio", "")
@@ -160,6 +225,14 @@ class BaseWorker:
         params["save_result_path"] = tmp_video_path
         return tmp_video_path, output_video_path
 
+    def prepare_output_image(self, params, outputs, tmp_dir, data_manager):
+        output_image_path = outputs.get("output_image", "")
+        tmp_image_path = os.path.join(tmp_dir, output_image_path)
+        if data_manager.name == "local":
+            tmp_image_path = os.path.join(data_manager.local_dir, output_image_path)
+        params["save_result_path"] = tmp_image_path
+        return tmp_image_path, output_image_path
+
     async def prepare_dit_inputs(self, inputs, data_manager):
         device = torch.device("cuda", self.rank)
         text_out = inputs["text_encoder_output"]
@@ -194,11 +267,23 @@ class BaseWorker:
             video_data = open(tmp_video_path, "rb").read()
             await data_manager.save_bytes(video_data, output_video_path)
 
+    async def save_output_image(self, tmp_image_path, output_image_path, data_manager):
+        # save output image
+        if data_manager.name != "local" and self.rank == self.out_video_rank and isinstance(tmp_image_path, str):
+            image_data = open(tmp_image_path, "rb").read()
+            await data_manager.save_bytes(image_data, output_image_path)
+
     def is_audio_model(self):
         return "audio" in self.runner.config["model_cls"] or "seko_talk" in self.runner.config["model_cls"]
 
     def is_animate_model(self):
         return self.runner.config.get("task") == "animate"
+
+    def is_image_task(self):
+        return self.runner.config.get("task") == "i2i" or self.runner.config.get("task") == "t2i"
+
+    def is_t2v_task(self):
+        return self.runner.config.get("task") == "t2v"
 
     async def broadcast_data(self, data, src_rank=0):
         if self.world_size <= 1:
@@ -292,7 +377,11 @@ class PipelineWorker(BaseWorker):
             await self.prepare_input_image(params, inputs, tmp_dir, data_manager)
             await self.prepare_input_audio(params, inputs, tmp_dir, data_manager)
             await self.prepare_input_video(params, inputs, tmp_dir, data_manager)
-            tmp_video_path, output_video_path = self.prepare_output_video(params, outputs, tmp_dir, data_manager)
+            await self.prepare_input_last_frame(params, inputs, tmp_dir, data_manager)
+            if self.is_image_task():
+                tmp_image_path, output_image_path = self.prepare_output_image(params, outputs, tmp_dir, data_manager)
+            else:
+                tmp_video_path, output_video_path = self.prepare_output_video(params, outputs, tmp_dir, data_manager)
             logger.info(f"run params: {params}, {inputs}, {outputs}")
 
             self.set_inputs(params)
@@ -304,7 +393,10 @@ class PipelineWorker(BaseWorker):
             status, _ = await future
             if not status:
                 return False
-            await self.save_output_video(tmp_video_path, output_video_path, data_manager)
+            if self.is_image_task():
+                await self.save_output_image(tmp_image_path, output_image_path, data_manager)
+            else:
+                await self.save_output_video(tmp_video_path, output_video_path, data_manager)
             return True
 
 
@@ -449,7 +541,7 @@ class VaeDecoderWorker(BaseWorker):
             device = torch.device("cuda", self.rank)
             latents = await data_manager.load_tensor(inputs["latents"], device)
             self.runner.gen_video = self.runner.run_vae_decoder(latents)
-            self.runner.process_images_after_vae_decoder(save_video=True)
+            self.runner.process_images_after_vae_decoder()
 
             await self.save_output_video(tmp_video_path, output_video_path, data_manager)
 
@@ -495,4 +587,4 @@ class SegmentDiTWorker(BaseWorker):
 
     def run_dit(self):
         self.runner.run_main()
-        self.runner.process_images_after_vae_decoder(save_video=True)
+        self.runner.process_images_after_vae_decoder()

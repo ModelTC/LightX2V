@@ -1,0 +1,20 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "general_sparse_attn",
+    "general_sparse_attn_setting": {
+        "sparse_mask_generator": "sla_mask_generator",
+        "sparse_setting": {
+            "sla_sparsity_ratio": 0.8
+        },
+        "sparse_operator": "magi_operator"
+    },
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 5,
+    "sample_shift": 5,
+    "enable_cfg": true,
+    "cpu_offload": false
+}

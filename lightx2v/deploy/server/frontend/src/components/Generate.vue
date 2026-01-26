@@ -39,10 +39,15 @@ import {
             i2vImagePreview,
             s2vImagePreview,
             s2vAudioPreview,
+            i2iImagePreview,
+            flf2vImagePreview,
+            flf2vLastFramePreview,
             getCurrentImagePreview,
             getCurrentAudioPreview,
             getCurrentVideoPreview,
+            getCurrentLastFramePreview,
             setCurrentImagePreview,
+            setCurrentLastFramePreview,
             setCurrentAudioPreview,
             setCurrentVideoPreview,
             updateUploadedContentStatus,
@@ -100,12 +105,15 @@ import {
             updateFaceRoleName,
             toggleFaceEditing,
             saveFaceRoleName,
+            handleLastFrameUpload,
             selectTask,
             selectModel,
             resetForm,
             triggerImageUpload,
+            triggerLastFrameUpload,
             triggerAudioUpload,
             removeImage,
+            removeLastFrame,
             removeAudio,
             removeVideo,
             handleAudioUpload,
@@ -195,6 +203,8 @@ import {
             getCurrentImagePreviewUrl,
             getCurrentAudioPreviewUrl,
             getCurrentVideoPreviewUrl,
+            getCurrentLastFramePreviewUrl,
+            getI2IImagePreviews,
             handleThumbnailError,
             handleImageError,
             handleImageLoad,
@@ -233,6 +243,7 @@ import {
             getImageHistory,
             getAudioHistory,
             selectImageHistory,
+            selectLastFrameImageHistory,
             selectAudioHistory,
             previewAudioHistory,
             clearImageHistory,
@@ -282,6 +293,7 @@ import {
             closeImageZoomModal,
             // 模板素材应用相关
             applyTemplateImage,
+            applyTemplateLastFrameImage,
             applyTemplateAudio,
             applyTemplatePrompt,
             copyPrompt,
@@ -306,6 +318,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { watch, onMounted, computed, ref, nextTick, onUnmounted } from 'vue'
 import ModelDropdown from './ModelDropdown.vue'
 import TaskCarousel from './TaskCarousel.vue'
+import DropdownMenu from './DropdownMenu.vue'
+import FaceEditModal from './FaceEditModal.vue'
 
 // Props
 const props = defineProps({
@@ -420,6 +434,24 @@ watch(selectedTaskId, (newTaskId, oldTaskId) => {
         // 重置分离记录
         lastSeparatedFaceCount.value = 0
         lastSeparatedAudioUrl.value = ''
+
+        // 对于 t2v 和 t2i 任务，如果 customShape 为 null，自动设置默认值
+        const form = getCurrentForm()
+        if (form && !form.customShape) {
+            if (newTaskId === 't2v') {
+                // t2v: 使用 720p（横屏）作为默认值
+                const defaultResolution = videoResolutions.find(r => r.label === '720p_landscape')
+                if (defaultResolution) {
+                    form.customShape = defaultResolution.value
+                }
+            } else if (newTaskId === 't2i') {
+                // t2i: 使用 16:9 宽高比作为默认值
+                const ratio16_9 = imageAspectRatios.find(r => r.value === '16:9')
+                if (ratio16_9) {
+                    selectImageAspectRatio(ratio16_9)
+                }
+            }
+        }
     }
 })
 
@@ -537,6 +569,9 @@ const toggleRoleMode = async () => {
             if (audioDataUrl && form.detectedFaces && form.detectedFaces.length > 1) {
                 try {
                     await separateAudioTracks(audioDataUrl, form.detectedFaces.length)
+                    // 更新分离记录，避免 watch 监听器重复分离
+                    lastSeparatedFaceCount.value = form.detectedFaces.length
+                    lastSeparatedAudioUrl.value = audioDataUrl
                 } catch (error) {
                     console.error('Audio separation failed:', error)
                     showAlert(t('audioSeparationFailed') + ': ' + error.message, 'error')
@@ -549,6 +584,8 @@ const toggleRoleMode = async () => {
 
         // 清空分离的音频（单角色模式不需要分离）
         form.separatedAudios = []
+        lastSeparatedFaceCount.value = 0
+        lastSeparatedAudioUrl.value = ''
 
         // 如果有多于1个角色的情况下切回单模式，提示用户
         if (form.detectedFaces && form.detectedFaces.length > 1) {
@@ -575,14 +612,6 @@ const showFaceEditModal = ref(false)
 const editingFaceIndex = ref(-1)
 const editingFaceBbox = ref([0, 0, 0, 0]) // [x1, y1, x2, y2]
 const originalImageUrl = ref('')
-const imageContainerRef = ref(null)
-const imageLoaded = ref(false) // 图片是否已加载完成
-const imageNaturalSize = ref({ width: 0, height: 0 }) // 图片原始尺寸
-const isDraggingBbox = ref(false)
-const dragType = ref('move') // 'move', 'resize-n', 'resize-s', 'resize-w', 'resize-e', 'resize-nw', 'resize-ne', 'resize-sw', 'resize-se'
-const dragStartPos = ref({ x: 0, y: 0 })
-const dragStartBbox = ref([0, 0, 0, 0]) // 拖拽开始时的bbox坐标
-const bboxOffset = ref({ x: 0, y: 0 })
 const isAddingNewFace = ref(false) // 是否在新增角色模式
 const faceSaving = ref(false) // 是否正在保存角色（用于显示加载状态）
 const showRoleModeInfo = ref(false) // 是否显示角色模式说明
@@ -593,93 +622,13 @@ const openFaceEditModal = async (faceIndex) => {
     if (!form) return
 
     originalImageUrl.value = getCurrentImagePreviewUrl()
-    imageLoaded.value = false // 重置图片加载状态
-    imageNaturalSize.value = { width: 0, height: 0 } // 重置图片尺寸
 
     // 如果是新增模式（faceIndex 为 -1）
     if (faceIndex === -1) {
         isAddingNewFace.value = true
         editingFaceIndex.value = -1
+        editingFaceBbox.value = [0, 0, 0, 0] // 组件会自动计算默认值
         showFaceEditModal.value = true
-
-        // 等待DOM更新，确保图片元素已渲染
-        await nextTick()
-        await nextTick() // 多等待一次，确保图片元素完全渲染
-
-        // 等待图片加载完成
-        const img = imageContainerRef.value?.querySelector('img')
-        if (img) {
-            // 如果图片已经加载完成（从缓存），立即设置状态
-            if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-                imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-                imageLoaded.value = true
-            } else {
-                // 确保图片完全加载
-                await new Promise((resolve) => {
-                    if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-                        imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-                        imageLoaded.value = true
-                        resolve()
-                    } else {
-                        const onLoad = () => {
-                            // 确保图片尺寸已正确设置
-                            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-                                imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-                                imageLoaded.value = true
-                                img.removeEventListener('load', onLoad)
-                                img.removeEventListener('error', onError)
-                                resolve()
-                            }
-                        }
-                        const onError = () => {
-                            imageLoaded.value = true
-                            img.removeEventListener('load', onLoad)
-                            img.removeEventListener('error', onError)
-                            resolve() // 即使加载失败也继续
-                        }
-                        img.addEventListener('load', onLoad)
-                        img.addEventListener('error', onError)
-                    }
-                })
-            }
-
-            // 再次等待，确保图片尺寸已正确设置
-            await nextTick()
-
-            // 计算图片的原始尺寸
-            const imgNaturalWidth = img.naturalWidth
-            const imgNaturalHeight = img.naturalHeight
-
-            if (imgNaturalWidth > 0 && imgNaturalHeight > 0) {
-                imageNaturalSize.value = { width: imgNaturalWidth, height: imgNaturalHeight }
-                // 默认居中，大小为图片的 30%
-                const bboxSize = Math.min(imgNaturalWidth, imgNaturalHeight) * 0.3
-                const centerX = imgNaturalWidth / 2
-                const centerY = imgNaturalHeight / 2
-
-                editingFaceBbox.value = [
-                    centerX - bboxSize / 2,
-                    centerY - bboxSize / 2,
-                    centerX + bboxSize / 2,
-                    centerY + bboxSize / 2
-                ]
-
-                // 标记图片已加载
-                imageLoaded.value = true
-                // 再次等待DOM更新，确保边界框已渲染
-                await nextTick()
-            } else {
-                // 如果图片尺寸无效，使用默认值
-                editingFaceBbox.value = [0, 0, 100, 100]
-                imageLoaded.value = true
-                await nextTick()
-            }
-        } else {
-            // 如果图片还没加载，使用默认值
-            editingFaceBbox.value = [0, 0, 100, 100]
-            imageLoaded.value = true
-            await nextTick()
-        }
     } else {
         // 编辑现有角色
         if (!form.detectedFaces || !form.detectedFaces[faceIndex]) return
@@ -688,90 +637,52 @@ const openFaceEditModal = async (faceIndex) => {
         editingFaceIndex.value = faceIndex
         editingFaceBbox.value = [...(face.bbox || [0, 0, 0, 0])]
         showFaceEditModal.value = true
+    }
+}
 
-        // 等待DOM更新，确保图片元素已渲染
-        await nextTick()
-        await nextTick() // 多等待一次，确保图片元素完全渲染
+// 计算现有角色（排除当前编辑的）
+const existingCharactersForModal = computed(() => {
+    const form = getCurrentForm()
+    if (!form || !form.detectedFaces) return []
 
-        // 等待图片加载完成，确保边界框能正确显示
-        const img = imageContainerRef.value?.querySelector('img')
-        if (img) {
-            // 如果图片已经加载完成（从缓存），立即设置状态
-            if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-                imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-                imageLoaded.value = true
-            } else {
-                // 确保图片完全加载
-                await new Promise((resolve) => {
-                    if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-                        imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-                        imageLoaded.value = true
-                        resolve()
-                    } else {
-                        const onLoad = () => {
-                            // 确保图片尺寸已正确设置
-                            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-                                imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-                                imageLoaded.value = true
-                                img.removeEventListener('load', onLoad)
-                                img.removeEventListener('error', onError)
-                                resolve()
-                            }
-                        }
-                        const onError = () => {
-                            imageLoaded.value = true
-                            img.removeEventListener('load', onLoad)
-                            img.removeEventListener('error', onError)
-                            resolve() // 即使加载失败也继续
-                        }
-                        img.addEventListener('load', onLoad)
-                        img.addEventListener('error', onError)
-                    }
-                })
-            }
+    return form.detectedFaces
+        .map((face, index) => ({
+            id: index,
+            roleName: face.roleName || `角色${index + 1}`,
+            name: face.roleName || `角色${index + 1}`,
+            bbox: face.bbox || [0, 0, 0, 0]
+        }))
+        .filter((_, index) => index !== editingFaceIndex.value) // 排除当前编辑的角色
+})
 
-            // 再次等待，确保图片尺寸已正确设置
-            await nextTick()
+// 计算角色标签
+const characterLabelForModal = computed(() => {
+    const form = getCurrentForm()
+    if (isAddingNewFace.value) {
+        const newRoleIndex = (form?.detectedFaces?.length || 0) + 1
+        return `角色${newRoleIndex}`
         } else {
-            imageLoaded.value = true
-        }
+        const face = form?.detectedFaces?.[editingFaceIndex.value]
+        return face?.roleName || `角色${editingFaceIndex.value + 1}`
     }
-}
-
-// 处理脸部编辑模态框中的图片加载
-const handleFaceEditImageLoad = () => {
-    const img = imageContainerRef.value?.querySelector('img')
-    if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
-        imageNaturalSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-        imageLoaded.value = true
-        nextTick()
-    }
-}
-
-// 处理脸部编辑模态框中的图片加载错误
-const handleFaceEditImageError = () => {
-    imageLoaded.value = true // 即使加载失败也显示，避免一直显示加载中
-}
+})
 
 // 关闭脸部编辑模态框
 const closeFaceEditModal = () => {
     showFaceEditModal.value = false
     editingFaceIndex.value = -1
-    isDraggingBbox.value = false
     isAddingNewFace.value = false
-    imageLoaded.value = false
-    imageNaturalSize.value = { width: 0, height: 0 }
 }
 
 // 保存边界框更改
-const saveFaceBbox = async () => {
+const saveFaceBbox = async (bbox) => {
     const form = getCurrentForm()
     if (!form) return
 
     // 保存当前状态（在关闭模态框之前）
     const wasAddingNewFace = isAddingNewFace.value
     const currentEditingIndex = editingFaceIndex.value // 保存编辑索引
-    const currentBbox = [...editingFaceBbox.value] // 保存边界框
+    const currentBbox = bbox || [...editingFaceBbox.value] // 使用传入的 bbox 或当前值
     const currentImageUrl = originalImageUrl.value // 保存图片URL
 
     // 立即关闭模态框
@@ -829,6 +740,9 @@ const saveFaceBbox = async () => {
                 try {
                     const audioDataUrl = getCurrentAudioPreview()
                     await separateAudioTracks(audioDataUrl, form.detectedFaces.length)
+                    // 更新分离记录，避免 watch 监听器重复分离
+                    lastSeparatedFaceCount.value = form.detectedFaces.length
+                    lastSeparatedAudioUrl.value = audioDataUrl
                 } catch (error) {
                     console.error('Failed to re-separate audio after adding face:', error)
                 }
@@ -890,468 +804,21 @@ const removeFace = async (faceIndex) => {
         try {
             const audioDataUrl = getCurrentAudioPreview()
             await separateAudioTracks(audioDataUrl, form.detectedFaces.length)
+            // 更新分离记录，避免 watch 监听器重复分离
+            lastSeparatedFaceCount.value = form.detectedFaces.length
+            lastSeparatedAudioUrl.value = audioDataUrl
         } catch (error) {
             console.error('Failed to re-separate audio after removing face:', error)
         }
     } else if (selectedTaskId.value === 's2v') {
         // 如果没有角色了，清空分离的音频
         s2vForm.value.separatedAudios = []
+        lastSeparatedFaceCount.value = 0
+        lastSeparatedAudioUrl.value = ''
     }
 }
 
-// 获取图片缩放比例
-const getImageScale = () => {
-    const container = imageContainerRef.value
-    if (!container) return { scaleX: 1, scaleY: 1, imgWidth: 0, imgHeight: 0 }
-
-    const img = container.querySelector('img')
-    if (!img || !img.complete) return { scaleX: 1, scaleY: 1, imgWidth: 0, imgHeight: 0 }
-
-    const imgRect = img.getBoundingClientRect()
-    const scaleX = img.naturalWidth > 0 ? imgRect.width / img.naturalWidth : 1
-    const scaleY = img.naturalHeight > 0 ? imgRect.height / img.naturalHeight : 1
-
-    return { scaleX, scaleY, imgWidth: imgRect.width, imgHeight: imgRect.height }
-}
-
-// 获取图片相对于容器的偏移
-const getImageOffset = () => {
-    const container = imageContainerRef.value
-    if (!container) return { offsetX: 0, offsetY: 0 }
-
-    const img = container.querySelector('img')
-    if (!img) return { offsetX: 0, offsetY: 0 }
-
-    const containerRect = container.getBoundingClientRect()
-    const imgRect = img.getBoundingClientRect()
-
-    return {
-        offsetX: imgRect.left - containerRect.left,
-        offsetY: imgRect.top - containerRect.top
-    }
-}
-
-// 开始拖拽边界框
-const startDragBbox = (event, type = 'move') => {
-    event.preventDefault()
-    event.stopPropagation()
-
-    const container = imageContainerRef.value
-    if (!container) return
-
-    const img = container.querySelector('img')
-    if (!img) return
-
-    // 获取图片的实际显示尺寸和原始尺寸
-    const imgRect = img.getBoundingClientRect()
-    const containerRect = container.getBoundingClientRect()
-    const displayWidth = imgRect.width
-    const displayHeight = imgRect.height
-    const naturalWidth = img.naturalWidth
-    const naturalHeight = img.naturalHeight
-
-    // 检查图片是否已加载（通过尺寸判断，而不是 complete 属性）
-    // 因为 complete 可能在图片尺寸设置之前就为 true
-    if (naturalWidth === 0 || naturalHeight === 0 || displayWidth === 0 || displayHeight === 0) {
-        console.warn('Image not ready for dragging:', { naturalWidth, naturalHeight, displayWidth, displayHeight, complete: img.complete })
-        return
-    }
-
-    // 检查 #app 是否有 transform: scale
-    const appElement = document.getElementById('app')
-    let appScale = 1
-    if (appElement) {
-        const appStyle = window.getComputedStyle(appElement)
-        const transform = appStyle.transform
-        if (transform && transform !== 'none') {
-            const matrix = transform.match(/matrix\(([^)]+)\)/)
-            if (matrix) {
-                const values = matrix[1].split(',').map(v => parseFloat(v.trim()))
-                appScale = values[0] || 1
-            } else {
-                const scaleMatch = transform.match(/scale\(([^)]+)\)/)
-                if (scaleMatch) {
-                    appScale = parseFloat(scaleMatch[1])
-                }
-            }
-        }
-    }
-
-    // 计算缩放比例（补偿 #app 的缩放）
-    const scaleX = displayWidth / (naturalWidth * appScale)
-    const scaleY = displayHeight / (naturalHeight * appScale)
-
-    // 图片在容器中的偏移
-    const offsetX = imgRect.left - containerRect.left
-    const offsetY = imgRect.top - containerRect.top
-
-    // 边界框坐标
-    const [x1, y1, x2, y2] = editingFaceBbox.value
-
-    // 计算边界框在容器中的显示位置
-    const bboxRect = {
-        left: offsetX + x1 * scaleX,
-        top: offsetY + y1 * scaleY,
-        right: offsetX + x2 * scaleX,
-        bottom: offsetY + y2 * scaleY
-    }
-
-    // 点击位置相对于容器
-    const clickX = event.clientX - containerRect.left
-    const clickY = event.clientY - containerRect.top
-
-    // 如果是拖拽手柄（type 不是 'move'），直接开始拖拽
-    if (type !== 'move') {
-        isDraggingBbox.value = true
-        dragType.value = type
-        dragStartPos.value = { x: clickX, y: clickY }
-        dragStartBbox.value = [...editingFaceBbox.value]
-        return
-    }
-
-    // 检查点击是否在边界框内（移动模式）
-    if (clickX < bboxRect.left || clickX > bboxRect.right ||
-        clickY < bboxRect.top || clickY > bboxRect.bottom) {
-        return
-    }
-
-    isDraggingBbox.value = true
-    dragType.value = 'move'
-    dragStartPos.value = { x: clickX, y: clickY }
-    dragStartBbox.value = [...editingFaceBbox.value]
-}
-
-// 拖拽边界框
-const dragBbox = (event) => {
-    if (!isDraggingBbox.value) return
-
-    const container = imageContainerRef.value
-    if (!container) return
-
-    const img = container.querySelector('img')
-    if (!img || !img.complete) return
-
-    // 获取图片的实际显示尺寸和原始尺寸
-    const imgRect = img.getBoundingClientRect()
-    const containerRect = container.getBoundingClientRect()
-    const displayWidth = imgRect.width
-    const displayHeight = imgRect.height
-    const naturalWidth = img.naturalWidth
-    const naturalHeight = img.naturalHeight
-
-    if (naturalWidth === 0 || naturalHeight === 0) return
-
-    // 检查 #app 是否有 transform: scale
-    const appElement = document.getElementById('app')
-    let appScale = 1
-    if (appElement) {
-        const appStyle = window.getComputedStyle(appElement)
-        const transform = appStyle.transform
-        if (transform && transform !== 'none') {
-            const matrix = transform.match(/matrix\(([^)]+)\)/)
-            if (matrix) {
-                const values = matrix[1].split(',').map(v => parseFloat(v.trim()))
-                appScale = values[0] || 1
-            } else {
-                const scaleMatch = transform.match(/scale\(([^)]+)\)/)
-                if (scaleMatch) {
-                    appScale = parseFloat(scaleMatch[1])
-                }
-            }
-        }
-    }
-
-    // 计算缩放比例（补偿 #app 的缩放）
-    // displayWidth 已经是经过 appScale 缩放后的尺寸，所以需要除以 appScale 来得到相对于原始图片的缩放比例
-    const scaleX = displayWidth / (naturalWidth * appScale)
-    const scaleY = displayHeight / (naturalHeight * appScale)
-
-    // 图片在容器中的偏移
-    const offsetX = imgRect.left - containerRect.left
-    const offsetY = imgRect.top - containerRect.top
-
-    // 鼠标当前位置相对于容器
-    const containerRect2 = container.getBoundingClientRect()
-    const currentX = event.clientX - containerRect2.left
-    const currentY = event.clientY - containerRect2.top
-
-    // 将坐标转换为相对于图片的位置（考虑图片在容器中的偏移）
-    const imgCurrentX = currentX - offsetX
-    const imgCurrentY = currentY - offsetY
-    const imgStartX = dragStartPos.value.x - offsetX
-    const imgStartY = dragStartPos.value.y - offsetY
-
-    const deltaX = (imgCurrentX - imgStartX) / scaleX
-    const deltaY = (imgCurrentY - imgStartY) / scaleY
-
-    // 获取拖拽开始时的bbox
-    const [startX1, startY1, startX2, startY2] = dragStartBbox.value
-    const startWidth = startX2 - startX1
-    const startHeight = startY2 - startY1
-
-    let newX1 = startX1
-    let newY1 = startY1
-    let newX2 = startX2
-    let newY2 = startY2
-
-    // 根据拖拽类型调整bbox
-    const type = dragType.value
-    if (type === 'move') {
-        // 移动模式：整体移动
-        newX1 = startX1 + deltaX
-        newY1 = startY1 + deltaY
-        newX2 = startX2 + deltaX
-        newY2 = startY2 + deltaY
-    } else if (type === 'resize-n') {
-        // 调整顶部
-        newY1 = Math.min(startY1 + deltaY, startY2 - 10) // 最小高度10px
-        newX1 = startX1
-        newX2 = startX2
-        newY2 = startY2
-    } else if (type === 'resize-s') {
-        // 调整底部
-        newY2 = Math.max(startY2 + deltaY, startY1 + 10) // 最小高度10px
-        newX1 = startX1
-        newY1 = startY1
-        newX2 = startX2
-    } else if (type === 'resize-w') {
-        // 调整左侧
-        newX1 = Math.min(startX1 + deltaX, startX2 - 10) // 最小宽度10px
-        newY1 = startY1
-        newX2 = startX2
-        newY2 = startY2
-    } else if (type === 'resize-e') {
-        // 调整右侧
-        newX2 = Math.max(startX2 + deltaX, startX1 + 10) // 最小宽度10px
-        newX1 = startX1
-        newY1 = startY1
-        newY2 = startY2
-    } else if (type === 'resize-nw') {
-        // 调整左上角
-        newX1 = Math.min(startX1 + deltaX, startX2 - 10)
-        newY1 = Math.min(startY1 + deltaY, startY2 - 10)
-        newX2 = startX2
-        newY2 = startY2
-    } else if (type === 'resize-ne') {
-        // 调整右上角
-        newX2 = Math.max(startX2 + deltaX, startX1 + 10)
-        newY1 = Math.min(startY1 + deltaY, startY2 - 10)
-        newX1 = startX1
-        newY2 = startY2
-    } else if (type === 'resize-sw') {
-        // 调整左下角
-        newX1 = Math.min(startX1 + deltaX, startX2 - 10)
-        newY2 = Math.max(startY2 + deltaY, startY1 + 10)
-        newX2 = startX2
-        newY1 = startY1
-    } else if (type === 'resize-se') {
-        // 调整右下角
-        newX2 = Math.max(startX2 + deltaX, startX1 + 10)
-        newY2 = Math.max(startY2 + deltaY, startY1 + 10)
-        newX1 = startX1
-        newY1 = startY1
-    }
-
-    // 边界限制：确保bbox在图片范围内
-    const minSize = 10 // 最小尺寸
-
-    // X方向边界限制
-    if (newX1 < 0) {
-        newX1 = 0
-        if (type.includes('w') || type === 'resize-nw' || type === 'resize-sw') {
-            // 如果是调整左边或左角，需要保持宽度
-            newX2 = Math.max(newX2, minSize)
-        }
-    }
-    if (newX2 > naturalWidth) {
-        newX2 = naturalWidth
-        if (type.includes('e') || type === 'resize-ne' || type === 'resize-se') {
-            // 如果是调整右边或右角，需要保持宽度
-            newX1 = Math.min(newX1, naturalWidth - minSize)
-        }
-    }
-
-    // Y方向边界限制
-    if (newY1 < 0) {
-        newY1 = 0
-        if (type.includes('n') || type === 'resize-nw' || type === 'resize-ne') {
-            // 如果是调整上边或上角，需要保持高度
-            newY2 = Math.max(newY2, minSize)
-        }
-    }
-    if (newY2 > naturalHeight) {
-        newY2 = naturalHeight
-        if (type.includes('s') || type === 'resize-sw' || type === 'resize-se') {
-            // 如果是调整下边或下角，需要保持高度
-            newY1 = Math.min(newY1, naturalHeight - minSize)
-        }
-    }
-
-    // 确保最小尺寸
-    if (newX2 - newX1 < minSize) {
-        if (type.includes('w') || type === 'resize-nw' || type === 'resize-sw') {
-            newX1 = newX2 - minSize
-        } else {
-            newX2 = newX1 + minSize
-        }
-    }
-    if (newY2 - newY1 < minSize) {
-        if (type.includes('n') || type === 'resize-nw' || type === 'resize-ne') {
-            newY1 = newY2 - minSize
-        } else {
-            newY2 = newY1 + minSize
-        }
-    }
-
-    // 更新边界框坐标
-    editingFaceBbox.value = [newX1, newY1, newX2, newY2]
-}
-
-// 结束拖拽
-const endDragBbox = () => {
-    isDraggingBbox.value = false
-    dragType.value = 'move'
-}
-
-// 计算边界框的样式（用于在放大图片上显示）
-const getBboxStyle = computed(() => {
-    if (!imageContainerRef.value || editingFaceBbox.value.length !== 4 || !imageLoaded.value) {
-        return {}
-    }
-
-    const container = imageContainerRef.value
-    const img = container.querySelector('img')
-    if (!img || !img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
-        return {}
-    }
-
-    // 获取图片的实际显示尺寸
-    // getBoundingClientRect() 返回的是相对于 viewport 的坐标
-    // 如果 #app 有 transform: scale(0.8)，那么所有元素都会被缩放 0.8
-    const imgRect = img.getBoundingClientRect()
-    const containerRect = container.getBoundingClientRect()
-
-    // 图片的实际显示尺寸（已考虑所有CSS样式和可能的缩放，包括 #app 的 0.8 缩放）
-    const displayWidth = imgRect.width
-    const displayHeight = imgRect.height
-
-    // 图片的原始尺寸（naturalWidth/naturalHeight 是图片文件的真实尺寸）
-    const naturalWidth = img.naturalWidth
-    const naturalHeight = img.naturalHeight
-
-    if (naturalWidth === 0 || naturalHeight === 0) {
-        return {}
-    }
-
-    // 检查 #app 是否有 transform: scale
-    // 如果模态框在 #app 内部，会受到 #app 的 transform 影响
-    const appElement = document.getElementById('app')
-    let appScale = 1
-    if (appElement) {
-        const appStyle = window.getComputedStyle(appElement)
-        const transform = appStyle.transform
-        if (transform && transform !== 'none') {
-            // 解析 transform matrix 或 scale
-            const matrix = transform.match(/matrix\(([^)]+)\)/)
-            if (matrix) {
-                const values = matrix[1].split(',').map(v => parseFloat(v.trim()))
-                // matrix(a, b, c, d, tx, ty) 中，a 和 d 是缩放值
-                appScale = values[0] || 1
-            } else {
-                const scaleMatch = transform.match(/scale\(([^)]+)\)/)
-                if (scaleMatch) {
-                    appScale = parseFloat(scaleMatch[1])
-                }
-            }
-        }
-    }
-
-    // 计算缩放比例
-    // displayWidth 已经是经过 appScale 缩放后的尺寸
-    // 所以相对于原始图片的实际缩放比例是 displayWidth / naturalWidth
-    // 但由于 #app 的缩放，边界框在模态框中的尺寸需要补偿这个缩放
-    // 如果 appScale = 0.8，那么边界框的尺寸应该是 displayWidth / appScale / naturalWidth = displayWidth / (naturalWidth * appScale)
-    const scaleX = displayWidth / (naturalWidth * appScale)
-    const scaleY = displayHeight / (naturalHeight * appScale)
-
-    // 图片在容器中的偏移（相对于容器）
-    // 如果容器是 inline-block，图片和容器可能在同一位置
-    // 我们需要检查容器是否包裹了图片，或者图片就是容器的唯一内容
-    let offsetX = imgRect.left - containerRect.left
-    let offsetY = imgRect.top - containerRect.top
-
-    // 如果计算出的偏移很小（可能是浮点数误差），或者容器和图片尺寸相同，说明图片填充了整个容器
-    // 在这种情况下，offset 应该为 0
-    if (Math.abs(offsetX) < 1 && Math.abs(offsetY) < 1) {
-        offsetX = 0
-        offsetY = 0
-    }
-
-    // 边界框坐标（原始图片坐标 [x1, y1, x2, y2]）
-    // 这些坐标是基于原始图片尺寸的绝对像素坐标
-    const [x1, y1, x2, y2] = editingFaceBbox.value
-
-    // 转换为显示坐标
-    // bbox坐标是基于原始图片尺寸的，需要乘以缩放比例得到显示尺寸
-    // 注意：这里计算的是边界框在容器中的位置和尺寸
-    const left = offsetX + x1 * scaleX
-    const top = offsetY + y1 * scaleY
-    const width = (x2 - x1) * scaleX
-    const height = (y2 - y1) * scaleY
-
-    const indicatorSize = 12
-
-    // 确保边界框的尺寸计算正确（考虑 border 的影响）
-    // border-2 = 2px，左右各2px，所以总宽度需要包含 border
-    // 但由于使用了 box-sizing: border-box，所以不需要额外调整
-
-    return {
-        left: `${left}px`,
-        top: `${top}px`,
-        width: `${width}px`,
-        height: `${height}px`,
-        indicatorSize: indicatorSize,
-        boxSizing: 'border-box'
-    }
-})
-
-// 计算角色名字标签的样式（显示在边界框上方）
-const getRoleNameLabelStyle = computed(() => {
-    const bboxStyle = getBboxStyle.value
-    if (!bboxStyle.left || !bboxStyle.top) {
-        return {}
-    }
-
-    // 获取当前编辑的人脸信息
-    const form = getCurrentForm()
-    let roleName
-
-    // 如果是新增模式
-    if (isAddingNewFace.value) {
-        // 计算新角色的序号：当前角色数量 + 1
-        const newRoleIndex = (form?.detectedFaces?.length || 0) + 1
-        roleName = `角色${newRoleIndex}`
-    } else {
-        // 编辑现有角色
-        const face = form?.detectedFaces?.[editingFaceIndex.value]
-        roleName = face?.roleName || `角色${editingFaceIndex.value + 1}`
-    }
-
-    // 计算标签位置：在边界框上方居中
-    const left = parseFloat(bboxStyle.left) || 0
-    const top = parseFloat(bboxStyle.top) || 0
-    const width = parseFloat(bboxStyle.width) || 0
-
-    // 标签在边界框上方，水平居中
-    const labelLeft = left + width / 2
-
-    return {
-        left: `${labelLeft}px`,
-        top: `${top - 28}px`,  // 在边界框上方 28px
-        transform: 'translateX(-50%)',  // 水平居中
-        roleName: roleName
-    }
-})
+// 以下函数已移至 FaceEditModal 组件，不再需要
 
 
 // 处理提交任务并滚动到任务区域
@@ -1819,9 +1286,7 @@ onMounted(async () => {
     }
     window.addEventListener('resize', resizeHandler)
 
-    // 添加全局鼠标事件监听用于拖拽边界框
-    document.addEventListener('mousemove', dragBbox)
-    document.addEventListener('mouseup', endDragBbox)
+    // 拖拽事件监听已移至 FaceEditModal 组件
 
     // 加载精选模版数据
     await loadFeaturedTemplates(true)
@@ -1878,6 +1343,34 @@ const handleImageDrop = (e) => {
         showAlert(t('imageDragSuccess'), 'success')
     } else {
         showAlert(t('pleaseDragImage'), 'warning')
+    }
+}
+
+const handleLastFrameDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    isDragOver.value = false
+
+    const files = Array.from(e.dataTransfer.files)
+    const imageFile = files.find(file => file.type.startsWith('image/'))
+
+    if (imageFile) {
+        // 创建FileList对象来模拟input[type="file"]的change事件
+        const dataTransfer = new DataTransfer()
+        dataTransfer.items.add(imageFile)
+        const fileList = dataTransfer.files
+
+        // 创建模拟的change事件
+        const event = {
+            target: {
+                files: fileList
+            }
+        }
+
+        handleLastFrameUpload(event)
+        showAlert('尾帧图片拖拽上传成功', 'success')
+    } else {
+        showAlert('请拖拽图片文件', 'warning')
     }
 }
 
@@ -2229,7 +1722,8 @@ const onRoleDrop = (event, targetIndex) => {
     const draggedFace = faces[draggedRoleIndex.value]
     faces.splice(draggedRoleIndex.value, 1)
     faces.splice(targetIndex, 0, draggedFace)
-    form.detectedFaces = faces
+    // 触发响应式更新
+    form.detectedFaces = [...faces]
 
     // 更新音频的 roleIndex 和 roleName，以匹配新的角色位置
     // 但不改变音频的显示顺序
@@ -2342,6 +1836,234 @@ const onAudioDrop = (event, targetIndex) => {
     dragOverAudioIndex.value = -1
 }
 
+
+// 尺寸设置相关状态
+const showCustomSize = ref(false)  // 是否显示自定义尺寸输入
+const customWidth = ref('')
+const customHeight = ref('')
+
+// 图片任务宽高比选项
+const imageAspectRatios = [
+    { label: '16:9', value: '16:9', key: 'aspectRatio16_9' },
+    { label: '9:16', value: '9:16', key: 'aspectRatio9_16' },
+    { label: '1:1', value: '1:1', key: 'aspectRatio1_1' },
+    { label: '4:3', value: '4:3', key: 'aspectRatio4_3' },
+    { label: '3:4', value: '3:4', key: 'aspectRatio3_4' }
+]
+
+// 宽高比到尺寸的映射（基于后端 ASPECT_RATIO_MAP）
+// 格式: [width, height] -> 转换为 customShape 格式 [height, width]
+const aspectRatioToSizeMap = {
+    '16:9': [928, 1664],   // [height, width] 对应后端的 [1664, 928]
+    '9:16': [1664, 928],   // [height, width] 对应后端的 [928, 1664]
+    '1:1': [1328, 1328],   // [height, width] 对应后端的 [1328, 1328]
+    '4:3': [1140, 1472],  // [height, width] 对应后端的 [1472, 1140]
+    '3:4': [1024, 768]     // [height, width] 对应后端的 [768, 1024]
+}
+
+// 视频任务预设分辨率选项（仅用于 t2v 任务）
+// value 格式: [height, width]
+const videoResolutions = [
+    { label: '480p_landscape', value: [480, 832], key: 'resolution480pLandscape' }, // 480p（横屏）480×832
+    { label: '480p_portrait', value: [832, 480], key: 'resolution480pPortrait' }, // 480p（竖屏）832×480
+    { label: '720p_landscape', value: [720, 1280], key: 'resolution720pLandscape' }, // 720p（横屏）720×1280
+    { label: '720p_portrait', value: [1280, 720], key: 'resolution720pPortrait' }, // 720p（竖屏）1280×720
+]
+
+
+// 选择视频预设分辨率
+const selectVideoResolution = (resolution) => {
+    const form = getCurrentForm()
+    if (form) {
+        form.customShape = resolution.value
+        showCustomSize.value = false
+        customWidth.value = ''
+        customHeight.value = ''
+    }
+}
+
+// 选择图片宽高比（转换为 custom_shape）
+const selectImageAspectRatio = (aspectRatio) => {
+    const form = getCurrentForm()
+    if (form) {
+        form.aspectRatio = aspectRatio.value
+        // 设置 customShape，格式为 [height, width]
+        if (aspectRatioToSizeMap[aspectRatio.value]) {
+            form.customShape = aspectRatioToSizeMap[aspectRatio.value]
+        }
+        showCustomSize.value = false
+        customWidth.value = ''
+        customHeight.value = ''
+    }
+}
+
+// 使用默认尺寸
+const useDefaultSize = () => {
+    const form = getCurrentForm()
+    if (form) {
+        form.customShape = null
+        form.aspectRatio = null
+        showCustomSize.value = false
+        customWidth.value = ''
+        customHeight.value = ''
+    }
+}
+
+// 应用自定义尺寸（自动应用，无需手动调用）
+const applyCustomSize = () => {
+    const width = parseInt(customWidth.value)
+    const height = parseInt(customHeight.value)
+
+    // 如果输入为空或无效，不应用
+    if (!customWidth.value || !customHeight.value || isNaN(width) || isNaN(height) || width <= 0 || height <= 0) {
+        return
+    }
+
+    const form = getCurrentForm()
+    if (form) {
+        form.customShape = [height, width]
+    }
+}
+
+// 打开自定义尺寸输入
+const openCustomSize = () => {
+    showCustomSize.value = true
+    const form = getCurrentForm()
+    if (form && form.customShape && Array.isArray(form.customShape) && form.customShape.length === 2) {
+        customHeight.value = form.customShape[0].toString()
+        customWidth.value = form.customShape[1].toString()
+    }
+}
+
+// 检查当前 customShape 是否匹配某个预设宽高比
+const getCurrentAspectRatio = () => {
+    const form = getCurrentForm()
+    if (!form || !form.customShape || !Array.isArray(form.customShape) || form.customShape.length !== 2) {
+        return null
+    }
+    const [height, width] = form.customShape
+    // 检查是否匹配某个预设值
+    // customShape 格式是 [height, width]
+    for (const [ratioValue, sizeArray] of Object.entries(aspectRatioToSizeMap)) {
+        const [presetHeight, presetWidth] = sizeArray
+        if (height === presetHeight && width === presetWidth) {
+            return ratioValue  // 返回 '16:9' 等格式
+        }
+    }
+    return null
+}
+
+// 获取当前选中的尺寸值（用于下拉菜单）
+const getCurrentSizeValue = () => {
+    const form = getCurrentForm()
+
+    // t2v 任务：检查是否匹配预设分辨率
+    if (selectedTaskId.value === 't2v') {
+        if (!form || !form.customShape) {
+            return '720p_landscape'  // 默认 720p（横屏）
+        }
+        const [height, width] = form.customShape
+        for (const resolution of videoResolutions) {
+            if (resolution.value[0] === height && resolution.value[1] === width) {
+                return resolution.label
+            }
+        }
+        return '720p_landscape'  // 默认 720p（横屏）
+    }
+
+    // 图片任务：检查是否匹配预设宽高比
+    if (selectedTaskId.value === 't2i' || selectedTaskId.value === 'i2i') {
+        // 如果自定义尺寸输入框已打开，优先显示 "custom"
+        if (showCustomSize.value) {
+            return 'custom'
+        }
+        if (!form || !form.customShape) {
+            return 'default'  // 默认 16:9 横屏
+        }
+        const aspectRatio = getCurrentAspectRatio()
+        if (aspectRatio) {
+            return aspectRatio
+        }
+        return 'custom'
+    }
+
+    // 其他任务：使用输入尺寸
+    return 'default'
+}
+
+// 视频任务尺寸选项（仅用于 t2v 任务）
+const videoSizeOptions = computed(() => {
+    // 只有 t2v 任务才显示尺寸选项
+    if (selectedTaskId.value !== 't2v') {
+        return []
+    }
+
+    const options = []
+
+    videoResolutions.forEach(resolution => {
+        options.push({
+            value: resolution.label,
+            label: t(resolution.key),
+            icon: 'fas fa-video'
+        })
+    })
+
+    return options
+})
+
+// 图片任务尺寸选项
+const imageSizeOptions = computed(() => {
+    const options = []
+
+    // t2i 任务不显示"使用默认尺寸"选项
+    if (selectedTaskId.value !== 't2i') {
+        options.push({
+            value: 'default',
+            label: t('useInputSize'),
+            icon: 'fas fa-undo'
+        })
+    }
+
+    imageAspectRatios.forEach(ratio => {
+        options.push({
+            value: ratio.value,
+            label: t(ratio.key),
+            icon: 'fas fa-image'
+        })
+    })
+
+    options.push({
+        value: 'custom',
+        label: t('custom'),
+        icon: 'fas fa-edit'
+    })
+
+    return options
+})
+
+// 处理尺寸下拉选择
+const handleSizeSelect = (item) => {
+    if (item.value === 'default') {
+        useDefaultSize()
+    } else if (item.value === 'custom') {
+        openCustomSize()
+    } else {
+        // t2v 任务：选择横屏或竖屏
+        if (selectedTaskId.value === 't2v') {
+            const resolution = videoResolutions.find(r => r.label === item.value)
+            if (resolution) {
+                selectVideoResolution(resolution)
+            }
+        }
+        // 图片任务：选择宽高比
+        else if (selectedTaskId.value === 't2i' || selectedTaskId.value === 'i2i') {
+            const ratio = imageAspectRatios.find(r => r.value === item.value)
+            if (ratio) {
+                selectImageAspectRatio(ratio)
+            }
+        }
+    }
+}
 
 // 组件卸载时清理
 onUnmounted(() => {
@@ -2472,6 +2194,12 @@ onUnmounted(() => {
                                                   class="inline-block animate-fade-in">{{ t('pleaseUploadAnImageAsTheFirstFrameOfTheVideoAndTheMostDetailedVideoScript') }}</span>
                                             <span v-else-if="selectedTaskId === 's2v'"
                                                   class="inline-block animate-fade-in">{{ t('pleaseUploadARoleImageAnAudioAndTheGeneralVideoRequirements') }}</span>
+                                            <span v-else-if="selectedTaskId === 'flf2v'"
+                                                  class="inline-block animate-fade-in">{{ t('pleaseUploadFirstAndLastFrameImagesAndTheMostDetailedVideoScript') }}</span>
+                                            <span v-else-if="selectedTaskId === 'i2i'"
+                                                  class="inline-block animate-fade-in">{{ t('pleaseUploadAnImageAsTheReferenceImageAndThePromptForImageGeneration') }}</span>
+                                            <span v-else-if="selectedTaskId === 't2i'"
+                                                  class="inline-block animate-fade-in">{{ t('pleaseEnterThePromptForImageGeneration') || '请输入图片生成提示词，描述图片的内容、风格和细节要求' }}</span>
                                             <span v-else
                                                   class="inline-block animate-fade-in">选择任务类型开始创作您的视频</span>
                                         </p>
@@ -2497,14 +2225,14 @@ onUnmounted(() => {
                                         </button>
                                     </div>
 
-                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate'" class="upload-section">
+                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate' || selectedTaskId === 'flf2v' || selectedTaskId === 'i2i'" class="upload-section">
                                     <!-- 上传图片 - Apple 风格 -->
-                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate'">
+                                    <div v-if="selectedTaskId === 'i2v' || selectedTaskId === 's2v' || selectedTaskId === 'animate' || selectedTaskId === 'flf2v' || selectedTaskId === 'i2i'">
                                         <!-- 图片标签 -->
                                         <div class="flex justify-between items-center mb-3">
-                                                <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
-                                                                {{ t('image') }}
-                                                </label>
+                                            <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
+                                                {{ selectedTaskId === 'flf2v' ? t('firstFrameImage') : t('image') }}
+                                            </label>
                                         </div>
                                         <!-- 上传图片区域 - Apple 风格 -->
                                         <div class="relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl p-2 min-h-[220px] transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
@@ -2514,13 +2242,17 @@ onUnmounted(() => {
                                             @dragleave="handleDragLeave"
                                             :class="{
                                                 'border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10': isDragOver,
-                                                'p-8': !getCurrentImagePreview()
+                                                'p-8': !getCurrentImagePreview() && (selectedTaskId !== 'i2i' || getI2IImagePreviews().length === 0)
                                             }"
                                             >
                                             <!-- 默认上传界面 - Apple 风格 -->
-                                            <div v-if="!getCurrentImagePreview()" class="flex flex-col items-center justify-center h-full">
-                                            <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('uploadImage') }}</p>
-                                            <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">{{ t('supportedImageFormats') }}</p>
+                                            <div v-if="!getCurrentImagePreview() && (selectedTaskId !== 'i2i' || getI2IImagePreviews().length === 0)" class="flex flex-col items-center justify-center h-full">
+                                            <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">
+                                                {{ selectedTaskId === 'i2i' ? (t('uploadImages') || '上传图片（支持多张）') : t('uploadImage') }}
+                                            </p>
+                                            <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">
+                                                {{ selectedTaskId === 'i2i' ? (t('supportedImageFormats') + ' ' + (t('multipleImagesSupported') || '（支持多张）')) : t('supportedImageFormats') }}
+                                            </p>
                                             <div class="flex items-center justify-center gap-4">
                                                         <div class="flex flex-col items-center gap-2">
                                                             <button
@@ -2543,8 +2275,39 @@ onUnmounted(() => {
                                             </div>
                                             </div>
 
-                                            <!-- 图片预览区域 - 只显示主图 -->
-                                            <div v-if="getCurrentImagePreview()" class="flex items-center justify-center w-full min-h-[220px]">
+                                            <!-- 图片预览区域 -->
+                                            <!-- i2i 模式：多图预览 -->
+                                            <div v-if="selectedTaskId === 'i2i' && getI2IImagePreviews().length > 0" class="flex items-center justify-center w-full min-h-[220px]">
+                                                <div class="flex flex-wrap justify-center items-center gap-3 p-2 w-full">
+                                                    <div v-for="(preview, index) in getI2IImagePreviews()" :key="index"
+                                                        class="relative group flex items-center justify-center bg-white/40 dark:bg-[#2c2c2e]/40 rounded-xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all duration-200"
+                                                        style="max-height: 220px; aspect-ratio: 1; width: calc((100% - 12px) / 2); min-width: 100px; max-width: 220px;">
+                                                        <img :src="preview" :alt="`${t('previewImage')} ${index + 1}`"
+                                                            class="max-w-full max-h-[220px] w-auto h-auto object-contain">
+                                                        <!-- 删除按钮 -->
+                                                        <button @click.stop="removeImage(index)"
+                                                            class="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100 opacity-0 group-hover:opacity-100"
+                                                            :title="t('deleteImage')">
+                                                            <i class="fas fa-times text-xs"></i>
+                                                        </button>
+                                                        <!-- 图片序号 -->
+                                                        <div class="absolute bottom-2 left-2 px-2 py-1 bg-black/50 dark:bg-black/70 text-white text-xs rounded backdrop-blur-sm">
+                                                            {{ index + 1 }}
+                                                        </div>
+                                                    </div>
+                                                    <!-- 继续添加图片按钮（最多3张） -->
+                                                    <div v-if="getI2IImagePreviews().length < 3" @click="triggerImageUpload"
+                                                        class="relative group flex items-center justify-center bg-white/40 dark:bg-[#2c2c2e]/40 rounded-xl overflow-hidden border-2 border-dashed border-[color:var(--brand-primary)]/30 dark:border-[color:var(--brand-primary-light)]/30 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all duration-200 cursor-pointer"
+                                                        style="max-height: 220px; aspect-ratio: 1; width: calc((100% - 12px) / 2); min-width: 100px; max-width: 220px;">
+                                                        <div class="flex flex-col items-center gap-2">
+                                                            <i class="fas fa-plus text-2xl text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
+                                                            <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('addMoreImages') || '添加更多' }}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <!-- 其他模式或 i2i 单图：单图预览 -->
+                                            <div v-else-if="getCurrentImagePreview()" class="flex items-center justify-center w-full min-h-[220px]">
                                                 <!-- 主图预览 - Apple 风格 -->
                                                 <div class="relative w-auto max-w-full min-h-[220px] flex items-center justify-center group">
                                                     <img :src="getCurrentImagePreviewUrl()" alt="t('previewImage')"
@@ -2560,9 +2323,10 @@ onUnmounted(() => {
                                                         </button>
                                                     </div>
                                                 </div>
-
                                             </div>
-                                                <input type="file" ref="imageInput" @change="handleImageUpload" accept="image/*"
+                                                <input type="file" ref="imageInput" @change="handleImageUpload"
+                                                :accept="selectedTaskId === 'i2i' ? 'image/*' : 'image/*'"
+                                                :multiple="selectedTaskId === 'i2i'"
                                                 style="display: none;">
                                             </div>
 
@@ -2571,6 +2335,73 @@ onUnmounted(() => {
                                                 <i class="fas fa-spinner fa-spin text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                                 <span>{{ t('detectingCharacters') }}</span>
                                             </div>
+                                    </div>
+
+                                    <!-- 上传尾帧图片 - flf2v 任务 - Apple 风格 -->
+                                    <div v-if="selectedTaskId === 'flf2v'" class="mt-6">
+                                        <!-- 尾帧图片标签 -->
+                                        <div class="flex justify-between items-center mb-3">
+                                            <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
+                                                {{ t('lastFrameImage') }}
+                                            </label>
+                                        </div>
+                                        <!-- 上传尾帧图片区域 - Apple 风格 -->
+                                        <div class="relative bg-white/80 dark:bg-[#2c2c2e]/80 backdrop-blur-[20px] border border-black/8 dark:border-white/8 rounded-2xl p-2 min-h-[220px] transition-all duration-200 hover:bg-white dark:hover:bg-[#3a3a3c] hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
+                                            @drop.prevent.stop="handleLastFrameDrop"
+                                            @dragover.prevent.stop="handleDragOver"
+                                            @dragenter.prevent.stop="handleDragEnter"
+                                            @dragleave.prevent.stop="handleDragLeave"
+                                            :class="{
+                                                'border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] bg-[color:var(--brand-primary)]/5 dark:bg-[color:var(--brand-primary-light)]/10': isDragOver,
+                                                'p-8': !getCurrentLastFramePreview()
+                                            }"
+                                            >
+                                            <!-- 默认上传界面 - Apple 风格 -->
+                                            <div v-if="!getCurrentLastFramePreview()" class="flex flex-col items-center justify-center h-full">
+                                                <p class="text-base font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-2 tracking-tight">{{ t('uploadLastFrameImage') }}</p>
+                                                <p class="text-xs text-[#86868b] dark:text-[#98989d] mb-6 tracking-tight">{{ t('supportedImageFormats') }}</p>
+                                                <div class="flex items-center justify-center gap-4">
+                                                    <div class="flex flex-col items-center gap-2">
+                                                        <button
+                                                            class="w-12 h-12 flex items-center justify-center bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.3)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100"
+                                                            @click="triggerLastFrameUpload"
+                                                            :title="t('uploadLastFrameImage')">
+                                                            <i class="fas fa-upload text-base"></i>
+                                                        </button>
+                                                        <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('upload') }}</span>
+                                                    </div>
+                                                    <div class="flex flex-col items-center gap-2">
+                                                        <button
+                                                            @click.stop="isSelectingLastFrame = true; showImageTemplates = true; mediaModalTab = 'history'; getImageHistory()"
+                                                            class="w-12 h-12 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 text-[#1d1d1f] dark:text-[#f5f5f7] rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100"
+                                                            :title="t('templates')">
+                                                            <i class="fas fa-history text-base"></i>
+                                                        </button>
+                                                        <span class="text-xs text-[#86868b] dark:text-[#98989d] tracking-tight">{{ t('templates') }}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <!-- 尾帧图片预览 - Apple 风格 -->
+                                            <div v-if="getCurrentLastFramePreview()" class="relative w-full min-h-[220px] flex items-center justify-center group">
+                                                <img :src="getCurrentLastFramePreviewUrl()" alt="t('previewLastFrameImage')"
+                                                    class="max-w-full max-h-[220px] w-auto h-auto object-contain rounded-xl transition-all duration-200">
+
+                                                <!-- 删除按钮 - Apple 风格 -->
+                                                <div
+                                                    class="absolute inset-x-0 bottom-4 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200">
+                                                    <div class="flex gap-3">
+                                                        <button @click.stop="removeLastFrame"
+                                                            class="w-11 h-11 flex items-center justify-center bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] border border-black/8 dark:border-white/8 text-red-500 dark:text-red-400 rounded-full transition-all duration-200 hover:scale-110 hover:shadow-[0_4px_12px_rgba(239,68,68,0.2)] dark:hover:shadow-[0_4px_12px_rgba(248,113,113,0.3)] active:scale-100"
+                                                            :title="t('deleteLastFrameImage')">
+                                                            <i class="fas fa-trash text-base"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <input type="file" ref="lastFrameInput" @change="handleLastFrameUpload" accept="image/*" data-role="last-frame-input"
+                                                style="display: none;">
+                                        </div>
                                     </div>
 
                                     <!-- 上传音频 - Apple 风格 -->
@@ -3142,7 +2973,7 @@ onUnmounted(() => {
                                         <div v-if="selectedTaskId !== 'animate'">
                                             <div class="mt-8 space-y-3 flex justify-between items-center mb-3">
                                                 <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center tracking-tight">
-                                                        {{ t('prompt') }}
+                                                        {{ selectedTaskId === 's2v' ? t('promptOptional') : t('prompt') }}
                                                         <button @click="showPromptModal = true; promptModalTab = 'templates'"
                                                             class="ml-2 text-xs text-[#86868b] dark:text-[#98989d] hover:text-[color:var(--brand-primary)] dark:hover:text-[color:var(--brand-primary-light)] transition-colors"
                                                             :title="t('promptTemplates')">
@@ -3171,6 +3002,59 @@ onUnmounted(() => {
 
                                             </div>
                                         </div>
+
+                                <!-- 尺寸设置区域 - Apple 风格（仅 t2v 和图片任务显示） -->
+                                <div v-if="selectedTaskId === 't2v' || selectedTaskId === 't2i' || selectedTaskId === 'i2i'" class="mt-6">
+                                    <div class="flex justify-between items-center mb-3">
+                                        <label class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">
+                                            {{ t('sizeSetting') }}
+                                        </label>
+                                    </div>
+
+                                    <!-- t2v 任务：横屏/竖屏选择 -->
+                                    <div v-if="selectedTaskId === 't2v'">
+                                        <DropdownMenu
+                                            :items="videoSizeOptions"
+                                            :selected-value="getCurrentSizeValue()"
+                                            :placeholder="t('sizeSettingDescription')"
+                                            @select-item="handleSizeSelect"
+                                            class="flex-1 max-w-50"
+                                        />
+                                    </div>
+
+                                    <!-- 图片任务：下拉选择 -->
+                                    <div v-else-if="selectedTaskId === 't2i' || selectedTaskId === 'i2i'">
+                                        <div class="flex items-center gap-3">
+                                            <DropdownMenu
+                                                :items="imageSizeOptions"
+                                                :selected-value="getCurrentSizeValue()"
+                                                :placeholder="t('sizeSettingDescription')"
+                                                @select-item="handleSizeSelect"
+                                                class="flex-1 max-w-50"
+                                            />
+
+                                            <!-- 自定义尺寸输入 -->
+                                            <div v-if="showCustomSize" class="flex items-center gap-1.5">
+                                                <input
+                                                    v-model="customWidth"
+                                                    type="number"
+                                                    min="1"
+                                                    :placeholder="t('width')"
+                                                    @input="applyCustomSize"
+                                                    class="w-16 h-8 px-2 text-xs bg-white/95 dark:bg-[#1e1e1e]/95 border border-black/8 dark:border-white/8 rounded-lg text-[#1d1d1f] dark:text-[#f5f5f7] focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]/30 dark:focus:ring-[color:var(--brand-primary-light)]/40 focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/50 transition-all duration-200 tracking-tight placeholder:text-[#86868b]/60 dark:placeholder:text-[#98989d]/60">
+                                                <span class="text-[#86868b] dark:text-[#98989d] text-xs font-light">×</span>
+                                                <input
+                                                    v-model="customHeight"
+                                                    type="number"
+                                                    min="1"
+                                                    :placeholder="t('height')"
+                                                    @input="applyCustomSize"
+                                                    class="w-16 h-8 px-2 text-xs bg-white/95 dark:bg-[#1e1e1e]/95 border border-black/8 dark:border-white/8 rounded-lg text-[#1d1d1f] dark:text-[#f5f5f7] focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]/30 dark:focus:ring-[color:var(--brand-primary-light)]/40 focus:border-[color:var(--brand-primary)]/50 dark:focus:border-[color:var(--brand-primary-light)]/50 transition-all duration-200 tracking-tight placeholder:text-[#86868b]/60 dark:placeholder:text-[#98989d]/60">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- 提交按钮 - Apple 极简风格 -->
                                 <div class="flex justify-center mt-8">
                                     <button @click="handleSubmitTask" :disabled="submitting || templateLoading"
@@ -3180,7 +3064,9 @@ onUnmounted(() => {
                                         <i v-if="submitting" class="fas fa-spinner fa-spin text-lg mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                         <i v-else-if="templateLoading" class="fas fa-spinner fa-spin text-lg mr-2 text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]"></i>
                                         <i v-else class="fi fi-sr-select text-lg text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] transition-all duration-200 pointer-events-none"></i>
-                                        <span class="pl-2 text-base font-semibold transition-all duration-200 pointer-events-none">{{ submitting ? t('submitting') : templateLoading ? '模板加载中...' : t('generateVideo') }}</span>
+                                        <span class="pl-2 text-base font-semibold transition-all duration-200 pointer-events-none">
+                                            {{ submitting ? t('submitting') : templateLoading ? '模板加载中...' : (selectedTaskId === 't2i' || selectedTaskId === 'i2i') ? (t('generateImage') || '生成图片') : t('generateVideo') }}
+                                        </span>
                                         </button>
                                 </div>
 
@@ -3320,195 +3206,17 @@ onUnmounted(() => {
                 </div>
             </div>
 
-            <!-- 脸部编辑模态框 - 显示放大图片和可拖拽的边界框 -->
-            <div v-if="showFaceEditModal"
-                class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-sm"
-                @click="closeFaceEditModal">
-                <div
-                    @click.stop
-                    class="relative bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] rounded-2xl p-6 max-w-4xl max-h-[90vh] overflow-auto shadow-[0_12px_32px_rgba(0,0,0,0.6)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.8)]">
-                    <!-- 关闭按钮 -->
-                    <button
-                        @click="closeFaceEditModal"
-                        class="absolute top-4 right-4 w-10 h-10 flex items-center justify-center bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-white dark:hover:bg-[#3a3a3c] rounded-full transition-all duration-200 z-10"
-                        :title="t('close') || '关闭'">
-                        <i class="fas fa-times text-sm"></i>
-                    </button>
-
-                    <!-- 标题 -->
-                    <h3 class="text-xl font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] mb-4 tracking-tight">
-                        {{ isAddingNewFace ? (t('addNewRole') || '新增角色') : (t('adjustFaceBox') || '调整人脸边界框') }}
-                    </h3>
-
-                    <!-- 图片容器 -->
-                    <div
-                        ref="imageContainerRef"
-                        class="relative inline-block max-w-full"
-                        :style="imageNaturalSize.width > 0 && imageNaturalSize.height > 0 && !imageLoaded ? {
-                            width: `${Math.min(imageNaturalSize.width, 800)}px`,
-                            height: `${Math.min(imageNaturalSize.height, 600)}px`,
-                            aspectRatio: `${imageNaturalSize.width} / ${imageNaturalSize.height}`
-                        } : {}">
-                        <!-- 占位符 - 图片加载前显示 -->
-                        <div
-                            v-show="!imageLoaded"
-                            class="absolute inset-0 w-full h-full min-w-[400px] min-h-[300px] bg-[#f5f5f7] dark:bg-[#1e1e1e] rounded-xl flex items-center justify-center z-10">
-                            <div class="flex flex-col items-center gap-3">
-                                <i class="fas fa-spinner fa-spin text-2xl text-[#86868b] dark:text-[#98989d]"></i>
-                                <span class="text-sm text-[#86868b] dark:text-[#98989d]">{{ t('loading') || '加载中...' }}</span>
-                            </div>
-                        </div>
-                        <!-- 实际图片 - 始终渲染，但加载完成后才显示 -->
-                        <img
-                            :src="originalImageUrl"
-                            alt="Face Edit"
-                            class="max-w-full max-h-[70vh] h-auto object-contain rounded-xl"
-                            :class="{ 'opacity-0': !imageLoaded }"
-                            @load="handleFaceEditImageLoad"
-                            @error="handleFaceEditImageError">
-
-                        <!-- 遮罩层 - 框外区域变暗 -->
-                        <svg
-                            v-if="editingFaceBbox.length === 4 && getBboxStyle.left"
-                            class="absolute inset-0 pointer-events-none z-[5]"
-                            :style="{
-                                left: 0,
-                                top: 0,
-                                width: '100%',
-                                height: '100%'
-                            }">
-                            <defs>
-                                <mask id="bbox-mask">
-                                    <rect width="100%" height="100%" fill="white"/>
-                                    <rect
-                                        :x="getBboxStyle.left"
-                                        :y="getBboxStyle.top"
-                                        :width="getBboxStyle.width"
-                                        :height="getBboxStyle.height"
-                                        fill="black"/>
-                                </mask>
-                            </defs>
-                            <rect
-                                width="100%"
-                                height="100%"
-                                fill="rgba(0,0,0,0.5)"
-                                mask="url(#bbox-mask)"/>
-                        </svg>
-
-                        <!-- 角色名字标签 - 显示在边界框上方 -->
-                        <div
-                            v-if="editingFaceBbox.length === 4 && getBboxStyle.left && getRoleNameLabelStyle.roleName"
-                            :style="{
-                                left: getRoleNameLabelStyle.left,
-                                top: getRoleNameLabelStyle.top,
-                                transform: getRoleNameLabelStyle.transform
-                            }"
-                            class="absolute px-2 py-1 text-xs font-medium text-white bg-[color:var(--brand-primary)]/90 dark:bg-[color:var(--brand-primary-light)]/90 rounded-md shadow-lg whitespace-nowrap pointer-events-none z-10">
-                            {{ getRoleNameLabelStyle.roleName }}
-                        </div>
-
-                        <!-- 边界框 -->
-                        <div
-                            v-if="editingFaceBbox.length === 4 && getBboxStyle.left"
-                            :style="getBboxStyle"
-                            @mousedown="(e) => startDragBbox(e, 'move')"
-                            class="absolute border-2 border-[color:var(--brand-primary)] dark:border-[color:var(--brand-primary-light)] cursor-move bg-transparent hover:bg-[color:var(--brand-primary)]/5 dark:hover:bg-[color:var(--brand-primary-light)]/5 transition-colors duration-200"
-                            :class="{ 'ring-2 ring-[color:var(--brand-primary)]/50 dark:ring-[color:var(--brand-primary-light)]/50 bg-[color:var(--brand-primary)]/10 dark:bg-[color:var(--brand-primary-light)]/10': isDraggingBbox }"
-                            style="box-sizing: border-box;">
-
-                            <!-- 四个角的拖拽手柄 -->
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-nw')"
-                                :style="{
-                                    width: `${getBboxStyle.indicatorSize || 16}px`,
-                                    height: `${getBboxStyle.indicatorSize || 16}px`,
-                                    left: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    top: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full border-2 border-white dark:border-[#2c2c2e] shadow-lg cursor-nw-resize hover:scale-110 transition-transform z-20"></div>
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-ne')"
-                                :style="{
-                                    width: `${getBboxStyle.indicatorSize || 16}px`,
-                                    height: `${getBboxStyle.indicatorSize || 16}px`,
-                                    right: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    top: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full border-2 border-white dark:border-[#2c2c2e] shadow-lg cursor-ne-resize hover:scale-110 transition-transform z-20"></div>
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-sw')"
-                                :style="{
-                                    width: `${getBboxStyle.indicatorSize || 16}px`,
-                                    height: `${getBboxStyle.indicatorSize || 16}px`,
-                                    left: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    bottom: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full border-2 border-white dark:border-[#2c2c2e] shadow-lg cursor-sw-resize hover:scale-110 transition-transform z-20"></div>
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-se')"
-                                :style="{
-                                    width: `${getBboxStyle.indicatorSize || 16}px`,
-                                    height: `${getBboxStyle.indicatorSize || 16}px`,
-                                    right: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    bottom: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] rounded-full border-2 border-white dark:border-[#2c2c2e] shadow-lg cursor-se-resize hover:scale-110 transition-transform z-20"></div>
-
-                            <!-- 四个边的拖拽手柄 -->
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-n')"
-                                :style="{
-                                    width: 'calc(100% + 16px)',
-                                    height: `${getBboxStyle.indicatorSize || 16}px`,
-                                    left: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    top: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute cursor-n-resize hover:bg-[color:var(--brand-primary)]/20 dark:hover:bg-[color:var(--brand-primary-light)]/20 transition-colors rounded-t z-10"></div>
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-s')"
-                                :style="{
-                                    width: 'calc(100% + 16px)',
-                                    height: `${getBboxStyle.indicatorSize || 16}px`,
-                                    left: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    bottom: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute cursor-s-resize hover:bg-[color:var(--brand-primary)]/20 dark:hover:bg-[color:var(--brand-primary-light)]/20 transition-colors rounded-b z-10"></div>
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-w')"
-                                :style="{
-                                    width: `${getBboxStyle.indicatorSize || 16}px`,
-                                    height: 'calc(100% + 16px)',
-                                    left: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    top: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute cursor-w-resize hover:bg-[color:var(--brand-primary)]/20 dark:hover:bg-[color:var(--brand-primary-light)]/20 transition-colors rounded-l z-10"></div>
-                            <div
-                                @mousedown.stop="(e) => startDragBbox(e, 'resize-e')"
-                                :style="{
-                                    width: `${getBboxStyle.indicatorSize || 16}px`,
-                                    height: 'calc(100% + 16px)',
-                                    right: `${-(getBboxStyle.indicatorSize || 16) / 2}px`,
-                                    top: `${-(getBboxStyle.indicatorSize || 16) / 2}px`
-                                }"
-                                class="absolute cursor-e-resize hover:bg-[color:var(--brand-primary)]/20 dark:hover:bg-[color:var(--brand-primary-light)]/20 transition-colors rounded-r z-10"></div>
-                        </div>
-                    </div>
-
-                    <!-- 操作按钮 -->
-                    <div class="flex items-center justify-end gap-3 mt-6">
-                        <button
-                            @click="closeFaceEditModal"
-                            class="px-4 py-2 text-sm font-medium text-[#86868b] dark:text-[#98989d] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7] hover:bg-black/4 dark:hover:bg-white/6 rounded-lg transition-all duration-200 tracking-tight">
-                            {{ t('cancel') || '取消' }}
-                        </button>
-                        <button
-                            @click="saveFaceBbox"
-                            class="px-4 py-2 text-sm font-medium text-white bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] hover:opacity-90 rounded-lg transition-all duration-200 tracking-tight">
-                            {{ t('save') || '保存' }}
-                        </button>
-                    </div>
-                </div>
-            </div>
+            <!-- 脸部编辑模态框 -->
+            <FaceEditModal
+                v-if="showFaceEditModal"
+                :image-url="originalImageUrl"
+                :initial-bbox="editingFaceBbox"
+                :character-label="characterLabelForModal"
+                :is-adding-new="isAddingNewFace"
+                :existing-characters="existingCharactersForModal"
+                @save="saveFaceBbox"
+                @cancel="closeFaceEditModal"
+            />
 
 </template>
 

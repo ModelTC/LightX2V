@@ -10,8 +10,11 @@ import safetensors
 import torch
 import torch.distributed as dist
 import torchvision
+import torchvision.transforms.functional as TF
 from einops import rearrange
 from loguru import logger
+from torchvision.transforms import InterpolationMode
+from torchvision.transforms.functional import resize
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -484,3 +487,200 @@ def best_output_size(w, h, dw, dh, expected_area):
         return ow1, oh1
     else:
         return ow2, oh2
+
+
+def get_optimal_patched_size_with_sp(patched_h, patched_w, sp_size):
+    assert sp_size > 0 and (sp_size & (sp_size - 1)) == 0, "sp_size must be a power of 2"
+
+    h_ratio, w_ratio = 1, 1
+    while sp_size != 1:
+        sp_size //= 2
+        if patched_h % 2 == 0:
+            patched_h //= 2
+            h_ratio *= 2
+        elif patched_w % 2 == 0:
+            patched_w //= 2
+            w_ratio *= 2
+        else:
+            if patched_h > patched_w:
+                patched_h //= 2
+                h_ratio *= 2
+            else:
+                patched_w //= 2
+                w_ratio *= 2
+    return patched_h * h_ratio, patched_w * w_ratio
+
+
+def get_crop_bbox(ori_h, ori_w, tgt_h, tgt_w):
+    tgt_ar = tgt_h / tgt_w
+    ori_ar = ori_h / ori_w
+    if abs(ori_ar - tgt_ar) < 0.01:
+        return 0, ori_h, 0, ori_w
+    if ori_ar > tgt_ar:
+        crop_h = int(tgt_ar * ori_w)
+        y0 = (ori_h - crop_h) // 2
+        y1 = y0 + crop_h
+        return y0, y1, 0, ori_w
+    else:
+        crop_w = int(ori_h / tgt_ar)
+        x0 = (ori_w - crop_w) // 2
+        x1 = x0 + crop_w
+        return 0, ori_h, x0, x1
+
+
+def isotropic_crop_resize(frames: torch.Tensor, size: tuple):
+    """
+    frames: (C, H, W) or (T, C, H, W) or (N, C, H, W)
+    size: (H, W)
+    """
+    original_shape = frames.shape
+
+    if len(frames.shape) == 3:
+        frames = frames.unsqueeze(0)
+    elif len(frames.shape) == 4 and frames.shape[0] > 1:
+        pass
+
+    ori_h, ori_w = frames.shape[2:]
+    h, w = size
+    y0, y1, x0, x1 = get_crop_bbox(ori_h, ori_w, h, w)
+    cropped_frames = frames[:, :, y0:y1, x0:x1]
+    resized_frames = resize(cropped_frames, [h, w], InterpolationMode.BICUBIC, antialias=True)
+
+    if len(original_shape) == 3:
+        resized_frames = resized_frames.squeeze(0)
+
+    return resized_frames
+
+
+def fixed_shape_resize(img, target_height, target_width):
+    orig_height, orig_width = img.shape[-2:]
+
+    target_ratio = target_height / target_width
+    orig_ratio = orig_height / orig_width
+
+    if orig_ratio > target_ratio:
+        crop_width = orig_width
+        crop_height = int(crop_width * target_ratio)
+    else:
+        crop_height = orig_height
+        crop_width = int(crop_height / target_ratio)
+
+    cropped_img = TF.center_crop(img, [crop_height, crop_width])
+
+    resized_img = TF.resize(cropped_img, [target_height, target_width], antialias=True)
+
+    h, w = resized_img.shape[-2:]
+    return resized_img, h, w
+
+
+def check_path_exists(path: str) -> None:
+    """
+    Check if a file path exists and raise an error if it doesn't.
+
+    Args:
+        path: The file path to check
+
+    Raises:
+        FileNotFoundError: If the path is not empty and the file does not exist
+    """
+    if path and not path.startswith(("http://", "https://", "data:")):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File does not exist: {path}")
+
+
+def validate_task_arguments(args: "argparse.Namespace") -> None:
+    """
+    Validate arguments based on the task type.
+
+    Args:
+        args: Parsed arguments from argparse
+
+    Raises:
+        AssertionError: If required arguments are missing or invalid for the task
+    """
+    # Check model_path exists
+    model_path = getattr(args, "model_path", None)
+    if model_path:
+        check_path_exists(model_path)
+
+    task = args.task
+
+    # Define required file paths for each task
+    task_requirements = {
+        "i2i": {"required_paths": ["image_path"], "description": "Image-to-Image task requires --image_path"},
+        "i2v": {"required_paths": ["image_path"], "description": "Image-to-Video task requires --image_path"},
+        "flf2v": {"required_paths": ["image_path", "last_frame_path"], "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"},
+        "s2v": {"required_paths": ["image_path", "audio_path"], "description": "Speech-to-Video task requires --image_path and --audio_path"},
+        "vace": {"required_paths": ["src_video"], "description": "Video Appearance Change Editing task requires --src_video"},
+        "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
+        "t2v": {"required_paths": [], "description": "Text-to-Video task"},
+        "t2i": {"required_paths": [], "description": "Text-to-Image task"},
+        "i2av": {"required_paths": ["image_path"], "description": "Image-to-Audio-Video task requires --image_path"},
+    }
+
+    if task not in task_requirements:
+        logger.warning(f"Unknown task type: {task}, skipping validation")
+        return
+
+    requirements = task_requirements[task]
+
+    # Check required paths
+    for path_arg in requirements["required_paths"]:
+        path_value = getattr(args, path_arg, "")
+
+        # Check if path is provided
+        if not path_value:
+            raise ValueError(f"{requirements['description']}: --{path_arg} cannot be empty")
+
+        # For comma-separated paths (like i2i with multiple images)
+        if "," in path_value:
+            paths = [p.strip() for p in path_value.split(",")]
+            for path in paths:
+                check_path_exists(path)
+        else:
+            check_path_exists(path_value)
+
+    logger.info(f"✓ Task '{task}' arguments validated successfully")
+
+
+def validate_config_paths(config: dict) -> None:
+    """
+    Validate checkpoint paths in config dictionary.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        FileNotFoundError: If any checkpoint path in config does not exist
+    """
+    # Check dit_quantized_ckpt or dit_original_ckpt
+    if "dit_quantized_ckpt" in config and config["dit_quantized_ckpt"] is not None:
+        check_path_exists(config["dit_quantized_ckpt"])
+        logger.debug(f"✓ Verified dit_quantized_ckpt: {config['dit_quantized_ckpt']}")
+
+    if "dit_original_ckpt" in config and config["dit_original_ckpt"] is not None:
+        check_path_exists(config["dit_original_ckpt"])
+        logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
+
+    # For wan2.2, check high and low noise checkpoints
+    model_cls = config.get("model_cls", "")
+    if model_cls and "wan2.2" in model_cls:
+        # Check high noise checkpoints
+        if "high_noise_original_ckpt" in config and config["high_noise_original_ckpt"] is not None:
+            check_path_exists(config["high_noise_original_ckpt"])
+            logger.debug(f"✓ Verified high_noise_original_ckpt: {config['high_noise_original_ckpt']}")
+
+        if "high_noise_quantized_ckpt" in config and config["high_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["high_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified high_noise_quantized_ckpt: {config['high_noise_quantized_ckpt']}")
+
+        # Check low noise checkpoints
+        if "low_noise_original_ckpt" in config and config["low_noise_original_ckpt"] is not None:
+            check_path_exists(config["low_noise_original_ckpt"])
+            logger.debug(f"✓ Verified low_noise_original_ckpt: {config['low_noise_original_ckpt']}")
+
+        if "low_noise_quantized_ckpt" in config and config["low_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["low_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified low_noise_quantized_ckpt: {config['low_noise_quantized_ckpt']}")
+
+    logger.info("✓ Config checkpoint paths validated successfully")

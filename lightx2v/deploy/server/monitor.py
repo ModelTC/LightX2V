@@ -1,11 +1,12 @@
 import asyncio
+import os
 import time
 from enum import Enum
 
 from loguru import logger
 
 from lightx2v.deploy.common.utils import class_try_catch_async
-from lightx2v.deploy.task_manager import TaskStatus
+from lightx2v.deploy.task_manager import ActiveStatus, FinishedStatus, TaskStatus
 
 
 class WorkerStatus(Enum):
@@ -131,6 +132,8 @@ class ServerMonitor:
         self.user_max_daily_tasks = self.config["user_max_daily_tasks"]
         self.user_visit_frequency = self.config["user_visit_frequency"]
 
+        self.skip_check_user_busy_list = {user.strip() for user in os.getenv("SKIP_CHECK_USER_BUSY_LIST", "").split(",") if user.strip()}
+
         assert self.worker_avg_window > 0
         assert self.worker_offline_timeout > 0
         assert self.worker_min_capacity > 0
@@ -236,6 +239,9 @@ class ServerMonitor:
 
     @class_try_catch_async
     async def check_user_busy(self, user_id, active_new_task=False):
+        if user_id in self.skip_check_user_busy_list:
+            return True
+
         # check if user visit too frequently
         cur_t = time.time()
         if user_id in self.user_visits:
@@ -246,13 +252,12 @@ class ServerMonitor:
 
         if active_new_task:
             # check if user has too many active tasks
-            active_statuses = [TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.CREATED]
-            active_tasks = await self.task_manager.list_tasks(status=active_statuses, user_id=user_id)
+            active_tasks = await self.task_manager.list_tasks(status=ActiveStatus, user_id=user_id)
             if len(active_tasks) >= self.user_max_active_tasks:
                 return f"User {user_id} has too many active tasks, {len(active_tasks)} vs {self.user_max_active_tasks}"
 
             # check if user has too many daily tasks
-            daily_statuses = active_statuses + [TaskStatus.SUCCEED, TaskStatus.CANCEL, TaskStatus.FAILED]
+            daily_statuses = ActiveStatus + FinishedStatus
             daily_tasks = await self.task_manager.list_tasks(status=daily_statuses, user_id=user_id, start_created_t=cur_t - 86400, include_delete=True)
             if len(daily_tasks) >= self.user_max_daily_tasks:
                 return f"User {user_id} has too many daily tasks, {len(daily_tasks)} vs {self.user_max_daily_tasks}"

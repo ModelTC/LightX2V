@@ -6,24 +6,19 @@ import multiprocessing
 import os
 import re
 import shutil
+import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import torch
 from loguru import logger
-
-try:
-    from lora_loader import LoRALoader
-except ImportError:
-    pass
-import sys
-from pathlib import Path
-
 from safetensors import safe_open
 from safetensors import torch as st
 from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
+from lightx2v.utils.lora_loader import LoRALoader
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
 from tools.convert.quant import *
 
@@ -479,7 +474,7 @@ def convert_weights(args):
                 weights = weights["module"]
         elif file_path.endswith(".safetensors"):
             # Use lazy loading for safetensors to reduce memory usage
-            with safe_open(file_path, framework="pt") as f:
+            with safe_open(file_path, framework="pt", device=args.device) as f:
                 # Only load tensors when needed (lazy loading)
                 weights = {}
                 keys = f.keys()

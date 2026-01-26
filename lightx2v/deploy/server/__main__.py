@@ -11,6 +11,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 
+import aiofiles
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,12 +20,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from lightx2v.deploy.common.audio_separator import AudioSeparator
 from lightx2v.deploy.common.face_detector import FaceDetector
 from lightx2v.deploy.common.pipeline import Pipeline
 from lightx2v.deploy.common.podcasts import VolcEnginePodcastClient
-from lightx2v.deploy.common.utils import check_params, data_name, fetch_resource, format_image_data, load_inputs
+from lightx2v.deploy.common.sensetime_voice_clone import SenseTimeTTSClient
+from lightx2v.deploy.common.utils import check_params, data_name, fetch_resource, format_audio_data, format_image_data, load_inputs, media_to_audio
+from lightx2v.deploy.common.volcengine_asr import VolcEngineASRClient
 from lightx2v.deploy.common.volcengine_tts import VolcEngineTTSClient
 from lightx2v.deploy.data_manager import LocalDataManager, S3DataManager
 from lightx2v.deploy.queue_manager import LocalQueueManager, RabbitMQQueueManager
@@ -56,6 +60,21 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+class VoiceCloneSaveRequest(BaseModel):
+    speaker_id: str
+    name: str = ""  # 音色名称
+
+
+class VoiceCloneTTSRequest(BaseModel):
+    text: str
+    speaker_id: str
+    style: str = "正常"
+    speed: float = 1.0
+    volume: float = 0
+    pitch: float = 0
+    language: str = "ZH_CN"
+
+
 # =========================
 # FastAPI Related Code
 # =========================
@@ -68,6 +87,8 @@ server_monitor = None
 auth_manager = None
 metrics_monitor = MetricMonitor()
 volcengine_tts_client = None
+volcengine_asr_client = None
+sensetime_voice_clone_client = None
 volcengine_podcast_client = None
 face_detector = None
 audio_separator = None
@@ -108,9 +129,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# 添加assets目录的静态文件服务
-assets_dir = os.path.join(os.path.dirname(__file__), "static", "assets")
-app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 security = HTTPBearer()
 
 
@@ -313,7 +331,7 @@ async def prepare_subtasks(task_id):
 
 
 def format_task(task):
-    task["status"] = task["status"].name
+    task["status"] = task["status"].name if task["status"] != TaskStatus.REJECT else TaskStatus.FAILED.name
     task["model_cls"] = model_pipelines.outer_model_name(task["model_cls"])
 
 
@@ -412,6 +430,8 @@ async def api_v1_task_list(request: Request, user=Depends(verify_user_access)):
 
         query_params = {"user_id": user_id}
         if status_filter and status_filter != "ALL":
+            if status_filter.upper() == TaskStatus.REJECT.name:
+                status_filter = TaskStatus.FAILED.name
             query_params["status"] = TaskStatus[status_filter.upper()]
 
         total_tasks = await task_manager.list_tasks(count=True, **query_params)
@@ -474,6 +494,11 @@ async def api_v1_task_input_url(request: Request, user=Depends(verify_user_acces
             assert name in task["inputs"], f"Extra input {name} not found in task {task_id}"
             assert name in extra_inputs, f"Filename {filename} not found in extra inputs"
 
+        # multi-images, rename input_image to input_image/input_image_1
+        all_extra_inputs = task["params"].get("extra_inputs", {})
+        if name in all_extra_inputs:
+            name = all_extra_inputs[name][0]
+
         url = await data_manager.presign_url(task["inputs"][name])
         if url is None:
             url = f"./assets/task/input?task_id={task_id}&name={name}"
@@ -518,11 +543,13 @@ async def assets_task_input(request: Request, user=Depends(verify_user_access_fr
 
         task = await task_manager.query_task(task_id, user_id=user["user_id"])
         assert task is not None, f"Task {task_id} not found"
+
+        # Standard case: name exists in inputs
         assert name in task["inputs"], f"Input {name} not found in task {task_id}"
         if name in task["params"]:
             return error_response(f"Input {name} is a stream", 400)
 
-        # eg, multi person audio directory input
+        # eg, multi person audio directory input, multi image input
         if filename is not None:
             extra_inputs = task["params"]["extra_inputs"][name]
             name = f"{name}/{filename}"
@@ -669,7 +696,7 @@ async def api_v1_worker_report(request: Request, valid=Depends(verify_worker_acc
         ret = await task_manager.finish_subtasks(task_id, status, worker_identity=identity, worker_name=worker_name, fail_msg=fail_msg, should_running=True)
 
         # not all subtasks finished, prepare new ready subtasks
-        if ret not in [TaskStatus.SUCCEED, TaskStatus.FAILED]:
+        if ret not in FinishedStatus:
             await prepare_subtasks(task_id)
 
         # all subtasks succeed, delete temp data
@@ -685,6 +712,10 @@ async def api_v1_worker_report(request: Request, valid=Depends(verify_worker_acc
 
         elif ret == TaskStatus.FAILED:
             logger.warning(f"Task {task_id} failed")
+        elif ret == TaskStatus.CANCEL:
+            logger.warning(f"Task {task_id} cancel")
+        elif ret == TaskStatus.REJECT:
+            logger.warning(f"Task {task_id} reject")
 
         return {"msg": "ok"}
 
@@ -986,6 +1017,9 @@ async def api_v1_share_get(share_id: str):
         user_info = await task_manager.query_user(share_data["user_id"])
         username = user_info.get("username", "用户") if user_info else "用户"
 
+        # 判断是否是图片输出任务（i2i 或 t2i）
+        is_image_task = task["task_type"] in ["i2i", "t2i"]
+
         share_info = {
             "task_id": task_id,
             "share_type": share_type,
@@ -1004,6 +1038,7 @@ async def api_v1_share_get(share_id: str):
             "auth_type": share_data["auth_type"],
             "auth_value": share_data["auth_value"],
             "output_video_url": None,
+            "output_image_url": None,
             "input_urls": {},
         }
 
@@ -1015,13 +1050,26 @@ async def api_v1_share_get(share_id: str):
                 input_url = await data_manager.presign_url(input_filename)
             share_info["input_urls"][input_name] = input_url
 
+        # 根据任务类型处理输出URL
         for output_name, output_filename in task["outputs"].items():
             if share_type == "template":
-                assert "video" in output_name, "Only video output is supported for template share"
-                output_url = await data_manager.presign_template_url("videos", output_filename)
+                if is_image_task:
+                    # 图片输出任务：使用 images 类型
+                    assert "image" in output_name, "Only image output is supported for image task template share"
+                    output_url = await data_manager.presign_template_url("images", output_filename)
+                    share_info["output_image_url"] = output_url
+                else:
+                    # 视频输出任务：使用 videos 类型
+                    assert "video" in output_name, "Only video output is supported for video task template share"
+                    output_url = await data_manager.presign_template_url("videos", output_filename)
+                    share_info["output_video_url"] = output_url
             else:
+                # 任务分享：根据任务类型设置对应的输出URL
                 output_url = await data_manager.presign_url(output_filename)
-            share_info["output_video_url"] = output_url
+                if is_image_task and "image" in output_name:
+                    share_info["output_image_url"] = output_url
+                elif not is_image_task and "video" in output_name:
+                    share_info["output_video_url"] = output_url
 
         return share_info
 
@@ -1079,13 +1127,156 @@ async def api_v1_tts_generate(request: TTSRequest):
 
         if success and os.path.exists(output_path):
             # Return the audio file
-            return FileResponse(output_path, media_type="audio/mpeg", filename=output_filename)
+            return FileResponse(output_path, media_type="audio/mpeg", filename=output_filename, background=BackgroundTask(lambda: os.unlink(output_path) if os.path.exists(output_path) else None))
         else:
             return JSONResponse({"error": "TTS generation failed"}, status_code=500)
 
     except Exception as e:
         logger.error(f"TTS generation error: {e}")
         return JSONResponse({"error": f"TTS generation failed: {str(e)}"}, status_code=500)
+
+
+@app.post("/api/v1/voice/clone")
+async def api_v1_voice_clone(request: Request, user=Depends(verify_user_access)):
+    try:
+        if volcengine_asr_client is None:
+            return JSONResponse({"error": "ASR client not initialized"}, status_code=500)
+        if sensetime_voice_clone_client is None:
+            return JSONResponse({"error": "Voice clone client not initialized"}, status_code=500)
+
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            return JSONResponse({"error": "No file uploaded"}, status_code=400)
+        raw_data = await file.read()
+
+        user_text = form.get("text", "").strip() if form.get("text") else ""
+        use_user_text = bool(user_text)
+
+        cur_duration, min_duration, step_duration = 10.0, 5.0, 2.0
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            while True:
+                audio_data = await asyncio.to_thread(format_audio_data, raw_data, max_duration=cur_duration)
+                audio_path = os.path.join(tmp_dir, "formatted_audio.wav")
+                async with aiofiles.open(audio_path, "wb") as fout:
+                    await fout.write(audio_data)
+
+                if use_user_text:
+                    asr_text = user_text
+                    logger.info(f"Using user input text (skipping ASR): {asr_text}")
+                else:
+                    if volcengine_asr_client is None:
+                        return JSONResponse({"error": "ASR client not initialized"}, status_code=500)
+                    asr_success, asr_result = await volcengine_asr_client.recognize_request(file_path=audio_path)
+                    if not asr_success:
+                        return JSONResponse({"error": f"ASR failed: {asr_result}"}, status_code=500)
+                    asr_text = asr_result.get("result", {}).get("text", "")
+                    if not asr_text:
+                        return JSONResponse({"error": "Failed to extract text from audio"}, status_code=500)
+                    logger.info(f"ASR recognized text: {asr_text}")
+
+                clone_success, clone_result = await sensetime_voice_clone_client.upload_audio_clone(
+                    audio_path=audio_path,
+                    audio_text=asr_text,
+                )
+                if not clone_success:
+                    err_msg = str(clone_result).lower()
+                    cur_duration -= step_duration
+                    if "text length" in err_msg and "too long" in err_msg and cur_duration >= min_duration:
+                        logger.warning(f"Voice clone failed: {err_msg}, reducing duration to {cur_duration}s")
+                        continue
+                    return JSONResponse({"error": f"Voice clone failed: {clone_result}"}, status_code=500)
+                logger.info(f"Voice clone successful with duration: {cur_duration}s, speaker_id: {clone_result}")
+                return JSONResponse({"speaker_id": clone_result, "text": asr_text, "message": "Voice clone successful. Please save the voice to add it to your collection."}, status_code=200)
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse({"error": "Voice clone failed"}, status_code=500)
+
+
+@app.post("/api/v1/voice/clone/tts")
+async def api_v1_voice_clone_tts(request: VoiceCloneTTSRequest):
+    try:
+        if not request.text.strip():
+            return JSONResponse({"error": "Text cannot be empty"}, status_code=400)
+        if not request.speaker_id:
+            return JSONResponse({"error": "Speaker ID is required"}, status_code=400)
+        if sensetime_voice_clone_client is None:
+            return JSONResponse({"error": "Voice clone client not initialized"}, status_code=500)
+        output_filename = f"voice_clone_tts_{uuid.uuid4().hex}.wav"
+        output_path = os.path.join(tempfile.gettempdir(), output_filename)
+
+        success = await sensetime_voice_clone_client.tts_request(
+            text=request.text,
+            speaker=request.speaker_id,
+            style=request.style,
+            speed=request.speed,
+            volume=request.volume,
+            pitch=request.pitch,
+            language=request.language,
+            output=output_path,
+            sample_rate=24000,
+            audio_format="pcm",
+            stream_output=True,
+            output_subtitles=False,
+        )
+        if success and os.path.exists(output_path):
+            return FileResponse(output_path, media_type="audio/wav", filename=output_filename, background=BackgroundTask(lambda: os.unlink(output_path) if os.path.exists(output_path) else None))
+        else:
+            return JSONResponse({"error": "TTS generation failed"}, status_code=500)
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse({"error": "TTS generation failed"}, status_code=500)
+
+
+@app.post("/api/v1/voice/clone/save")
+async def api_v1_voice_clone_save(request: VoiceCloneSaveRequest, user=Depends(verify_user_access)):
+    try:
+        if not request.speaker_id:
+            return JSONResponse({"error": "Speaker ID is required"}, status_code=400)
+        if not request.name.strip():
+            return JSONResponse({"error": "Name is required"}, status_code=400)
+        ret = await task_manager.create_voice_clone(user["user_id"], request.speaker_id, request.name)
+        if not ret:
+            return JSONResponse({"error": "Failed to create voice clone"}, status_code=500)
+        return {"message": "Voice clone saved successfully", "speaker_id": request.speaker_id, "name": request.name}
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse({"error": "Failed to save voice clone"}, status_code=500)
+
+
+@app.delete("/api/v1/voice/clone/{speaker_id}")
+async def api_v1_voice_clone_delete(speaker_id: str, user=Depends(verify_user_access)):
+    try:
+        if not speaker_id:
+            return JSONResponse({"error": "Speaker ID is required"}, status_code=400)
+        if sensetime_voice_clone_client is None:
+            return JSONResponse({"error": "Voice clone client not initialized"}, status_code=500)
+
+        delete_success = await sensetime_voice_clone_client.delete_speaker(speaker_id)
+        if not delete_success:
+            return JSONResponse({"error": "Failed to delete voice clone from server"}, status_code=500)
+
+        ret = await task_manager.delete_voice_clone(user["user_id"], speaker_id)
+        if not ret:
+            return JSONResponse({"error": "Failed to delete voice clone"}, status_code=500)
+        return {"message": "Voice clone deleted successfully"}
+
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse({"error": "Failed to delete voice clone"}, status_code=500)
+
+
+@app.get("/api/v1/voice/clone/list")
+async def api_v1_voice_clone_list(user=Depends(verify_user_access)):
+    try:
+        voice_clones = await task_manager.list_voice_clones(user["user_id"])
+        if voice_clones is None:
+            return JSONResponse({"error": "Failed to get voice clone list"}, status_code=500)
+        return {"voice_clones": voice_clones}
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse({"error": "Failed to get voice clone list"}, status_code=500)
 
 
 @app.websocket("/api/v1/podcast/generate")
@@ -1320,6 +1511,13 @@ class AudioSeparateRequest(BaseModel):
     num_speakers: int = None  # Optional: number of speakers to separate
 
 
+class AudioExtractRequest(BaseModel):
+    video: str  # Base64 encoded video
+    output_format: str = "wav"  # Output audio format: wav, mp3
+    sample_rate: int = 44100  # Output sample rate
+    channels: int = 2  # Output channels: 1=mono, 2=stereo
+
+
 @app.post("/api/v1/face/detect")
 async def api_v1_face_detect(request: FaceDetectRequest, user=Depends(verify_user_access)):
     """Detect faces in image (only detection, no cropping - cropping is done on frontend)
@@ -1419,6 +1617,71 @@ async def api_v1_audio_separate(request: AudioSeparateRequest, user=Depends(veri
         return error_response(f"Audio separation failed: {str(e)}", 500)
 
 
+@app.post("/api/v1/audio/extract")
+async def api_v1_audio_extract(request: AudioExtractRequest, user=Depends(verify_user_access)):
+    """Extract audio from video file"""
+    try:
+        # Validate request parameters
+        output_formats = ["wav", "mp3"]
+        sample_rates = [8000, 16000, 24000, 32000, 44100, 48000]
+        channels = [1, 2]
+        if request.output_format not in output_formats or request.sample_rate not in sample_rates or request.channels not in channels:
+            return error_response(
+                f"Unsupported request parameters: output_format={request.output_format}, sample_rate={request.sample_rate}, channels={request.channels}. Supported formats: {output_formats}, sample rates: {sample_rates}, channels: {channels}",
+                400,
+            )
+
+        video_bytes = None
+        try:
+            encoded = request.video
+            if encoded.startswith("data:"):
+                # Remove data URL prefix (e.g., "data:video/mp4;base64,")
+                _, encoded = encoded.split(",", 1)
+            video_bytes = await asyncio.to_thread(base64.b64decode, encoded, validate=True)
+            logger.debug(f"Successfully decoded base64 video, size: {len(video_bytes)} bytes")
+
+        except Exception as e:
+            logger.error(f"Failed to decode base64 video {request.video[:100]}..., error: {str(e)}")
+            return error_response(f"Invalid base64 video data", 400)
+
+        # Extract audio from video
+        audio_bytes = await asyncio.to_thread(media_to_audio, video_bytes, None, request.sample_rate, request.channels, request.output_format)
+
+        # Convert audio bytes to base64
+        audio_base64 = await asyncio.to_thread(base64.b64encode, audio_bytes)
+        audio_base64 = audio_base64.decode("utf-8")
+
+        # Determine MIME type based on output format
+        mime_type = "audio/wav" if request.output_format == "wav" else "audio/mpeg"
+        audio_data_url = f"data:{mime_type};base64,{audio_base64}"
+
+        logger.info(f"Successfully extracted audio from video: {len(audio_bytes)} bytes, format={request.output_format}")
+        return {
+            "audio": audio_data_url,  # Data URL format for easy use in frontend
+            "format": request.output_format,
+            "sample_rate": request.sample_rate,
+            "channels": request.channels,
+            "size": len(audio_bytes),
+        }
+
+    except Exception as e:
+        logger.error(f"Audio extraction error: {traceback.format_exc()}")
+        error_msg = str(e).lower()
+        code = 500
+        if "does not contain an audio track" in error_msg or "no audio track" in error_msg:
+            code = 400
+        return error_response(f"Audio extraction failed: {error_msg}", code)
+
+
+# =========================
+# Static file mount (must be after all dynamic routes)
+# =========================
+# 添加assets目录的静态文件服务（用于前端静态资源）
+assets_dir = os.path.join(os.path.dirname(__file__), "static", "assets")
+if os.path.exists(assets_dir):
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
 # 所有未知路由 fallback 到 index.html (必须在所有API路由之后)
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 async def vue_fallback(full_path: str):
@@ -1454,15 +1717,22 @@ if __name__ == "__main__":
     parser.add_argument("--ip", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--face_detector_model_path", type=str, default=None)
+    parser.add_argument("--face_detector_method", type=str, default="yolo")
     parser.add_argument("--audio_separator_model_path", type=str, default="")
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
     model_pipelines = Pipeline(args.pipeline_json)
     volcengine_tts_client = VolcEngineTTSClient(args.volcengine_tts_list_json)
+    volcengine_asr_client = VolcEngineASRClient()
+    sensetime_voice_clone_client = SenseTimeTTSClient()
     volcengine_podcast_client = VolcEnginePodcastClient()
-    face_detector = FaceDetector(model_path=args.face_detector_model_path)
-    audio_separator = AudioSeparator(model_path=args.audio_separator_model_path)
+    face_detector = FaceDetector(method=args.face_detector_method, model_path=args.face_detector_model_path)
+    try:
+        audio_separator = AudioSeparator(model_path=args.audio_separator_model_path)
+    except Exception as e:
+        logger.warning(f"Failed to initialize audio_separator, audio separation feature will be disabled: {e}")
+        audio_separator = None
     auth_manager = AuthManager()
     if args.task_url.startswith("/"):
         task_manager = LocalTaskManager(args.task_url, metrics_monitor)

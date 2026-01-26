@@ -4,9 +4,10 @@ import torch
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
+from lightx2v.utils.registry_factory import *
 
 from .triton_ops import fuse_scale_shift_kernel
-from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch
+from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
 
 
 def modulate(x, scale, shift):
@@ -18,6 +19,9 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.task = config["task"]
         self.attention_type = config.get("attention_type", "flash_attn2")
+        self.self_attn_1_type = config.get("self_attn_1_type", "flash_attn2")
+        self.cross_attn_1_type = config.get("cross_attn_1_type", "flash_attn2")
+        self.cross_attn_2_type = config.get("cross_attn_2_type", "flash_attn2")
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
         self.has_post_adapter = False
@@ -29,16 +33,29 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            if self.config.get("rope_chunk", False):
-                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_flashinfer)
-            else:
-                self.apply_rope_func = apply_wan_rope_with_flashinfer
+        rope_funcs = {
+            "flashinfer": apply_wan_rope_with_flashinfer,
+            "torch": apply_wan_rope_with_torch,
+            "torch_naive": apply_wan_rope_with_torch_naive,
+        }
+        rope_type = self.config.get("rope_type", "flashinfer")
+        # Try to get rope function from registry first (for platform-specific implementations)
+        if rope_type in ROPE_REGISTER:
+            rope_class = ROPE_REGISTER[rope_type]
+            self.rope_instance = rope_class()
+
+            # Create a wrapper function that matches the expected signature
+            def rope_wrapper(xq, xk, cos_sin_cache):
+                return self.rope_instance.apply(xq, xk, cos_sin_cache)
+
+            rope_func = rope_wrapper
         else:
-            if self.config.get("rope_chunk", False):
-                self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=apply_wan_rope_with_torch)
-            else:
-                self.apply_rope_func = apply_wan_rope_with_torch
+            # Fallback to hardcoded functions
+            rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
+        if self.config.get("rope_chunk", False):
+            self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=rope_func)
+        else:
+            self.apply_rope_func = rope_func
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
@@ -46,25 +63,36 @@ class WanTransformerInfer(BaseTransformerInfer):
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
+            self.enable_head_parallel = False
+            self.seq_p_tensor_fusion = False
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
-
-    def _calculate_q_k_len(self, q, k_lens):
-        q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
-        cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
-        cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
-        return cu_seqlens_q, cu_seqlens_k
 
     def get_scheduler_values(self):
         self.cos_sin = self.scheduler.cos_sin
 
     @torch.no_grad()
+    def reset_post_adapter_states(self):
+        pass
+
+    def reset_infer_states(self):
+        self.self_attn_cu_seqlens_qkv = None
+        self.cross_attn_cu_seqlens_q = None
+        self.cross_attn_cu_seqlens_kv = None
+        self.cross_attn_cu_seqlens_kv_img = None
+        if self.has_post_adapter:
+            self.reset_post_adapter_states()
+
+    @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.get_scheduler_values()
+        self.reset_infer_states()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
@@ -168,34 +196,46 @@ class WanTransformerInfer(BaseTransformerInfer):
         q, k = self.apply_rope_func(q, k, cos_sin)
 
         img_qkv_len = q.shape[0]
-        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
+        if self.self_attn_cu_seqlens_qkv is None:
+            if self.self_attn_1_type in ["flash_attn2", "flash_attn3"]:
+                self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
+            else:
+                self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
 
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
             torch.cuda.empty_cache()
+
+        attn_running_args = {
+            "block_idx": self.block_idx,
+            "scheduler": self.scheduler,
+        }
 
         if self.config["seq_parallel"]:
             attn_out = phase.self_attn_1_parallel.apply(
                 q=q,
                 k=k,
                 v=v,
-                img_qkv_len=img_qkv_len,
-                cu_seqlens_qkv=cu_seqlens_qkv,
+                slice_qkv_len=img_qkv_len,
+                cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
+                attention_type=self.self_attn_1_type,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
-                model_cls=self.config["model_cls"],
+                use_tensor_fusion=self.seq_p_tensor_fusion,
+                enable_head_parallel=self.enable_head_parallel,
+                **attn_running_args,
             )
         else:
             attn_out = phase.self_attn_1.apply(
                 q=q,
                 k=k,
                 v=v,
-                cu_seqlens_q=cu_seqlens_qkv,
-                cu_seqlens_kv=cu_seqlens_qkv,
+                cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
                 max_seqlen_q=img_qkv_len,
                 max_seqlen_kv=img_qkv_len,
-                model_cls=self.config["model_cls"],
+                **attn_running_args,
             )
 
         y = phase.self_attn_o.apply(attn_out)
@@ -229,38 +269,45 @@ class WanTransformerInfer(BaseTransformerInfer):
         q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
         k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-            q,
-            k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
-        )
+
+        if self.cross_attn_cu_seqlens_q is None:
+            if self.cross_attn_1_type == "flash_attn2" or self.cross_attn_1_type == "flash_attn3":
+                self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
+            else:
+                self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
+        if self.cross_attn_cu_seqlens_kv is None:
+            if self.cross_attn_1_type == "flash_attn2" or self.cross_attn_1_type == "flash_attn3":
+                self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32).to(k.device, non_blocking=True)
+            else:
+                self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
             v=v,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_kv=cu_seqlens_k,
+            cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+            cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
-            model_cls=self.config["model_cls"],
         )
 
         if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 
-            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-                q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
-            )
+            if self.cross_attn_cu_seqlens_kv_img is None:
+                if self.cross_attn_2_type == "flash_attn2" or self.cross_attn_2_type == "flash_attn3":
+                    self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32).to(k_img.device, non_blocking=True)
+                else:
+                    self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
+
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,
                 k=k_img,
                 v=v_img,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
+                cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+                cu_seqlens_kv=self.cross_attn_cu_seqlens_kv_img,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
-                model_cls=self.config["model_cls"],
             )
             attn_out.add_(img_attn_out)
 

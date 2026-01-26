@@ -1,0 +1,12 @@
+{
+    "infer_steps": 50,
+    "aspect_ratio": "1:1",
+    "attn_type": "torch_sdpa",
+    "enable_cfg": true,
+    "sample_guide_scale": 4.5,
+    "enable_cfg_renorm": true,
+    "cfg_renorm_min": 0.0,
+    "axes_dims_rope": [16, 56, 56],
+    "dit_quant_scheme": "Default",
+    "rms_norm_type": "Default"
+}

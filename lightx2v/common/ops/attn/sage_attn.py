@@ -5,7 +5,8 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 
-if torch.cuda.is_available() and torch.cuda.get_device_capability(0) in [(8, 9), (12, 0)]:
+capability = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None
+if capability in [(8, 9), (12, 0)]:
     try:
         from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
     except ImportError:
@@ -39,7 +40,7 @@ class SageAttn2Weight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         if len(q.shape) == 3:
@@ -70,7 +71,7 @@ class SageAttn3Weight(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
-        model_cls=None,
+        **kwargs,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         if len(q.shape) == 3:

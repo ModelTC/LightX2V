@@ -1,0 +1,47 @@
+# Dockerfile for LightX2V on AMD ROCm platform
+# Base image: SGLang with ROCm 7.0.0 for MI300X
+FROM lmsysorg/sglang:v0.5.6.post2-rocm700-mi35x
+
+LABEL maintainer="LightX2V Contributors"
+LABEL description="LightX2V video generation framework with AMD ROCm support"
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install aiter (AMD ROCm optimized kernels)
+# Commit: a7d3bf8cd47afbaf6a6133c1f12e3b01d2c27b0e
+ARG AITER_COMMIT=a7d3bf8cd47afbaf6a6133c1f12e3b01d2c27b0e
+RUN git clone https://github.com/ROCm/aiter.git /tmp/aiter && \
+    cd /tmp/aiter && \
+    git checkout ${AITER_COMMIT} && \
+    pip install --no-cache-dir -e . && \
+    rm -rf /tmp/aiter/.git
+
+# Install flash-attn for ROCm
+RUN pip install --no-cache-dir flash-attn --no-build-isolation
+
+# Copy LightX2V source
+COPY . /workspace/LightX2V
+
+# Install LightX2V dependencies
+WORKDIR /workspace/LightX2V
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install LightX2V
+RUN pip install --no-cache-dir -e .
+
+# Set environment variables for AMD ROCm
+ENV HIP_VISIBLE_DEVICES=0
+ENV ROCM_PATH=/opt/rocm
+ENV HSA_FORCE_FINE_GRAIN_PCIE=1
+
+# Default command
+CMD ["python", "-c", "from lightx2v import LightX2VPipeline; print('LightX2V AMD ROCm ready!')"]

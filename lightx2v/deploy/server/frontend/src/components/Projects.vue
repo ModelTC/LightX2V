@@ -485,8 +485,14 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                         <div class="cursor-pointer bg-black/2 dark:bg-white/2 relative flex flex-col"
                                                     @click="openTaskDetailModal(task)"
                                                     :title="t('viewTaskDetails')">
-                                                            <!-- 成功任务：显示视频动图 -->
-                                                            <video v-if="task.status === 'SUCCEED' && task.outputs?.output_video"
+                                                            <!-- 图片输出任务（i2i 或 t2i）：显示输出图片 -->
+                                                            <img v-if="(task.task_type === 'i2i' || task.task_type === 't2i') && task.status === 'SUCCEED' && task.outputs?.output_image"
+                                                                :src="getTaskFileUrlSync(task.task_id, 'output_image')"
+                                                                class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
+                                                                @error="handleThumbnailError" />
+
+                                                            <!-- 视频输出任务：显示视频动图 -->
+                                                            <video v-else-if="task.status === 'SUCCEED' && task.outputs?.output_video"
                                                                 :src="getTaskFileUrlSync(task.task_id, 'output_video')"
                                                                 :poster="getTaskFileUrlSync(task.task_id, 'input_image')"
                                 class="w-full h-auto object-contain group-hover:scale-[1.02] transition-transform duration-200"
@@ -508,8 +514,8 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                 <i class="fas fa-video text-4xl text-[#86868b]/30 dark:text-[#98989d]/30"></i>
                             </div>
 
-                            <!-- 移动端播放按钮 - Apple 风格 -->
-                            <button v-if="task.status === 'SUCCEED' && task.outputs?.output_video"
+                            <!-- 移动端播放按钮 - Apple 风格（仅视频任务显示） -->
+                            <button v-if="task.status === 'SUCCEED' && task.outputs?.output_video && task.task_type !== 'i2i' && task.task_type !== 't2i'"
                                                         @click.stop="toggleVideoPlay($event)"
                                 class="md:hidden absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-10 rounded-full bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.2)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 transition-all duration-200 z-20">
                                                         <i class="fas fa-play text-sm"></i>

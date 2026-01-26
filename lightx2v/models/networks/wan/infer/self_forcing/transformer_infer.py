@@ -50,6 +50,12 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         self.infer_func = self.infer_with_kvcache
 
+    def _calculate_q_k_len(self, q, k_lens):
+        q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
+        cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
+        cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
+        return cu_seqlens_q, cu_seqlens_k
+
     def get_scheduler_values(self):
         pass
 
@@ -91,7 +97,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         self.crossattn_cache = self.crossattn_cache_default
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-            x = self.infer_block_witch_kvcache(blocks[block_idx], x, pre_infer_out)
+            x = self.infer_block_with_kvcache(blocks[block_idx], x, pre_infer_out)
         return x
 
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
@@ -151,11 +157,10 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 q=q,
                 k=attn_k,
                 v=attn_v,
-                img_qkv_len=q.shape[0],
+                slice_qkv_len=q.shape[0],
                 cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
-                model_cls=self.config["model_cls"],
             )
         else:
             attn_out = phase.self_attn_1.apply(
@@ -166,7 +171,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=attn_k.size(0),
-                model_cls=self.config["model_cls"],
             )
 
         y = phase.self_attn_o.apply(attn_out)
@@ -221,7 +225,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
             cu_seqlens_kv=cu_seqlens_k,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
-            model_cls=self.config["model_cls"],
         )
 
         if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
@@ -240,7 +243,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
-                model_cls=self.config["model_cls"],
             )
             attn_out.add_(img_attn_out)
 
@@ -297,7 +299,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             torch.cuda.empty_cache()
         return x
 
-    def infer_block_witch_kvcache(self, block, x, pre_infer_out):
+    def infer_block_with_kvcache(self, block, x, pre_infer_out):
         if hasattr(block.compute_phases[0], "before_proj"):
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
 

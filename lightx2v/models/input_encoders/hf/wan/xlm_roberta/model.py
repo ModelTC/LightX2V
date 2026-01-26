@@ -10,7 +10,17 @@ from loguru import logger
 
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
-from lightx2v.models.input_encoders.hf.q_linear import Q8FQuantLinearFp8, Q8FQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearFp8, TorchaoQuantLinearInt8, VllmQuantLinearFp8, VllmQuantLinearInt8
+from lightx2v.models.input_encoders.hf.q_linear import (
+    Q8FQuantLinearFp8,
+    Q8FQuantLinearInt8,
+    SglQuantLinearFp8,
+    TorchaoQuantLinearFp8,
+    TorchaoQuantLinearInt8,
+    TritonQuantLinearFp8,
+    TritonQuantLinearInt8,
+    VllmQuantLinearFp8,
+    VllmQuantLinearInt8,
+)
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
@@ -75,6 +85,10 @@ class SelfAttention(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-triton":
+                linear_cls = TritonQuantLinearInt8
+            elif quant_scheme == "fp8-triton":
+                linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             else:
@@ -161,6 +175,10 @@ class AttentionBlock(nn.Module):
                 linear_cls = Q8FQuantLinearInt8
             elif quant_scheme == "fp8-q8f":
                 linear_cls = Q8FQuantLinearFp8
+            elif quant_scheme == "int8-triton":
+                linear_cls = TritonQuantLinearInt8
+            elif quant_scheme == "fp8-triton":
+                linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             else:
@@ -463,7 +481,7 @@ class CLIPModel:
         videos = torch.cat([F.interpolate(u, size=size, mode="bicubic", align_corners=False) for u in videos])
         videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
         # forward
-        with torch.amp.autocast("cuda", dtype=self.dtype):
+        with torch.amp.autocast(str(AI_DEVICE), dtype=self.dtype):
             out = self.model.visual(videos, use_31_block=self.use_31_block)
 
         if self.cpu_offload:

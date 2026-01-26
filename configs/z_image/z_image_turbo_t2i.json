@@ -1,0 +1,9 @@
+{
+    "aspect_ratio": "16:9",
+    "num_channels_latents": 16,
+    "infer_steps": 9,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 0.0,
+    "patch_size": 2
+}

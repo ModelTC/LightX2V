@@ -2,7 +2,7 @@
     "data":
     {
         "t2v": {
-            "wan2.1-1.3B": {
+            "wan2.2-T2V-A14B": {
                 "single_stage": {
                     "pipeline": {
                         "inputs": [],
@@ -34,7 +34,7 @@
             }
         },
         "i2v": {
-            "wan2.1-14B-480P": {
+            "wan2.2-14B-480P": {
                 "single_stage": {
                     "pipeline": {
                         "inputs": ["input_image"],
@@ -68,6 +68,14 @@
                     }
                 }
             },
+            "wan2.2-I2V-A14B-distill": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            },
             "matrix-game2-gta-drive": {
                 "single_stage": {
                     "pipeline": {
@@ -89,6 +97,26 @@
                     "pipeline": {
                         "inputs": ["input_image"],
                         "outputs": ["output_video"]
+                    }
+                }
+            }
+        },
+        "i2i": {
+            "qwen-image-2509": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image"],
+                        "outputs": ["output_image"]
+                    }
+                }
+            }
+        },
+        "t2i": {
+            "qwen-image": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": [],
+                        "outputs": ["output_image"]
                     }
                 }
             }
@@ -135,16 +163,36 @@
                     }
                 }
             }
+        },
+        "flf2v": {
+            "wan2.2-14B-480P": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image", "input_last_frame"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            },
+            "Wan2.2-I2V-A14B-distill": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": ["input_image", "input_last_frame"],
+                        "outputs": ["output_video"]
+                    }
+                }
+            }
         }
 
     },
     "meta": {
         "special_types": {
             "input_image": "IMAGE",
+            "input_last_frame": "IMAGE",
             "input_audio": "AUDIO",
             "input_video": "VIDEO",
             "latents": "TENSOR",
-            "output_video": "VIDEO"
+            "output_video": "VIDEO",
+            "output_image": "IMAGE"
         },
         "model_name_inner_to_outer": {
             "seko_talk": "SekoTalk"
@@ -160,7 +208,11 @@
                 "i2v-wan2.1-14B-480P-multi_stage-dit": 600,
                 "i2v-wan2.1-14B-480P-single_stage-pipeline": 600,
                 "i2v-SekoTalk-Distill-single_stage-pipeline": 3600,
-                "i2v-SekoTalk-Distill-multi_stage-segment_dit": 3600
+                "i2v-SekoTalk-Distill-multi_stage-segment_dit": 3600,
+                "flf2v-wan2.2-14B-480P-single_stage-pipeline": 3600,
+                "flf2v-wan2.2-14B-480P-multi_stage-segment_dit": 3600,
+                "i2i-qwen-image-single_stage-pipeline": 3600,
+                "animate-wan2.2_animate-single_stage-pipeline": 3600
             },
             "worker_avg_window": 20,
             "worker_offline_timeout": 5,

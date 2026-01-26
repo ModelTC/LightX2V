@@ -1,0 +1,21 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "general_sparse_attn",
+    "general_sparse_attn_setting": {
+        "sparse_mask_generator": "nbhd_mask_generator",
+        "sparse_setting": {
+            "nbhd_coefficient": [1.0, 0.5, 0.056],
+            "nbhd_min_width": 1.0
+        },
+        "sparse_operator": "sla_triton_operator"
+    },
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 5,
+    "sample_shift": 5,
+    "enable_cfg": true,
+    "cpu_offload": false
+}

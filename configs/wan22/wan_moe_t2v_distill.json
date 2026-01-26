@@ -24,11 +24,6 @@
         500,
         250
     ],
-    "lora_configs": [
-        {
-            "name": "low_noise_model",
-            "path": "Wan2.1-T2V-14B/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
-            "strength": 1.0
-        }
-    ]
+    "high_noise_original_ckpt": "Wan2.2-T2V-A14B/distill_models/high_noise_model/distill_model.safetensors",
+    "low_noise_original_ckpt": "Wan2.2-T2V-A14B/distill_models/low_noise_model/distill_model.safetensors"
 }

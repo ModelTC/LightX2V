@@ -215,11 +215,10 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
                 q=q,
                 k=attn_k,
                 v=attn_v,
-                img_qkv_len=q.shape[0],
+                slice_qkv_len=q.shape[0],
                 cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
-                model_cls=self.config["model_cls"],
             )
         else:
             attn_out = phase.self_attn_1.apply(
@@ -230,7 +229,6 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=attn_k.size(0),
-                model_cls=self.config["model_cls"],
             )
 
         y = phase.self_attn_o.apply(attn_out)
@@ -277,7 +275,6 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
             cu_seqlens_kv=cu_seqlens_k,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
-            model_cls=self.config["model_cls"],
         )
 
         attn_out = phase.cross_attn_o.apply(attn_out)

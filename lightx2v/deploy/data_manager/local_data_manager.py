@@ -34,6 +34,10 @@ class LocalDataManager(BaseDataManager):
     @class_try_catch_async
     async def save_bytes(self, bytes_data, filename, abs_path=None):
         out_path = self.fmt_path(self.local_dir, filename, abs_path)
+        # Ensure parent directories exist for folder-based storage
+        parent_dir = os.path.dirname(out_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
         with open(out_path, "wb") as fout:
             fout.write(bytes_data)
             return True
@@ -60,6 +64,10 @@ class LocalDataManager(BaseDataManager):
     async def list_files(self, base_dir=None):
         prefix = base_dir if base_dir else self.local_dir
         return os.listdir(prefix)
+
+    @class_try_catch_async
+    async def presign_url(self, filename, abs_path=None):
+        return None
 
     @class_try_catch_async
     async def create_podcast_temp_session_dir(self, session_id):

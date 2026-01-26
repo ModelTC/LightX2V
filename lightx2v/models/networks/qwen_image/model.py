@@ -1,10 +1,11 @@
 import gc
 import glob
-import json
 import os
 
 import torch
+import torch.distributed as dist
 from safetensors import safe_open
+from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
@@ -23,23 +24,50 @@ class QwenImageTransformerModel:
     transformer_weight_class = QwenImageTransformerWeights
     post_weight_class = QwenImagePostWeights
 
-    def __init__(self, config):
+    def __init__(self, config, lora_path=None, lora_strength=1.0):
         self.config = config
         self.model_path = os.path.join(config["model_path"], "transformer")
+        self.lora_path = lora_path
+        self.lora_strength = lora_strength
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
         self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
 
-        with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
-            transformer_config = json.load(f)
-            self.in_channels = transformer_config["in_channels"]
+        self.in_channels = self.config["in_channels"]
         self.attention_kwargs = {}
-
+        self.remove_keys = []
+        self.lazy_load = self.config.get("lazy_load", False)
+        if self.lazy_load:
+            self.remove_keys.extend(["blocks."])
         self.dit_quantized = self.config.get("dit_quantized", False)
+
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    def _load_lora_file(self, file_path):
+        if self.device.type != "cpu" and dist.is_initialized():
+            device = dist.get_rank()
+        else:
+            device = str(self.device)
+        if device == "cpu":
+            with safe_open(file_path, framework="pt", device=device) as f:
+                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).pin_memory() for key in f.keys()}
+        else:
+            with safe_open(file_path, framework="pt", device=device) as f:
+                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
+        return tensor_dict
+
+    def _register_lora(self, lora_path, strength):
+        lora_weight = self._load_lora_file(lora_path)
+        self.pre_weight.register_lora(lora_weight, strength)
+        self.transformer_weights.register_lora(lora_weight, strength)
+        self.post_weight.register_lora(lora_weight, strength)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -68,10 +96,7 @@ class QwenImageTransformerModel:
                     weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
                 else:
                     # Load quantized weights
-                    if not self.config.get("lazy_load", False):
-                        weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
-                    else:
-                        weight_dict = self._load_quant_split_ckpt(unified_dtype, sensitive_layer)
+                    weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
 
             if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
                 weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
@@ -82,7 +107,10 @@ class QwenImageTransformerModel:
 
         # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
-        self.transformer_weights = self.transformer_weight_class(self.config)
+        if self.lazy_load:
+            self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
+        else:
+            self.transformer_weights = self.transformer_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
         if not self._should_init_empty_model():
             self._apply_weights()
@@ -95,6 +123,9 @@ class QwenImageTransformerModel:
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
+        if self.config.get("lora_dynamic_apply"):
+            assert self.config.get("lora_configs", False)
+            self._register_lora(self.lora_path, self.lora_strength)
         self.post_weight.load(self.original_weight_dict)
 
         del self.original_weight_dict
@@ -117,7 +148,7 @@ class QwenImageTransformerModel:
         return False
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and self.config["lora_configs"]:
+        if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):
             return True
         return False
 
@@ -143,8 +174,18 @@ class QwenImageTransformerModel:
             safetensors_path = self.model_path
 
         if os.path.isdir(safetensors_path):
-            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+                non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+                if os.path.exists(non_block_file):
+                    safetensors_files = [non_block_file]
+                else:
+                    raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
+            else:
+                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
             safetensors_files = [safetensors_path]
 
         weight_dict = {}
@@ -164,8 +205,18 @@ class QwenImageTransformerModel:
             safetensors_path = self.model_path
 
         if os.path.isdir(safetensors_path):
-            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
+                non_block_file = os.path.join(safetensors_path, "non_block.safetensors")
+                if os.path.exists(non_block_file):
+                    safetensors_files = [non_block_file]
+                else:
+                    raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
+            else:
+                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
+            if self.lazy_load:
+                self.lazy_load_path = safetensors_path
             safetensors_files = [safetensors_path]
             safetensors_path = os.path.dirname(safetensors_path)
 
@@ -196,28 +247,6 @@ class QwenImageTransformerModel:
                 weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
 
         return weight_dict
-
-    def _load_quant_split_ckpt(self, unified_dtype, sensitive_layer):  # Need rewrite
-        lazy_load_model_path = self.dit_quantized_ckpt
-        logger.info(f"Loading splited quant model from {lazy_load_model_path}")
-        pre_post_weight_dict = {}
-
-        safetensor_path = os.path.join(lazy_load_model_path, "non_block.safetensors")
-        with safe_open(safetensor_path, framework="pt", device="cpu") as f:
-            for k in f.keys():
-                if f.get_tensor(k).dtype in [
-                    torch.float16,
-                    torch.bfloat16,
-                    torch.float,
-                ]:
-                    if unified_dtype or all(s not in k for s in sensitive_layer):
-                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
-                    else:
-                        pre_post_weight_dict[k] = f.get_tensor(k).to(GET_SENSITIVE_DTYPE()).to(self.device)
-                else:
-                    pre_post_weight_dict[k] = f.get_tensor(k).to(self.device)
-
-        return pre_post_weight_dict
 
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
         logger.info("Loading distributed weights")
@@ -284,6 +313,8 @@ class QwenImageTransformerModel:
         self.post_infer = self.post_infer_class(self.config)
         if hasattr(self.transformer_infer, "offload_manager"):
             self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
+            if self.lazy_load:
+                self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
 
     def to_cpu(self):
         self.pre_weight.to_cpu()
@@ -304,7 +335,6 @@ class QwenImageTransformerModel:
                 self.pre_weight.to_cuda()
                 self.post_weight.to_cuda()
 
-        t = self.scheduler.timesteps[self.scheduler.step_index]
         latents = self.scheduler.latents
         if self.config["task"] == "i2i":
             image_latents = torch.cat([item["image_latents"] for item in inputs["image_encoder_output"]], dim=1)
@@ -312,72 +342,84 @@ class QwenImageTransformerModel:
         else:
             latents_input = latents
 
-        timestep = t.expand(latents.shape[0]).to(latents.dtype)
-        img_shapes = inputs["img_shapes"]
+        if self.config["enable_cfg"]:
+            if self.config["cfg_parallel"]:
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
 
-        prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        prompt_embeds_mask = inputs["text_encoder_output"]["prompt_embeds_mask"]
+                if cfg_p_rank == 0:
+                    noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                    if self.config["task"] == "i2i":
+                        noise_pred = noise_pred[:, : latents.size(1)]
+                else:
+                    noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+                    if self.config["task"] == "i2i":
+                        noise_pred = noise_pred[:, : latents.size(1)]
+                noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
+                dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
+                noise_pred_cond = noise_pred_list[0]  # cfg_p_rank == 0
+                noise_pred_uncond = noise_pred_list[1]  # cfg_p_rank == 1
+            else:
+                # ==================== CFG Processing ====================
+                noise_pred_cond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+                if self.config["task"] == "i2i":
+                    noise_pred_cond = noise_pred_cond[:, : latents.size(1)]
 
-        txt_seq_lens = prompt_embeds_mask.sum(dim=1).tolist() if prompt_embeds_mask is not None else None
+                noise_pred_uncond = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["negative_prompt_embeds"], infer_condition=False)
+                if self.config["task"] == "i2i":
+                    noise_pred_uncond = noise_pred_uncond[:, : latents.size(1)]
 
-        hidden_states, encoder_hidden_states, _, pre_infer_out = self.pre_infer.infer(
+            comb_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            noise_pred_cond_norm = torch.norm(noise_pred_cond, dim=-1, keepdim=True)
+            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+            self.scheduler.noise_pred = comb_pred * (noise_pred_cond_norm / noise_norm)
+        else:
+            # ==================== No CFG Processing ====================
+            noise_pred = self._infer_cond_uncond(latents_input, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
+            if self.config["task"] == "i2i":
+                noise_pred = noise_pred[:, : latents.size(1)]
+            self.scheduler.noise_pred = noise_pred
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
+        self.scheduler.infer_condition = infer_condition
+
+        pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,
             hidden_states=latents_input,
-            timestep=timestep / 1000,
-            guidance=self.scheduler.guidance,
-            encoder_hidden_states_mask=prompt_embeds_mask,
             encoder_hidden_states=prompt_embeds,
-            img_shapes=img_shapes,
-            txt_seq_lens=txt_seq_lens,
-            attention_kwargs=self.attention_kwargs,
         )
 
-        encoder_hidden_states, hidden_states = self.transformer_infer.infer(
+        if self.config["seq_parallel"]:
+            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+
+        hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
-            hidden_states=hidden_states.unsqueeze(0),
-            encoder_hidden_states=encoder_hidden_states.unsqueeze(0),
             pre_infer_out=pre_infer_out,
         )
+        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.temb_txt_silu)
 
-        noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out[0])
+        if self.config["seq_parallel"]:
+            noise_pred = self._seq_parallel_post_process(noise_pred)
+        return noise_pred
 
-        if self.config["do_true_cfg"]:
-            neg_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
-            neg_prompt_embeds_mask = inputs["text_encoder_output"]["negative_prompt_embeds_mask"]
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        seqlen = pre_infer_out.hidden_states.shape[0]
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
+        pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=0)[cur_rank]
+        return pre_infer_out
 
-            negative_txt_seq_lens = neg_prompt_embeds_mask.sum(dim=1).tolist() if neg_prompt_embeds_mask is not None else None
-
-            neg_hidden_states, neg_encoder_hidden_states, _, neg_pre_infer_out = self.pre_infer.infer(
-                weights=self.pre_weight,
-                hidden_states=latents_input,
-                timestep=timestep / 1000,
-                guidance=self.scheduler.guidance,
-                encoder_hidden_states_mask=neg_prompt_embeds_mask,
-                encoder_hidden_states=neg_prompt_embeds,
-                img_shapes=img_shapes,
-                txt_seq_lens=negative_txt_seq_lens,
-                attention_kwargs=self.attention_kwargs,
-            )
-
-            neg_encoder_hidden_states, neg_hidden_states = self.transformer_infer.infer(
-                block_weights=self.transformer_weights,
-                hidden_states=neg_hidden_states.unsqueeze(0),
-                encoder_hidden_states=neg_encoder_hidden_states.unsqueeze(0),
-                pre_infer_out=neg_pre_infer_out,
-            )
-
-            neg_noise_pred = self.post_infer.infer(self.post_weight, neg_hidden_states, neg_pre_infer_out[0])
-
-        if self.config["task"] == "i2i":
-            noise_pred = noise_pred[:, : latents.size(1)]
-
-        if self.config["do_true_cfg"]:
-            neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
-            comb_pred = neg_noise_pred + self.config["true_cfg_scale"] * (noise_pred - neg_noise_pred)
-
-            cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
-            noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-            noise_pred = comb_pred * (cond_norm / noise_norm)
-
-        noise_pred = noise_pred[:, : latents.size(1)]
-        self.scheduler.noise_pred = noise_pred
+    @torch.no_grad()
+    def _seq_parallel_post_process(self, noise_pred):
+        world_size = dist.get_world_size(self.seq_p_group)
+        gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
+        dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
+        noise_pred = torch.cat(gathered_noise_pred, dim=1)
+        return noise_pred

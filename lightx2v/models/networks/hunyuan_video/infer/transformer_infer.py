@@ -104,9 +104,11 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
+            self.enable_head_parallel = False
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -229,17 +231,15 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 q=query,
                 k=key,
                 v=value,
-                img_qkv_len=img_seqlen,
+                slice_qkv_len=img_seqlen,
                 cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
-                model_cls=self.config["model_cls"],
+                enable_head_parallel=self.enable_head_parallel,
             )
         else:
-            attn_out = weights.self_attention.apply(
-                q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen, model_cls=self.config["model_cls"]
-            )
+            attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
 
         img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn

@@ -125,7 +125,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k.size(0),
-                model_cls=self.config["model_cls"],
             )
         else:
             # TODO: Implement parallel attention for causvid inference
@@ -166,7 +165,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
             cu_seqlens_kv=cu_seqlens_k,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
-            model_cls=self.config["model_cls"],
         )
 
         if self.task in ["i2v", "s2v"]:
@@ -186,7 +184,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
                 cu_seqlens_kv=cu_seqlens_k,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
-                model_cls=self.config["model_cls"],
             )
 
             attn_out = attn_out + img_attn_out

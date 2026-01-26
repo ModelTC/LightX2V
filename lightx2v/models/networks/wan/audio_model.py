@@ -21,17 +21,17 @@ class WanAudioModel(WanModel):
     post_weight_class = WanPostWeights
     transformer_weight_class = WanAudioTransformerWeights
 
-    def __init__(self, model_path, config, device):
+    def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         self.config = config
         self._load_adapter_ckpt()
-        super().__init__(model_path, config, device)
+        super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
 
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
             if self.config.get("adapter_quantized", False):
-                if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl", "fp8-torchao"]:
+                if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl", "fp8-torchao", "fp8-triton"]:
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
-                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-tmo"]:
+                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-triton", "int8-tmo", "int8-npu"]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
                 elif self.config.get("adapter_quant_scheme", None) in ["mxfp4"]:
                     adapter_model_name = "audio_adapter_model_mxfp4.safetensors"

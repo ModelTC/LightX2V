@@ -1,5 +1,7 @@
 import math
 
+import torch
+
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
@@ -15,7 +17,7 @@ class MluFlashAttnWeight(AttnWeightTemplate):
         self.config = {}
         assert tmo is not None, "torch_mlu_ops is not installed."
 
-    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, model_cls=None):
+    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, **kwds):
         if len(q.shape) == 3:
             bs = 1
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
@@ -26,8 +28,8 @@ class MluFlashAttnWeight(AttnWeightTemplate):
             q=q,
             k=k,
             v=v,
-            cu_seq_lens_q=cu_seqlens_q,
-            cu_seq_lens_kv=cu_seqlens_kv,
+            cu_seq_lens_q=None,  # cu_seqlens_q,
+            cu_seq_lens_kv=None,  # cu_seqlens_kv,
             max_seq_len_q=max_seqlen_q,
             max_seq_len_kv=max_seqlen_kv,
             softmax_scale=softmax_scale,
@@ -37,6 +39,7 @@ class MluFlashAttnWeight(AttnWeightTemplate):
             out=None,
             alibi_slope=None,
             attn_bias=None,
+            compute_dtype=torch.half,
         )
         x = x.reshape(bs * max_seqlen_q, -1)
         return x

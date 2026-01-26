@@ -11,8 +11,12 @@ imageio
 imageio-ffmpeg
 einops
 loguru
-qtorch
 ftfy
 gradio
 aiohttp
 pydantic
+torchao
+triton-windows
+prometheus_client
+gguf
+modelscope

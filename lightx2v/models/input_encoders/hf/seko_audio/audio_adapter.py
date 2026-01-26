@@ -67,10 +67,10 @@ def get_qk_lens_audio_range(
     assert q_lens.shape == k_lens.shape
     max_seqlen_q, max_seqlen_k = get_max_int(q_lens, k_lens)
 
-    return q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0, t1
+    return q_lens, k_lens, max_seqlen_q, max_seqlen_k, t0.item(), t1.item()
 
 
-def calculate_n_query_tokens(hidden_states, person_mask_latens, sp_rank, sp_size, n_tokens_per_rank, n_tokens):
+def calculate_n_query_tokens(sp_rank, sp_size, n_tokens_per_rank, n_tokens):
     tail_length = n_tokens_per_rank * sp_size - n_tokens
     n_unused_ranks = tail_length // n_tokens_per_rank
 
@@ -82,6 +82,10 @@ def calculate_n_query_tokens(hidden_states, person_mask_latens, sp_rank, sp_size
     else:
         n_query_tokens = n_tokens_per_rank
 
+    return n_query_tokens
+
+
+def align_hidden_states_and_mask(n_query_tokens, hidden_states, person_mask_latens):
     if n_query_tokens > 0:
         hidden_states_aligned = hidden_states[:n_query_tokens]
         hidden_states_tail = hidden_states[n_query_tokens:]
@@ -98,7 +102,7 @@ def calculate_n_query_tokens(hidden_states, person_mask_latens, sp_rank, sp_size
         else:
             person_mask_aligned = None
 
-    return n_query_tokens, hidden_states_aligned, hidden_states_tail, person_mask_aligned
+    return hidden_states_aligned, hidden_states_tail, person_mask_aligned
 
 
 '''
@@ -188,6 +192,7 @@ class AudioProjection(nn.Module):
             in_dim = out_dim
         self.mlp = nn.Sequential(*mlp)
         self.norm = nn.LayerNorm(mlp_dims[-1] // num_tokens)
+        self.device = torch.device(AI_DEVICE)
         self.num_tokens = num_tokens
         if transformer_layers > 0:
             decoder_layer = nn.TransformerDecoderLayer(d_model=audio_feature_dim, nhead=audio_feature_dim // 64, dim_feedforward=4 * audio_feature_dim, dropout=0.0, batch_first=True)
@@ -204,7 +209,13 @@ class AudioProjection(nn.Module):
         audio_feature = linear_interpolation(audio_feature_ori, video_frame)
         if self.transformer_decoder is not None:
             audio_feature = self.transformer_decoder(audio_feature, audio_feature_ori)
-        audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
+        if "npu" in str(self.device):
+            dtype = audio_feature.dtype
+            audio_feature = audio_feature.type(torch.float16)
+            audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
+            audio_feature.type(dtype)
+        else:
+            audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
         audio_feature = audio_feature.unfold(dimension=1, size=self.audio_frames, step=1)
         audio_feature = rearrange(audio_feature, "B T C W -> B T (W C)")
         audio_feature = self.mlp(audio_feature)  # (B, video_frame, C)

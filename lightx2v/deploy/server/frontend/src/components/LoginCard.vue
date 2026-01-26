@@ -60,10 +60,12 @@ const router = useRouter();
                                 <label for="verifyCode" class="block text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight">{{ t('verifyCode') }}</label>
             <button
                 @click="sendSmsCode"
-                                    class="text-sm font-medium text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:text-[color:var(--brand-primary)]/80 dark:hover:text-[color:var(--brand-primary-light)]/80 transition-colors tracking-tight"
+                class="relative text-sm font-medium text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)] hover:text-[color:var(--brand-primary)]/80 dark:hover:text-[color:var(--brand-primary-light)]/80 transition-colors tracking-tight disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 :disabled="!phoneNumber || smsCountdown > 0 || loginLoading"
             >
-                {{ smsCountdown > 0 ? `${smsCountdown}s` : t('sendSmsCode') }}
+                <i v-if="loginLoading"
+                   class="fas fa-spinner fa-spin text-xs"></i>
+                <span>{{ smsCountdown > 0 ? `${smsCountdown}s` : t('sendSmsCode') }}</span>
             </button>
         </div>
                             <input
@@ -82,11 +84,19 @@ const router = useRouter();
                             <button
                                 @click="loginWithSms"
                                 :disabled="!phoneNumber || !verifyCode || loginLoading"
-                                class="w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-6 py-4 text-base font-semibold text-white hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100 transition-all duration-200 ease-out disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none tracking-tight"
+                                class="relative w-full rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] border-0 px-6 py-4 text-base font-semibold text-white hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(var(--brand-primary-rgb),0.35)] dark:hover:shadow-[0_8px_24px_rgba(var(--brand-primary-light-rgb),0.4)] active:scale-100 transition-all duration-200 ease-out disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none tracking-tight overflow-hidden"
                             >
-            {{ loginLoading ? t('loginLoading') : t('login') }}
-        </button>
-      </div>
+                                <!-- 加载动画背景 -->
+                                <div v-if="loginLoading"
+                                     class="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
+                                <!-- 按钮内容 -->
+                                <span class="relative flex items-center justify-center gap-2">
+                                    <i v-if="loginLoading"
+                                       class="fas fa-spinner fa-spin text-lg"></i>
+                                    <span>{{ loginLoading ? t('loginLoading') : t('login') }}</span>
+                                </span>
+                            </button>
+                        </div>
     </div>
 
                     <!-- 分隔线 - Apple 风格 -->
@@ -103,22 +113,54 @@ const router = useRouter();
                     <div class="flex justify-center gap-5">
                         <button
                             @click="loginWithGitHub"
-                            class="w-14 h-14 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 rounded-full text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100 transition-all duration-200"
                             :disabled="loginLoading"
+                            class="relative w-14 h-14 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 rounded-full text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none overflow-hidden"
                             :title="t('loginWithGitHub')"
                         >
-                            <i class="fab fa-github text-2xl"></i>
+                            <!-- 加载动画背景 -->
+                            <div v-if="loginLoading"
+                                 class="absolute inset-0 bg-gradient-to-r from-transparent via-black/5 dark:via-white/10 to-transparent animate-shimmer"></div>
+                            <!-- 图标或加载动画 -->
+                            <i v-if="loginLoading"
+                               class="fas fa-spinner fa-spin text-xl relative z-10"></i>
+                            <i v-else
+                               class="fab fa-github text-2xl relative z-10"></i>
                         </button>
 
                         <button
                             @click="loginWithGoogle"
-                            class="w-14 h-14 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 rounded-full text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100 transition-all duration-200"
                             :disabled="loginLoading"
+                            class="relative w-14 h-14 flex items-center justify-center bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 rounded-full text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-100 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none overflow-hidden"
                             :title="t('loginWithGoogle')"
                         >
-                            <i class="fab fa-google text-2xl"></i>
+                            <!-- 加载动画背景 -->
+                            <div v-if="loginLoading"
+                                 class="absolute inset-0 bg-gradient-to-r from-transparent via-black/5 dark:via-white/10 to-transparent animate-shimmer"></div>
+                            <!-- 图标或加载动画 -->
+                            <i v-if="loginLoading"
+                               class="fas fa-spinner fa-spin text-xl relative z-10"></i>
+                            <i v-else
+                               class="fab fa-google text-2xl relative z-10"></i>
                         </button>
                     </div>
                 </div>
             </div>
 </template>
+
+<style scoped>
+/* Apple 风格极简设计 - 所有样式已通过 Tailwind CSS 在 template 中定义 */
+
+/* 加载动画 - shimmer 效果 */
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+.animate-shimmer {
+    animation: shimmer 1.5s infinite;
+}
+</style>

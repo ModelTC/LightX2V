@@ -124,7 +124,7 @@ def fuse_scale_shift_kernel(
     block_l: int = 128,
     block_c: int = 128,
 ):
-    assert x.is_cuda and scale.is_cuda
+    # assert x.is_cuda and scale.is_cuda
     assert x.is_contiguous()
     if x.dim() == 2:
         x = x.unsqueeze(0)
@@ -828,7 +828,7 @@ def norm_infer(
     out: Optional[Tensor] = None,
 ):
     M, N = x.shape
-    assert x.stride(-1) == 1
+    x = x.contiguous()
     if weight is not None:
         assert weight.shape == (N,)
         assert weight.stride(-1) == 1

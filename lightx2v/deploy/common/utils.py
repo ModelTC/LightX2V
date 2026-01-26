@@ -72,12 +72,16 @@ def class_try_catch_async(func):
 
 
 def data_name(x, task_id):
-    if x == "input_image":
+    if x == "input_image" or x.startswith("input_image/"):
         x = x + ".png"
     elif x == "input_video":
         x = x + ".mp4"
+    elif x == "input_last_frame":
+        x = x + ".png"
     elif x == "output_video":
         x = x + ".mp4"
+    elif x == "output_image":
+        x = x + ".png"
     return f"{task_id}-{x}"
 
 
@@ -145,20 +149,23 @@ def format_image_data(data, max_size=1280):
     return output.getvalue()
 
 
-def media_to_wav(data):
+def media_to_audio(data, max_duration=None, sample_rate=44100, channels=2, output_format="wav"):
     with tempfile.NamedTemporaryFile() as fin:
         fin.write(data)
         fin.flush()
-        cmd = ["ffmpeg", "-i", fin.name, "-f", "wav", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", "pipe:1"]
+        ds = ["-t", str(max_duration)] if max_duration is not None else []
+        fmts = ["mp3", "libmp3lame"] if output_format == "mp3" else ["wav", "pcm_s16le"]
+        cmd = ["ffmpeg", "-i", fin.name, *ds, "-f", fmts[0], "-acodec", fmts[1], "-ar", str(sample_rate), "-ac", str(channels), "pipe:1"]
+        logger.info(f"media_to_audio cmd: {cmd}")
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert p.returncode == 0, f"media to wav failed: {p.stderr.decode()}"
+        assert p.returncode == 0, f"media to {output_format} failed: {p.stderr.decode()}"
         return p.stdout
 
 
-def format_audio_data(data):
+def format_audio_data(data, max_duration=None):
     if len(data) < 4:
         raise ValueError("Audio file too short")
-    data = media_to_wav(data)
+    data = media_to_audio(data, max_duration)
     waveform, sample_rate = torchaudio.load(io.BytesIO(data), num_frames=10)
     logger.info(f"load audio: {waveform.size()}, {sample_rate}")
     assert waveform.numel() > 0, "audio is empty"
@@ -172,8 +179,17 @@ async def preload_data(inp, inp_type, typ, val):
             timeout = int(os.getenv("REQUEST_TIMEOUT", "5"))
             data = await fetch_resource(val, timeout=timeout)
         elif typ == "base64":
-            # Decode base64 in background thread to avoid blocking event loop
-            data = await asyncio.to_thread(base64.b64decode, val)
+            # Check if this is multiple base64 images (for i2i tasks)
+            # Frontend now sends a list of base64 strings: ["base64string1", "base64string2", ...]
+            if isinstance(val, list):
+                data = {}
+                for idx, encoded in enumerate(val):
+                    if encoded.startswith("data:image"):
+                        _, encoded = encoded.split(",", 1)
+                    decoded = await asyncio.to_thread(base64.b64decode, encoded)
+                    data[f"{inp}_{idx + 1}"] = decoded
+            else:
+                data = await asyncio.to_thread(base64.b64decode, val)
         # For multi-person audio directory, val should be a dict with file structure
         elif typ == "directory":
             data = {}
@@ -188,7 +204,12 @@ async def preload_data(inp, inp_type, typ, val):
 
         # check if valid image bytes
         if inp_type == "IMAGE":
-            data = await asyncio.to_thread(format_image_data, data)
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    data[key] = await asyncio.to_thread(format_image_data, value)
+                return {"type": "directory", "data": data}
+            else:
+                data = await asyncio.to_thread(format_image_data, data)
         elif inp_type == "AUDIO":
             if typ != "stream" and typ != "directory":
                 data = await asyncio.to_thread(format_audio_data, data)
@@ -211,13 +232,15 @@ async def load_inputs(params, raw_inputs, types):
         item = params.pop(inp)
         bytes_data = await preload_data(inp, types[inp], item["type"], item["data"])
 
-        # Handle multi-person audio directory
+        # Handle multi-person audio directory, multiple images (for i2i tasks)
         if bytes_data is not None and isinstance(bytes_data, dict) and bytes_data.get("type") == "directory":
             fs = []
             for fname, fdata in bytes_data["data"].items():
                 inputs_data[f"{inp}/{fname}"] = fdata
                 fs.append(f"{inp}/{fname}")
-            params["extra_inputs"] = {inp: fs}
+            if "extra_inputs" not in params:
+                params["extra_inputs"] = {}
+            params["extra_inputs"][inp] = fs
         elif bytes_data is not None:
             inputs_data[inp] = bytes_data
         else:

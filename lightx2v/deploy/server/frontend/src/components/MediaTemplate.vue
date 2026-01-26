@@ -15,6 +15,8 @@ import {
     jumpToTemplatePage,
     getVisibleTemplatePages,
     selectImageHistory,
+    selectLastFrameImageHistory,
+    applyTemplateLastFrameImage,
     selectImageTemplate,
     selectAudioHistory,
     selectAudioTemplate,
@@ -210,7 +212,7 @@ watch(audioTemplates, (newTemplates) => {
                                             </div>
                                             <div class="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 px-1">
                                                 <div v-for="(history, index) in imageHistory" :key="index"
-                                                    @click="selectImageHistory(history)"
+                                                    @click="isSelectingLastFrame ? selectLastFrameImageHistory(history) : selectImageHistory(history)"
                                                     class="break-inside-avoid mb-4 relative group cursor-pointer rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.2)]">
                                                         <img :src="getHistoryImageUrl(history)" :alt="history.filename"
                                                             class="w-full h-auto object-contain">
@@ -280,9 +282,19 @@ watch(audioTemplates, (newTemplates) => {
                                                         <span>{{ t('loading') }}</span>
                                                     </div>
                                                 </div>
-                                                <div v-if="mergedTemplates.filter(t => t.image).length > 0" class="columns-2 sm:columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 px-1">
+                                                <div v-if="(mergedTemplates.filter(t => t.image).length > 0) || (imageTemplates.length > 0)" class="columns-2 sm:columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 px-1">
                                                     <div v-for="template in mergedTemplates.filter(t => t.image)" :key="template.id"
                                                         @click="selectImageTemplate(template.image)"
+                                                        class="break-inside-avoid mb-4 relative group cursor-pointer rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.2)]">
+                                                            <img :src="template.image.url" :alt="template.image.filename"
+                                                            class="w-full h-auto object-contain" preload="metadata">
+                                                            <div
+                                                                class="absolute inset-0 bg-black/50 dark:bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                            <i class="fas fa-check text-white text-2xl"></i>
+                                                        </div>
+                                                    </div>
+                                                    <div v-for="template in imageTemplates" :key="template.filename"
+                                                        @click="isSelectingLastFrame ? applyTemplateLastFrameImage(template) : selectImageTemplate(template)"
                                                         class="break-inside-avoid mb-4 relative group cursor-pointer rounded-2xl overflow-hidden border border-black/8 dark:border-white/8 hover:border-[color:var(--brand-primary)]/50 dark:hover:border-[color:var(--brand-primary-light)]/50 transition-all hover:shadow-[0_4px_12px_rgba(var(--brand-primary-rgb),0.15)] dark:hover:shadow-[0_4px_12px_rgba(var(--brand-primary-light-rgb),0.2)]">
                                                             <img :src="template.image.url" :alt="template.image.filename"
                                                             class="w-full h-auto object-contain" preload="metadata">
