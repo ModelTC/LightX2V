@@ -184,7 +184,7 @@ qwen_image_t2i_2512_distill_fp8.json内容如下：
 
 `dit_quantized_ckpt` 表示 DIT 量化权重路径，指定 FP8 量化后的 DIT 权重文件的本地路径
 
-`dit_quant_scheme` 表示 DIT 量化方案，指定量化类型为 "fp8-sgl"（FP8 单粒度量化）
+`dit_quant_scheme` 表示 DIT 量化方案，指定量化类型为 "fp8-sgl"（fp8-sgl表示使用sglang的fp8 kernel进行推理）
 
 ### 启动服务生成图片
 

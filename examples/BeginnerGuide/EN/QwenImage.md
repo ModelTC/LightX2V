@@ -184,7 +184,7 @@ qwen_image_t2i_2512_distill_fp8.json内容如下：
 
 `dit_quantized_ckpt` specifies the DIT quantized weight path, which specifies the local path of the DIT weight file after FP8 quantization.
 
-`dit_quant_scheme` the DIT quantization scheme, which specifies the quantization type as "fp8-sgl" (FP8 single-granularity quantization).
+`dit_quant_scheme` the DIT quantization scheme, which specifies the quantization type as "fp8-sgl" (where "fp8-sgl" means using the FP8 kernel of sglang for inference).
 
 ### Start Service to Generate Image
 
