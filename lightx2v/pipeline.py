@@ -1,4 +1,5 @@
 import json
+import os
 
 import torch
 import torch.distributed as dist
@@ -21,7 +22,6 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all, validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
-import os
 
 
 def dict_like(cls):
