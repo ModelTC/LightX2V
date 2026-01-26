@@ -25,8 +25,6 @@ pipe = LightX2VPipeline(
     task=task,
 )
 
-pipe.enable_parallel(cfg_p_size=2, seq_p_size=2, seq_p_attn_type="ulysses")
-# pipe.enable_parallel(seq_p_size=8)
 pipe.create_generator(config_json=f"{lightx2v_path}/configs/dist_infer/wan22_moe_t2v_cfg_ulysses.json")
 
 
