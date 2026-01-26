@@ -9,13 +9,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchaudio as ta
 import torchvision.transforms.functional as TF
-
-# Use torchaudio compatibility layer for better PyTorch version compatibility
-try:
-    import torchaudio as ta
-except (ImportError, OSError) as e:
-    from lightx2v.utils import torchaudio_compat as ta
 from PIL import Image, ImageCms, ImageOps
 from einops import rearrange
 from loguru import logger

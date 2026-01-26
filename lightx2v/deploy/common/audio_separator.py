@@ -17,12 +17,6 @@ import torch.serialization
 import torchaudio
 from loguru import logger
 
-# Use torchaudio compatibility layer for better PyTorch version compatibility
-try:
-    import torchaudio
-except (ImportError, OSError) as e:
-    from lightx2v.utils import torchaudio_compat as torchaudio
-
 # Import pyannote.audio for speaker diarization
 from pyannote.audio import Audio, Pipeline
 

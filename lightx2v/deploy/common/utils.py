@@ -9,13 +9,8 @@ import traceback
 from datetime import datetime
 
 import httpx
+import torchaudio
 from PIL import Image
-
-# Use torchaudio compatibility layer for better PyTorch version compatibility
-try:
-    import torchaudio
-except (ImportError, OSError) as e:
-    from lightx2v.utils import torchaudio_compat as torchaudio
 from loguru import logger
 
 FMT = "%Y-%m-%d %H:%M:%S"

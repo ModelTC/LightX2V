@@ -9,13 +9,8 @@ import traceback
 
 import numpy as np
 import torch
+import torchaudio as ta
 from loguru import logger
-
-# Use torchaudio compatibility layer for better PyTorch version compatibility
-try:
-    import torchaudio as ta
-except (ImportError, OSError) as e:
-    from lightx2v.utils import torchaudio_compat as ta
 
 
 def pseudo_random(a, b):

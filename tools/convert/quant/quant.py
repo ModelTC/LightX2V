@@ -1,13 +1,9 @@
 from abc import ABCMeta
 
 import torch
+from qtorch.quant import float_quantize
 
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
-
-try:
-    from qtorch.quant import float_quantize
-except ImportError:
-    float_quantize = None
 
 try:
     from lightx2v_kernel.gemm import scaled_mxfp4_quant, scaled_mxfp6_quant, scaled_mxfp8_quant, scaled_nvfp4_quant
@@ -57,8 +53,6 @@ class QuantWeightINT8(QuantTemplate):
 class QuantWeightFP8(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
-        if float_quantize is None:
-            raise ImportError("qtorch is required for FP8 quantization. Please install it with: pip install qtorch")
         self.weight_quant_func = self.load_fp8_weight
 
     @torch.no_grad()
