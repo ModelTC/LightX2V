@@ -6,7 +6,7 @@ Among them, the text-to-image model used is Qwen-Image-2512, and the image editi
 
 ## Prepare the Environment
 
-Please refer to[01.PrepareEnv](01.PrepareEnv.md)
+Please refer to [01.PrepareEnv](01.PrepareEnv.md)
 
 ## Getting Started
 
@@ -49,7 +49,7 @@ Text-to-Image Models
 # Inference with 2512 text-to-image original model, default is 50 steps
 bash qwen_image_t2i_2512.sh
 
-# Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires modify the lora_configs path in # config_json file
+# Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires modify the lora_configs path in config_json file
 bash qwen_image_t2i_2512_lora.sh
 
 # Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 8 steps, requires modify the dit_quantized_ckpt path in config_json file
@@ -164,7 +164,7 @@ cd examples/qwen_image/
 # Environment variables need to be set before running.
 export PYTHONPATH=/data1/yongyang/huangli/LightX2V
 
-# Before running, you need to modify the paths in the script to the actual paths, including: model_path、dit_quantized_ckpt、image_path、save_result_path
+# Before running, you need to modify the paths in the script to the actual paths, including: model_path, dit_quantized_ckpt, image_path, save_result_path
 python qwen_2511_fp8.py
 ```
 This approach reduces inference steps through step distillation technology while using FP8 quantization to reduce model size and memory footprint, achieving faster inference speed.
@@ -247,7 +247,7 @@ Run the qwen_2511_with_distill_lora.py script, which uses the Qwen-Image-Edit-25
 ```
 cd examples/qwen_image/
 
-# Before running, you need to modify the paths in the script to the actual paths, including: model_path、pipe.enable_lora中的path、image_path、save_result_path
+# Before running, you need to modify the paths in the script to the actual paths, including: model_path, path in pipe.enable_lora, image_path, save_result_path
 python qwen_2511_with_distill_lora.py
 ```
 
