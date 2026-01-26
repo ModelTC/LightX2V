@@ -797,9 +797,19 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ]
         return latent_shape
 
+    @ProfilingContext4DebugL1("Run VAE Decoder")
+    def run_vae_cached_decoder(self, latents):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_decoder = self.load_vae_decoder()
+        images = self.vae_decoder.cached_decode(latents.to(GET_DTYPE()))
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_decoder
+            torch.cuda.empty_cache()
+            gc.collect()
+        return images
+
     def run_clip(self):
         infer_steps = self.model.scheduler.infer_steps
-
         for step_index in range(infer_steps):
             self.model.scheduler.step_pre(step_index=step_index)
             self.model.infer(self.inputs)
@@ -810,7 +820,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def run_clip_main(self):
         self.scheduler.set_audio_adapter(self.audio_adapter)
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
         self.input_info.seed = self.input_info.seed
@@ -825,14 +835,21 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_features = self.audio_encoder.infer(audio_clip)
         audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
         self.inputs["audio_encoder_output"] = audio_features
-        # 处理前一帧图像输入
-        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
+        # 处理前一帧图像或latent输入
+        if self.task in ["rs2v"]:
+            self.inputs["previmg_encoder_output"] = {"prev_latents":self.input_info.overlap_latent}
+            self.inputs["ref_state"] = self.input_info.ref_state
+        else:
+            self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
         # 执行dit推理
         latents = self.run_clip()
         # 运行vae decoder
-        gen_video = self.run_vae_decoder(latents)
+        if self.task in ["rs2v"]:
+            gen_video = self.run_vae_cached_decoder(latents)
+        else:
+            gen_video = self.run_vae_decoder(latents)
 
-        return gen_video, audio_clip
+        return gen_video, audio_clip, latents
 
     def run_clip_pipeline(self, input_info):
         self.input_info = input_info
@@ -874,7 +891,7 @@ class Wan22AudioRunner(WanAudioRunner):
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
-        if self.config.task not in ["i2v", "s2v"]:
+        if self.config.task not in ["i2v", "s2v", "rs2v"]:
             return None
         else:
             return Wan2_2_VAE(**vae_config)

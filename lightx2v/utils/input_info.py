@@ -99,6 +99,33 @@ class S2VInputInfo:
     # input preprocess audio
     audio_clip: torch.Tensor = field(default_factory=lambda: None)
 
+@dataclass
+class RS2VInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    audio_path: str = field(default_factory=str)
+    audio_num: int = field(default_factory=int)
+    with_mask: bool = field(default_factory=lambda: False)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    stream_config: dict = field(default_factory=dict)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+
+    # prev info
+    overlap_frame: torch.Tensor = field(default_factory=lambda: None)
+    overlap_latent: torch.Tensor = field(default_factory=lambda: None)
+    # input preprocess audio
+    audio_clip: torch.Tensor = field(default_factory=lambda: None)
+    # input reference state
+    ref_state: torch.Tensor = field(default_factory=lambda: None)
 
 # Need Check
 @dataclass
@@ -201,6 +228,8 @@ def init_empty_input_info(task):
         return VaceInputInfo()
     elif task == "s2v":
         return S2VInputInfo()
+    elif task == "rs2v":
+        return RS2VInputInfo()
     elif task == "animate":
         return AnimateInputInfo()
     elif task == "t2i":

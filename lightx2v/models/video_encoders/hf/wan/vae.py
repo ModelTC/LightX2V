@@ -844,6 +844,7 @@ class WanVAE:
         use_2d_split=True,
         load_from_rank0=False,
         use_lightvae=False,
+        use_cache_vae=False,
     ):
         self.dtype = dtype
         self.device = device
@@ -851,6 +852,7 @@ class WanVAE:
         self.use_tiling = use_tiling
         self.cpu_offload = cpu_offload
         self.use_2d_split = use_2d_split
+        self.use_cache_vae = use_cache_vae
         if use_lightvae:
             pruning_rate = 0.75  # 0.75
         else:
@@ -1424,6 +1426,19 @@ class WanVAE:
 
         return images
 
+
+    def cached_decode(self, zs):
+        if self.cpu_offload:
+            self.to_cuda()
+
+        images = self.model.cached_decode(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
+
+        if self.cpu_offload:
+            images = images.cpu()
+            self.to_cpu()
+
+        return images
+    
     def decode_stream(self, zs):
         if self.cpu_offload:
             self.to_cuda()

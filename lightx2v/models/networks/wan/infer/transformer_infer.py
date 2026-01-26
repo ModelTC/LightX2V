@@ -8,7 +8,7 @@ from lightx2v.utils.registry_factory import *
 
 from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
-
+from loguru import logger
 
 def modulate(x, scale, shift):
     return x * (1 + scale.squeeze()) + shift.squeeze()
@@ -74,8 +74,6 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         self.cos_sin = None
 
-    def get_scheduler_values(self):
-        self.cos_sin = self.scheduler.cos_sin
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
@@ -91,7 +89,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
-        self.get_scheduler_values()
+        self.cos_sin = pre_infer_out.cos_sin
         self.reset_infer_states()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
@@ -188,13 +186,10 @@ class WanTransformerInfer(BaseTransformerInfer):
             norm1_out = norm1_out.to(self.infer_dtype)
 
         s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
-
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-
         q, k = self.apply_rope_func(q, k, cos_sin)
-
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
             if self.self_attn_1_type in ["flash_attn2", "flash_attn3"]:
@@ -253,7 +248,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             x.add_(y_out * gate_msa.squeeze())
 
         norm3_out = phase.norm3.apply(x)
-        if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
+        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             context_img = context[:257]
             context = context[257:]
         else:
@@ -261,11 +256,10 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             context = context.to(self.infer_dtype)
-            if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
+            if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
                 context_img = context_img.to(self.infer_dtype)
 
         n, d = self.num_heads, self.head_dim
-
         q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
         k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
@@ -290,7 +284,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             max_seqlen_kv=k.size(0),
         )
 
-        if self.task in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
+        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 

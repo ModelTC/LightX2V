@@ -2,7 +2,7 @@ import torch
 
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.utils.envs import *
-
+from loguru import logger
 
 class WanAudioPostInfer(WanPostInfer):
     def __init__(self, config):
@@ -11,14 +11,12 @@ class WanAudioPostInfer(WanPostInfer):
 
     @torch.no_grad()
     def infer(self, x, pre_infer_out):
-        t, h, w = pre_infer_out.grid_sizes.tuple
-        if self.config.get("f2v_process", False):
-            grid_sizes = (t, h, w)
-        else:
-            grid_sizes = (t - 1, h, w)
+        _, h, w = pre_infer_out.grid_sizes.tuple
+
+        grid_sizes = (pre_infer_out.valid_latent_num, h, w)
+        x = x[:pre_infer_out.valid_token_len]
 
         x = self.unpatchify(x, grid_sizes)
-
         if self.clean_cuda_cache:
             torch.cuda.empty_cache()
 

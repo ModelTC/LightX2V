@@ -1,10 +1,11 @@
 import torch
-
+import torch.distributed as dist
+from torch.nn import functional as F
 from lightx2v.utils.envs import *
 
 from .module_io import GridOutput, WanPreInferModuleOutput
 from .utils import guidance_scale_embedding, sinusoidal_embedding_1d
-
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 class WanPreInfer:
     def __init__(self, config):
@@ -19,8 +20,74 @@ class WanPreInfer:
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+
+        self.head_size = self.config["dim"] // self.config["num_heads"]
+        self.freqs = torch.cat(
+            [
+                self.rope_params(1024, self.head_size - 4 * (self.head_size // 6)),
+                self.rope_params(1024, 2 * (self.head_size // 6)),
+                self.rope_params(1024, 2 * (self.head_size // 6)),
+            ],
+            dim=1,
+        ).to(torch.device(AI_DEVICE))
+        self.rope_t_dim = self.head_size // 2 - 2 * (self.head_size // 6)
+
+    def rope_params(self, max_seq_len, dim, theta=10000):
+        assert dim % 2 == 0
+        freqs = torch.outer(
+            torch.arange(max_seq_len),
+            1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)),
+        )
+        freqs = torch.polar(torch.ones_like(freqs), freqs)
+        return freqs
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+
+    def prepare_cos_sin(self, grid_sizes, freqs):
+        c = self.head_size // 2
+        freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+        f, h, w = grid_sizes
+        seq_len = f * h * w
+        cos_sin = torch.cat(
+            [
+                freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+            ],
+            dim=-1,
+        )
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            cos_sin = cos_sin.reshape(seq_len, -1)
+            # Extract cos and sin parts separately and concatenate
+            cos_half = cos_sin.real.contiguous()
+            sin_half = cos_sin.imag.contiguous()
+            cos_sin = torch.cat([cos_half, sin_half], dim=-1)
+            if self.seq_p_group is not None:
+                world_size = dist.get_world_size(self.seq_p_group)
+                cur_rank = dist.get_rank(self.seq_p_group)
+                seqlen = cos_sin.shape[0]
+                multiple = world_size * self.padding_multiple
+                padding_size = (multiple - (seqlen % multiple)) % multiple
+                if padding_size > 0:
+                    cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
+                cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
+        else:
+            cos_sin = cos_sin.reshape(seq_len, 1, -1)
+            if self.seq_p_group is not None:
+                world_size = dist.get_world_size(self.seq_p_group)
+                cur_rank = dist.get_rank(self.seq_p_group)
+                seqlen = cos_sin.shape[0]
+                multiple = world_size * self.padding_multiple
+                padding_size = (multiple - (seqlen % multiple)) % multiple
+                if padding_size > 0:
+                    cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
+                cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
+        return cos_sin
 
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
@@ -35,7 +102,7 @@ class WanPreInfer:
         else:
             context = inputs["text_encoder_output"]["context_null"]
 
-        if self.task in ["i2v", "flf2v", "animate", "s2v"]:
+        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"]:
             if self.config.get("use_image_encoder", True):
                 clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
 
@@ -128,11 +195,13 @@ class WanPreInfer:
             torch.cuda.empty_cache()
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
+        cos_sin = self.prepare_cos_sin(grid_sizes.tuple, self.freqs)
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
             x=x.squeeze(0),
             embed0=embed0.squeeze(0),
             context=context,
+            cos_sin=cos_sin,
             adapter_args={"motion_vec": motion_vec},
         )

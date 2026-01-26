@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 
@@ -17,5 +17,11 @@ class WanPreInferModuleOutput:
     x: torch.Tensor
     embed0: torch.Tensor
     context: torch.Tensor
+    # 3D RoPE / position related
+    cos_sin: Optional[torch.Tensor] = None
+    valid_token_len: int = 0
+    valid_latent_num: int = 0
+    # extra
     adapter_args: Dict[str, Any] = field(default_factory=dict)
     conditional_dict: Dict[str, Any] = field(default_factory=dict)
+
