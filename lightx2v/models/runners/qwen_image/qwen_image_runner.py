@@ -380,19 +380,22 @@ class QwenImageRunner(DefaultRunner):
         self.end_run()
 
         if not input_info.return_result_tensor:
+            image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+            image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
             if isinstance(images[0], list) and len(images[0]) > 1:
-                image_prefix = f"{input_info.save_result_path}".split(".")[0]
                 for idx, image in enumerate(images[0]):
-                    image.save(f"{image_prefix}_{idx}.png")
-                    logger.info(f"Image saved: {image_prefix}_{idx}.png")
+                    image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                    logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
             else:
                 image = images[0]
-                image.save(f"{input_info.save_result_path}")
-                logger.info(f"Image saved: {input_info.save_result_path}")
+                image.save(f"{image_prefix}.{image_suffix}")
+                logger.info(f"Image saved: {image_prefix}.{image_suffix}")
 
         del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}
