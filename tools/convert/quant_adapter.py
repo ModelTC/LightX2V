@@ -8,8 +8,13 @@ from safetensors.torch import save_file
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from lightx2v.utils.quant_utils import FloatQuantizer
-from tools.convert.quant import *
+quant_path = str(Path(__file__).parent / "quant")
+if quant_path not in sys.path:
+    sys.path.insert(0, quant_path)
+
+from quant import *  # noqa: E402
+
+from lightx2v.utils.quant_utils import FloatQuantizer  # noqa: E402
 
 
 def main():

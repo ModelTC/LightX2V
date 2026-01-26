@@ -18,9 +18,14 @@ from safetensors import torch as st
 from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from lightx2v.utils.lora_loader import LoRALoader
-from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
-from tools.convert.quant import *
+quant_path = str(Path(__file__).parent / "quant")
+if quant_path not in sys.path:
+    sys.path.insert(0, quant_path)
+
+from quant import *  # noqa: E402
+
+from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
+from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
 
 dtype_mapping = {
     "int8": torch.int8,
