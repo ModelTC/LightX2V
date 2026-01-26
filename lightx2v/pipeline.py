@@ -20,6 +20,8 @@ from lightx2v.utils.input_info import init_empty_input_info, update_input_info_f
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all, validate_config_paths
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+import os
 
 
 def dict_like(cls):
@@ -162,6 +164,12 @@ class LightX2VPipeline:
 
         config = set_config(self)
         validate_config_paths(config)
+
+        if config["parallel"]:
+            platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+            platform_device.init_parallel_env()
+            set_parallel_config(config)
+
         self.runner = self._init_runner(config)
         print(self.runner.config)
         logger.info(f"Initializing {self.model_cls} runner for {self.task} task...")
@@ -358,13 +366,11 @@ class LightX2VPipeline:
             self.magcache_ratios = magcache_ratios
 
     def enable_parallel(self, cfg_p_size=1, seq_p_size=1, seq_p_attn_type="ulysses"):
-        self._init_parallel()
         self.parallel = {
             "cfg_p_size": cfg_p_size,
             "seq_p_size": seq_p_size,
             "seq_p_attn_type": seq_p_attn_type,
         }
-        set_parallel_config(self)
 
     @torch.no_grad()
     def generate(
