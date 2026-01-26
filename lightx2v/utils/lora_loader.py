@@ -181,13 +181,15 @@ class LoRAPatternMatcher:
 class LoRALoader:
     """Loads and applies LoRA weights to model weights using pattern matching."""
 
-    def __init__(self, key_mapping_rules: Optional[List[Tuple[str, str]]] = None):
+    def __init__(self, key_mapping_rules: Optional[List[Tuple[str, str]]] = None, model_prefix: Optional[str] = None):
         """
         Args:
             key_mapping_rules: Optional list of (pattern, replacement) regex rules for key mapping
+            model_prefix: Optional prefix to add to model keys (e.g., "model.diffusion_model." for LTX2)
         """
         self.pattern_matcher = LoRAPatternMatcher()
         self.key_mapping_rules = key_mapping_rules or []
+        self.model_prefix = model_prefix
         self._compile_rules()
 
     def _compile_rules(self):
@@ -230,6 +232,10 @@ class LoRALoader:
         else:
             # Remove common prefixes for other models
             model_key = self._remove_prefixes(base_key) + suffix_to_add
+
+        # Apply model prefix if specified (e.g., for LTX2 models)
+        if self.model_prefix and not model_key.startswith(self.model_prefix):
+            model_key = self.model_prefix + model_key
 
         # Apply key mapping rules if provided
         if self.compiled_rules:

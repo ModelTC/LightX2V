@@ -1,6 +1,9 @@
+import gc
 from pathlib import Path
 
 import torch
+from loguru import logger
+from safetensors import safe_open
 from transformers import AutoImageProcessor, Gemma3ForConditionalGeneration, Gemma3Processor
 
 from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.av_encoder import (
@@ -9,6 +12,8 @@ from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.av_encoder import (
     AVGemmaTextEncoderModelConfigurator,
 )
 from lightx2v.models.input_encoders.hf.ltx2.gemma.tokenizer import LTXVGemmaTokenizer
+from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.lora_loader import LoRALoader
 from lightx2v.utils.ltx2_utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -172,6 +177,80 @@ class LTX2TextEncoder:
         v_context_p, a_context_p = context_p
         v_context_n, a_context_n = context_n
         return v_context_p, a_context_p, v_context_n, a_context_n
+
+    def apply_lora(self, lora_configs):
+        """
+        Apply LoRA weights to text encoder's feature_extractor_linear.
+
+        Args:
+            lora_configs: List of LoRA configuration dicts, each containing:
+                - path: Path to LoRA safetensors file
+                - strength: LoRA strength (default: 1.0)
+
+        Returns:
+            bool: True if LoRA was successfully applied, False otherwise
+        """
+        if not hasattr(self, "text_encoder"):
+            logger.warning("Text encoder does not have expected structure. Skipping LoRA application.")
+            return False
+
+        encoder_model = self.text_encoder
+
+        # Get the feature_extractor_linear module
+        if not hasattr(encoder_model, "feature_extractor_linear"):
+            logger.warning("Text encoder does not have feature_extractor_linear. Skipping LoRA application.")
+            return False
+
+        feature_extractor = encoder_model.feature_extractor_linear
+        if not hasattr(feature_extractor, "aggregate_embed"):
+            logger.warning("feature_extractor_linear does not have aggregate_embed. Skipping LoRA application.")
+            return False
+
+        # Create a weight dict for the feature extractor
+        # The key should match what LoRA loader expects after mapping
+        weight_dict = {"feature_extractor_linear.aggregate_embed.weight": feature_extractor.aggregate_embed.weight.data.clone()}
+
+        # Create LoRALoader without model_prefix (text encoder keys don't need it)
+        # Map text_embedding_projection. to feature_extractor_linear.
+        key_mapping_rules = [
+            (r"^text_embedding_projection\.", "feature_extractor_linear."),
+        ]
+        lora_loader = LoRALoader(key_mapping_rules=key_mapping_rules)
+
+        for lora_config in lora_configs:
+            lora_path = lora_config["path"]
+            lora_strength = lora_config.get("strength", 1.0)
+
+            # Load only text_embedding_projection keys to save memory
+            with safe_open(lora_path, framework="pt") as f:
+                # First, get all keys and filter for text_embedding_projection
+                all_keys = list(f.keys())
+                text_encoder_keys = [key for key in all_keys if key.startswith("text_embedding_projection.")]
+
+                # Only load the filtered keys
+                text_encoder_lora_weights = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in text_encoder_keys}
+
+            if text_encoder_lora_weights:
+                # Apply LoRA to feature extractor
+                applied_count = lora_loader.apply_lora(
+                    weight_dict=weight_dict,
+                    lora_weights=text_encoder_lora_weights,
+                    strength=lora_strength,
+                )
+
+                if applied_count > 0:
+                    # Update the actual model weights
+                    feature_extractor.aggregate_embed.weight.data = weight_dict["feature_extractor_linear.aggregate_embed.weight"]
+                    logger.info(f"Successfully applied {applied_count} LoRA weights to text encoder from {lora_path} (strength: {lora_strength})")
+                else:
+                    logger.warning(f"No LoRA weights were applied to text encoder from {lora_path}")
+            else:
+                logger.debug(f"No text_embedding_projection LoRA keys found in {lora_path}")
+
+            del text_encoder_lora_weights, weight_dict
+            gc.collect()
+
+        return True
 
 
 if __name__ == "__main__":

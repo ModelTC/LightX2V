@@ -13,9 +13,12 @@
     "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
-    "dit_quantized_ckpt": "Lightricks/LTX-2/ltx-2-19b-distilled-fp8.safetensors",
-    "dit_quantized": true,
-    "dit_quant_scheme": "fp8-pertensor",
-    "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47],
+    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors",
+    "lora_configs": [
+        {
+            "path": "Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors",
+            "strength": 0.8
+        }
+    ],
     "distilled_sigma_values": [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 }

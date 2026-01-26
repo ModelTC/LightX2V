@@ -5,11 +5,13 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
+from lightx2v.models.networks.ltx2.lora_adapter import LTX2LoraWrapper
 from lightx2v.models.networks.ltx2.model import LTX2Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.ltx2.scheduler import LTX2Scheduler
-from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2VideoVAE
+from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.envs import *
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.ltx2_media_io import load_image_conditioning
 from lightx2v.utils.memory_profiler import peak_memory_decorator
@@ -33,19 +35,37 @@ class LTX2Runner(DefaultRunner):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
         self.video_vae, self.audio_vae = self.load_vae()
+        if self.config.get("use_upsampler", False):
+            self.upsampler = self.load_upsampler()
 
-    def load_transformer(self):
-        wan_model_kwargs = {
+    def load_transformer(self, use_distilled_lora=False):
+        ltx2_model_kwargs = {
             "model_path": self.config["model_path"],
             "config": self.config,
             "device": self.init_device,
         }
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
-            model = LTX2Model(**wan_model_kwargs)
+            model = LTX2Model(**ltx2_model_kwargs)
         else:
-            raise NotImplementedError
+            model = LTX2Model(**ltx2_model_kwargs)
+            lora_wrapper = LTX2LoraWrapper(model)
+            lora_wrapper.apply_lora(lora_configs)
         return model
+
+    def load_upsampler(self):
+        if self.config.get("upsampler_original_ckpt", None) is not None:
+            ckpt_path = self.config["upsampler_original_ckpt"]
+        else:
+            ckpt_path = os.path.join(self.config["model_path"], "latent_upsampler")
+
+        upsampler = LTX2Upsampler(
+            checkpoint_path=ckpt_path,
+            device=self.init_device,
+            dtype=GET_DTYPE(),
+            cpu_offload=self.config.get("cpu_offload", False),
+        )
+        return upsampler
 
     def load_text_encoder(self):
         # offload config
@@ -71,9 +91,15 @@ class LTX2Runner(DefaultRunner):
             checkpoint_path=ckpt_path,
             gemma_root=gemma_ckpt,
             device=text_encoder_device,
-            dtype=torch.bfloat16,
+            dtype=GET_DTYPE(),
             cpu_offload=text_encoder_offload,
         )
+
+        # Apply LoRA to text encoder if configured
+        lora_configs = self.config.get("lora_configs")
+        if lora_configs:
+            text_encoder.apply_lora(lora_configs)
+
         text_encoders = [text_encoder]
         return text_encoders
 
@@ -98,7 +124,7 @@ class LTX2Runner(DefaultRunner):
             checkpoint_path=ckpt_path,
             device=vae_device,
             dtype=GET_DTYPE(),
-            load_encoder=self.config["task"] == "i2av",
+            load_encoder=self.config["task"] == "i2av" or self.config.get("use_upsampler", False),
             use_tiling=self.config.get("use_tiling_vae", False),
             cpu_offload=vae_offload,
         )
@@ -109,8 +135,18 @@ class LTX2Runner(DefaultRunner):
         return video_vae, audio_vae
 
     def get_latent_shape_with_target_hw(self):
-        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
-        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
+        if self.input_info.target_shape:
+            target_height = self.input_info.target_shape[0]
+            target_width = self.input_info.target_shape[1]
+        else:
+            if self.config.get("use_upsampler", False):
+                target_height = self.config["target_height"] // 2
+                target_width = self.config["target_width"] // 2
+            else:
+                target_height = self.config["target_height"]
+                target_width = self.config["target_width"]
+            self.input_info.target_shape = [target_height, target_width]
+
         video_latent_shape = (
             self.config.get("num_channels_latents", 128),
             (self.config["target_video_length"] - 1) // self.config["vae_scale_factors"][0] + 1,
@@ -172,9 +208,9 @@ class LTX2Runner(DefaultRunner):
         """
         # Get latent shape
         C, F, H, W = self.input_info.video_latent_shape
-        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
-        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
 
+        target_height = self.input_info.target_shape[0]
+        target_width = self.input_info.target_shape[1]
         # Initialize denoise mask (1 = denoise, 0 = keep original)
         # Shape: [1, F, H, W]
         video_denoise_mask = torch.ones(
@@ -310,6 +346,89 @@ class LTX2Runner(DefaultRunner):
 
         return video, audio
 
+    def run_upsampler(self, v_latent, a_latent):
+        """Run Stage 2: Upsampling and high-resolution refinement.
+
+        This method handles the upsampling and scheduler preparation, then delegates
+        the denoising loop to run_segment to reduce code duplication.
+        """
+        logger.info("🚀 Starting Stage 2: Upsampling and high-resolution refinement")
+
+        upsample_distilled_sigmas = torch.tensor(self.config.get("distilled_sigma_values_upsample"), dtype=torch.float32, device=AI_DEVICE)
+        self.model.scheduler.reset_sigmas(upsample_distilled_sigmas)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.upsampler = self.load_upsampler()
+
+        upsampled_v_latent = self.upsampler.upsample(v_latent, self.video_vae.encoder).squeeze(0)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.upsampler
+            torch_device_module.empty_cache()
+            gc.collect()
+
+        self.input_info.target_shape = [self.input_info.target_shape[0] * 2, self.input_info.target_shape[1] * 2]
+        self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
+
+        # Prepare scheduler using the shared method
+        self._prepare_scheduler(
+            initial_video_latent=upsampled_v_latent,  # Use upsampled video latent
+            initial_audio_latent=a_latent,  # Keep audio from stage 1 (aligned with distilled.py:183)
+            video_denoise_mask=None,  # Stage 2 fully denoises, no mask needed
+            noise_scale=upsample_distilled_sigmas[0].item(),  # Use first sigma as noise_scale (aligned with distilled.py:181)
+        )
+
+        # Delegate denoising loop to run_segment with stage_name for logging
+        logger.info(f"🔄 Stage 2 - Running {self.model.scheduler.infer_steps} denoising steps")
+        v_latent, a_latent = self.run_segment(segment_idx=None, stage_name="Stage 2", cleanup_inputs=True)
+
+        logger.info("✅ Stage 2 completed")
+        return v_latent, a_latent
+
+    def _prepare_scheduler(
+        self,
+        initial_video_latent=None,
+        initial_audio_latent=None,
+        video_denoise_mask=None,
+        noise_scale=None,
+    ):
+        """
+        Prepare scheduler with given latents and masks.
+
+        Args:
+            initial_video_latent: Initial video latent. If None, uses self.initial_video_latent.
+            initial_audio_latent: Initial audio latent. If None, not passed to scheduler.
+            video_denoise_mask: Video denoise mask. If None, uses self.video_denoise_mask.
+            noise_scale: Noise scale for scheduler. If None, not passed to scheduler.
+        """
+        prepare_kwargs = {
+            "seed": self.input_info.seed,
+            "video_latent_shape": self.input_info.video_latent_shape,
+            "audio_latent_shape": self.input_info.audio_latent_shape,
+            "initial_video_latent": initial_video_latent if initial_video_latent is not None else self.initial_video_latent,
+        }
+
+        if initial_audio_latent is not None:
+            prepare_kwargs["initial_audio_latent"] = initial_audio_latent
+
+        if video_denoise_mask is not None:
+            # Explicitly provided mask (not None)
+            prepare_kwargs["video_denoise_mask"] = video_denoise_mask
+        elif hasattr(self, "video_denoise_mask") and self.video_denoise_mask is not None:
+            # video_denoise_mask was not explicitly provided, check if we should use self.video_denoise_mask
+            # Only use self.video_denoise_mask if we're in Stage 1 (not Stage 2 upsampler)
+            # Stage 2 passes explicit initial_video_latent (high-res), so mask should match high-res
+            # Stage 1 uses self.initial_video_latent (low-res), so mask matches low-res
+            if initial_video_latent is None or initial_video_latent is self.initial_video_latent:
+                # Stage 1: use the mask (low-res matches low-res latent)
+                prepare_kwargs["video_denoise_mask"] = self.video_denoise_mask
+            # Stage 2: don't pass mask, let scheduler create a full mask (all 1s) matching the high-res latent
+        # If video_denoise_mask is explicitly None and no self.video_denoise_mask exists,
+        # scheduler will create a full mask (all 1s) matching the latent shape
+
+        if noise_scale is not None:
+            prepare_kwargs["noise_scale"] = noise_scale
+
+        self.model.scheduler.prepare(**prepare_kwargs)
+
     def init_run(self):
         self.gen_video_final = None
         self.get_video_segment_num()
@@ -320,13 +439,7 @@ class LTX2Runner(DefaultRunner):
 
         # Image conditioning (if any) is already prepared in run_input_encoder
         # and stored in self.video_denoise_mask and self.initial_video_latent
-        self.model.scheduler.prepare(
-            seed=self.input_info.seed,
-            video_latent_shape=self.input_info.video_latent_shape,
-            audio_latent_shape=self.input_info.audio_latent_shape,
-            initial_video_latent=self.initial_video_latent,
-            video_denoise_mask=self.video_denoise_mask,
-        )
+        self._prepare_scheduler()
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
@@ -346,6 +459,10 @@ class LTX2Runner(DefaultRunner):
                 self.init_run_segment(segment_idx)
                 # 2. main inference loop
                 v_latent, a_latent = self.run_segment(segment_idx)
+
+                ## upsample latent
+                if self.config.get("use_upsampler", False):
+                    v_latent, a_latent = self.run_upsampler(v_latent, a_latent)
                 # 3. vae decoder
                 self.gen_video, self.gen_audio = self.run_vae_decoder(v_latent, a_latent)
 
@@ -377,8 +494,26 @@ class LTX2Runner(DefaultRunner):
             return {"video": None}
 
     @peak_memory_decorator
-    def run_segment(self, segment_idx=0):
+    def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
+        """
+        Run denoising loop for a segment.
+
+        Args:
+            segment_idx: Segment index (0-based). Use None for upsampler stage.
+            stage_name: Optional stage name for logging (e.g., "Stage 2"). If None, uses default logging.
+            cleanup_inputs: Whether to cleanup inputs after completion. If None, uses default logic:
+                - For upsampler (segment_idx=None): always cleanup
+                - For regular segments: cleanup only if last segment and not using upsampler
+        """
         infer_steps = self.model.scheduler.infer_steps
+
+        # Determine cleanup behavior
+        if cleanup_inputs is None:
+            # Default logic: cleanup only for last segment when not using upsampler
+            cleanup_inputs = not self.config.get("use_upsampler", False) and segment_idx is not None and segment_idx == self.video_segment_num - 1
+        elif cleanup_inputs is True and segment_idx is None:
+            # Explicit cleanup for upsampler stage
+            cleanup_inputs = True
 
         for step_index in range(infer_steps):
             # only for single segment, check stop signal every step
@@ -390,7 +525,12 @@ class LTX2Runner(DefaultRunner):
             ):
                 if self.video_segment_num == 1:
                     self.check_stop()
-                logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+
+                # Use stage_name for logging if provided, otherwise use default
+                if stage_name:
+                    logger.info(f"==> {stage_name} step_index: {step_index + 1} / {infer_steps}")
+                else:
+                    logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
 
                 with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.step_pre(step_index=step_index)
@@ -401,12 +541,14 @@ class LTX2Runner(DefaultRunner):
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
 
-                if self.progress_callback:
+                # Progress callback only for regular segments (not upsampler)
+                if self.progress_callback and segment_idx is not None:
                     current_step = segment_idx * infer_steps + step_index + 1
                     total_all_steps = self.video_segment_num * infer_steps
                     self.progress_callback((current_step / total_all_steps) * 100, 100)
 
-        if segment_idx is not None and segment_idx == self.video_segment_num - 1:
+        # Cleanup inputs if needed
+        if cleanup_inputs:
             del self.inputs
             torch_device_module.empty_cache()
 

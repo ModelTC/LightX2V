@@ -1,5 +1,11 @@
 import json
+import os
 
+os.environ["PROFILING_DEBUG_LEVEL"] = "2"
+os.environ["DTYPE"] = "BF16"
+os.environ["SENSITIVE_LAYER_DTYPE"] = "None"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import torch.distributed as dist
 from loguru import logger
@@ -136,6 +142,7 @@ class LightX2VPipeline:
         audio_fps=24000,
         double_precision_rope=True,
         norm_modulate_backend="torch",
+        distilled_sigma_values=None,
     ):
         self.resize_mode = resize_mode
         if config_json is not None:
@@ -158,6 +165,7 @@ class LightX2VPipeline:
                 audio_fps,
                 double_precision_rope,
                 norm_modulate_backend,
+                distilled_sigma_values,
             )
 
         config = set_config(self)
@@ -186,8 +194,13 @@ class LightX2VPipeline:
         audio_fps,
         double_precision_rope,
         norm_modulate_backend,
+        distilled_sigma_values,
     ):
-        self.infer_steps = infer_steps
+        if self.model_cls == "ltx2":
+            self.distilled_sigma_values = distilled_sigma_values
+            self.infer_steps = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
+        else:
+            self.infer_steps = infer_steps
         self.target_width = width
         self.target_height = height
         self.target_video_length = num_frames
