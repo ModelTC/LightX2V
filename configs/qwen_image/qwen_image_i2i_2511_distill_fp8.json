@@ -9,6 +9,6 @@
     "enable_cfg": false,
     "sample_guide_scale": 4.0,
     "dit_quantized": true,
-    "dit_quantized_ckpt": "/path/to/your/quantized/model.safetensors",
+    "dit_quantized_ckpt": "lightx2v/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_8steps_v1.0.safetensors",
     "dit_quant_scheme": "fp8-sgl"
 }
