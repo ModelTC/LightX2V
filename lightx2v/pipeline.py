@@ -222,7 +222,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             self.attn_type = attn_mode
         self.norm_modulate_backend = norm_modulate_backend
 
