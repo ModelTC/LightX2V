@@ -51,7 +51,9 @@ class MMWeightTemplate(metaclass=ABCMeta):
 
 
 class MMWeightQuantTemplate(MMWeightTemplate):
-    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+    def __init__(
+        self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, lora_prefix="diffusion_model.blocks", lora_path=""
+    ):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.weight_scale_name = self.weight_name.removesuffix(".weight") + ".weight_scale"
         self.load_func = None
