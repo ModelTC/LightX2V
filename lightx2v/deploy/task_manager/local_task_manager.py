@@ -182,7 +182,7 @@ class LocalTaskManager(BaseTaskManager):
             task_id = cand["task_id"]
             worker_name = cand["worker_name"]
             task, subtasks = self.load(task_id)
-            if task["status"] in [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]:
+            if task["status"] in FinishedStatus:
                 continue
             for sub in subtasks:
                 if sub["worker_name"] == worker_name:
@@ -225,7 +225,7 @@ class LocalTaskManager(BaseTaskManager):
             pre = subs[0]["worker_identity"]
             assert pre == worker_identity, f"worker identity not matched: {pre} vs {worker_identity}"
 
-        assert status in [TaskStatus.SUCCEED, TaskStatus.FAILED], f"invalid finish status: {status}"
+        assert status in FinishedStatus, f"invalid finish status: {status}"
         for sub in subs:
             if sub["status"] not in FinishedStatus:
                 if should_running and sub["status"] != TaskStatus.RUNNING:
@@ -239,6 +239,11 @@ class LocalTaskManager(BaseTaskManager):
             self.save(task, subtasks)
             self.metrics_commit(records)
             return TaskStatus.CANCEL
+
+        if task["status"] == TaskStatus.REJECT:
+            self.save(task, subtasks)
+            self.metrics_commit(records)
+            return TaskStatus.REJECT
 
         running_subs = []
         failed_sub = False

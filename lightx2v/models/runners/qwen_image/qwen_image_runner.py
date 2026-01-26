@@ -367,6 +367,7 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
+    @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
@@ -378,15 +379,16 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            image_prefix = f"{input_info.save_result_path}".split(".")[0]
-            for idx, image in enumerate(images[0]):
-                image.save(f"{image_prefix}_{idx}.png")
-                logger.info(f"Image saved: {image_prefix}_{idx}.png")
-        else:
-            image = images[0]
-            image.save(f"{input_info.save_result_path}")
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        if not input_info.return_result_tensor:
+            if isinstance(images[0], list) and len(images[0]) > 1:
+                image_prefix = f"{input_info.save_result_path}".split(".")[0]
+                for idx, image in enumerate(images[0]):
+                    image.save(f"{image_prefix}_{idx}.png")
+                    logger.info(f"Image saved: {image_prefix}_{idx}.png")
+            else:
+                image = images[0]
+                image.save(f"{input_info.save_result_path}")
+                logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()

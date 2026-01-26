@@ -24,7 +24,7 @@ from lightx2v.utils.input_info import init_empty_input_info, update_input_info_f
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
-from lightx2v.utils.utils import seed_all, validate_task_arguments
+from lightx2v.utils.utils import seed_all, validate_config_paths, validate_task_arguments
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
@@ -75,15 +75,15 @@ def main():
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
 
-    parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
-    parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
-    parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
     parser.add_argument(
-        "--images",
+        "--image_path",
         type=str,
         default="",
-        help="Image conditioning for I2AV task. Format: 'path1:frame_idx1:strength1,path2:frame_idx2:strength2'. Example: 'cat.jpg:0:1.0,dog.jpg:60:0.8'",
+        help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
+    parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
+    parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
+    parser.add_argument("--image_strength", type=float, default=1.0, help="The strength of the image-to-audio-video (i2av) task")
     # [Warning] For vace task, need refactor.
     parser.add_argument(
         "--src_ref_images",
@@ -148,6 +148,8 @@ def main():
         set_parallel_config(config)
 
     print_config(config)
+
+    validate_config_paths(config)
 
     with ProfilingContext4DebugL1("Total Cost"):
         # init runner

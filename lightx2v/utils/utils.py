@@ -598,6 +598,11 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
     Raises:
         AssertionError: If required arguments are missing or invalid for the task
     """
+    # Check model_path exists
+    model_path = getattr(args, "model_path", None)
+    if model_path:
+        check_path_exists(model_path)
+
     task = args.task
 
     # Define required file paths for each task
@@ -610,6 +615,7 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
         "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
         "t2v": {"required_paths": [], "description": "Text-to-Video task"},
         "t2i": {"required_paths": [], "description": "Text-to-Image task"},
+        "i2av": {"required_paths": ["image_path"], "description": "Image-to-Audio-Video task requires --image_path"},
     }
 
     if task not in task_requirements:
@@ -635,3 +641,46 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
             check_path_exists(path_value)
 
     logger.info(f"✓ Task '{task}' arguments validated successfully")
+
+
+def validate_config_paths(config: dict) -> None:
+    """
+    Validate checkpoint paths in config dictionary.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        FileNotFoundError: If any checkpoint path in config does not exist
+    """
+    # Check dit_quantized_ckpt or dit_original_ckpt
+    if "dit_quantized_ckpt" in config and config["dit_quantized_ckpt"] is not None:
+        check_path_exists(config["dit_quantized_ckpt"])
+        logger.debug(f"✓ Verified dit_quantized_ckpt: {config['dit_quantized_ckpt']}")
+
+    if "dit_original_ckpt" in config and config["dit_original_ckpt"] is not None:
+        check_path_exists(config["dit_original_ckpt"])
+        logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
+
+    # For wan2.2, check high and low noise checkpoints
+    model_cls = config.get("model_cls", "")
+    if model_cls and "wan2.2" in model_cls:
+        # Check high noise checkpoints
+        if "high_noise_original_ckpt" in config and config["high_noise_original_ckpt"] is not None:
+            check_path_exists(config["high_noise_original_ckpt"])
+            logger.debug(f"✓ Verified high_noise_original_ckpt: {config['high_noise_original_ckpt']}")
+
+        if "high_noise_quantized_ckpt" in config and config["high_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["high_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified high_noise_quantized_ckpt: {config['high_noise_quantized_ckpt']}")
+
+        # Check low noise checkpoints
+        if "low_noise_original_ckpt" in config and config["low_noise_original_ckpt"] is not None:
+            check_path_exists(config["low_noise_original_ckpt"])
+            logger.debug(f"✓ Verified low_noise_original_ckpt: {config['low_noise_original_ckpt']}")
+
+        if "low_noise_quantized_ckpt" in config and config["low_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["low_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified low_noise_quantized_ckpt: {config['low_noise_quantized_ckpt']}")
+
+    logger.info("✓ Config checkpoint paths validated successfully")

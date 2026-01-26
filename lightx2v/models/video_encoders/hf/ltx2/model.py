@@ -34,16 +34,19 @@ class LTX2VideoVAE:
         device: torch.device,
         dtype: torch.dtype = torch.bfloat16,
         load_encoder: bool = True,
+        use_tiling: bool = False,
         cpu_offload: bool = False,
     ):
         self.checkpoint_path = checkpoint_path
         self.device = device
         self.dtype = dtype
         self.load_encoder_flag = load_encoder
+        self.use_tiling = use_tiling
         self.loader = SafetensorsModelStateDictLoader()
         self.encoder = None
         self.decoder = None
         self.cpu_offload = cpu_offload
+        self.grid_table = {}  # Cache for 2D grid calculations
         self.load()
 
     def load(self) -> tuple[VideoEncoder | None, VideoDecoder | None]:
@@ -75,11 +78,27 @@ class LTX2VideoVAE:
         self.decoder = decoder.to(self.device).eval()
 
     def encode(self, video_frames: torch.Tensor) -> torch.Tensor:
+        """
+        Encode video frames to latent space.
+        Args:
+            video_frames: Input video tensor [1, C, T, H, W] or [C, T, H, W]
+        Returns:
+            Encoded latent tensor [C, F, H_latent, W_latent]
+        """
+        # Ensure video has batch dimension
+        if video_frames.dim() == 4:
+            video_frames = video_frames.unsqueeze(0)
+
         if self.cpu_offload:
             self.encoder = self.encoder.to(AI_DEVICE)
+
         out = self.encoder(video_frames)
+        if out.dim() == 5:
+            out = out.squeeze(0)
+
         if self.cpu_offload:
             self.encoder = self.encoder.to("cpu")
+
         return out
 
     def decode(
@@ -88,6 +107,10 @@ class LTX2VideoVAE:
         tiling_config: TilingConfig | None = None,
         generator: torch.Generator | None = None,
     ) -> Iterator[torch.Tensor]:
+        # 如果启用了tiling但没有提供配置，使用默认配置
+        if self.use_tiling and tiling_config is None:
+            tiling_config = TilingConfig.default()
+
         if self.cpu_offload:
             self.decoder = self.decoder.to(AI_DEVICE)
         try:
