@@ -9,3 +9,4 @@ elif AI_DEVICE == "cuda":
     # Check if running on Hygon DCU platform
     if os.getenv("PLATFORM") == "hygon_dcu":
         from .attn.hygon_dcu import *
+        from .mm.hygon_dcu import *
