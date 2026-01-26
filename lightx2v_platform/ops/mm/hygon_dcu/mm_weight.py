@@ -25,7 +25,18 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         Kernel: vllm (blaslt for ROCm/DCU)
     """
 
-    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = False
@@ -59,7 +70,7 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
 
         # Use ops.blaslt_scaled_mm from vllm for ROCm/DCU instead of torch.ops._C.cutlass_scaled_mm
-        if ops is not None and hasattr(ops, 'blaslt_scaled_mm'):
+        if ops is not None and hasattr(ops, "blaslt_scaled_mm"):
             # Ensure out_dtype is bfloat16 or float16 as required by blaslt_scaled_mm
             out_dtype = dtype if dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
 

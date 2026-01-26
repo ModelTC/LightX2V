@@ -58,10 +58,7 @@ class QuantWeightFP8(QuantTemplate):
     def __init__(self, weight):
         super().__init__(weight)
         if float_quantize is None:
-            raise ImportError(
-                "qtorch is required for FP8 quantization. "
-                "Please install it with: pip install qtorch"
-            )
+            raise ImportError("qtorch is required for FP8 quantization. Please install it with: pip install qtorch")
         self.weight_quant_func = self.load_fp8_weight
 
     @torch.no_grad()
