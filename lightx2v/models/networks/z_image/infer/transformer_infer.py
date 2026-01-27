@@ -121,7 +121,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         attn_phase = block_weight.compute_phases[1]
         ffn_phase = block_weight.compute_phases[2]
 
-        scale_msa, gate_msa, scale_mlp, gate_mlp = self.infer_mod(mod_phase, attn_phase, hidden_states, adaln_input)
+        scale_msa, gate_msa, scale_mlp, gate_mlp = self.infer_mod(mod_phase, hidden_states, adaln_input)
         attn_out = self.infer_attn(attn_phase, hidden_states, freqs_cis, scale_msa)
 
         if gate_msa is not None:
