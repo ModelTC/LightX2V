@@ -31,6 +31,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         target_video_length = rs2v.config.get("target_video_length", 81)
         target_fps = rs2v.config.get("target_fps", 16)
         audio_sr = rs2v.config.get("audio_sr", 16000)
+        audio_per_frame = audio_sr // target_fps
 
         # 根据 pipe 最长 overlap_len 初始化 tail buffer
 
@@ -50,25 +51,31 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
         idx = 0
         while True:
-            audio_clip = audio_reader.next_frame()
+            audio_clip, pad_len = audio_reader.next_frame()
             if audio_clip is None:
                 break
+
+            is_first = True if idx == 0 else False
+            is_last = True if pad_len > 0 else False
 
             pipe = rs2v
             inputs = self.clip_inputs["rs2v_clip"]
             #inputs.prompt = "A man speaks to the camera with a slightly furrowed brow and focused gaze. He raises both hands upward in powerful, emphatic gestures. "  # 添加动作提示
-
             ref_state = torch.tensor(ref_state_sq[idx%len(ref_state_sq)])
 
+            inputs.is_first = is_first
+            inputs.is_last = is_last
             inputs.ref_state = ref_state
             inputs.seed = inputs.seed + idx  # 不同 clip 使用不同随机种子
             inputs.audio_clip = audio_clip
             idx = idx + 1
 
             gen_clip_video, audio_clip, gen_latents = pipe.run_clip_pipeline(inputs)
-            logger.info(f"Generated rs2v clip {idx}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
-            gen_video_list.append(gen_clip_video)
-            cut_audio_list.append(audio_clip)
+            logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
+                
+            video_pad_len = pad_len // audio_per_frame
+            gen_video_list.append(gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len])
+            cut_audio_list.append(audio_clip[: audio_clip.shape[0] - pad_len])
             inputs.overlap_latent = gen_latents[:, -1:]
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()

@@ -27,7 +27,6 @@ class WanScheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
-        self.padding_multiple = self.config.get("padding_multiple", 1)
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:

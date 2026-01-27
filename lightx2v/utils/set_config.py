@@ -109,13 +109,6 @@ def set_config(args):
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 
-    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "ltx2"]:
-        config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
-        if config["model_cls"] in ["seko_talk", "wan2.2_animate"]:
-            if not config.get("f2v_process", False):
-                config["attnmap_frame_num"] += 1
-            config["padding_multiple"] = config["attnmap_frame_num"]
-
     # Load diffusers vae config
     if os.path.exists(os.path.join(config["model_path"], "vae", "config.json")):
         with open(os.path.join(config["model_path"], "vae", "config.json"), "r") as f:

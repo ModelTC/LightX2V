@@ -798,10 +798,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return latent_shape
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
-    def run_vae_cached_decoder(self, latents):
+    def run_vae_cached_decoder_withflag(self, latents, is_first: bool, is_last: bool):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.cached_decode(latents.to(GET_DTYPE()))
+        images = self.vae_decoder.cached_decode_withflag(latents.to(GET_DTYPE()), is_first, is_last)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
             torch.cuda.empty_cache()
@@ -845,7 +845,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         latents = self.run_clip()
         # 运行vae decoder
         if self.task in ["rs2v"]:
-            gen_video = self.run_vae_cached_decoder(latents)
+            gen_video = self.run_vae_cached_decoder_withflag(latents,  
+                                                             self.input_info.is_first,
+                                                             self.input_info.is_last)
         else:
             gen_video = self.run_vae_decoder(latents)
 

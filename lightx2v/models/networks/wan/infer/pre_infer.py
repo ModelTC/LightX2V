@@ -71,7 +71,7 @@ class WanPreInfer:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
                 seqlen = cos_sin.shape[0]
-                multiple = world_size * self.padding_multiple
+                multiple = world_size * f
                 padding_size = (multiple - (seqlen % multiple)) % multiple
                 if padding_size > 0:
                     cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
@@ -82,7 +82,7 @@ class WanPreInfer:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
                 seqlen = cos_sin.shape[0]
-                multiple = world_size * self.padding_multiple
+                multiple = world_size * f
                 padding_size = (multiple - (seqlen % multiple)) % multiple
                 if padding_size > 0:
                     cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))

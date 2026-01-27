@@ -566,7 +566,7 @@ class WanVAE_(nn.Module):
         for i in range(0, height, self.tile_sample_stride_height):
             row = []
             for j in range(0, width, self.tile_sample_stride_width):
-                self.clear_cache()
+                self.clear_encode_cache()
                 time = []
                 frame_range = 1 + (num_frames - 1) // 4
                 for k in range(frame_range):
@@ -592,7 +592,7 @@ class WanVAE_(nn.Module):
 
                 row.append(torch.cat(time, dim=2))
             rows.append(row)
-        self.clear_cache()
+        self.clear_encode_cache()
 
         result_rows = []
         for i, row in enumerate(rows):
@@ -634,7 +634,7 @@ class WanVAE_(nn.Module):
         for i in range(0, height, tile_latent_stride_height):
             row = []
             for j in range(0, width, tile_latent_stride_width):
-                self.clear_cache()
+                self.clear_decode_cache()
                 time = []
                 for k in range(num_frames):
                     self._conv_idx = [0]
@@ -644,7 +644,7 @@ class WanVAE_(nn.Module):
                     time.append(decoded)
                 row.append(torch.cat(time, dim=2))
             rows.append(row)
-        self.clear_cache()
+        self.clear_decode_cache()
 
         result_rows = []
         for i, row in enumerate(rows):
@@ -664,7 +664,7 @@ class WanVAE_(nn.Module):
         return dec
 
     def encode(self, x, scale, return_mu=False):
-        self.clear_cache()
+        self.clear_encode_cache()
         ## cache
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
@@ -689,14 +689,14 @@ class WanVAE_(nn.Module):
         else:
             mu = (mu - scale[0]) * scale[1]
 
-        self.clear_cache()
+        self.clear_encode_cache()
         if return_mu:
             return mu, log_var
         else:
             return mu
 
     def decode(self, z, scale):
-        self.clear_cache()
+        self.clear_decode_cache()
 
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
@@ -721,11 +721,11 @@ class WanVAE_(nn.Module):
                 )
                 out = torch.cat([out, out_], 2)
 
-        self.clear_cache()
+        self.clear_decode_cache()
         return out
 
     def decode_stream(self, z, scale):
-        self.clear_cache()
+        self.clear_decode_cache()
 
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
@@ -760,6 +760,32 @@ class WanVAE_(nn.Module):
                 out = torch.cat([out, out_], 2)
         return out
 
+
+    def cached_decode_withflag(self, z, scale, is_first_clip, is_last_clip):
+        # z: [b,c,t,h,w]
+        if isinstance(scale[0], torch.Tensor):
+            z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
+        else:
+            z = z / scale[1] + scale[0]
+        iter_ = z.shape[2]
+        x = self.conv2(z)
+
+        if is_first_clip:
+            self.clear_decode_cache()
+
+        for i in range(iter_):
+            self._conv_idx = [0]
+            if i == 0:
+                out = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
+            else:
+                out_ = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
+                out = torch.cat([out, out_], 2)
+
+        if is_last_clip:
+            self.clear_decode_cache()
+        return out
+
+
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
@@ -773,9 +799,15 @@ class WanVAE_(nn.Module):
         return mu + std * torch.randn_like(std), mu, log_var
 
     def clear_cache(self):
+        self.clear_encode_cache()
+        self.clear_decode_cache()
+
+    def clear_decode_cache(self):
         self._conv_num = count_conv3d(self.decoder)
         self._conv_idx = [0]
         self._feat_map = [None] * self._conv_num
+
+    def clear_encode_cache(self):
         # cache encode
         self._enc_conv_num = count_conv3d(self.encoder)
         self._enc_conv_idx = [0]
@@ -1427,11 +1459,11 @@ class WanVAE:
         return images
 
 
-    def cached_decode(self, zs):
+    def cached_decode_withflag(self, zs, is_first, is_last):
         if self.cpu_offload:
             self.to_cuda()
 
-        images = self.model.cached_decode(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
+        images = self.model.cached_decode_withflag(zs.unsqueeze(0), self.scale, is_first, is_last).clamp_(-1, 1)
 
         if self.cpu_offload:
             images = images.cpu()

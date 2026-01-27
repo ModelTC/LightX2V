@@ -58,7 +58,6 @@ class WanModel(CompiledMethodsMixin):
         else:
             self.seq_p_group = None
 
-        self.padding_multiple = self.config.get("padding_multiple", 1)
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
@@ -503,8 +502,8 @@ class WanModel(CompiledMethodsMixin):
         x = pre_infer_out.x
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
-
-        multiple = world_size * self.padding_multiple
+        f, _, _ = pre_infer_out.grid_sizes.tuple
+        multiple = world_size * f
         padding_size = (multiple - (x.shape[0] % multiple)) % multiple
         if padding_size > 0:
             x = F.pad(x, (0, 0, 0, padding_size))

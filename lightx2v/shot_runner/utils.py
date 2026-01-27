@@ -6,6 +6,7 @@ import torch
 import torchaudio as ta
 from einops import rearrange
 from loguru import logger
+import torch.nn.functional as F
 
 
 class SlidingWindowReader:
@@ -51,10 +52,9 @@ class RS2V_SlidingWindowReader:
         self.first_clip_len = first_clip_len
         self.clip_len = clip_len
 
-        self.audio_per_frame = sr // fps  # samples per video frame
-
-        self.pos_frame = 0        # 当前起始帧位置
-        self.chunk_idx = 0        # 第几个 chunk（用于区分第一段）
+        self.audio_per_frame = sr // fps
+        self.pos_frame = 0
+        self.chunk_idx = 0
 
     def next_frame(self):
         cur_clip_len = (
@@ -62,18 +62,25 @@ class RS2V_SlidingWindowReader:
         )
 
         start_sample = self.pos_frame * self.audio_per_frame
+        if start_sample >= self.samples.numel():
+            return None, 0
+
         end_sample = start_sample + cur_clip_len * self.audio_per_frame
+        real_end = min(end_sample, self.samples.numel())
 
-        if end_sample > self.samples.numel():
-            return None
+        frame = self.samples[start_sample:real_end].float()
 
-        frame = self.samples[start_sample:end_sample]
+        expected_samples = cur_clip_len * self.audio_per_frame
+        real_samples = frame.numel()
+        pad_len = expected_samples - real_samples
+
+        if pad_len > 0:
+            frame = F.pad(frame, (0, pad_len))
 
         self.pos_frame += cur_clip_len
         self.chunk_idx += 1
 
-        return frame.float()
-
+        return frame, pad_len
 
 def array_to_video(
     image_array: np.ndarray,
