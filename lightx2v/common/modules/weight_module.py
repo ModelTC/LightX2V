@@ -88,7 +88,7 @@ class WeightModule:
             if module is not None:
                 yield from module.named_parameters(prefix + name + ".")
 
-    def to_cpu(self):
+    def to_cpu(self, non_blocking=False):
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cpu"):
@@ -110,7 +110,7 @@ class WeightModule:
                 if module is not None and hasattr(module, "to_cpu"):
                     module.to_cpu()
 
-    def to_cuda(self):
+    def to_cuda(self, non_blocking=False):
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cuda"):
@@ -131,7 +131,7 @@ class WeightModule:
                 if module is not None and hasattr(module, "to_cuda"):
                     module.to_cuda()
 
-    def to_cpu_async(self):
+    def to_cpu_async(self, non_blocking=True):
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cpu"):
@@ -153,7 +153,7 @@ class WeightModule:
                 if module is not None and hasattr(module, "to_cpu"):
                     module.to_cpu(non_blocking=True)
 
-    def to_cuda_async(self):
+    def to_cuda_async(self, non_blocking=True):
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cuda"):

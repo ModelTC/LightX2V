@@ -3,9 +3,9 @@
     "num_channels_latents": 16,
     "infer_steps": 9,
     "attn_type": "flash_attn3",
-    "enable_cfg": true,
+    "enable_cfg": false,
     "sample_guide_scale": 0.0,
     "patch_size": 2,
-    "strength": 0.6,
-    "resize_mode": "adaptive"
+    "cpu_offload": true,
+    "offload_granularity": "block"
 }
