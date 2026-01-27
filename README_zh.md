@@ -36,6 +36,7 @@ pre-commit run --all-files
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
+- [kikidouloveme79](https://github.com/kikidouloveme79)
 
 ## :fire: 最新动态
 
