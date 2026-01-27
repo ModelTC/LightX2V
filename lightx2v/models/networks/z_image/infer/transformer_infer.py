@@ -27,7 +27,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def infer_mod(self, mod_phase, attn_phase, hidden_states, adaln_input):
+    def infer_mod(self, mod_phase, hidden_states, adaln_input):
         if mod_phase is None:
             return None, None, None, None
 
