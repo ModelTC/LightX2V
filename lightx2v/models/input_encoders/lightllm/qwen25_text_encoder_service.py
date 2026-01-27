@@ -302,6 +302,7 @@ class LightLLMServiceTextEncoder:
                 # Fallback to base64 mode
                 if "hidden_states_base64" in result:
                     import base64
+
                     data_bytes = base64.b64decode(result["hidden_states_base64"])
                     shape = result["hidden_states_shape"]
                     hidden_states_np = np.frombuffer(data_bytes, dtype=np.uint8).reshape(shape)

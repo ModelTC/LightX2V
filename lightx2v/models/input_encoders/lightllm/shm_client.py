@@ -5,9 +5,10 @@ Shared Memory Client for LightLLM Hidden States
 实现零拷贝数据传输，显著降低通信延迟。
 """
 
-import numpy as np
 from multiprocessing import shared_memory
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
+import numpy as np
 from loguru import logger
 
 
