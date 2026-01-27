@@ -45,12 +45,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = qwen_module(**model_kwargs)
         lora_wrapper = QwenImageLoraWrapper(model)
-        for lora_config in lora_configs:
-            lora_path = lora_config["path"]
-            strength = lora_config.get("strength", 1.0)
-            lora_name = lora_wrapper.load_lora(lora_path)
-            lora_wrapper.apply_lora(lora_name, strength)
-            logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        lora_wrapper.apply_lora(lora_configs)
     return model
 
 
@@ -281,8 +276,6 @@ class QwenImageRunner(DefaultRunner):
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def get_custom_shape(self):
-        if self.config["task"] == "i2i":
-            return None
         default_aspect_ratios = {
             "16:9": [1664, 928],
             "9:16": [928, 1664],
@@ -306,11 +299,12 @@ class QwenImageRunner(DefaultRunner):
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        if self.input_info.aspect_ratio in as_maps:
-            logger.info(f"Qwen Image Runner got aspect ratio: {self.input_info.aspect_ratio}")
-            width, height = as_maps[self.input_info.aspect_ratio]
+        aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
+        if aspect_ratio in as_maps:
+            logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
+            width, height = as_maps[aspect_ratio]
             return (width, height)
-        logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
+        logger.warning(f"Invalid aspect ratio: {aspect_ratio}, not in {as_maps.keys()}")
 
         return None
 
@@ -373,6 +367,7 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
+    @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
@@ -384,19 +379,23 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            image_prefix = f"{input_info.save_result_path}".split(".")[0]
-            for idx, image in enumerate(images[0]):
-                image.save(f"{image_prefix}_{idx}.png")
-                logger.info(f"Image saved: {image_prefix}_{idx}.png")
-        else:
-            image = images[0]
-            image.save(f"{input_info.save_result_path}")
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        if not input_info.return_result_tensor:
+            image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+            image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+            if isinstance(images[0], list) and len(images[0]) > 1:
+                for idx, image in enumerate(images[0]):
+                    image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                    logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
+            else:
+                image = images[0]
+                image.save(f"{image_prefix}.{image_suffix}")
+                logger.info(f"Image saved: {image_prefix}.{image_suffix}")
 
         del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}

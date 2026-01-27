@@ -39,6 +39,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **January 20, 2026:** 🚀 We support the [LTX-2](https://huggingface.co/Lightricks/LTX-2) audio-video generation model, featuring CFG parallelism, block-level offload, and FP8 per-tensor quantization. Usage examples can be found in [examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2) and [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2).
+
 - **January 6, 2026:** 🚀 We updated the 8-step CFG/step-distilled models for [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) and [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511). You can download the corresponding weights from [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) and [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) for use. Usage tutorials can be found [here](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image).
 
 - **January 6, 2026:** 🚀 Supported deployment on Enflame S60 (GCU).
@@ -200,6 +202,7 @@ pipe.generate(
 ## 🤖 Supported Model Ecosystem
 
 ### Official Open-Source Models
+- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)

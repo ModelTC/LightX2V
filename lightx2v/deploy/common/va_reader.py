@@ -198,7 +198,11 @@ class VAReader:
         logger.info(f"Got segment audio rank={self.rank}: {audio_data.shape} {audio_data.dtype} {audio_data.min()} {audio_data.max()}")
         return audio_data
 
-    def get_audio_segment(self, timeout: float = 1.0):
+    def get_audio_segment(self, timeout: float = 1.0, fetch_duration: float = None, prev_duration: float = None):
+        if fetch_duration is not None and self.segment_duration != fetch_duration:
+            logger.warning(f"ignore fetch_duration, {fetch_duration} != {self.segment_duration}")
+        if prev_duration is not None and self.prev_duration != prev_duration:
+            raise ValueError(f"prev_duration {prev_duration} != {self.prev_duration}")
         audio_data = None
         if self.rank == self.target_rank:
             try:
@@ -208,7 +212,7 @@ class VAReader:
         if self.world_size > 1:
             audio_data = self.braodcast_audio_data(audio_data)
         audio_data = self.bytes_to_ndarray(audio_data)
-        return audio_data
+        return audio_data, self.segment_duration
 
     def stop(self):
         # Stop ffmpeg process

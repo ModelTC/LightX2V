@@ -397,13 +397,16 @@ class LongCatImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        image = images[0]
-        image.save(f"{input_info.save_result_path}")
-        logger.info(f"Image saved: {input_info.save_result_path}")
+        if not input_info.return_result_tensor:
+            image = images[0]
+            image.save(input_info.save_result_path)
+            logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}

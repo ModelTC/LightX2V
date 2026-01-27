@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # System management interface: hy-smi
+export PLATFORM=hygon_dcu
 
-# set path and first
+# set path firstly
 lightx2v_path=
 model_path=
 

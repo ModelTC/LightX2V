@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# set path and first
+# set path firstly
 lightx2v_path=/data/nvme2/wushuo/LightX2V
 model_path=/data/nvme2/wushuo/hf_models/Skywork/Matrix-Game-2.0
 

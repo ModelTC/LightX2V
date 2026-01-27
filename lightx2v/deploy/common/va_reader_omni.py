@@ -131,6 +131,10 @@ class ChatAdapter:
                     "provider": "huoshan_stream_tts",
                 }
             }
+        system_prompt = stream_config.get("system_prompt", "")
+        if system_prompt:
+            override_config["model"] = {"system_prompt": system_prompt}
+            logger.info(f"Omni use custom system prompt: {system_prompt}")
         with open(config_schema_path, "r") as f:
             schema = json.load(f)
         jsonschema.validate(instance=override_config, schema=schema)
@@ -142,6 +146,8 @@ class ChatAdapter:
         self.reset_prev = False
         self.status = "blank"
         self.immediate_switch = 0
+        self.image_switch = ""
+        self.action_switch = ""
         self.model_runner = model_runner
 
     def launch_chat_server(self):
@@ -175,9 +181,26 @@ class ChatAdapter:
         self.reset_prev = True
         self.status = status
         self.immediate_switch = 1
-        if self.model_runner is not None:
+        # only no action switch can be paused immediately
+        if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner pause signal set to True")
+
+    def set_image_switch(self, image_path):
+        logger.warning(f"Setting image switch: {image_path}")
+        self.image_switch = image_path
+        # only blank status and no action switch can be paused immediately
+        if self.model_runner is not None and self.model_runner.can_pause:
+            self.model_runner.pause_signal = True
+            logger.warning(f"Model runner set pause signal for image switch & blank status")
+
+    def set_action_switch(self, prompt):
+        logger.warning(f"Setting action switch: {prompt}")
+        self.action_switch = prompt
+        # only blank status can be paused immediately
+        if self.model_runner is not None and self.model_runner.can_pause:
+            self.model_runner.pause_signal = True
+            logger.warning(f"Model runner set pause signal for action switch & blank status")
 
     def recv_loop(self):
         while True:
@@ -243,7 +266,7 @@ class ChatAdapter:
 
     def get_audio(self, fetch_duration) -> (bytes, AudioInfo):
         bytes_count = self.has_voice(fetch_duration)
-        if bytes_count is False:
+        if bytes_count is False or self.audio_info is None:
             return None
         pcm_data = self.audio_buffer.get(bytes_count)
 
@@ -283,6 +306,7 @@ class OmniVAReader:
         model_runner=None,
         huoshan_tts_voice_type=None,
         stream_config: dict = {},
+        **kwargs,
     ):
         self.rank = rank
         self.world_size = world_size
@@ -298,6 +322,7 @@ class OmniVAReader:
 
         self.target_rank = target_rank % self.world_size
         self.flag_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
+        self.valid_duration_tensor = torch.tensor([0], dtype=torch.float32).to(device="cuda")
         self.immediate_switch_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
         chunk_size = int(self.segment_duration * self.sample_rate) * 2
         self.audio_tensor = torch.zeros(chunk_size, dtype=torch.uint8, device="cuda")
@@ -366,6 +391,12 @@ class OmniVAReader:
             audio_data = self.audio_tensor.cpu().numpy().tobytes()
         return audio_data
 
+    def braodcast_valid_duration(self, valid_duration):
+        if self.rank == self.target_rank:
+            self.valid_duration_tensor.fill_(valid_duration)
+        dist.broadcast(self.valid_duration_tensor, src=self.target_rank)
+        return self.valid_duration_tensor.item()
+
     def bytes_to_ndarray(self, audio_data):
         if audio_data is None:
             return None
@@ -398,6 +429,7 @@ class OmniVAReader:
         if chat_audio_result is not None:
             audio_data, audio_info = chat_audio_result
             audio, sample_count = self.convert_pcm_s16le_to_mono_resampled(audio_data, audio_info)
+        valid_duration = sample_count / self.sample_rate
 
         # if is not the first segment, concat with previous segment
         if self.prev_seg_chunk is not None:
@@ -415,12 +447,12 @@ class OmniVAReader:
         # update prev seg chunk
         self.prev_seg_chunk = audio[-self.prev_seg_sample_count :]
         # logger.info(f"audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}, prev seg chunk: {self.prev_seg_chunk.shape}")
-        return audio.tobytes()
+        return audio.tobytes(), valid_duration
 
     def get_fetch_duration(self):
         fetch_duration = self.segment_duration
         # after immediate switch, reset prev seg chunk
-        if self.chat_adapter.reset_prev:
+        if self.chat_adapter is not None and self.chat_adapter.reset_prev:
             self.prev_seg_chunk = None
             self.chat_adapter.reset_prev = False
             logger.warning(f"Reset prev seg chunk")
@@ -429,40 +461,92 @@ class OmniVAReader:
             fetch_duration -= self.prev_duration
         return fetch_duration
 
-    def get_audio_segment(self):
+    def change_segment_duration(self, segment_duration):
+        if segment_duration is None or self.segment_duration == segment_duration:
+            return
+        if self.rank == self.target_rank:
+            logger.warning(f"segment duration changed: {self.segment_duration} -> {segment_duration}")
+        self.segment_duration = segment_duration
+        self.all_seg_sample_count = int(self.segment_duration * self.sample_rate)
+        chunk_size = int(self.segment_duration * self.sample_rate) * 2
+        self.audio_tensor = torch.zeros(chunk_size, dtype=torch.uint8, device="cuda")
+        if self.chat_adapter is not None:
+            self.chat_adapter.seg_duration = segment_duration
+
+    def get_audio_segment(self, fetch_duration: float = None, prev_duration: float = None):
         audio_data = None
+        valid_duration = 0
+        if prev_duration is not None and self.prev_duration != prev_duration:
+            raise ValueError(f"prev_duration {prev_duration} != {self.prev_duration}")
+        self.change_segment_duration(fetch_duration)
+
         if self.rank == self.target_rank:
             try:
                 fetch_duration = self.get_fetch_duration()
                 # logger.info(f"Get segment, fetch_duration: {fetch_duration}")
                 if self.chat_adapter.status == "voice":
                     audio_result = self.chat_adapter.get_audio(fetch_duration)
-                    audio_data = self.prepare_audio_data(audio_result)
+                    audio_data, valid_duration = self.prepare_audio_data(audio_result)
                     # think all voice segments inferred, naturally switch to blank
                     if audio_result is None:
                         logger.info(f"Think all voice segments inferred, naturally switch to blank")
                         self.chat_adapter.status = "blank"
                 else:
-                    audio_data = self.prepare_audio_data(None)
+                    audio_data, valid_duration = self.prepare_audio_data(None)
             except Exception as e:
                 logger.warning(f"Failed to get voice segment: {e}")
-                return None
+                return None, 0
         if self.world_size > 1:
             audio_data = self.braodcast_audio_data(audio_data)
+            valid_duration = self.braodcast_valid_duration(valid_duration)
         audio_data = self.bytes_to_ndarray(audio_data)
-        return audio_data
+        return audio_data, valid_duration
 
     def get_immediate_switch(self):
         if self.rank == self.target_rank:
-            if self.chat_adapter.immediate_switch == 1:
+            if self.chat_adapter is not None and self.chat_adapter.immediate_switch == 1:
                 self.immediate_switch_tensor.fill_(1)
                 # reset immediate switch
                 self.chat_adapter.immediate_switch = 0
             else:
                 self.immediate_switch_tensor.fill_(0)
-        dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
-        immediate_switch = self.immediate_switch_tensor.item()
-        return immediate_switch
+        if self.world_size > 1:
+            dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
+        return self.immediate_switch_tensor.item()
+
+    def get_image_switch(self):
+        data = "" if self.chat_adapter is None else self.chat_adapter.image_switch
+        image_switch = self.broadcast_data(data)
+        # reset image switch
+        if self.chat_adapter is not None:
+            self.chat_adapter.image_switch = ""
+        return image_switch
+
+    def get_action_switch(self):
+        data = "" if self.chat_adapter is None else self.chat_adapter.action_switch
+        action_switch = self.broadcast_data(data)
+        # reset action switch
+        if self.chat_adapter is not None:
+            self.chat_adapter.action_switch = ""
+        return action_switch
+
+    def broadcast_data(self, data):
+        if self.world_size <= 1:
+            return data
+        if self.rank == self.target_rank:
+            val = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            T = torch.frombuffer(bytearray(val), dtype=torch.uint8).to(device="cuda")
+            S = torch.tensor([T.shape[0]], dtype=torch.int32).to(device="cuda")
+        else:
+            S = torch.zeros(1, dtype=torch.int32, device="cuda")
+        dist.broadcast(S, src=self.target_rank)
+        if self.rank != self.target_rank:
+            T = torch.zeros(S.item(), dtype=torch.uint8, device="cuda")
+        dist.broadcast(T, src=self.target_rank)
+        if self.rank != self.target_rank:
+            val = T.cpu().numpy().tobytes()
+            data = json.loads(val.decode("utf-8"))
+        return data
 
     def stop(self):
         self.model_runner = None

@@ -11,9 +11,11 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 class NextControl:
     def __init__(self, action: str, data: any = None):
-        # action: switch, data: prev_video tensor
+        # action: blank_to_voice, data: prev_video tensor
         # action: wait, data: None
         # action: fetch, data: None
+        # action: switch_image, data: image_path
+        # action: perform_action, data: action prompt
         self.action = action
         self.data = data
 
@@ -67,9 +69,17 @@ class VAController:
         self.slice_frame = config.get("slice_frame", self.prev_frame_length)
         # estimate the max infer seconds, for immediate switch with local omni
         slice_interval = self.slice_frame / self.record_fps
+
         est_max_infer_secs = config.get("est_max_infer_secs", 0.6)
+        est_max_switch_image_secs = config.get("est_max_switch_image_secs", 0)
+        est_max_switch_action_secs = config.get("est_max_switch_action_secs", 0)
+
         self.est_infer_end_idx = math.ceil(est_max_infer_secs / slice_interval)
-        self.min_stay_queue_num = self.est_infer_end_idx * 2 + 1
+        self.est_switch_image_end_idx = math.ceil(est_max_switch_image_secs / slice_interval)
+        self.est_switch_action_end_idx = math.ceil(est_max_switch_action_secs / slice_interval)
+
+        max_end_idx = max(self.est_infer_end_idx, self.est_switch_image_end_idx, self.est_switch_action_end_idx)
+        self.min_stay_queue_num = max_end_idx * 2 + 1
 
     def init_recorder(self):
         if not self.output_video_path or self.rank != self.target_recorder_rank:
@@ -120,6 +130,7 @@ class VAController:
                 model_runner=model_runner,
                 huoshan_tts_voice_type=self.audio_path.get("huoshan_tts_voice_type", None),
                 stream_config=self.stream_config,
+                va_recorder=self.recorder,
             )
         else:
             from lightx2v.deploy.common.va_reader import VAReader
@@ -146,6 +157,12 @@ class VAController:
         from lightx2v.deploy.common.va_reader_omni import OmniVAReader
 
         if isinstance(self.reader, OmniVAReader):
+            action_control = self.omni_reader_action_control()
+            if action_control is not None:
+                return action_control
+            image_control = self.omni_reader_image_control()
+            if image_control is not None:
+                return image_control
             return self.omni_reader_next_control()
         return NextControl(action="fetch")
 
@@ -173,7 +190,7 @@ class VAController:
             dist.broadcast(self.flag_tensor, src=self.target_recorder_rank)
             if self.flag_tensor.item() == 1:
                 dist.broadcast(self.prev_tensor, src=self.target_recorder_rank)
-                return NextControl(action="switch", data=self.prev_tensor)
+                return NextControl(action="blank_to_voice", data=self.prev_tensor)
         else:
             # get the length of stream buffer, broadcast to all ranks
             if self.rank == self.target_recorder_rank:
@@ -186,9 +203,32 @@ class VAController:
                 return NextControl(action="wait")
         return NextControl(action="fetch")
 
-    def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor):
+    def omni_reader_image_control(self):
+        image_switch = self.reader.get_image_switch()
+        if not isinstance(image_switch, str) or len(image_switch) == 0:
+            return None
+        if not os.path.exists(image_switch):
+            logger.warning(f"Switch image path {image_switch} does not exist")
+            return None
+        # truncate the stream buffer to keep the max infer time length
+        if self.rank == self.target_recorder_rank:
+            logger.warning(f"runner recv image switch, truncate stream buffer")
+            self.recorder.truncate_stream_buffer(self.est_switch_image_end_idx)
+        return NextControl(action="switch_image", data=image_switch)
+
+    def omni_reader_action_control(self):
+        action_switch = self.reader.get_action_switch()
+        if not isinstance(action_switch, str) or len(action_switch) == 0:
+            return None
+        # truncate the stream buffer to keep the max infer time length
+        if self.rank == self.target_recorder_rank:
+            logger.warning(f"runner recv action switch, truncate stream buffer")
+            self.recorder.truncate_stream_buffer(self.est_switch_action_end_idx)
+        return NextControl(action="perform_action", data=action_switch)
+
+    def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor, valid_duration=1e9):
         if self.recorder.realtime:
-            self.recorder.buffer_stream(images, audios, gen_video)
+            self.recorder.buffer_stream(images, audios, gen_video, valid_duration=valid_duration)
         else:
             self.recorder.pub_livestream(images, audios)
 
@@ -197,10 +237,16 @@ class VAController:
         self.flag_tensor = None
         self.prev_tensor = None
         if self.reader is not None:
-            self.reader.stop()
+            try:
+                self.reader.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping reader: {e}")
             self.reader = None
         if self.recorder is not None:
-            self.recorder.stop()
+            try:
+                self.recorder.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping recorder: {e}")
             self.recorder = None
 
     def __del__(self):

@@ -69,6 +69,12 @@ class QwenImageTransformerModel:
         self.transformer_weights.register_lora(lora_weight, strength)
         self.post_weight.register_lora(lora_weight, strength)
 
+    def _update_lora(self, lora_path, strength):
+        lora_weight = self._load_lora_file(lora_path)
+        self.pre_weight.update_lora(lora_weight, strength)
+        self.transformer_weights.update_lora(lora_weight, strength)
+        self.post_weight.update_lora(lora_weight, strength)
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
         self.pre_infer.set_scheduler(scheduler)
@@ -409,11 +415,11 @@ class QwenImageTransformerModel:
     def _seq_parallel_pre_process(self, pre_infer_out):
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
-        seqlen = pre_infer_out.hidden_states.shape[1]
+        seqlen = pre_infer_out.hidden_states.shape[0]
         padding_size = (world_size - (seqlen % world_size)) % world_size
         if padding_size > 0:
             pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
-        pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=1)[cur_rank]
+        pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=0)[cur_rank]
         return pre_infer_out
 
     @torch.no_grad()

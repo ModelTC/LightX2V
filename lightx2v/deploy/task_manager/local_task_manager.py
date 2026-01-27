@@ -182,7 +182,7 @@ class LocalTaskManager(BaseTaskManager):
             task_id = cand["task_id"]
             worker_name = cand["worker_name"]
             task, subtasks = self.load(task_id)
-            if task["status"] in [TaskStatus.SUCCEED, TaskStatus.FAILED, TaskStatus.CANCEL]:
+            if task["status"] in FinishedStatus:
                 continue
             for sub in subtasks:
                 if sub["worker_name"] == worker_name:
@@ -225,7 +225,7 @@ class LocalTaskManager(BaseTaskManager):
             pre = subs[0]["worker_identity"]
             assert pre == worker_identity, f"worker identity not matched: {pre} vs {worker_identity}"
 
-        assert status in [TaskStatus.SUCCEED, TaskStatus.FAILED], f"invalid finish status: {status}"
+        assert status in FinishedStatus, f"invalid finish status: {status}"
         for sub in subs:
             if sub["status"] not in FinishedStatus:
                 if should_running and sub["status"] != TaskStatus.RUNNING:
@@ -240,13 +240,34 @@ class LocalTaskManager(BaseTaskManager):
             self.metrics_commit(records)
             return TaskStatus.CANCEL
 
+        if task["status"] == TaskStatus.REJECT:
+            self.save(task, subtasks)
+            self.metrics_commit(records)
+            return TaskStatus.REJECT
+
         running_subs = []
         failed_sub = False
+        reject_sub = False
         for sub in subtasks:
             if sub["status"] not in FinishedStatus:
                 running_subs.append(sub)
             if sub["status"] == TaskStatus.FAILED:
                 failed_sub = True
+            if sub["status"] == TaskStatus.REJECT:
+                reject_sub = True
+
+        if reject_sub:
+            if task["status"] != TaskStatus.REJECT:
+                self.mark_task_end(records, task, TaskStatus.REJECT)
+                task["status"] = TaskStatus.REJECT
+                task["update_t"] = current_time()
+            for sub in running_subs:
+                self.mark_subtask_change(records, sub, sub["status"], TaskStatus.REJECT, fail_msg="other subtask reject")
+                sub["status"] = TaskStatus.REJECT
+                sub["update_t"] = current_time()
+            self.save(task, subtasks)
+            self.metrics_commit(records)
+            return TaskStatus.REJECT
 
         # some subtask failed, we should fail all other subtasks
         if failed_sub:

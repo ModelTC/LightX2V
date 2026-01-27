@@ -106,38 +106,7 @@ def cache_video(
         return None
 
 
-def vae_to_comfyui_image(vae_output: torch.Tensor) -> torch.Tensor:
-    """
-    Convert VAE decoder output to ComfyUI Image format
-
-    Args:
-        vae_output: VAE decoder output tensor, typically in range [-1, 1]
-                    Shape: [B, C, T, H, W] or [B, C, H, W]
-
-    Returns:
-        ComfyUI Image tensor in range [0, 1]
-        Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
-    """
-    # Handle video tensor (5D) vs image tensor (4D)
-    if vae_output.dim() == 5:
-        # Video tensor: [B, C, T, H, W]
-        B, C, T, H, W = vae_output.shape
-        # Reshape to [B*T, C, H, W] for processing
-        vae_output = vae_output.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
-
-    # Normalize from [-1, 1] to [0, 1]
-    images = (vae_output + 1) / 2
-
-    # Clamp values to [0, 1]
-    images = torch.clamp(images, 0, 1)
-
-    # Convert from [B, C, H, W] to [B, H, W, C]
-    images = images.permute(0, 2, 3, 1).cpu()
-
-    return images
-
-
-def vae_to_comfyui_image_inplace(vae_output: torch.Tensor) -> torch.Tensor:
+def wan_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
     """
     Convert VAE decoder output to ComfyUI Image format (inplace operation)
 
@@ -151,23 +120,28 @@ def vae_to_comfyui_image_inplace(vae_output: torch.Tensor) -> torch.Tensor:
         Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
         Note: The returned tensor is the same object as input (modified in-place)
     """
-    # Handle video tensor (5D) vs image tensor (4D)
-    if vae_output.dim() == 5:
-        # Video tensor: [B, C, T, H, W]
-        B, C, T, H, W = vae_output.shape
-        # Reshape to [B*T, C, H, W] for processing (inplace view)
-        vae_output = vae_output.permute(0, 2, 1, 3, 4).contiguous().view(B * T, C, H, W)
 
-    # Normalize from [-1, 1] to [0, 1] (inplace)
-    vae_output.add_(1).div_(2)
+    vae_output.add_(1.0).mul_(0.5).clamp_(0.0, 1.0)
 
-    # Clamp values to [0, 1] (inplace)
-    vae_output.clamp_(0, 1)
+    if vae_output.ndim == 5:
+        # Video: [B, C, T, H, W] -> [B, T, H, W, C]
+        vae_output = vae_output.permute(0, 2, 3, 4, 1)
+        # -> [B*T, H, W, C]
+        return vae_output.cpu().flatten(0, 1)
+    else:
+        # Image: [B, C, H, W] -> [B, H, W, C]
+        return vae_output.permute(0, 2, 3, 1).cpu()
 
-    # Convert from [B, C, H, W] to [B, H, W, C] and move to CPU
-    vae_output = vae_output.permute(0, 2, 3, 1).cpu()
 
-    return vae_output
+def diffusers_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
+    """
+    Convert Diffusers VAE decoder output to ComfyUI Image format
+    Image processor for VAE, return tensor in range [0, 1] when do_denormalize is True.
+
+    ref: https://github.com/huggingface/diffusers/blob/main/src/diffusers/image_processor.py#L744
+
+    """
+    return vae_output.permute(0, 2, 3, 1).cpu()
 
 
 def save_to_video(
@@ -598,6 +572,11 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
     Raises:
         AssertionError: If required arguments are missing or invalid for the task
     """
+    # Check model_path exists
+    model_path = getattr(args, "model_path", None)
+    if model_path:
+        check_path_exists(model_path)
+
     task = args.task
 
     # Define required file paths for each task
@@ -610,6 +589,7 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
         "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
         "t2v": {"required_paths": [], "description": "Text-to-Video task"},
         "t2i": {"required_paths": [], "description": "Text-to-Image task"},
+        "i2av": {"required_paths": ["image_path"], "description": "Image-to-Audio-Video task requires --image_path"},
     }
 
     if task not in task_requirements:
@@ -635,3 +615,46 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
             check_path_exists(path_value)
 
     logger.info(f"✓ Task '{task}' arguments validated successfully")
+
+
+def validate_config_paths(config: dict) -> None:
+    """
+    Validate checkpoint paths in config dictionary.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        FileNotFoundError: If any checkpoint path in config does not exist
+    """
+    # Check dit_quantized_ckpt or dit_original_ckpt
+    if "dit_quantized_ckpt" in config and config["dit_quantized_ckpt"] is not None:
+        check_path_exists(config["dit_quantized_ckpt"])
+        logger.debug(f"✓ Verified dit_quantized_ckpt: {config['dit_quantized_ckpt']}")
+
+    if "dit_original_ckpt" in config and config["dit_original_ckpt"] is not None:
+        check_path_exists(config["dit_original_ckpt"])
+        logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
+
+    # For wan2.2, check high and low noise checkpoints
+    model_cls = config.get("model_cls", "")
+    if model_cls and "wan2.2" in model_cls:
+        # Check high noise checkpoints
+        if "high_noise_original_ckpt" in config and config["high_noise_original_ckpt"] is not None:
+            check_path_exists(config["high_noise_original_ckpt"])
+            logger.debug(f"✓ Verified high_noise_original_ckpt: {config['high_noise_original_ckpt']}")
+
+        if "high_noise_quantized_ckpt" in config and config["high_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["high_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified high_noise_quantized_ckpt: {config['high_noise_quantized_ckpt']}")
+
+        # Check low noise checkpoints
+        if "low_noise_original_ckpt" in config and config["low_noise_original_ckpt"] is not None:
+            check_path_exists(config["low_noise_original_ckpt"])
+            logger.debug(f"✓ Verified low_noise_original_ckpt: {config['low_noise_original_ckpt']}")
+
+        if "low_noise_quantized_ckpt" in config and config["low_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["low_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified low_noise_quantized_ckpt: {config['low_noise_quantized_ckpt']}")
+
+    logger.info("✓ Config checkpoint paths validated successfully")

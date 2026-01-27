@@ -1,0 +1,24 @@
+{
+    "infer_steps": 8,
+    "target_video_length": 121,
+    "target_height": 512,
+    "target_width": 768,
+    "attn_type": "sage_attn2",
+    "sample_guide_scale": 1,
+    "sample_shift": [2.05, 0.95],
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "num_channels_latents": 128,
+    "fps": 24,
+    "audio_fps": 24000,
+    "audio_mel_bins":16,
+    "double_precision_rope": true,
+    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors",
+    "lora_configs": [
+        {
+            "path": "Lightricks/LTX-2/ltx-2-19b-distilled-lora-384.safetensors",
+            "strength": 0.8
+        }
+    ],
+    "distilled_sigma_values": [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
+}

@@ -33,8 +33,8 @@ git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V/scripts/qwen_image
 
 # Before running the scripts below, you need to replace lightx2v_path and model_path in the scripts with actual paths
-# For example: export lightx2v_path=/home/user/LightX2V
-# For example: export model_path=/home/user/models/Qwen-Image-Edit-2511
+# For example: lightx2v_path=/home/user/LightX2V
+# For example: model_path=/home/user/models/Qwen-Image-Edit-2511
 ```
 
 Text-to-Image Models
@@ -43,7 +43,7 @@ Text-to-Image Models
 bash qwen_image_t2i_2512.sh
 
 # Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
-bash qwen_image_t2i_2512_lora.sh
+bash qwen_image_t2i_2512_distill.sh
 
 # Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 8 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
 bash qwen_image_t2i_2512_distill_fp8.sh
@@ -55,7 +55,7 @@ Image Editing Models
 bash qwen_image_i2i_2511.sh
 
 # Inference with 2511 image editing step-distilled model, default is 8 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
-bash qwen_image_i2i_2511_lora.sh
+bash qwen_image_i2i_2511_distill.sh
 
 # Inference with 2511 image editing step-distilled + FP8 quantized model, default is 8 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
 bash qwen_image_i2i_2511_distill_fp8.sh
