@@ -36,6 +36,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
+- [kikidouloveme79](https://github.com/kikidouloveme79)
 
 ## :fire: Latest News
 
