@@ -29,8 +29,8 @@ class WanAnimateTransformerWeights(WanTransformerWeights):
         if hasattr(self, "offload_block_cuda_buffers") and self.offload_block_cuda_buffers is not None:
             for i in range(self.offload_blocks_num):
                 self.offload_block_cuda_buffers[i].compute_phases.append(WanAnimateFuserBlock(self.config, 0, "face_adapter.fuser_blocks", self.mm_type, create_cuda_buffer=True))
-            if self.lazy_load:
-                self.offload_block_cpu_buffers[i].compute_phases.append(WanAnimateFuserBlock(self.config, 0, "face_adapter.fuser_blocks", self.mm_type, create_cpu_buffer=True))
+                if self.lazy_load:
+                    self.offload_block_cpu_buffers[i].compute_phases.append(WanAnimateFuserBlock(self.config, 0, "face_adapter.fuser_blocks", self.mm_type, create_cpu_buffer=True))
         elif hasattr(self, "offload_phase_cuda_buffers") and self.offload_phase_cuda_buffers is not None:
             self.offload_phase_cuda_buffers.append(WanAnimateFuserBlock(self.config, 0, "face_adapter.fuser_blocks", self.mm_type, create_cuda_buffer=True))
             if self.lazy_load:
