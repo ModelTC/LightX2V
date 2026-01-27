@@ -1,18 +1,9 @@
 import torch
+import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .triton_ops import (
-    fuse_scale_shift_kernel,
-)
 from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
-
-
-def calculate_q_k_len(q, k_lens):
-    q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
-    cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
-    cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
-    return cu_seqlens_q, cu_seqlens_k
 
 
 class ZImageTransformerInfer(BaseTransformerInfer):
@@ -22,15 +13,12 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.zero_cond_t = config.get("zero_cond_t", False)
+        self.n_heads = config.get("n_heads", config.get("num_attention_heads", 24))
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
         self.seq_p_fp8_comm = False
-        if self.config.get("modulate_type", "triton") == "triton":
-            self.modulate_func = fuse_scale_shift_kernel
-        else:
-            self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
             self.apply_rope_func = apply_wan_rope_with_flashinfer
         else:
@@ -39,51 +27,60 @@ class ZImageTransformerInfer(BaseTransformerInfer):
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def apply_attn(self, block_weight, hidden_states, freqs_cis):
-        is_3d = hidden_states.dim() == 3
-        if is_3d:
-            B, T, D = hidden_states.shape
-            hidden_states_2d = hidden_states.reshape(-1, D)
-            freqs_cis_2d = freqs_cis.reshape(-1, freqs_cis.shape[-1])
+    def infer_mod(self, mod_phase, hidden_states, adaln_input):
+        if mod_phase is None:
+            return None, None, None, None
+
+        mod_params = mod_phase.adaLN_modulation.apply(adaln_input)
+        scale_msa, gate_msa, scale_mlp, gate_mlp = mod_params.chunk(4, dim=-1)
+        gate_msa.tanh_()
+        gate_mlp.tanh_()
+
+        scale_msa.add_(1.0)
+        scale_mlp.add_(1.0)
+
+        return scale_msa, gate_msa, scale_mlp, gate_mlp
+
+    def infer_attn(self, attn_phase, hidden_states, freqs_cis, scale_msa=None):
+        norm1_out = attn_phase.attention_norm1.apply(hidden_states)
+        if scale_msa is not None:
+            scaled_norm1 = norm1_out * scale_msa
         else:
-            hidden_states_2d = hidden_states
-            freqs_cis_2d = freqs_cis
+            scaled_norm1 = norm1_out
 
-        query = block_weight.attention.to_q.apply(hidden_states_2d)
-        key = block_weight.attention.to_k.apply(hidden_states_2d)
-        value = block_weight.attention.to_v.apply(hidden_states_2d)
+        query = attn_phase.to_q.apply(scaled_norm1)
+        key = attn_phase.to_k.apply(scaled_norm1)
+        value = attn_phase.to_v.apply(scaled_norm1)
+        head_dim = query.shape[-1] // self.n_heads
+        query = query.unflatten(-1, (self.n_heads, head_dim))
+        key = key.unflatten(-1, (self.n_heads, head_dim))
+        value = value.unflatten(-1, (self.n_heads, head_dim))
 
-        query = query.unflatten(-1, (block_weight.attention.heads, -1))
-        key = key.unflatten(-1, (block_weight.attention.heads, -1))
-        value = value.unflatten(-1, (block_weight.attention.heads, -1))
+        if attn_phase.norm_q is not None:
+            query = attn_phase.norm_q.apply(query)
+        if attn_phase.norm_k is not None:
+            key = attn_phase.norm_k.apply(key)
 
-        if block_weight.attention.norm_q is not None:
-            query = block_weight.attention.norm_q.apply(query)
-        if block_weight.attention.norm_k is not None:
-            key = block_weight.attention.norm_k.apply(key)
-
-        query, key = self.apply_rope_func(query, key, freqs_cis_2d)
-
-        dtype = query.dtype
-        query, key = query.to(dtype), key.to(dtype)
+        query, key = self.apply_rope_func(query, key, freqs_cis)
 
         total_seq_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu").to(query.device, non_blocking=True)
 
         if self.config["seq_parallel"]:
-            hidden_states_out = block_weight.attention.calculate_parallel.apply(
+            hidden_states_out = attn_phase.calculate_parallel.apply(
                 q=query,
                 k=key,
                 v=value,
                 slice_qkv_len=total_seq_len,
                 cu_seqlens_qkv=cu_seqlens,
-                attention_module=block_weight.attention.calculate,
+                attention_module=attn_phase.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 img_first=False,
             )
         else:
-            hidden_states_out = block_weight.attention.calculate.apply(
+            # todo
+            hidden_states_out = attn_phase.calculate.apply(
                 q=query,
                 k=key,
                 v=value,
@@ -93,14 +90,25 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 max_seqlen_kv=total_seq_len,
             )
 
-        output = block_weight.attention.to_out[0].apply(hidden_states_out)
-        if len(block_weight.attention.to_out) > 1:
-            output = block_weight.attention.to_out[1].apply(output)
+        output = attn_phase.to_out[0].apply(hidden_states_out)
+        if len(attn_phase.to_out) > 1:
+            output = attn_phase.to_out[1].apply(output)
 
-        if is_3d:
-            output = output.reshape(B, T, -1)
+        attn_out = attn_phase.attention_norm2.apply(output)
 
-        return output
+        return attn_out
+
+    def infer_ffn(self, ffn_phase, hidden_states, scale_mlp=None, gate_mlp=None):
+        ffn_norm1_out = ffn_phase.ffn_norm1.apply(hidden_states)
+        if scale_mlp is not None:
+            ffn_norm1_out.mul_(scale_mlp)
+        w1_out = ffn_phase.w1.apply(ffn_norm1_out)
+        w3_out = ffn_phase.w3.apply(ffn_norm1_out)
+        silu_gated = F.silu(w1_out) * w3_out
+        ffn_out = ffn_phase.w2.apply(silu_gated)
+        norm2_ffn = ffn_phase.ffn_norm2.apply(ffn_out)
+
+        return norm2_ffn, gate_mlp
 
     def infer_block(
         self,
@@ -109,57 +117,90 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         freqs_cis,
         adaln_input=None,
     ):
-        if block_weight.modulation:
-            assert adaln_input is not None
-            mod_params = block_weight.adaLN_modulation.apply(adaln_input)
-            scale_msa, gate_msa, scale_mlp, gate_mlp = mod_params.unsqueeze(1).chunk(4, dim=2)
+        mod_phase = block_weight.compute_phases[0] if block_weight.has_modulation else None
+        attn_phase = block_weight.compute_phases[1]
+        ffn_phase = block_weight.compute_phases[2]
 
-            gate_msa, gate_mlp = gate_msa.tanh(), gate_mlp.tanh()
-            scale_msa, scale_mlp = 1.0 + scale_msa, 1.0 + scale_mlp
+        scale_msa, gate_msa, scale_mlp, gate_mlp = self.infer_mod(mod_phase, hidden_states, adaln_input)
+        attn_out = self.infer_attn(attn_phase, hidden_states, freqs_cis, scale_msa)
 
-            norm1_out = block_weight.attention_norm1.apply(hidden_states)
-            scaled_norm1 = norm1_out * scale_msa
-
-            # Attention block
-            attn_out = self.apply_attn(
-                block_weight=block_weight,
-                hidden_states=scaled_norm1,
-                freqs_cis=freqs_cis,
-            )
-            norm2_attn = block_weight.attention_norm2.apply(attn_out)
-
-            hidden_states = hidden_states + gate_msa * norm2_attn
-
-            ffn_norm1_out = block_weight.ffn_norm1.apply(hidden_states)
-            scaled_ffn_norm1 = ffn_norm1_out * scale_mlp
-
-            ffn_out = block_weight.feed_forward.forward(scaled_ffn_norm1)
-            norm2_ffn = block_weight.ffn_norm2.apply(ffn_out)
-
-            hidden_states = hidden_states + gate_mlp * norm2_ffn
+        if gate_msa is not None:
+            hidden_states.add_(gate_msa * attn_out)
         else:
-            norm1_out = block_weight.attention_norm1.apply(hidden_states)
+            hidden_states.add_(attn_out)
+        norm2_ffn, gate_mlp = self.infer_ffn(ffn_phase, hidden_states, scale_mlp, gate_mlp)
 
-            # Attention block
-            attn_out = self.apply_attn(
+        if gate_mlp is not None:
+            hidden_states.add_(gate_mlp * norm2_ffn)
+        else:
+            hidden_states.add_(norm2_ffn)
+
+        if hidden_states.dtype == torch.float16:
+            hidden_states.clip_(-65504, 65504)
+
+        return hidden_states
+
+    def infer_noise_refiner(
+        self,
+        noise_refiner_blocks,
+        hidden_states,
+        x_freqs_cis,
+        adaln_input,
+        x_len,
+    ):
+        x_hidden = hidden_states[:x_len]
+        x_freqs = x_freqs_cis[:x_len]
+        for block_weight in noise_refiner_blocks:
+            x_hidden = self.infer_block(
                 block_weight=block_weight,
-                hidden_states=norm1_out,
-                freqs_cis=freqs_cis,
+                hidden_states=x_hidden,
+                freqs_cis=x_freqs,
+                adaln_input=adaln_input,
             )
 
-            norm2_attn = block_weight.attention_norm2.apply(attn_out)
-            hidden_states = hidden_states + norm2_attn
+        return x_hidden
 
-            # FFN block
-            ffn_norm1_out = block_weight.ffn_norm1.apply(hidden_states)
-            ffn_out = block_weight.feed_forward.forward(ffn_norm1_out)
-            norm2_ffn = block_weight.ffn_norm2.apply(ffn_out)
-            hidden_states = hidden_states + norm2_ffn
+    def infer_context_refiner(
+        self,
+        context_refiner_blocks,
+        encoder_hidden_states,
+        cap_freqs_cis,
+        cap_len,
+    ):
+        cap_hidden = encoder_hidden_states[:cap_len]
+        cap_freqs = cap_freqs_cis[:cap_len]
+        for block_weight in context_refiner_blocks:
+            cap_hidden = self.infer_block(
+                block_weight=block_weight,
+                hidden_states=cap_hidden,
+                freqs_cis=cap_freqs,
+                adaln_input=None,
+            )
 
-        # Clip to prevent overflow for fp16
-        if hidden_states.dtype == torch.float16:
-            hidden_states = hidden_states.clip(-65504, 65504)
-        return hidden_states
+        return cap_hidden
+
+    def infer_main_blocks(
+        self,
+        main_blocks,
+        hidden_states,
+        encoder_hidden_states,
+        x_freqs_cis,
+        cap_freqs_cis,
+        adaln_input,
+        x_len,
+        cap_len,
+    ):
+        unified = torch.cat([hidden_states, encoder_hidden_states], dim=0)
+        unified_freqs_cis = torch.cat([x_freqs_cis[:x_len], cap_freqs_cis[:cap_len]], dim=0)
+        for block_weight in main_blocks:
+            unified = self.infer_block(
+                block_weight=block_weight,
+                hidden_states=unified,
+                freqs_cis=unified_freqs_cis,
+                adaln_input=adaln_input,
+            )
+
+        return unified
 
     def infer_calculating(
         self,
@@ -172,101 +213,37 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         x_item_seqlens,
         cap_item_seqlens,
     ):
-        from torch.nn.utils.rnn import pad_sequence
+        x_len = x_item_seqlens[0]
+        cap_len = cap_item_seqlens[0]
 
-        batch_size = hidden_states.shape[0]
-        device = hidden_states.device
+        # Stage 1: Noise Refiner (Image Stream)
+        hidden_states = self.infer_noise_refiner(
+            noise_refiner_blocks=block_weights.noise_refiner,
+            hidden_states=hidden_states,
+            x_freqs_cis=x_freqs_cis,
+            adaln_input=adaln_input,
+            x_len=x_len,
+        )
 
-        # ==================== Stage 1: Noise Refiner (Image Stream) ====================
-        # Process image stream with modulation
-        if block_weights.noise_refiner is not None and len(block_weights.noise_refiner) > 0:
-            # Build attention mask for image tokens
-            x_max_seqlen = max(x_item_seqlens)
-            x_attn_mask = torch.zeros((batch_size, x_max_seqlen), dtype=torch.bool, device=device)
-            for i, seq_len in enumerate(x_item_seqlens):
-                x_attn_mask[i, :seq_len] = True
+        # Stage 2: Context Refiner (Text Stream)
+        encoder_hidden_states = self.infer_context_refiner(
+            context_refiner_blocks=block_weights.context_refiner,
+            encoder_hidden_states=encoder_hidden_states,
+            cap_freqs_cis=cap_freqs_cis,
+            cap_len=cap_len,
+        )
 
-            # Process through noise_refiner layers (with modulation)
-            # Use 3D [B, T, D] format to match official implementation
-            for idx in range(len(block_weights.noise_refiner)):
-                hidden_states = self.infer_block(
-                    block_weight=block_weights.noise_refiner[idx],
-                    hidden_states=hidden_states,
-                    freqs_cis=x_freqs_cis,
-                    adaln_input=adaln_input,
-                )
-
-        # ==================== Stage 2: Context Refiner (Text Stream) ====================
-        # Process text stream without modulation
-        if block_weights.context_refiner is not None and len(block_weights.context_refiner) > 0:
-            # Build attention mask for text tokens
-            cap_max_seqlen = max(cap_item_seqlens)
-            cap_attn_mask = torch.zeros((batch_size, cap_max_seqlen), dtype=torch.bool, device=device)
-            for i, seq_len in enumerate(cap_item_seqlens):
-                cap_attn_mask[i, :seq_len] = True
-
-            # Process through context_refiner layers (without modulation)
-            # Use 3D [B, L, D] format to match official implementation
-            for idx in range(len(block_weights.context_refiner)):
-                encoder_hidden_states = self.infer_block(
-                    block_weight=block_weights.context_refiner[idx],
-                    hidden_states=encoder_hidden_states,  # [B, L, D]
-                    freqs_cis=cap_freqs_cis,  # [B, L, D_rope]
-                    adaln_input=None,  # No modulation for context_refiner
-                )
-
-        # ==================== Stage 3: Unified Layers (Merged Stream) ====================
-        # Merge image and text streams
-        unified_list = []
-        unified_freqs_cis_list = []
-        unified_item_seqlens = []
-
-        for b in range(batch_size):
-            x_len = x_item_seqlens[b]
-            cap_len = cap_item_seqlens[b]
-
-            # Concatenate image and text tokens: [image_tokens, text_tokens]
-            unified_item = torch.cat(
-                [
-                    hidden_states[b, :x_len],
-                    encoder_hidden_states[b, :cap_len],
-                ],
-                dim=0,
-            )
-            unified_list.append(unified_item)
-
-            # Concatenate freqs_cis: [image_freqs, text_freqs]
-            unified_freqs_item = torch.cat(
-                [
-                    x_freqs_cis[b, :x_len],
-                    cap_freqs_cis[b, :cap_len],
-                ],
-                dim=0,
-            )
-            unified_freqs_cis_list.append(unified_freqs_item)
-
-            unified_item_seqlens.append(x_len + cap_len)
-
-        # Pad unified sequences
-        unified_max_seqlen = max(unified_item_seqlens)
-        unified = pad_sequence(unified_list, batch_first=True, padding_value=0.0)  # [B, max_seqlen, D]
-        unified_freqs_cis = pad_sequence(unified_freqs_cis_list, batch_first=True, padding_value=0.0)  # [B, max_seqlen, D_rope]
-
-        # Build attention mask for unified stream
-        unified_attn_mask = torch.zeros((batch_size, unified_max_seqlen), dtype=torch.bool, device=device)
-        for i, seq_len in enumerate(unified_item_seqlens):
-            unified_attn_mask[i, :seq_len] = True
-
-        # Process through unified layers (with modulation)
-        # Use 3D [B, T_unified, D] format to match official implementation
-        if block_weights.blocks is not None and len(block_weights.blocks) > 0:
-            for idx in range(len(block_weights.blocks)):
-                unified = self.infer_block(
-                    block_weight=block_weights.blocks[idx],
-                    hidden_states=unified,
-                    freqs_cis=unified_freqs_cis,
-                    adaln_input=adaln_input,
-                )
+        # Stage 3: Main Blocks (Unified Stream)
+        unified = self.infer_main_blocks(
+            main_blocks=block_weights.blocks,
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            x_freqs_cis=x_freqs_cis,
+            cap_freqs_cis=cap_freqs_cis,
+            adaln_input=adaln_input,
+            x_len=x_len,
+            cap_len=cap_len,
+        )
 
         return unified
 
@@ -276,8 +253,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         adaln_input = pre_infer_out.adaln_input
         x_item_seqlens = pre_infer_out.x_item_seqlens
         cap_item_seqlens = pre_infer_out.cap_item_seqlens
-
-        # Use freqs_cis generated from position ids in pre_infer
         x_freqs_cis = pre_infer_out.x_freqs_cis
         cap_freqs_cis = pre_infer_out.cap_freqs_cis
 
