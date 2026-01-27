@@ -1,12 +1,6 @@
 """
 LightLLM Service-based Text Encoder
 使用 LightLLM 服务提供的 hidden states 作为 text encoder 输出
-
-优势:
-1. 显存节省: 本地不需要加载 text encoder (~7-8GB)
-2. 计算卸载: text encoder 推理在服务端完成
-3. 服务复用: 多个实例可共享同一服务
-4. 硬件优化: 服务端使用专用优化 (Flash Attention 3, CUDA Graph)
 """
 
 import math
@@ -55,17 +49,19 @@ class LightLLMServiceTextEncoder:
             self.resolution = config.get("resolution", 640)
             self.VAE_IMAGE_SIZE = self.resolution * self.resolution
 
-        # LightLLM 服务配置 (支持新旧格式)
-        # 新格式: lightllm_config.service_url
-        # 旧格式: lightllm_service_url (向后兼容)
-        self.service_url = config.get("service_url", config.get("lightllm_service_url", "http://localhost:8010"))
-        self.timeout = config.get("service_timeout", config.get("lightllm_service_timeout", 30))  # 超时时间（秒）
-        self.retry_times = config.get("service_retry", config.get("lightllm_service_retry", 3))  # 重试次数
+        # LightLLM 服务配置
+        self.service_url = config.get("service_url", "http://localhost:8010")
+        self.timeout = config.get("service_timeout", 30)  # 超时时间（秒）
+        self.retry_times = config.get("service_retry", 3)  # 重试次数
+
+        # Shared Memory 模式配置（默认开启，仅在同机部署时有效）
+        self.use_shm = config.get("use_shm", True)
 
         logger.info(f"Initializing LightLLM Service Text Encoder")
         logger.info(f"  Service URL: {self.service_url}")
         logger.info(f"  Timeout: {self.timeout}s")
         logger.info(f"  Device: {self.device}")
+        logger.info(f"  Use Shared Memory: {self.use_shm}")
 
         # 加载必要的组件
         self.load()
@@ -153,12 +149,9 @@ class LightLLMServiceTextEncoder:
             image_items = []
             for idx, img in enumerate(images):
                 buffered = BytesIO()
-                # JPEG 编码比 PNG 快 3-5x，且文件更小
-                # 使用高质量 (95) 以保持图像质量
-                if img.mode == "RGBA":
-                    # JPEG 不支持透明通道，转换为 RGB
-                    img = img.convert("RGB")
-                img.save(buffered, format="JPEG", quality=95, optimize=False)
+                # BMP 格式：无损且编码极快 (也就是直接内存拷贝)，适合 Localhost 高带宽场景
+                # 相比 PNG (CPU 压缩慢) 和 JPEG (有损)，BMP 是由于 Service Mode 的最佳选择
+                img.save(buffered, format="BMP")
                 img_str = base64.b64encode(buffered.getvalue()).decode()
                 image_items.append({"type": "base64", "data": img_str})
                 logger.debug(f"Encoded image {idx + 1}/{len(images)}: {len(img_str)} chars base64 (JPEG)")
@@ -293,7 +286,30 @@ class LightLLMServiceTextEncoder:
         result = self._call_service(txt, condition_image_list)
 
         # 解析返回的 hidden states
-        if "hidden_states_base64" in result:
+        # 优先使用 Shared Memory 模式（零拷贝，最快）
+        if self.use_shm and "shm_hidden_states_name" in result:
+            from .shm_client import get_shm_client
+
+            shm_name = result["shm_hidden_states_name"]
+            shape = tuple(result["shm_hidden_states_shape"])
+            try:
+                shm_client = get_shm_client()
+                hidden_states_np = shm_client.read_hidden_states(shm_name, shape, dtype=np.uint8)
+                hidden_states = torch.from_numpy(hidden_states_np).to(device=self.device, non_blocking=True)
+                logger.debug(f"✓ Read hidden states from shared memory: {shm_name}")
+            except Exception as e:
+                logger.warning(f"Failed to read from shared memory '{shm_name}': {e}, falling back to HTTP mode")
+                # Fallback to base64 mode
+                if "hidden_states_base64" in result:
+                    import base64
+                    data_bytes = base64.b64decode(result["hidden_states_base64"])
+                    shape = result["hidden_states_shape"]
+                    hidden_states_np = np.frombuffer(data_bytes, dtype=np.uint8).reshape(shape)
+                    hidden_states = torch.from_numpy(hidden_states_np).to(device=self.device, non_blocking=True)
+                else:
+                    raise
+
+        elif "hidden_states_base64" in result:
             import base64
 
             # Decode base64 to bytes
