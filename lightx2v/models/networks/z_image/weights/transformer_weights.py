@@ -20,7 +20,9 @@ class ZImageTransformerWeights(WeightModule):
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module(
             "blocks",
-            WeightModuleList(ZImageTransformerBlock(i, self.task, self.mm_type, self.config, False, False, "layers") for i in range(self.blocks_num)),
+            WeightModuleList(
+                ZImageTransformerBlock(i, self.task, self.mm_type, self.config, False, False, "layers", lazy_load=self.lazy_load, lazy_load_path=lazy_load_path) for i in range(self.blocks_num)
+            ),
         )
 
         self.add_module(
@@ -71,6 +73,8 @@ class ZImageTransformerWeights(WeightModule):
                             True,
                             False,
                             "layers",
+                            lazy_load=self.lazy_load,
+                            lazy_load_path=lazy_load_path,
                         )
                         for i in range(self.offload_blocks_num)
                     ]
@@ -209,7 +213,7 @@ class ZImageAdaLNModulation(WeightModule):
         self.lazy_load_file = lazy_load_file
         self.add_module(
             "adaLN_modulation",
-            MM_WEIGHT_REGISTER["Default"](
+            MM_WEIGHT_REGISTER[self.mm_type](
                 f"{block_prefix}.{block_idx}.adaLN_modulation.0.weight",
                 f"{block_prefix}.{block_idx}.adaLN_modulation.0.bias",
                 create_cuda_buffer,
@@ -266,6 +270,8 @@ class ZImageAttention(WeightModule):
                 f"{block_prefix}.{block_idx}.attention_norm1.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -274,6 +280,8 @@ class ZImageAttention(WeightModule):
                 f"{block_prefix}.{block_idx}.attention_norm2.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
             ),
         )
 
@@ -284,6 +292,8 @@ class ZImageAttention(WeightModule):
                 f"{block_prefix}.{block_idx}.attention.norm_q.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -292,6 +302,8 @@ class ZImageAttention(WeightModule):
                 f"{block_prefix}.{block_idx}.attention.norm_k.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
             ),
         )
 
@@ -436,6 +448,8 @@ class ZImageFFN(WeightModule):
                 f"{block_prefix}.{block_idx}.ffn_norm1.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
             ),
         )
         self.add_module(
@@ -444,6 +458,8 @@ class ZImageFFN(WeightModule):
                 f"{block_prefix}.{block_idx}.ffn_norm2.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
             ),
         )
 

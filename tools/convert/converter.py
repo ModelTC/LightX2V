@@ -815,7 +815,7 @@ def main():
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
         model_type_keys_map = {
-            "z_image_dit": {"key_idx": 2, "target_keys": ["attention", "feed_forward"], "ignore_key": None},
+            "z_image_dit": {"key_idx": 2, "target_keys": ["attention", "feed_forward", "adaLN_modulation", "linear"], "ignore_key": None},
             "qwen_image_dit": {
                 "key_idx": 2,
                 "target_keys": ["attn", "img_mlp", "txt_mlp", "txt_mod", "img_mod"],
