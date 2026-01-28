@@ -97,7 +97,6 @@ class ZImageTransformerModel:
             gc.collect()
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
-        print(self.original_weight_dict.keys())
         self.transformer_weights.load(self.original_weight_dict)
         self.post_weight.load(self.original_weight_dict)
 
