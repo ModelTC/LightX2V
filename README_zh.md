@@ -20,7 +20,7 @@
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
-> 👋 **加入[微信交流群](https://light-ai.top/community.html)。**
+> 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 
 ## 🧾 社区代码贡献指南
 

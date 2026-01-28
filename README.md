@@ -20,7 +20,7 @@
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
 
-> 👋 **Join us on [WeChat](https://light-ai.top/community.html).**
+> 👋 **Join our WeChat group! LightX2V Rotbot WeChat ID: random42seed**
 
 ## 🧾 Community Code Contribution Guidelines
 
