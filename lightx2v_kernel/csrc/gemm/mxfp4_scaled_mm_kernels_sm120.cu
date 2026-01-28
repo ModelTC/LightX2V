@@ -154,8 +154,8 @@ typename Mxfp4GemmSm120::Gemm::Arguments args_from_options_mxp4_mxfp4(
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
-    static const float beta_zero = 0.0f;
-    fusion_args.beta_ptr = &beta_zero;
+    // static const float beta_zero = 0.0f;
+    // fusion_args.beta_ptr = &beta_zero;
     fusion_args.bias_ptr = static_cast<Mxfp4GemmSm120::Gemm::ElementC const*>(bias->data_ptr());
     fusion_args.dBias = StrideBias{};
     return arguments;
@@ -180,8 +180,8 @@ typename Mxfp4GemmSm120::Gemm::Arguments args_from_options_mxp4_mxfp4(
        stride_D}};
     auto& fusion_args = arguments.epilogue.thread;
     fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
-    static const float beta_zero = 0.0f;
-    fusion_args.beta_ptr = &beta_zero;
+    // static const float beta_zero = 0.0f;
+    // fusion_args.beta_ptr = &beta_zero;
     return arguments;
   }
 }
@@ -202,6 +202,11 @@ void runGemmMxfp4Sm120(
   typename Mxfp4GemmSm120::Gemm gemm;
 
   auto arguments = args_from_options_mxp4_mxfp4(D, A, B, A_sf, B_sf, alpha, bias, m, n, k);
+  auto beta_dev = torch::zeros({1}, torch::TensorOptions()
+                                .dtype(torch::kFloat32)
+                                .device(A.device()));
+  arguments.epilogue.thread.beta_ptr =
+      static_cast<float const*>(beta_dev.data_ptr());
   size_t workspace_size = Mxfp4GemmSm120::Gemm::get_workspace_size(arguments);
   auto const workspace_options = torch::TensorOptions().dtype(torch::kUInt8).device(A.device());
   auto workspace = torch::empty(workspace_size, workspace_options);

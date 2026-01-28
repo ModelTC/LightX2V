@@ -64,6 +64,7 @@ class ZImageRunner(DefaultRunner):
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
+            self.model.set_scheduler(self.scheduler)
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
@@ -74,12 +75,11 @@ class ZImageRunner(DefaultRunner):
         else:
             assert NotImplementedError
 
-        self.model.set_scheduler(self.scheduler)
-
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
         self.model.scheduler.prepare(self.input_info)
         latents, generator = self.run(total_steps)
         return latents, generator
@@ -87,7 +87,11 @@ class ZImageRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
         torch_device_module.empty_cache()
         gc.collect()
         return {
@@ -134,7 +138,11 @@ class ZImageRunner(DefaultRunner):
             images_list.append(image)
 
         prompt = self.input_info.prompt
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, images_list, neg_prompt=self.input_info.negative_prompt)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
 
         image_encoder_output_list = []
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
@@ -208,7 +216,13 @@ class ZImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration, metrics_labels=["ZImageRunner"])
     def run_vae_encoder(self, image):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae = self.load_vae()
         image_latents = self.vae.encode_vae_image(image.to(GET_DTYPE()))
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae
+            torch_device_module.empty_cache()
+            gc.collect()
         return {"image_latents": image_latents}
 
     def run(self, total_steps=None):
@@ -318,10 +332,10 @@ class ZImageRunner(DefaultRunner):
     )
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae_decoder = self.load_vae()
+            self.vae = self.load_vae()
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.vae_decoder
+            del self.vae
             torch_device_module.empty_cache()
             gc.collect()
         return images
