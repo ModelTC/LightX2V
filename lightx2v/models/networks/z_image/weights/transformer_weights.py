@@ -227,7 +227,6 @@ class ZImageAdaLNModulation(WeightModule):
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
-                print(module)
                 module.to_cuda(non_blocking=non_blocking)
 
 
