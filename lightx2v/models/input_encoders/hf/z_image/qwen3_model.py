@@ -4,6 +4,8 @@ import os
 import torch
 from PIL import Image
 
+from lightx2v.utils.envs import *
+
 try:
     from transformers import Qwen2Tokenizer, Qwen3Model
 except ImportError:
@@ -25,15 +27,22 @@ class Qwen3Model_TextEncoder:
         self.config = config
         self.tokenizer_max_length = 512
         self.cpu_offload = config.get("qwen3_cpu_offload", config.get("cpu_offload", False))
-        self.dtype = torch.bfloat16
+        self.qwen3_quantized = config.get("qwen3_quantized", False)
         self.load()
 
     def load(self):
-        self.text_encoder = Qwen3Model.from_pretrained(os.path.join(self.config["model_path"], "text_encoder"), torch_dtype=torch.bfloat16)
-        if not self.cpu_offload:
-            self.text_encoder = self.text_encoder.to(AI_DEVICE)
+        if self.qwen3_quantized:
+            assert self.config["qwen3_quant_scheme"] == "int4"
+            self.text_encoder = Qwen3Model.from_pretrained(self.config["qwen3_quantized_ckpt"], torch_dtype=GET_DTYPE(), device_map=AI_DEVICE)
+        else:
+            qwen3_original_ckpt = self.config.get("qwen3_original_ckpt", os.path.join(self.config["model_path"], "text_encoder"))
+            if self.cpu_offload:
+                self.text_encoder = Qwen3Model.from_pretrained(qwen3_original_ckpt, torch_dtype=GET_DTYPE(), device_map="cpu")
+            else:
+                self.text_encoder = Qwen3Model.from_pretrained(qwen3_original_ckpt, torch_dtype=GET_DTYPE(), device_map=AI_DEVICE)
 
-        self.tokenizer = Qwen2Tokenizer.from_pretrained(os.path.join(self.config["model_path"], "tokenizer"))
+        qwen3_tokenizer_path = self.config.get("qwen3_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
+        self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen3_tokenizer_path)
 
         if self.config["task"] == "i2i":
             self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
@@ -52,7 +61,7 @@ class Qwen3Model_TextEncoder:
 
     @torch.no_grad()
     def infer(self, prompt, image_list=None):
-        if self.cpu_offload:
+        if self.cpu_offload and not self.qwen3_quantized:
             self.text_encoder.to(AI_DEVICE)
 
         if isinstance(prompt, str):
@@ -86,7 +95,7 @@ class Qwen3Model_TextEncoder:
                 "vae_image_list": vae_image_list,
             }
 
-        if self.cpu_offload:
+        if self.cpu_offload and not self.qwen3_quantized:
             self.text_encoder.to(torch.device("cpu"))
             torch_device_module.empty_cache()
             gc.collect()

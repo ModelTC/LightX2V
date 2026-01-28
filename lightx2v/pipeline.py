@@ -281,19 +281,16 @@ class LightX2VPipeline:
             self.clip_quant_scheme = quant_scheme
             self.clip_quantized = image_encoder_quantized
             self.clip_quantized_ckpt = image_encoder_quantized_ckpt
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image"]:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
-            self.qwen25vl_quant_scheme = quant_scheme
-        elif self.model_cls in ["qwen_image"]:
-            self.qwen25vl_quantized = text_encoder_quantized
-            self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
-            if text_encoder_quant_scheme is not None:
-                self.qwen25vl_quant_scheme = text_encoder_quant_scheme
-            else:
-                self.qwen25vl_quant_scheme = quant_scheme
+            self.qwen25vl_quant_scheme = text_encoder_quant_scheme
         elif self.model_cls in ["ltx2"]:
             self.skip_fp8_block_index = skip_fp8_block_index
+        elif self.model_cls == "z_image":
+            self.qwen3_quantized = text_encoder_quantized
+            self.qwen3_quantized_ckpt = text_encoder_quantized_ckpt
+            self.qwen3_quant_scheme = text_encoder_quant_scheme
 
     def enable_offload(
         self,
@@ -331,6 +328,8 @@ class LightX2VPipeline:
             self.qwen25vl_cpu_offload = text_encoder_offload
         elif self.model_cls == "ltx2":
             self.gemma_cpu_offload = text_encoder_offload
+        elif self.model_cls == "z_image":
+            self.qwen3_cpu_offload = text_encoder_offload
 
     def enable_compile(
         self,

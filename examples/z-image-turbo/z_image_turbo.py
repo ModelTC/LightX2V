@@ -14,17 +14,25 @@ pipe = LightX2VPipeline(
 
 # Alternative: create generator from config JSON file
 # pipe.create_generator(
-#     config_json="../configs/qwen_image/qwen_image_t2i_2512_distill_fp8.json"
+#     config_json="../configs/z_image/z_image_turbo_t2i.json"
 # )
+
+# Load fp8 distilled weights (and int4 Qwen3 model (optional))
+pipe.enable_quantize(
+    dit_quantized=True,
+    dit_quantized_ckpt="lightx2v/Z-Image-Turbo-Quantized/z_image_turbo_scaled_fp8_e4m3fn.safetensors",
+    quant_scheme="fp8-sgl",
+    # text_encoder_quantized=True,
+    # text_encoder_quantized_ckpt="JunHowie/Qwen3-4B-GPTQ-Int4",
+    # text_encoder_quant_scheme="int4"
+)
 
 # Enable offloading to significantly reduce VRAM usage with minimal speed impact
 # Suitable for RTX 30/40/50 consumer GPUs
-# pipe.enable_offload(
-#     cpu_offload=True,
-#     offload_granularity="block", #["block", "phase"]
-#     text_encoder_offload=True,
-#     vae_offload=False,
-# )
+pipe.enable_offload(
+    cpu_offload=True,
+    offload_granularity="model",  # ["model", "block"]
+)
 
 # Create generator manually with specified parameters
 pipe.create_generator(

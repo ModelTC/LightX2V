@@ -84,7 +84,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
                     "model.language_model": "cpu",
                 }
             else:
-                self.device_map = "auto"
+                self.device_map = AI_DEVICE
             self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(self.config["qwen25vl_quantized_ckpt"], dtype=torch.bfloat16, device_map=self.device_map, low_cpu_mem_usage=True)
         else:
             self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config["model_path"], "text_encoder"), torch_dtype=torch.bfloat16)
@@ -155,7 +155,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
     @torch.no_grad()
     def infer(self, text, image_list=None):
         if self.cpu_offload:
-            if not hasattr(self, "device_map") or self.device_map == "auto":
+            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
                 self.text_encoder.to(AI_DEVICE)
 
         if self.is_layered:
@@ -245,7 +245,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
 
         if self.cpu_offload:
-            if not hasattr(self, "device_map") or self.device_map == "auto":
+            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
                 self.text_encoder.to(torch.device("cpu"))
             torch_device_module.empty_cache()
             gc.collect()
