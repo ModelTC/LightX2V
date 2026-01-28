@@ -142,10 +142,15 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 shard_txt_k = txt_k[:, (cur_rank * shard_heads + h) : (cur_rank * shard_heads + h + 1), :]
                 shard_txt_v = txt_v[:, (cur_rank * shard_heads + h) : (cur_rank * shard_heads + h + 1), :]
 
-                # 合并图像和文本的查询、键和值
-                q = torch.cat((shard_img_q, shard_txt_q), dim=0)
-                k = torch.cat((shard_img_k, shard_txt_k), dim=0)
-                v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+                # 合并图像和文本的查询、键和值（根据 img_first 决定顺序）
+                if img_first:
+                    q = torch.cat((shard_img_q, shard_txt_q), dim=0)
+                    k = torch.cat((shard_img_k, shard_txt_k), dim=0)
+                    v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+                else:
+                    q = torch.cat((shard_txt_q, shard_img_q), dim=0)
+                    k = torch.cat((shard_txt_k, shard_img_k), dim=0)
+                    v = torch.cat((shard_txt_v, shard_img_v), dim=0)
 
                 # 调用注意力函数计算注意力结果
                 head_attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs)
@@ -182,10 +187,15 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             shard_txt_k = txt_k[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
             shard_txt_v = txt_v[:, cur_rank * shard_heads : (cur_rank + 1) * shard_heads, :]
 
-            # 合并图像和文本的查询、键和值
-            q = torch.cat((shard_img_q, shard_txt_q), dim=0)
-            k = torch.cat((shard_img_k, shard_txt_k), dim=0)
-            v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+            # 合并图像和文本的查询、键和值（根据 img_first 决定顺序）
+            if img_first:
+                q = torch.cat((shard_img_q, shard_txt_q), dim=0)
+                k = torch.cat((shard_img_k, shard_txt_k), dim=0)
+                v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+            else:
+                q = torch.cat((shard_txt_q, shard_img_q), dim=0)
+                k = torch.cat((shard_txt_k, shard_img_k), dim=0)
+                v = torch.cat((shard_txt_v, shard_img_v), dim=0)
 
             # 调用注意力函数计算注意力结果
             attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs)
@@ -203,6 +213,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         gathered_txt_attn = [torch.empty_like(txt_attn) for _ in range(world_size)]
         dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)
         txt_attn = torch.cat(gathered_txt_attn, dim=1)  # 合并所有进程的文本注意力结果
+
+        # 将 txt_attn reshape 为 2D，与 img_attn 一致
+        txt_attn = txt_attn.reshape(txt_qkv_len, -1)
 
         # 合并图像和文本的注意力结果
         if img_first:
