@@ -24,11 +24,11 @@
     "t5_quant_scheme": "int8-npu",
     "modulate_type": "torch",
     "rope_type": "torch",
-    "ln_type": "Default",
+    "layer_norm_type": "torch",
     "cpu_offload": true,
     "audio_adapter_cpu_offload": true,
     "t5_cpu_offload": false,
     "offload_granularity": "model",
     "clip_cpu_offload": false,
-    "rms_type": "Default"
+    "rms_norm_type": "torch"
 }

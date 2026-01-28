@@ -119,7 +119,7 @@ class IndividualTokenRefinerBlock(WeightModule):
         self.mm_type = mm_type
         self.add_module(
             "norm1",
-            LN_WEIGHT_REGISTER["Default"](f"{block_prefix}.{block_idx}.norm1.weight", f"{block_prefix}.{block_idx}.norm1.bias"),
+            LN_WEIGHT_REGISTER["torch"](f"{block_prefix}.{block_idx}.norm1.weight", f"{block_prefix}.{block_idx}.norm1.bias"),
         )
         self.add_module(
             "self_attn_qkv",
@@ -131,7 +131,7 @@ class IndividualTokenRefinerBlock(WeightModule):
         )
         self.add_module(
             "norm2",
-            LN_WEIGHT_REGISTER["Default"](f"{block_prefix}.{block_idx}.norm2.weight", f"{block_prefix}.{block_idx}.norm2.bias"),
+            LN_WEIGHT_REGISTER["torch"](f"{block_prefix}.{block_idx}.norm2.weight", f"{block_prefix}.{block_idx}.norm2.bias"),
         )
         self.add_module(
             "mlp_fc1",

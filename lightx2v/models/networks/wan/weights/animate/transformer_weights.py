@@ -116,12 +116,12 @@ class WanAnimateFuserBlock(WeightModule):
 
         self.add_module(
             "pre_norm_feat",
-            LN_WEIGHT_REGISTER["Default"](),
+            LN_WEIGHT_REGISTER["torch"](),
         )
 
         self.add_module(
             "pre_norm_motion",
-            LN_WEIGHT_REGISTER["Default"](),
+            LN_WEIGHT_REGISTER["torch"](),
         )
 
         self.add_module("adapter_attn", ATTN_WEIGHT_REGISTER[config["adapter_attn_type"]]())

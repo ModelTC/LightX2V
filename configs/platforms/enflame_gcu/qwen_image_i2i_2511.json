@@ -16,6 +16,6 @@
     "zero_cond_t": true,
     "modulate_type": "torch",
     "rope_type": "gcu_wan_rope",
-    "ln_type": "gcu_layer_norm",
-    "rms_type": "Default"
+    "layer_norm_type": "gcu_layer_norm",
+    "rms_norm_type": "torch"
 }

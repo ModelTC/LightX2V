@@ -138,7 +138,7 @@ class ZImageTransformerBlock(WeightModule):
         self.task = task
         self.config = config
         self.has_modulation = has_modulation
-        self.ln_type = config.get("ln_type", "Triton")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
         self.lazy_load = lazy_load
