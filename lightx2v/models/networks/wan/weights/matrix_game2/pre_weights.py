@@ -34,7 +34,7 @@ class WanMtxg2PreWeights(WeightModule):
         # img_emb
         self.add_module(
             "img_emb_0",
-            LN_WEIGHT_REGISTER["Default"]("img_emb.proj.0.weight", "img_emb.proj.0.bias", eps=1e-5),
+            LN_WEIGHT_REGISTER["torch"]("img_emb.proj.0.weight", "img_emb.proj.0.bias", eps=1e-5),
         )
         self.add_module(
             "img_emb_1",
@@ -46,5 +46,5 @@ class WanMtxg2PreWeights(WeightModule):
         )
         self.add_module(
             "img_emb_4",
-            LN_WEIGHT_REGISTER["Default"]("img_emb.proj.4.weight", "img_emb.proj.4.bias", eps=1e-5),
+            LN_WEIGHT_REGISTER["torch"]("img_emb.proj.4.weight", "img_emb.proj.4.bias", eps=1e-5),
         )

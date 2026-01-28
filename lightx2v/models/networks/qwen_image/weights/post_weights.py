@@ -18,7 +18,7 @@ class QwenImagePostWeights(WeightModule):
                 "norm_out.linear.bias",
             ),
         )
-        self.add_module("norm_out", LN_WEIGHT_REGISTER["Default"](eps=1e-6))
+        self.add_module("norm_out", LN_WEIGHT_REGISTER["torch"](eps=1e-6))
 
         # proj_out
         self.add_module(

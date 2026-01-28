@@ -41,7 +41,7 @@ class WanTransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
         self.add_module(
             "head",
             MM_WEIGHT_REGISTER["Default"](
@@ -240,9 +240,9 @@ class WanSelfAttention(WeightModule):
         self.lazy_load_file = lazy_load_file
 
         if self.config.get("sf_config", False):
-            self.attn_rms_type = self.config.get("rms_type", "self_forcing")
+            self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
         else:
-            self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
+            self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
@@ -258,7 +258,7 @@ class WanSelfAttention(WeightModule):
 
         self.add_module(
             "norm1",
-            LN_WEIGHT_REGISTER["Default"](),
+            LN_WEIGHT_REGISTER["torch"](),
         )
 
         self.add_module(
@@ -316,7 +316,7 @@ class WanSelfAttention(WeightModule):
         )
         self.add_module(
             "self_attn_norm_q",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -328,7 +328,7 @@ class WanSelfAttention(WeightModule):
         )
         self.add_module(
             "self_attn_norm_k",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -440,14 +440,14 @@ class WanCrossAttention(WeightModule):
         self.lazy_load_file = lazy_load_file
 
         if self.config.get("sf_config", False):
-            self.attn_rms_type = self.config.get("rms_type", "self_forcing")
+            self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
         else:
-            self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
+            self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["Default"](
+            LN_WEIGHT_REGISTER["torch"](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
                 create_cuda_buffer,
@@ -512,7 +512,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_q",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -524,7 +524,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_k",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -565,7 +565,7 @@ class WanCrossAttention(WeightModule):
             )
             self.add_module(
                 "cross_attn_norm_k_img",
-                RMS_WEIGHT_REGISTER[self.attn_rms_type](
+                RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                     f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
                     create_cuda_buffer,
                     create_cpu_buffer,
@@ -603,7 +603,7 @@ class WanFFN(WeightModule):
         block_lora_prefix = "diffusion_model.blocks"
         self.add_module(
             "norm2",
-            LN_WEIGHT_REGISTER["Default"](),
+            LN_WEIGHT_REGISTER["torch"](),
         )
 
         self.add_module(

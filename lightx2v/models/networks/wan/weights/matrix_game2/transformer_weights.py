@@ -34,7 +34,7 @@ class WanActionTransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["Default"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
@@ -97,7 +97,7 @@ class WanActionModule(WeightModule):
         self.config = config
         self.quant_method = config.get("quant_method", None)
 
-        self.attn_rms_type = self.config.get("rms_type", "self_forcing")
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
 
         self.add_module(
             "keyboard_embed_0",
@@ -190,13 +190,13 @@ class WanActionCrossAttention(WeightModule):
         self.config = config
 
         if self.config.get("sf_config", False):
-            self.attn_rms_type = self.config.get("rms_type", "self_forcing")
+            self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
         else:
-            self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
+            self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["Default"](
+            LN_WEIGHT_REGISTER["torch"](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
             ),
@@ -231,13 +231,13 @@ class WanActionCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_q",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
             ),
         )
         self.add_module(
             "cross_attn_norm_k",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
             ),
         )

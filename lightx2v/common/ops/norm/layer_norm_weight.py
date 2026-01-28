@@ -184,7 +184,7 @@ class LNWeightTemplate(metaclass=ABCMeta):
         pass
 
 
-@LN_WEIGHT_REGISTER("Default")
+@LN_WEIGHT_REGISTER("torch")
 class LNWeight(LNWeightTemplate):
     def __init__(
         self,

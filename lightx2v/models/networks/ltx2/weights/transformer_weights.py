@@ -312,7 +312,7 @@ class LTX2Attention(WeightModule):
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-        self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
@@ -328,7 +328,7 @@ class LTX2Attention(WeightModule):
 
         self.add_module(
             f"q_norm",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.q_norm.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
@@ -340,7 +340,7 @@ class LTX2Attention(WeightModule):
         )
         self.add_module(
             f"k_norm",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.k_norm.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
@@ -494,7 +494,7 @@ class LTX2AttentionTP(WeightModule):
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-        self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"

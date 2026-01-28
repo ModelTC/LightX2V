@@ -134,7 +134,7 @@ class WanAudioAdapterCA(WeightModule):
 
         self.add_module(
             "norm_kv",
-            LN_WEIGHT_REGISTER["Default"](
+            LN_WEIGHT_REGISTER["torch"](
                 f"{block_prefix}.{block_index}.norm_kv.weight",
                 f"{block_prefix}.{block_index}.norm_kv.bias",
                 create_cuda_buffer,
@@ -146,7 +146,7 @@ class WanAudioAdapterCA(WeightModule):
 
         self.add_module(
             "norm_q",
-            LN_WEIGHT_REGISTER["Default"](),
+            LN_WEIGHT_REGISTER["torch"](),
         )
 
         self.add_module(

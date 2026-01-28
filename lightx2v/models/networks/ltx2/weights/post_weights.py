@@ -45,7 +45,7 @@ class LTX2PostWeights(WeightModule):
                 "model.diffusion_model.scale_shift_table",
             ),
         )
-        self.add_module("norm_out", LN_WEIGHT_REGISTER["Default"]())
+        self.add_module("norm_out", LN_WEIGHT_REGISTER["torch"]())
         self.add_module(
             "proj_out",
             MM_WEIGHT_REGISTER["Default"](
@@ -60,7 +60,7 @@ class LTX2PostWeights(WeightModule):
                 "model.diffusion_model.audio_scale_shift_table",
             ),
         )
-        self.add_module("audio_norm_out", LN_WEIGHT_REGISTER["Default"]())
+        self.add_module("audio_norm_out", LN_WEIGHT_REGISTER["torch"]())
         self.add_module(
             "audio_proj_out",
             MM_WEIGHT_REGISTER["Default"](

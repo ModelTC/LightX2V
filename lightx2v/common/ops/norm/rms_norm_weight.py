@@ -140,7 +140,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         pass
 
 
-@RMS_WEIGHT_REGISTER("Default")
+@RMS_WEIGHT_REGISTER("torch")
 class RMSWeight(RMSWeightTemplate):
     def __init__(
         self,

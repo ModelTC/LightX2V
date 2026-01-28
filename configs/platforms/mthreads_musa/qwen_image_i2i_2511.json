@@ -10,6 +10,6 @@
     "USE_IMAGE_ID_IN_PROMPT": true,
     "modulate_type": "torch",
     "rope_type": "torch_naive",
-    "ln_type": "Default",
-    "rms_type": "Default"
+    "layer_norm_type": "torch",
+    "rms_norm_type": "torch"
 }

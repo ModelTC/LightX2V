@@ -19,7 +19,7 @@ class ZImagePreWeights(WeightModule):
             MM_WEIGHT_REGISTER["Default"]("cap_embedder.1.weight", "cap_embedder.1.bias"),
         )
 
-        self.add_module("txt_norm", RMS_WEIGHT_REGISTER["Default"]("cap_embedder.0.weight"))
+        self.add_module("txt_norm", RMS_WEIGHT_REGISTER["torch"]("cap_embedder.0.weight"))
         self.add_module("time_text_embed_timestep_embedder_linear_1", MM_WEIGHT_REGISTER["Default"]("t_embedder.mlp.0.weight", "t_embedder.mlp.0.bias"))
         self.add_module("time_text_embed_timestep_embedder_linear_2", MM_WEIGHT_REGISTER["Default"]("t_embedder.mlp.2.weight", "t_embedder.mlp.2.bias"))
         self.add_module("x_pad_token", TENSOR_REGISTER["Default"]("x_pad_token"))
