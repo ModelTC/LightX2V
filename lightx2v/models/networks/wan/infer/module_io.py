@@ -24,4 +24,3 @@ class WanPreInferModuleOutput:
     # extra
     adapter_args: Dict[str, Any] = field(default_factory=dict)
     conditional_dict: Dict[str, Any] = field(default_factory=dict)
-

@@ -760,7 +760,6 @@ class WanVAE_(nn.Module):
                 out = torch.cat([out, out_], 2)
         return out
 
-
     def cached_decode_withflag(self, z, scale, is_first_clip, is_last_clip):
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
@@ -784,7 +783,6 @@ class WanVAE_(nn.Module):
         if is_last_clip:
             self.clear_decode_cache()
         return out
-
 
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
@@ -1458,7 +1456,6 @@ class WanVAE:
 
         return images
 
-
     def cached_decode_withflag(self, zs, is_first, is_last):
         if self.cpu_offload:
             self.to_cuda()
@@ -1470,7 +1467,7 @@ class WanVAE:
             self.to_cpu()
 
         return images
-    
+
     def decode_stream(self, zs):
         if self.cpu_offload:
             self.to_cuda()

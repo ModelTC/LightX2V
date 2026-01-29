@@ -1,5 +1,4 @@
 import torch
-import torch.distributed as dist
 from einops import rearrange
 from torch.nn import functional as F
 
@@ -116,6 +115,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         sample = self.latents.to(torch.float32)
         dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
         self.latents = sample + model_output * dt
+
 
 class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
     def __init__(self, config):

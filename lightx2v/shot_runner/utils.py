@@ -1,12 +1,13 @@
 import os
 import subprocess
 from typing import Optional, Tuple, Union
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchaudio as ta
 from einops import rearrange
 from loguru import logger
-import torch.nn.functional as F
 
 
 class SlidingWindowReader:
@@ -57,9 +58,7 @@ class RS2V_SlidingWindowReader:
         self.chunk_idx = 0
 
     def next_frame(self):
-        cur_clip_len = (
-            self.first_clip_len if self.chunk_idx == 0 else self.clip_len
-        )
+        cur_clip_len = self.first_clip_len if self.chunk_idx == 0 else self.clip_len
 
         start_sample = self.pos_frame * self.audio_per_frame
         if start_sample >= self.samples.numel():
@@ -81,6 +80,7 @@ class RS2V_SlidingWindowReader:
         self.chunk_idx += 1
 
         return frame, pad_len
+
 
 def array_to_video(
     image_array: np.ndarray,

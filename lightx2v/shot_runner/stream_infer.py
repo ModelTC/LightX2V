@@ -1,15 +1,17 @@
+import argparse
 import os
-import argparse 
+
 import numpy as np
 import torch
 import torch.distributed as dist
 import torchaudio as ta
 from loguru import logger
 
-from lightx2v.utils.utils import seed_all
-from lightx2v.shot_runner.shot_base import ShotPipeline, ShotConfig, load_clip_configs
+from lightx2v.shot_runner.shot_base import ShotConfig, ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.profiler import *
+from lightx2v.utils.utils import seed_all
+
 
 class ShotStreamPipeline(ShotPipeline):  # type:ignore
     def __init__(self, config):

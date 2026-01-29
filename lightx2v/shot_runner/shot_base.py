@@ -1,10 +1,11 @@
-
 import json
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
+
 import torch
 from loguru import logger
+
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -93,4 +94,4 @@ class ShotPipeline:
 
     @torch.no_grad()
     def generate(self):
-       pass
+        pass

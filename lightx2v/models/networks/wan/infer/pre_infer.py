@@ -1,11 +1,13 @@
 import torch
 import torch.distributed as dist
 from torch.nn import functional as F
+
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .module_io import GridOutput, WanPreInferModuleOutput
 from .utils import guidance_scale_embedding, sinusoidal_embedding_1d
-from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 class WanPreInfer:
     def __init__(self, config):
@@ -25,6 +27,8 @@ class WanPreInfer:
         else:
             self.seq_p_group = None
 
+        self.cos_sin = None
+        self.grid_sizes = (0, 0, 0)  # (t, h, w)
         self.head_size = self.config["dim"] // self.config["num_heads"]
         self.freqs = torch.cat(
             [
@@ -195,13 +199,18 @@ class WanPreInfer:
             torch.cuda.empty_cache()
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
-        cos_sin = self.prepare_cos_sin(grid_sizes.tuple, self.freqs)
+
+        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
+            freqs = self.freqs.clone()  # self.freqs init param can not be changed
+            self.grid_sizes = grid_sizes.tuple
+            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
             x=x.squeeze(0),
             embed0=embed0.squeeze(0),
             context=context,
-            cos_sin=cos_sin,
+            cos_sin=self.cos_sin,
             adapter_args={"motion_vec": motion_vec},
         )

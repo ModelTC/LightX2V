@@ -2,25 +2,15 @@ import torch
 
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from ..module_io import GridOutput, WanPreInferModuleOutput
 from ..utils import sinusoidal_embedding_1d
-from lightx2v_platform.base.global_var import AI_DEVICE
 
-from loguru import logger
+
 class WanAudioPreInfer(WanPreInfer):
     def __init__(self, config):
         super().__init__(config)
-        assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
-        self.config = config
-        self.task = config["task"]
-        self.freq_dim = config["freq_dim"]
-        self.dim = config["dim"]
-        self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.infer_dtype = GET_DTYPE()
-        self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
-        self.cos_sin = None
-        self.grid_sizes = (0, 0, 0) # (t, h, w)
         if self.task in ["rs2v"]:
             self.freqs = torch.cat(
                 [
@@ -42,27 +32,28 @@ class WanAudioPreInfer(WanPreInfer):
 
     def init_rope_param(self, grid_sizes, valid_latent_num=None, ref_latent_num=None, prev_latent_num=None):
         grid_sizes_t, _, _ = grid_sizes
-        freqs = self.freqs.clone()
+        freqs = self.freqs.clone()  # self.freqs init param can not be changed
         if self.task in ["rs2v"]:
-            #using neg temporal rope
-            #set ref_latent index temporal to zero
-            s = valid_latent_num + 1 ## neg temporal start from -1
+            # using neg temporal rope
+            # set ref_latent index temporal to zero
+            s = valid_latent_num + 1  ## neg temporal start from -1
             e = s + ref_latent_num
-            freqs[s:e, :self.rope_t_dim] = 0
-            #move neg temporal to prve_latent index
+            freqs[s:e, : self.rope_t_dim] = 0
+            # move neg temporal to prve_latent index
             if prev_latent_num != 0:
-                s = e 
+                s = e
                 e = s + prev_latent_num
-                freqs[s:e, :self.rope_t_dim] = freqs[0:1, :self.rope_t_dim]
+                freqs[s:e, : self.rope_t_dim] = freqs[0:1, : self.rope_t_dim]
             # Cut out neg temporal
             freqs = freqs[1:, :]
-            #init rope
+            # init rope
             cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
         else:
-            freqs[grid_sizes_t:, : self.rope_t_dim] = 0#set ref_latent index temporal to zero
+            freqs[grid_sizes_t:, : self.rope_t_dim] = 0  # set ref_latent index temporal to zero
             cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
 
         return cos_sin
+
     @torch.no_grad()
     def infer(self, weights, inputs):
         infer_condition, latents, timestep_input = self.scheduler.infer_condition, self.scheduler.latents, self.scheduler.timestep_input
@@ -119,11 +110,8 @@ class WanAudioPreInfer(WanPreInfer):
             ref_image_encoder = ref_image_encoder.flatten(2).transpose(1, 2).contiguous()
 
             # reference state embedding
-            state_ids = torch.zeros(
-                ref_image_encoder.shape[1], dtype=torch.long, device=ref_image_encoder.device
-            )
-            ref_state = inputs["ref_state"]
-            state_ids.fill_(ref_state.item())
+            state_ids = torch.zeros(ref_image_encoder.shape[1], dtype=torch.long, device=ref_image_encoder.device)
+            state_ids.fill_(inputs["ref_state"])
             state_emb = weights.state_embedding.apply(state_ids).contiguous()
             ref_image_encoder = ref_image_encoder + state_emb
             x = torch.cat([x, ref_image_encoder], dim=1)
@@ -193,15 +181,14 @@ class WanAudioPreInfer(WanPreInfer):
         if self.clean_cuda_cache:
             if self.config.get("use_image_encoder", True):
                 del context_clip
-            torch.cuda.empty_cache()        
+            torch.cuda.empty_cache()
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             self.grid_sizes = grid_sizes.tuple
             if self.task in ["rs2v"]:
-                self.cos_sin = self.init_rope_param(grid_sizes.tuple,
-                                                    valid_latent_num, ref_latent_num, prev_latent_num)
+                self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num, ref_latent_num, prev_latent_num)
             else:
                 self.cos_sin = self.init_rope_param(grid_sizes.tuple)
 

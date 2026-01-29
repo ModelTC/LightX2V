@@ -8,7 +8,7 @@ from lightx2v.utils.registry_factory import *
 
 from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
-from loguru import logger
+
 
 def modulate(x, scale, shift):
     return x * (1 + scale.squeeze()) + shift.squeeze()
@@ -73,7 +73,6 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
-
 
     @torch.no_grad()
     def reset_post_adapter_states(self):

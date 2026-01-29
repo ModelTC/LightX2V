@@ -837,7 +837,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.inputs["audio_encoder_output"] = audio_features
         # 处理前一帧图像或latent输入
         if self.task in ["rs2v"]:
-            self.inputs["previmg_encoder_output"] = {"prev_latents":self.input_info.overlap_latent}
+            self.inputs["previmg_encoder_output"] = {"prev_latents": self.input_info.overlap_latent}
             self.inputs["ref_state"] = self.input_info.ref_state
         else:
             self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
@@ -845,9 +845,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         latents = self.run_clip()
         # 运行vae decoder
         if self.task in ["rs2v"]:
-            gen_video = self.run_vae_cached_decoder_withflag(latents,  
-                                                             self.input_info.is_first,
-                                                             self.input_info.is_last)
+            gen_video = self.run_vae_cached_decoder_withflag(latents, self.input_info.is_first, self.input_info.is_last)
         else:
             gen_video = self.run_vae_decoder(latents)
 

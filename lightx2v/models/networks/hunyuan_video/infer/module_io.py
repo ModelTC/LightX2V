@@ -11,6 +11,7 @@ class HunyuanVideo15InferModuleOutput:
     cos_sin: torch.Tensor
     grid_sizes: tuple
 
+
 @dataclass
 class HunyuanVideo15ImgBranchOutput:
     img_mod1_gate: torch.Tensor

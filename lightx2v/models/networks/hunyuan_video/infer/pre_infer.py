@@ -3,8 +3,8 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-from torch.nn import functional as F
 from einops import rearrange
+from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -12,6 +12,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
 from .posemb_layers import get_nd_rotary_pos_embed
+
 
 def apply_gate(x, gate=None, tanh=False):
     """AI is creating summary for apply_gate
@@ -182,7 +183,7 @@ class HunyuanVideo15PreInfer:
         txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
         txt = txt[:, : text_mask.sum(), :]
 
-        grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w)
+        grid_sizes = (grid_sizes_t, grid_sizes_h, grid_sizes_w)
         cos_sin = self.prepare_cos_sin(grid_sizes)
         return HunyuanVideo15InferModuleOutput(
             img=img.contiguous(),

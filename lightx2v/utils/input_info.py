@@ -99,6 +99,7 @@ class S2VInputInfo:
     # input preprocess audio
     audio_clip: torch.Tensor = field(default_factory=lambda: None)
 
+
 @dataclass
 class RS2VInputInfo:
     seed: int = field(default_factory=int)
@@ -125,10 +126,11 @@ class RS2VInputInfo:
     # input preprocess audio
     audio_clip: torch.Tensor = field(default_factory=lambda: None)
     # input reference state
-    ref_state: torch.Tensor = field(default_factory=lambda: None)
+    ref_state: int = field(default_factory=int)
     # flags for first and last clip
     is_first: bool = field(default_factory=lambda: False)
     is_last: bool = field(default_factory=lambda: False)
+
 
 # Need Check
 @dataclass
