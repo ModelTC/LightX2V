@@ -1,1 +1,2 @@
 AI_DEVICE = None
+PLATFORM = None
