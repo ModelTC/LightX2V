@@ -53,7 +53,7 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
         if base_block_idx == 0:
             self.compute_phases[0].add_module(
                 "before_proj",
-                MM_WEIGHT_REGISTER[self.mm_type](
+                MM_WEIGHT_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.before_proj.weight",
                     f"{block_prefix}.{self.block_index}.before_proj.bias",
                     create_cuda_buffer,
@@ -65,7 +65,7 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
 
         self.compute_phases[-1].add_module(
             "after_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.after_proj.weight",
                 f"{block_prefix}.{self.block_index}.after_proj.bias",
                 create_cuda_buffer,
