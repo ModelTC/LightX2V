@@ -7,7 +7,7 @@ from PIL import Image
 
 from lightx2v.models.input_encoders.hf.vace.vace_processor import VaceVideoProcessor
 from lightx2v.models.networks.wan.vace_model import WanVaceModel
-from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -31,11 +31,12 @@ class WanVaceRunner(WanRunner):
         )
 
     def load_transformer(self):
-        model = WanVaceModel(
-            self.config["model_path"],
-            self.config,
-            self.init_device,
-        )
+        wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = WanVaceModel(**wan_model_kwargs)
+        else:
+            model = build_wan_model_with_lora(WanVaceModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
 
     def prepare_source(self, src_video, src_mask, src_ref_images, image_size, device=torch.device("cuda")):
@@ -190,3 +191,49 @@ class WanVaceRunner(WanRunner):
             gc.collect()
 
         return images
+
+
+@RUNNER_REGISTER("wan2.2_moe_vace")
+class Wan22MoeVaceRunner(WanVaceRunner):
+    def __init__(self, config):
+        super().__init__(config)
+        if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
+            self.high_noise_model_path = self.config["high_noise_quantized_ckpt"]
+        elif self.config.get("high_noise_original_ckpt", None):
+            self.high_noise_model_path = self.config["high_noise_original_ckpt"]
+        else:
+            self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
+            if not os.path.isdir(self.high_noise_model_path):
+                raise FileNotFoundError(f"High Noise Model does not find")
+
+        if self.config.get("dit_quantized", False) and self.config.get("low_noise_quantized_ckpt", None):
+            self.low_noise_model_path = self.config["low_noise_quantized_ckpt"]
+        elif not self.config.get("dit_quantized", False) and self.config.get("low_noise_original_ckpt", None):
+            self.low_noise_model_path = self.config["low_noise_original_ckpt"]
+        else:
+            self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
+            if not os.path.isdir(self.low_noise_model_path):
+                raise FileNotFoundError(f"Low Noise Model does not find")
+
+    def load_transformer(self):
+        lora_configs = self.config.get("lora_configs")
+        high_model_kwargs = {
+            "model_path": self.high_noise_model_path,
+            "config": self.config,
+            "device": self.init_device,
+            "model_type": "wan2.2_moe_high_noise",
+        }
+        low_model_kwargs = {
+            "model_path": self.low_noise_model_path,
+            "config": self.config,
+            "device": self.init_device,
+            "model_type": "wan2.2_moe_low_noise",
+        }
+        if not lora_configs:
+            high_noise_model = WanVaceModel(**high_model_kwargs)
+            low_noise_model = WanVaceModel(**low_model_kwargs)
+        else:
+            high_noise_model = build_wan_model_with_lora(WanVaceModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
+            low_noise_model = build_wan_model_with_lora(WanVaceModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
+
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])

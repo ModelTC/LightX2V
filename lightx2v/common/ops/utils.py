@@ -327,8 +327,11 @@ def load_state_dict(cls, base_attrs, lora_attrs, destination, block_index, adapt
     for name, attr_name, _ in base_attrs:
         actual_name = resolve_block_name(name, block_index, adapter_block_index, cls.is_post_adapter)
         cuda_buffer_attr = f"{attr_name}_cuda_buffer"
-        if hasattr(cls, cuda_buffer_attr):
-            setattr(cls, attr_name, getattr(cls, cuda_buffer_attr).copy_(destination[actual_name], non_blocking=True))
+        if actual_name in destination:
+            if hasattr(cls, cuda_buffer_attr):
+                setattr(cls, attr_name, getattr(cls, cuda_buffer_attr).copy_(destination[actual_name], non_blocking=True))
+        else:
+            setattr(cls, attr_name, None)
     # Lora
     for lora_attr, lora_attr_name in lora_attrs.items():
         name = resolve_block_name(getattr(cls, lora_attr_name), block_index)

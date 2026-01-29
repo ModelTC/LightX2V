@@ -585,7 +585,7 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
         "i2v": {"required_paths": ["image_path"], "description": "Image-to-Video task requires --image_path"},
         "flf2v": {"required_paths": ["image_path", "last_frame_path"], "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"},
         "s2v": {"required_paths": ["image_path", "audio_path"], "description": "Speech-to-Video task requires --image_path and --audio_path"},
-        "vace": {"required_paths": ["src_video"], "description": "Video Appearance Change Editing task requires --src_video"},
+        "vace": {"required_paths": ["src_ref_images"], "description": "Video Appearance Change Editing task requires --src_ref_images"},
         "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
         "t2v": {"required_paths": [], "description": "Text-to-Video task"},
         "t2i": {"required_paths": [], "description": "Text-to-Image task"},

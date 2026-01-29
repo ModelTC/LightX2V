@@ -47,6 +47,8 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         self.crossattn_cache = crossattn_cache
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
+        self.get_scheduler_values()
+        self.reset_infer_states()
         return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end)
 
     def _infer_with_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
