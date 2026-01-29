@@ -16,8 +16,8 @@ class WanVaceModel(WanModel):
     pre_weight_class = WanPreWeights
     transformer_weight_class = WanVaceTransformerWeights
 
-    def __init__(self, model_path, config, device):
-        super().__init__(model_path, config, device)
+    def __init__(self, model_path, config, device, model_type="wan2.1"):
+        super().__init__(model_path, config, device, model_type)
 
     def _init_infer(self):
         super()._init_infer()
@@ -44,7 +44,13 @@ class WanVaceModel(WanModel):
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
         pre_infer_out.vace_context = inputs["image_encoder_output"]["vae_encoder_out"][0]
 
+        if self.config["seq_parallel"]:
+            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
+
+        if self.config["seq_parallel"]:
+            x = self._seq_parallel_post_process(x)
 
         noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
 
