@@ -18,6 +18,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 try:
     from sgl_kernel.elementwise import timestep_embedding as timestep_embedding_cuda
+
     TIMESTEP_EMBEDDING_CUDA_AVAILABLE = PLATFORM == "cuda"
 except ImportError:
     TIMESTEP_EMBEDDING_CUDA_AVAILABLE = False
