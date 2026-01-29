@@ -21,6 +21,7 @@ try:
 except ImportError:
     timestep_embedding_cuda = None
 
+
 def calculate_shift(
     image_seq_len,
     base_seq_len: int = 256,
