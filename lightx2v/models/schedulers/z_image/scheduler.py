@@ -16,6 +16,11 @@ from torch.nn import functional as F
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+try:
+    from sgl_kernel.elementwise import timestep_embedding as timestep_embedding_cuda
+except ImportError:
+    timestep_embedding_cuda = None
+
 
 def calculate_shift(
     image_seq_len,
@@ -172,6 +177,17 @@ def get_timestep_embedding(
     Returns
         torch.Tensor: an [N x dim] Tensor of positional embeddings.
     """
+
+    if timestep_embedding_cuda is not None:
+        return timestep_embedding_cuda(
+            timesteps,
+            embedding_dim,
+            flip_sin_to_cos=flip_sin_to_cos,
+            downscale_freq_shift=downscale_freq_shift,
+            scale=scale,
+            max_period=max_period,
+        )
+
     assert len(timesteps.shape) == 1, "Timesteps should be a 1d-array"
 
     half_dim = embedding_dim // 2
