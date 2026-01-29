@@ -1,4 +1,3 @@
-import os
 import sys
 from datetime import datetime
 
@@ -6,7 +5,6 @@ lightx2v_path = "/path/to/LightX2V"
 model_path = "/path/to/Qwen/Qwen-Image-2512"
 
 sys.path.append(lightx2v_path)
-os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 
 from lightx2v import LightX2VPipeline  # noqa: E402
 
