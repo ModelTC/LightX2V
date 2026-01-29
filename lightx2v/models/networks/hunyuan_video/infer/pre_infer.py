@@ -5,15 +5,16 @@ import torch
 from einops import rearrange
 
 from lightx2v.utils.envs import *
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
 
 try:
     from sgl_kernel.elementwise import timestep_embedding as timestep_embedding_cuda
+    TIMESTEP_EMBEDDING_CUDA_AVAILABLE = PLATFORM == "cuda"
 except ImportError:
-    timestep_embedding_cuda = None
+    TIMESTEP_EMBEDDING_CUDA_AVAILABLE = False
 
 
 def apply_gate(x, gate=None, tanh=False):
@@ -206,7 +207,7 @@ class HunyuanVideo15PreInfer:
 
         .. ref_link: https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         """
-        if timestep_embedding_cuda is not None:
+        if TIMESTEP_EMBEDDING_CUDA_AVAILABLE:
             return timestep_embedding_cuda(
                 t,
                 dim,
