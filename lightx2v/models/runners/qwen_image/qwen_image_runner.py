@@ -7,7 +7,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
-from lightx2v.models.networks.qwen_image.lora_adapter import QwenImageLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
@@ -44,8 +44,8 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = qwen_module(**model_kwargs)
-        lora_wrapper = QwenImageLoraWrapper(model)
-        lora_wrapper.apply_lora(lora_configs)
+        lora_adapter = LoraAdapter(model)
+        lora_adapter.apply_lora(lora_configs)
     return model
 
 
@@ -75,7 +75,9 @@ class QwenImageRunner(DefaultRunner):
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
+            "model_path": os.path.join(self.config["model_path"], "transformer"),
             "config": self.config,
+            "device": self.init_device,
         }
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
