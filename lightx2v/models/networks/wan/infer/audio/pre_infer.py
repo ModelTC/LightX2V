@@ -19,7 +19,8 @@ class WanAudioPreInfer(WanPreInfer):
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
-
+        self.cos_sin = None
+        self.grid_sizes = (0, 0, 0) # (t, h, w)
         if self.task in ["rs2v"]:
             self.freqs = torch.cat(
                 [
@@ -38,7 +39,30 @@ class WanAudioPreInfer(WanPreInfer):
         )
         freqs = torch.polar(torch.ones_like(freqs), freqs)
         return freqs
-    
+
+    def init_rope_param(self, grid_sizes, valid_latent_num=None, ref_latent_num=None, prev_latent_num=None):
+        grid_sizes_t, _, _ = grid_sizes
+        freqs = self.freqs.clone()
+        if self.task in ["rs2v"]:
+            #using neg temporal rope
+            #set ref_latent index temporal to zero
+            s = valid_latent_num + 1 ## neg temporal start from -1
+            e = s + ref_latent_num
+            freqs[s:e, :self.rope_t_dim] = 0
+            #move neg temporal to prve_latent index
+            if prev_latent_num != 0:
+                s = e 
+                e = s + prev_latent_num
+                freqs[s:e, :self.rope_t_dim] = freqs[0:1, :self.rope_t_dim]
+            # Cut out neg temporal
+            freqs = freqs[1:, :]
+            #init rope
+            cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
+        else:
+            freqs[grid_sizes_t:, : self.rope_t_dim] = 0#set ref_latent index temporal to zero
+            cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
+
+        return cos_sin
     @torch.no_grad()
     def infer(self, weights, inputs):
         infer_condition, latents, timestep_input = self.scheduler.infer_condition, self.scheduler.latents, self.scheduler.timestep_input
@@ -173,24 +197,13 @@ class WanAudioPreInfer(WanPreInfer):
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
-        if self.task in ["rs2v"]:
-            #using neg temporal rope
-            #set ref_latent index temporal to zero
-            s = valid_latent_num + 1 ## neg temporal start from -1
-            e = s + ref_latent_num
-            self.freqs[s:e, :self.rope_t_dim] = 0
-            #move neg temporal to prve_latent index
-            if prev_latent_num != 0:
-                s = valid_latent_num + 1 + ref_latent_num
-                e = s + prev_latent_num
-                self.freqs[s:e, :self.rope_t_dim] = self.freqs[0:1, :self.rope_t_dim]
-            # Cut out neg temporal
-            self.freqs = self.freqs[1:, :]
-            #init rope
-            cos_sin = self.prepare_cos_sin(grid_sizes.tuple, self.freqs)
-        else:
-            self.freqs[grid_sizes_t:, : self.rope_t_dim] = 0
-            cos_sin = self.prepare_cos_sin(grid_sizes.tuple, self.freqs)
+        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
+            self.grid_sizes = grid_sizes.tuple
+            if self.task in ["rs2v"]:
+                self.cos_sin = self.init_rope_param(grid_sizes.tuple,
+                                                    valid_latent_num, ref_latent_num, prev_latent_num)
+            else:
+                self.cos_sin = self.init_rope_param(grid_sizes.tuple)
 
         return WanPreInferModuleOutput(
             embed=embed,
@@ -198,7 +211,7 @@ class WanAudioPreInfer(WanPreInfer):
             x=x.squeeze(0),
             embed0=embed0.squeeze(0),
             context=context,
-            cos_sin=cos_sin,
+            cos_sin=self.cos_sin,
             valid_token_len=valid_token_len,
             valid_latent_num=valid_latent_num,
             adapter_args={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
