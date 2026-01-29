@@ -340,6 +340,7 @@ class ZImageRunner(DefaultRunner):
             gc.collect()
         return images
 
+    @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
