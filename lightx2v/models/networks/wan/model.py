@@ -67,6 +67,7 @@ class WanModel(CompiledMethodsMixin):
                 "int8-triton",
                 "fp8-vllm",
                 "int8-vllm",
+                "int8-vllm-hygon-dcu",
                 "fp8-q8f",
                 "int8-q8f",
                 "fp8-b128-deepgemm",

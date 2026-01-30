@@ -283,7 +283,12 @@ class LTX2Scheduler(BaseScheduler):
                 - terminal: Terminal sigma value (default: 0.1)
         """
         super().__init__(config)
-        self.infer_steps = config["infer_steps"]
+        if config.get("distilled_sigma_values", None) is not None:
+            self.sigmas = torch.tensor(config["distilled_sigma_values"])
+            self.infer_steps = len(self.sigmas) - 1
+        else:
+            self.sigmas = None
+            self.infer_steps = config["infer_steps"]
         self.cfg_guidance_scale = config.get("cfg_guidance_scale", 1.0)
 
         # Sigma scheduler configuration
@@ -317,7 +322,6 @@ class LTX2Scheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
 
         # State
-        self.sigmas = None
         self.video_latent_state = None
         self.audio_latent_state = None
 
@@ -348,11 +352,16 @@ class LTX2Scheduler(BaseScheduler):
             video_latent_shape: Shape of video latents
             audio_latent_shape: Shape of audio latents
             initial_video_latent: Optional initial video latent (for conditioning)
-            initial_audio_latent: Optional initial audio latent (for conditioning)
+            initial_audio_latent: Opti onal initial audio latent (for conditioning)
             noise_scale: Scale factor for noise
             video_denoise_mask: Optional denoise mask for video (unpatchified)
             audio_denoise_mask: Optional denoise mask for audio (unpatchified)
         """
+        # Reset step state (important for stage 2 after stage 1)
+        self.step_index = 0
+        self.v_noise_pred = None
+        self.a_noise_pred = None
+
         # Initialize generator
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
 
@@ -367,8 +376,8 @@ class LTX2Scheduler(BaseScheduler):
             audio_denoise_mask=audio_denoise_mask,
         )
 
-        # Generate sigma schedule (needs unpatchified latent for token count calculation)
-        self.set_timesteps(infer_steps=self.infer_steps)
+        if self.sigmas is None:
+            self.set_timesteps(infer_steps=self.infer_steps)
 
     def prepare_latents(
         self,
@@ -718,17 +727,9 @@ class LTX2Scheduler(BaseScheduler):
         """
         return self.audio_latent_state.denoise_mask * self.sigmas[self.step_index]
 
-    def get_final_latents(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Get final latents after unpatchifying (aligned with source code).
+    def reset_sigmas(self, sigmas: torch.Tensor):
+        self.sigmas = sigmas.to(torch.float32).to(AI_DEVICE)
+        self.infer_steps = len(sigmas) - 1
 
-        Returns:
-            Tuple of (video_latent, audio_latent) in unpatchified form
-        """
-        channels_v, frames_v, height_v, width_v = self.video_latent_shape_orig
-        channels_a, frames_a, mel_bins_a = self.audio_latent_shape_orig
-
-        video_latent = self.video_patchifier.unpatchify(self.video_latent_state.latent, frames_v, height_v, width_v)
-        audio_latent = self.audio_patchifier.unpatchify(self.audio_latent_state.latent, channels=channels_a, mel_bins=mel_bins_a)
-
-        return video_latent, audio_latent
+    def reset_latents(self, video_latent: torch.Tensor):
+        self.video_latent_state.latent = video_latent

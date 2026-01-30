@@ -18,9 +18,14 @@ from safetensors import torch as st
 from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from lightx2v.utils.lora_loader import LoRALoader
-from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
-from tools.convert.quant import *
+quant_path = str(Path(__file__).parent / "quant")
+if quant_path not in sys.path:
+    sys.path.insert(0, quant_path)
+
+from quant import *  # noqa: E402
+
+from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
+from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
 
 dtype_mapping = {
     "int8": torch.int8,
@@ -742,7 +747,7 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm"],
+        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit"],
         default="wan_dit",
         help="Model type",
     )
@@ -810,6 +815,7 @@ def main():
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
         model_type_keys_map = {
+            "z_image_dit": {"key_idx": 2, "target_keys": ["attention", "feed_forward", "adaLN_modulation", "linear"], "ignore_key": None},
             "qwen_image_dit": {
                 "key_idx": 2,
                 "target_keys": ["attn", "img_mlp", "txt_mlp", "txt_mod", "img_mod"],

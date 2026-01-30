@@ -2,17 +2,8 @@
 Kernel-Optimized Text Encoder
 
 Key optimizations:
-1. Flash Attention (No-Padding) - ~40% of inference time
-2. Fused RMSNorm - frequent operation
-
-Performance target:
-- Speed: 1.13x faster than Baseline (81.23ms vs 92.23ms)
-- Precision: >0.99 cosine similarity
-- Memory: Similar to Lite (~125MB VRAM)
-
-Usage:
-    encoder = LightLLMKernelTextEncoder(config)
-    hidden_states, mask, image_info = encoder.infer(text, image_list)
+1. Flash Attention
+2. Fused RMSNorm - frequent operation (sgl_kernel version)
 """
 
 import math

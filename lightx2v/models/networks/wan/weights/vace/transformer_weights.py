@@ -13,7 +13,7 @@ class WanVaceTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__(config, lazy_load_path, lora_path)
         self.patch_size = (1, 2, 2)
-        self.register_offload_buffers(config)
+        self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.vace_blocks = WeightModuleList(
             [WanVaceTransformerAttentionBlock(self.config["vace_layers"][i], i, self.task, self.mm_type, self.config, False, False, "vace_blocks") for i in range(len(self.config["vace_layers"]))]
         )
@@ -23,8 +23,8 @@ class WanVaceTransformerWeights(WanTransformerWeights):
             CONV3D_WEIGHT_REGISTER["Default"]("vace_patch_embedding.weight", "vace_patch_embedding.bias", stride=self.patch_size),
         )
 
-    def register_offload_buffers(self, config):
-        super().register_offload_buffers(config)
+    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+        super().register_offload_buffers(config, lazy_load_path, lora_path)
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
                 self.vace_offload_block_cuda_buffers = WeightModuleList(
@@ -53,7 +53,7 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
         if base_block_idx == 0:
             self.compute_phases[0].add_module(
                 "before_proj",
-                MM_WEIGHT_REGISTER[self.mm_type](
+                MM_WEIGHT_REGISTER["Default"](
                     f"{block_prefix}.{self.block_index}.before_proj.weight",
                     f"{block_prefix}.{self.block_index}.before_proj.bias",
                     create_cuda_buffer,
@@ -65,7 +65,7 @@ class WanVaceTransformerAttentionBlock(WanTransformerAttentionBlock):
 
         self.compute_phases[-1].add_module(
             "after_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 f"{block_prefix}.{self.block_index}.after_proj.weight",
                 f"{block_prefix}.{self.block_index}.after_proj.bias",
                 create_cuda_buffer,

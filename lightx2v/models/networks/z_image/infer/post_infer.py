@@ -11,22 +11,42 @@ class ZImagePostInfer:
         self.scheduler = scheduler
 
     def infer(self, weights, hidden_states, temb_img_silu, image_tokens_len=None):
-        temb_silu = F.silu(temb_img_silu)
-        temb1 = weights.norm_out_linear.apply(temb_silu)
+        """
+        Post-inference processing: apply norm_out, proj_out, and unpatchify.
+        All processing is done without batch dimension: [T, D] instead of [B, T, D].
 
-        scale = 1.0 + temb1
-        normed = weights.norm_out.apply(hidden_states)
-        scaled_norm = normed * scale.unsqueeze(1)
-        B, T, D = scaled_norm.shape
-        hidden_states_2d = scaled_norm.reshape(B * T, D)
+        Args:
+            weights: PostInfer weights
+            hidden_states: Hidden states [T, D] (no batch dimension)
+            temb_img_silu: Time embedding [1, D]
+            image_tokens_len: Image tokens length (optional)
 
-        output_2d = weights.proj_out_linear.apply(hidden_states_2d)
-        out_dim = output_2d.shape[-1]
-        output = output_2d.reshape(B, T, out_dim)
+        Returns:
+            output_4d: Output tensor [C, H, W] (no batch dimension)
+        """
+        # hidden_states is already [T, D] from pre_infer (no batch dimension)
+        # temb_img_silu is [1, D] from pre_infer
 
+        # Apply norm_out_linear: [1, D] -> [1, D]
+        temb_silu = F.silu(temb_img_silu)  # [1, D]
+        temb1 = weights.norm_out_linear.apply(temb_silu)  # [1, D]
+
+        # Apply modulation: scale = 1.0 + temb1
+        scale = 1.0 + temb1  # [1, D]
+        normed = weights.norm_out.apply(hidden_states)  # [T, D]
+        scaled_norm = normed * scale  # [T, D] * [1, D] -> [T, D]
+
+        # Apply proj_out_linear: [T, D] -> [T, out_dim]
+        output = weights.proj_out_linear.apply(scaled_norm)  # [T, out_dim]
+
+        # Trim to image_tokens_len if specified
         if image_tokens_len is not None:
-            output = output[:, :image_tokens_len, :]
+            output = output[:image_tokens_len, :]  # [image_tokens_len, out_dim]
 
+        # Get output dimension
+        T, out_dim = output.shape
+
+        # Validate output dimension
         patch_size = self.config.get("patch_size", 2)
         f_patch_size = self.config.get("f_patch_size", 1)
         transformer_out_channels = out_dim // (patch_size * patch_size * f_patch_size)
@@ -47,12 +67,19 @@ class ZImagePostInfer:
         W_tokens = width // pW
 
         expected_T = F_tokens * H_tokens * W_tokens
-        if output.shape[1] != expected_T:
-            raise ValueError(f"Token count mismatch: output.shape[1]={output.shape[1]} != expected_T={expected_T} (from target_shape={target_shape})")
+        if T != expected_T:
+            raise ValueError(f"Token count mismatch: T={T} != expected_T={expected_T} (from target_shape={target_shape})")
 
-        output_reshaped = output.view(B, F_tokens, H_tokens, W_tokens, pF, pH, pW, out_channels)
-        output_permuted = output_reshaped.permute(0, 7, 1, 4, 2, 5, 3, 6)
-        output_4d = output_permuted.reshape(B, out_channels, num_frames, height, width)
-        output_4d = output_4d.squeeze(2)
+        # Unpatchify: [T, out_dim] -> [C, H, W]
+        # Reshape: [T, out_dim] -> [F_tokens, H_tokens, W_tokens, pF, pH, pW, out_channels]
+        output_reshaped = output.view(F_tokens, H_tokens, W_tokens, pF, pH, pW, out_channels)
+        # Permute: [F_tokens, H_tokens, W_tokens, pF, pH, pW, out_channels]
+        #       -> [out_channels, F_tokens, pF, H_tokens, pH, W_tokens, pW]
+        output_permuted = output_reshaped.permute(6, 0, 3, 1, 4, 2, 5)
+        # Reshape: [out_channels, F_tokens, pF, H_tokens, pH, W_tokens, pW]
+        #       -> [out_channels, num_frames, height, width]
+        output_4d = output_permuted.reshape(out_channels, num_frames, height, width)
+        # Remove frame dimension: [out_channels, 1, height, width] -> [out_channels, height, width]
+        output_4d = output_4d.squeeze(1)
 
         return output_4d

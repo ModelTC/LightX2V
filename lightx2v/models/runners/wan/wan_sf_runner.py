@@ -12,7 +12,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import vae_to_comfyui_image_inplace
+from lightx2v.utils.utils import wan_vae_to_comfy
 
 
 @RUNNER_REGISTER("wan2.1_sf")
@@ -119,7 +119,7 @@ class WanSFRunner(WanRunner):
         self.gen_video_final = torch.cat([self.gen_video_final, self.gen_video], dim=0) if self.gen_video_final is not None else self.gen_video
         if self.is_live:
             if self.video_recorder:
-                stream_video = vae_to_comfyui_image_inplace(self.gen_video)
+                stream_video = wan_vae_to_comfy(self.gen_video)
                 self.video_recorder.pub_video(stream_video)
 
         torch.cuda.empty_cache()

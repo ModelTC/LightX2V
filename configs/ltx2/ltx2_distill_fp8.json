@@ -16,5 +16,6 @@
     "dit_quantized_ckpt": "Lightricks/LTX-2/ltx-2-19b-distilled-fp8.safetensors",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-pertensor",
-    "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47]
+    "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47],
+    "distilled_sigma_values": [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 }
