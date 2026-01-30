@@ -6,6 +6,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
+from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -63,6 +64,7 @@ def main():
             "hunyuan_video_1.5_distill",
             "z_image",
             "ltx2",
+            "bagel",
         ],
         default="wan2.1",
     )
