@@ -20,7 +20,13 @@ def load_clip_configs(main_json_path: str):
     lightx2v_path = cfg["lightx2v_path"]
     clip_configs_raw = cfg["clip_configs"]
 
-    clip_configs = [ClipConfig(name=item["name"], config_json=str(Path(lightx2v_path) / item["path"])) for item in clip_configs_raw]
+    clip_configs = []
+    for item in clip_configs_raw:
+        if "config" in item:
+            config_json = item["config"]
+        else:
+            config_json = str(Path(lightx2v_path) / item["path"])
+        clip_configs.append(ClipConfig(name=item["name"], config_json=config_json))
 
     return clip_configs
 
@@ -50,6 +56,7 @@ class ShotPipeline:
         self.clip_inputs = {}
         self.overlap_frame = None
         self.overlap_latent = None
+        self.progress_callback = None
 
         for clip_config in shot_cfg.clip_configs:
             name = clip_config.name
@@ -72,11 +79,45 @@ class ShotPipeline:
             update_input_info_from_dict(input_info, vars(args))
             self.clip_inputs[name] = input_info
 
+    def _input_data_to_dict(self, input_data):
+        if isinstance(input_data, dict):
+            return input_data
+        if hasattr(input_data, "__dict__"):
+            return vars(input_data)
+        return {}
+
+    def update_input_info(self, input_data):
+        data = self._input_data_to_dict(input_data)
+        if not data:
+            return
+
+        # 将外部输入同步到 shot_cfg 和各 clip 的 input_info
+        for key in ["seed", "image_path", "audio_path", "prompt", "negative_prompt", "save_result_path", "target_shape"]:
+            if key in data and data[key] is not None:
+                setattr(self.shot_cfg, key, data[key])
+
+        for clip_input in self.clip_inputs.values():
+            update_input_info_from_dict(clip_input, data)
+            if hasattr(clip_input, "overlap_frame"):
+                clip_input.overlap_frame = None
+            if hasattr(clip_input, "overlap_latent"):
+                clip_input.overlap_latent = None
+            if hasattr(clip_input, "audio_clip"):
+                clip_input.audio_clip = None
+
     def _init_runner(self, config):
         torch.set_grad_enabled(False)
         runner = RUNNER_REGISTER[config["model_cls"]](config)
         runner.init_modules()
         return runner
+
+    def set_config(self, config_modify):
+        for runner in self.clip_generators.values():
+            if hasattr(runner, "set_config"):
+                runner.set_config(config_modify)
+
+    def set_progress_callback(self, callback):
+        self.progress_callback = callback
 
     def create_clip_generator(self, clip_config: ClipConfig):
         config = self.get_config_json(clip_config.config_json)
@@ -101,3 +142,7 @@ class ShotPipeline:
     @torch.no_grad()
     def generate(self):
         pass
+
+    def run_pipeline(self, input_info):
+        self.update_input_info(input_info)
+        return self.generate()
