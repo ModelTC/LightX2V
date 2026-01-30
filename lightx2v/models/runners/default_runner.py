@@ -14,7 +14,6 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, vae_to_comfyui_image
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -171,7 +170,6 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    @peak_memory_decorator
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
 
