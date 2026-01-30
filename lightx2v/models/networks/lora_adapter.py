@@ -21,7 +21,7 @@ class LoraAdapter:
             tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in f.keys()}
         return tensor_dict
 
-    def apply_lora(self, lora_configs, model_type):
+    def apply_lora(self, lora_configs, model_type=None):
         if not hasattr(self.model, "original_weight_dict"):
             logger.error("Model does not have 'original_weight_dict'. Cannot apply LoRA.")
             return False
@@ -34,7 +34,10 @@ class LoraAdapter:
                 lora_weights=lora_weights,
                 strength=lora_strength,
             )
-            logger.info(f"Successfully applied LoRA to {model_type} model: {lora_config['path']} (strength: {lora_strength})")
+            if model_type is not None:
+                logger.info(f"Successfully applied LoRA to {model_type} model: {lora_config['path']} (strength: {lora_strength})")
+            else:
+                logger.info(f"Successfully applied LoRA to model: {lora_config['path']} (strength: {lora_strength})")
             del lora_weights
             gc.collect()
 

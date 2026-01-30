@@ -35,7 +35,7 @@ class WanModel(BaseTransformerModel):
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device, model_type="wan2.1", lora_path=None, lora_strength=1.0):
-        super().__init__(config, model_path, device, model_type, lora_path, lora_strength)
+        super().__init__(model_path, config, device, model_type, lora_path, lora_strength)
         if self.lazy_load:
             self.remove_keys.extend(["blocks."])
         self.sensitive_layer = {

@@ -23,6 +23,7 @@ from lightx2v.utils.custom_compiler import CompiledMethodsMixin, compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import load_gguf_sd_ckpt
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class BaseTransformerModel(CompiledMethodsMixin, ABC):
@@ -72,7 +73,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         self.lazy_load = self.config.get("lazy_load", False)
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.get("dit_quantized", False)
-        if dit_quantized:
+        if self.dit_quantized:
             self._check_dit_quantized()
 
     def _check_dit_quantized(self):
@@ -137,11 +138,11 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
                     # Load quantized weights
                     weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
 
-            if self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False):
+            if (self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False)) or (hasattr(self, "use_tp") and self.use_tp):
                 weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
 
-            if hasattr(self, "adapter_weights_dict"):
-                weight_dict.update(self.adapter_weights_dict)
+            if hasattr(self, "_load_adapter_ckpt"):
+                weight_dict.update(self._load_adapter_ckpt())
 
             self.original_weight_dict = weight_dict
         else:
@@ -153,6 +154,9 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
         else:
             self.transformer_weights = self.transformer_weight_class(self.config)
+        if hasattr(self, "post_weight_class"):
+            self.post_weight = self.post_weight_class(self.config)
+
         if not self._should_init_empty_model():
             self._apply_weights()
 
@@ -227,7 +231,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
 
     def _load_lora_file(self, file_path):
         if self.device.type != "cpu" and dist.is_initialized():
-            device = dist.get_rank()
+            device = f"{AI_DEVICE}:{dist.get_rank()}"
         else:
             device = str(self.device)
         if device == "cpu":
