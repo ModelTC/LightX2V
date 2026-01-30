@@ -159,7 +159,7 @@ Simply modify `config_json` to enable Kernel Mode.
 
 **Parameters Explanation:**
 *   `text_encoder_type`: Set to **"lightllm_kernel"**.
-*   `use_flash_attention_kernel`: Enable FlashAttention acceleration for Attention layers.
+*   `use_flash_attention_kernel`: Enable FlashAttention acceleration for Attention layers. By default flash_attention_2 will be used, but you can also use "use_flash_attention_kernel": "flash_attention_3".
 *   `use_rmsnorm_kernel`: Enable Fused RMSNorm Kernel (requires `sgl_kernel` or related dependencies; will automatically downgrade if not installed).
 
 **Run Inference:**

@@ -159,7 +159,7 @@ Kernel Mode 适合单机高性能推理场景。它不在后台启动独立服�
 
 **参数说明:**
 *   `text_encoder_type`: 设置为 **"lightllm_kernel"**。
-*   `use_flash_attention_kernel`: 启用 FlashAttention 加速 Attention 层。
+*   `use_flash_attention_kernel`: 启用 FlashAttention 加速 Attention 层。 默认情况下将使用 flash_attention_2，但你也可以使用 “use_flash_attention_kernel”: “flash_attention_3”。
 *   `use_rmsnorm_kernel`: 启用 Fused RMSNorm Kernel (需安装 `sgl_kernel` 或相关依赖，如未安装会自动降级)。
 
 **运行推理:**
