@@ -1,8 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils.registry_factory import (
-    MM_WEIGHT_REGISTER,
-    EMBEDDING_WEIGHT_REGISTER
-)
+from lightx2v.utils.registry_factory import EMBEDDING_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
 
 
 class Qwen2PreWeights(WeightModule):

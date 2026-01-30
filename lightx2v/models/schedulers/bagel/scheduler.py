@@ -1,6 +1,7 @@
-import torch
-import numpy as np
 import random
+
+import numpy as np
+import torch
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
@@ -44,20 +45,20 @@ class BagelScheduler(BaseScheduler):
         self.latent_patch_size = config.latent_patch_size
         self.latent_downsample = config.vae_config.downsample * config.latent_patch_size
         self.max_latent_size = config["max_latent_size_update"]
-        self.latent_channel = config.vae_config.z_channels    
+        self.latent_channel = config.vae_config.z_channels
         self.infer_steps = self.config.get("infer_steps", 50)
         inference_hyper = config["inference_hyper"]
         self.timestep_shift = inference_hyper["timestep_shift"]
         self.cache_dic = None
         self.current = None
-        self.prepare()       
-            
+        self.prepare()
+
     def set_timesteps(self):
         timesteps = torch.linspace(1, 0, self.infer_steps, device="cpu")
         timesteps = self.timestep_shift * timesteps / (1 + (self.timestep_shift - 1) * timesteps)
-        self.dts =  timesteps[:-1] - timesteps[1:]
+        self.dts = timesteps[:-1] - timesteps[1:]
         self.timesteps = timesteps[:-1]
-    
+
     def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids):
         packed_text_ids, packed_text_indexes = list(), list()
         packed_vae_position_ids, packed_vae_token_indexes, packed_init_noises = list(), list(), list()
@@ -65,37 +66,31 @@ class BagelScheduler(BaseScheduler):
         packed_key_value_indexes = list()
 
         query_curr = curr = 0
-        
+
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
             curr += curr_kvlen
 
-            packed_text_ids.append(new_token_ids['start_of_image'])
+            packed_text_ids.append(new_token_ids["start_of_image"])
             packed_text_indexes.append(query_curr)
             packed_indexes.append(curr)
             curr += 1
             query_curr += 1
-            vae_posiiton_ids = self.get_flattened_position_ids(
-                H, W,
-                self.latent_downsample, 
-                max_num_patches_per_side=self.max_latent_size
-            )
+            vae_posiiton_ids = self.get_flattened_position_ids(H, W, self.latent_downsample, max_num_patches_per_side=self.max_latent_size)
             packed_vae_position_ids.append(vae_posiiton_ids)
 
             h, w = H // self.latent_downsample, W // self.latent_downsample
             num_image_tokens = h * w
 
             set_seed()
-            packed_init_noises.append(
-                torch.randn(num_image_tokens, self.latent_channel * self.latent_patch_size ** 2)
-            )
+            packed_init_noises.append(torch.randn(num_image_tokens, self.latent_channel * self.latent_patch_size**2))
 
             packed_vae_token_indexes.extend(range(query_curr, query_curr + num_image_tokens))
             packed_indexes.extend(range(curr, curr + num_image_tokens))
             curr += num_image_tokens
             query_curr += num_image_tokens
 
-            packed_text_ids.append(new_token_ids['end_of_image'])
+            packed_text_ids.append(new_token_ids["end_of_image"])
             packed_text_indexes.append(query_curr)
             packed_indexes.append(curr)
             curr += 1
@@ -151,7 +146,7 @@ class BagelScheduler(BaseScheduler):
         }
 
         return generation_input
-      
+
     def prepare(self):
         self.generator = torch.Generator().manual_seed(42)
         self.set_timesteps()
@@ -160,9 +155,9 @@ class BagelScheduler(BaseScheduler):
         self.generation_input_cfg_image = None
         self.latents = None
         self.noise_pred = None
-        
+
     def step_pre(self, step_index):
         self.step_index = step_index
-    
+
     def step_post(self):
         self.latents = self.latents - self.noise_pred.to(self.latents.device) * self.dts[self.step_index]

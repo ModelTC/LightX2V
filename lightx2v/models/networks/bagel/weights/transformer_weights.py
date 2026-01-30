@@ -21,7 +21,8 @@ class Qwen2TransformerWeights(WeightModule):
                 self.task,
                 self.mm_type,
                 self.config,
-            ) for i in range(self.blocks_num)
+            )
+            for i in range(self.blocks_num)
         )
         self.add_module("blocks", blocks)
 
@@ -59,7 +60,7 @@ class Qwen2MoTDecoderLayer(WeightModule):
             create_cuda_buffer=create_cuda_buffer,
             create_cpu_buffer=create_cpu_buffer,
             lazy_load=lazy_load,
-            lazy_load_path=lazy_load_path
+            lazy_load_path=lazy_load_path,
         )
         self.add_module("mlp", mlp)
         mlp_moe_gen = Qwen2MLP(
@@ -71,7 +72,7 @@ class Qwen2MoTDecoderLayer(WeightModule):
             create_cuda_buffer=create_cuda_buffer,
             create_cpu_buffer=create_cpu_buffer,
             lazy_load=lazy_load,
-            lazy_load_path=lazy_load_path
+            lazy_load_path=lazy_load_path,
         )
         self.add_module("mlp_moe_gen", mlp_moe_gen)
         # post_attention_layernorm
@@ -84,12 +85,7 @@ class Qwen2MoTDecoderLayer(WeightModule):
             RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.post_attention_layernorm_moe_gen.weight"),
         )
         # self attn
-        attn = PackedAttentionMoT(
-            block_index=block_index,
-            task=task,
-            mm_type=mm_type,
-            config=config   
-        )
+        attn = PackedAttentionMoT(block_index=block_index, task=task, mm_type=mm_type, config=config)
         self.add_module("self_attn", attn)
 
 
@@ -102,7 +98,7 @@ class Qwen2MLP(WeightModule):
         config,
         subname="mlp",
         create_cuda_buffer=False,
-        create_cpu_buffer=False,  
+        create_cpu_buffer=False,
         lazy_load=False,
         lazy_load_path=None,
     ):
@@ -120,7 +116,7 @@ class Qwen2MLP(WeightModule):
             "down_proj",
             MM_WEIGHT_REGISTER[mm_type](f"language_model.model.layers.{block_index}.{subname}.down_proj.weight"),
         )
-        
+
 
 class PackedAttentionMoT(WeightModule):
     def __init__(
@@ -130,7 +126,7 @@ class PackedAttentionMoT(WeightModule):
         mm_type,
         config,
         create_cuda_buffer=False,
-        create_cpu_buffer=False,  
+        create_cpu_buffer=False,
         lazy_load=False,
         lazy_load_path=None,
     ):
@@ -201,17 +197,5 @@ class PackedAttentionMoT(WeightModule):
             ),
         )
         # o
-        self.add_module(
-            "o_proj",
-            MM_WEIGHT_REGISTER[mm_type](
-                f"language_model.model.layers.{block_index}.self_attn.o_proj.weight"
-            )
-        )
-        self.add_module(
-            "o_proj_moe_gen",
-            MM_WEIGHT_REGISTER[mm_type](
-                f"language_model.model.layers.{block_index}.self_attn.o_proj_moe_gen.weight"
-            )
-        )
-        
-        
+        self.add_module("o_proj", MM_WEIGHT_REGISTER[mm_type](f"language_model.model.layers.{block_index}.self_attn.o_proj.weight"))
+        self.add_module("o_proj_moe_gen", MM_WEIGHT_REGISTER[mm_type](f"language_model.model.layers.{block_index}.self_attn.o_proj_moe_gen.weight"))

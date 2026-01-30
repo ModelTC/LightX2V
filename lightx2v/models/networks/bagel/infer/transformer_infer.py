@@ -1,16 +1,14 @@
-from typing import Optional
 from copy import deepcopy
+from typing import Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from flash_attn import flash_attn_varlen_func
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.bagel.model_io import NaiveCache
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.models.networks.bagel.model_io import NaiveCache
-
-from flash_attn import flash_attn_varlen_func
 
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
@@ -49,34 +47,33 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-
 class BagelTransformerInfer(BaseTransformerInfer):
     def __init__(self, config, llm_config):
         self.config = config
         self.llm_config = llm_config
         self.num_layers = llm_config["num_hidden_layers"]
-        self.use_moe = 'Mo' in llm_config["layer_module"]
+        self.use_moe = "Mo" in llm_config["layer_module"]
         self.hidden_size = llm_config["hidden_size"]
         self.num_heads = llm_config["num_attention_heads"]
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = llm_config["num_key_value_heads"]
         self.init_kv_cache()
-    
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-    
-    def init_gen_context(self): 
+
+    def init_gen_context(self):
         gen_context = {
-            'kv_lens': [0],
-            'ropes': [0],
-            'past_key_values': NaiveCache(self.num_layers),
+            "kv_lens": [0],
+            "ropes": [0],
+            "past_key_values": NaiveCache(self.num_layers),
         }
         return gen_context
 
     def init_kv_cache(self):
         self.gen_context = self.init_gen_context()
         self.cfg_text_context = deepcopy(self.gen_context)
-        self.cfg_img_context = deepcopy(self.gen_context)        
+        self.cfg_img_context = deepcopy(self.gen_context)
 
     def self_attn(
         self,
@@ -94,24 +91,14 @@ class BagelTransformerInfer(BaseTransformerInfer):
         packed_vae_token_indexes,
         packed_text_indexes,
         layer_idx,
-    ):  
-        if mode == 'und':
-            packed_query_states = weights.q_proj.apply(
-                packed_query_sequence
-            ).view(-1, self.num_heads, self.head_dim)
-            packed_key_states = weights.k_proj.apply(
-                packed_query_sequence
-            ).view(-1, self.num_key_value_heads, self.head_dim)
-            packed_value_states = weights.v_proj.apply(
-                packed_query_sequence
-            ).view(-1, self.num_key_value_heads, self.head_dim)
-            packed_query_states = weights.q_norm.apply(
-                packed_query_states
-            )
-            packed_key_states = weights.k_norm.apply(
-                packed_key_states
-            )
-        elif mode == 'gen':
+    ):
+        if mode == "und":
+            packed_query_states = weights.q_proj.apply(packed_query_sequence).view(-1, self.num_heads, self.head_dim)
+            packed_key_states = weights.k_proj.apply(packed_query_sequence).view(-1, self.num_key_value_heads, self.head_dim)
+            packed_value_states = weights.v_proj.apply(packed_query_sequence).view(-1, self.num_key_value_heads, self.head_dim)
+            packed_query_states = weights.q_norm.apply(packed_query_states)
+            packed_key_states = weights.k_norm.apply(packed_key_states)
+        elif mode == "gen":
             packed_text_indexes = packed_text_indexes.to(AI_DEVICE)
             packed_vae_token_indexes = packed_vae_token_indexes.to(AI_DEVICE)
 
@@ -136,23 +123,21 @@ class BagelTransformerInfer(BaseTransformerInfer):
             packed_key_states = packed_key_states.view(-1, self.num_key_value_heads, self.head_dim)
             packed_value_states = packed_value_states.view(-1, self.num_key_value_heads, self.head_dim)
 
-            packed_query_states = packed_query_states.to(torch.float32) 
+            packed_query_states = packed_query_states.to(torch.float32)
             packed_query_states[packed_text_indexes] = weights.q_norm.apply(packed_query_states[packed_text_indexes], moe_gen=True)
             packed_query_states[packed_vae_token_indexes] = weights.q_norm_moe_gen.apply(packed_query_states[packed_vae_token_indexes], moe_gen=True)
-            
+
             packed_key_states = packed_key_states.to(torch.float32)
             packed_key_states[packed_text_indexes] = weights.k_norm.apply(packed_key_states[packed_text_indexes], moe_gen=True)
             packed_key_states[packed_vae_token_indexes] = weights.k_norm_moe_gen.apply(packed_key_states[packed_vae_token_indexes], moe_gen=True)
 
         packed_cos, packed_sin = packed_query_position_embeddings
-        packed_query_states, packed_key_states = apply_rotary_pos_emb(
-            packed_query_states, packed_key_states, packed_cos, packed_sin, unsqueeze_dim=1
-        )
-    
+        packed_query_states, packed_key_states = apply_rotary_pos_emb(packed_query_states, packed_key_states, packed_cos, packed_sin, unsqueeze_dim=1)
+
         packed_query_states = packed_query_states.to(torch.bfloat16)
         packed_key_states = packed_key_states.to(torch.bfloat16)
         packed_value_states = packed_value_states.to(torch.bfloat16)
-        
+
         if past_key_values is not None and past_key_values.key_cache[layer_idx] is not None:
             past_key_states = past_key_values.key_cache[layer_idx]
             past_value_states = past_key_values.value_cache[layer_idx]
@@ -172,7 +157,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
 
         cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(query_lens, dim=0), (1, 0)).to(AI_DEVICE)
         cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(key_values_lens, dim=0), (1, 0)).to(AI_DEVICE)
-        
+
         packed_attn_output = flash_attn_varlen_func(
             q=packed_query_states,
             k=merged_key_states,
@@ -185,9 +170,9 @@ class BagelTransformerInfer(BaseTransformerInfer):
         )
         packed_attn_output = packed_attn_output.reshape(-1, self.hidden_size)
 
-        if mode == 'und':
+        if mode == "und":
             packed_attn_output = weights.o_proj.apply(packed_attn_output)
-        elif mode == 'gen':
+        elif mode == "gen":
             packed_attn_output[packed_text_indexes] = weights.o_proj.apply(packed_attn_output[packed_text_indexes])
             packed_attn_output[packed_vae_token_indexes] = weights.o_proj_moe_gen.apply(packed_attn_output[packed_vae_token_indexes])
 
@@ -196,23 +181,23 @@ class BagelTransformerInfer(BaseTransformerInfer):
             past_key_values.value_cache[layer_idx] = merged_value_states
 
         return packed_attn_output, past_key_values
-    
+
     def mlp(self, weights, hidden_state):
         gate_proj = weights.gate_proj.apply(hidden_state)
         up_proj = weights.up_proj.apply(hidden_state)
         h0 = F.silu(gate_proj) * up_proj
         h1 = weights.down_proj.apply(h0)
         return h1
-    
+
     def mlp_moe_gen(self, weights, hidden_state):
         gate_proj = weights.gate_proj.apply(hidden_state)
         up_proj = weights.up_proj.apply(hidden_state)
         h0 = F.silu(gate_proj) * up_proj
         h1 = weights.down_proj.apply(h0)
         return h1
-    
+
     def decoder_layer(
-        self, 
+        self,
         block_weight,
         layer_idx,
         packed_query_sequence: torch.Tensor,
@@ -228,19 +213,19 @@ class BagelTransformerInfer(BaseTransformerInfer):
         packed_vae_token_indexes=None,
         packed_text_indexes=None,
     ):
-        enable_taylorseer = getattr(self, 'enable_taylorseer', False)
+        enable_taylorseer = getattr(self, "enable_taylorseer", False)
 
-        if not enable_taylorseer or (enable_taylorseer and self.current['type'] == 'full'):
+        if not enable_taylorseer or (enable_taylorseer and self.current["type"] == "full"):
             residual = packed_query_sequence
             if mode == "und":
                 packed_query_sequence = block_weight.input_layernorm.apply(packed_query_sequence)
-                
+
             elif mode == "gen":
                 packed_query_sequence_ = torch.zeros_like(packed_query_sequence)
                 packed_query_sequence_[packed_text_indexes] = block_weight.input_layernorm.apply(packed_query_sequence[packed_text_indexes])
                 packed_query_sequence_[packed_vae_token_indexes] = block_weight.input_layernorm_moe_gen.apply(packed_query_sequence[packed_vae_token_indexes])
                 packed_query_sequence = packed_query_sequence_
-        
+
             # Self Attention
             packed_query_sequence, past_key_values = self.self_attn(
                 weights=block_weight.self_attn,
@@ -256,9 +241,9 @@ class BagelTransformerInfer(BaseTransformerInfer):
                 mode=mode,
                 packed_vae_token_indexes=packed_vae_token_indexes,
                 packed_text_indexes=packed_text_indexes,
-                layer_idx=layer_idx
+                layer_idx=layer_idx,
             )
-            
+
             packed_query_sequence = residual + packed_query_sequence
 
             # Fully Connected
@@ -279,9 +264,9 @@ class BagelTransformerInfer(BaseTransformerInfer):
 
             packed_query_sequence = residual + packed_query_sequence
         return packed_query_sequence, past_key_values
-    
+
     def infer(
-        self, 
+        self,
         block_weights,
         packed_query_sequence: torch.Tensor,
         query_lens: torch.Tensor,
@@ -296,7 +281,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
         packed_text_indexes=None,
         packed_query_position_embeddings=None,
         enable_taylorseer=False,
-    ):          
+    ):
         for layer_idx, block_weight in enumerate(block_weights):
             if enable_taylorseer:
                 assert NotImplementedError
@@ -316,5 +301,5 @@ class BagelTransformerInfer(BaseTransformerInfer):
                 packed_text_indexes=packed_text_indexes,
                 packed_vae_token_indexes=packed_vae_token_indexes,
             )
-        
+
         return packed_query_sequence, past_key_values

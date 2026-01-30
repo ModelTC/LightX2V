@@ -10,10 +10,8 @@ from functools import lru_cache
 from typing import Optional, Tuple
 
 import regex as re
-
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 from transformers.utils import logging
-
 
 logger = logging.get_logger(__name__)
 
@@ -40,9 +38,7 @@ def bytes_to_unicode():
     decent coverage. This is a significant percentage of your normal, say, 32K bpe vocab. To avoid that, we want lookup
     tables between utf-8 bytes and unicode strings.
     """
-    bs = (
-        list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
-    )
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
     cs = bs[:]
     n = 0
     for b in range(2**8):
@@ -137,26 +133,10 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
         **kwargs,
     ):
         # Qwen vocab does not contain control tokens; added tokens need to be special
-        bos_token = (
-            AddedToken(bos_token, lstrip=False, rstrip=False, special=True, normalized=False)
-            if isinstance(bos_token, str)
-            else bos_token
-        )
-        eos_token = (
-            AddedToken(eos_token, lstrip=False, rstrip=False, special=True, normalized=False)
-            if isinstance(eos_token, str)
-            else eos_token
-        )
-        unk_token = (
-            AddedToken(unk_token, lstrip=False, rstrip=False, special=True, normalized=False)
-            if isinstance(unk_token, str)
-            else unk_token
-        )
-        pad_token = (
-            AddedToken(pad_token, lstrip=False, rstrip=False, special=True, normalized=False)
-            if isinstance(pad_token, str)
-            else pad_token
-        )
+        bos_token = AddedToken(bos_token, lstrip=False, rstrip=False, special=True, normalized=False) if isinstance(bos_token, str) else bos_token
+        eos_token = AddedToken(eos_token, lstrip=False, rstrip=False, special=True, normalized=False) if isinstance(eos_token, str) else eos_token
+        unk_token = AddedToken(unk_token, lstrip=False, rstrip=False, special=True, normalized=False) if isinstance(unk_token, str) else unk_token
+        pad_token = AddedToken(pad_token, lstrip=False, rstrip=False, special=True, normalized=False) if isinstance(pad_token, str) else pad_token
 
         with open(vocab_file, encoding="utf-8") as vocab_handle:
             self.encoder = json.load(vocab_handle)
@@ -181,9 +161,7 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
         self.pat = re.compile(PRETOKENIZE_REGEX)
 
         if kwargs.get("add_prefix_space", False):
-            logger.warning_once(
-                f"{self.__class__.__name} does not support `add_prefix_space`, setting it to True has no effect."
-            )
+            logger.warning_once(f"{self.__class__.__name} does not support `add_prefix_space`, setting it to True has no effect.")
 
         super().__init__(
             errors=errors,
@@ -252,9 +230,7 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
         """Tokenize a string."""
         bpe_tokens = []
         for token in re.findall(self.pat, text):
-            token = "".join(
-                self.byte_encoder[b] for b in token.encode("utf-8")
-            )  # Maps all our bytes to unicode strings, avoiding control tokens of the BPE (spaces in our case)
+            token = "".join(self.byte_encoder[b] for b in token.encode("utf-8"))  # Maps all our bytes to unicode strings, avoiding control tokens of the BPE (spaces in our case)
             bpe_tokens.extend(bpe_token for bpe_token in self.bpe(token).split(" "))
         return bpe_tokens
 
@@ -298,12 +274,8 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
         if not os.path.isdir(save_directory):
             logger.error(f"Vocabulary path ({save_directory}) should be a directory")
             return
-        vocab_file = os.path.join(
-            save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["vocab_file"]
-        )
-        merge_file = os.path.join(
-            save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["merges_file"]
-        )
+        vocab_file = os.path.join(save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["vocab_file"])
+        merge_file = os.path.join(save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["merges_file"])
 
         with open(vocab_file, "w", encoding="utf-8") as f:
             f.write(json.dumps(self.encoder, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
@@ -313,10 +285,7 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
             writer.write("#version: 0.2\n")
             for bpe_tokens, token_index in sorted(self.bpe_ranks.items(), key=lambda kv: kv[1]):
                 if index != token_index:
-                    logger.warning(
-                        f"Saving vocabulary to {merge_file}: BPE merge indices are not consecutive."
-                        " Please check that the tokenizer is not corrupted!"
-                    )
+                    logger.warning(f"Saving vocabulary to {merge_file}: BPE merge indices are not consecutive. Please check that the tokenizer is not corrupted!")
                     index = token_index
                 writer.write(" ".join(bpe_tokens) + "\n")
                 index += 1

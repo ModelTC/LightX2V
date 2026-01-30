@@ -6,11 +6,11 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 class BagelPostInfer:
     def __init__(self, config, llm_config):
         self.config = config
-        self.use_moe = 'Mo' in llm_config["layer_module"]
-    
+        self.use_moe = "Mo" in llm_config["layer_module"]
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-        
+
     def infer(self, weights, packed_query_sequence, packed_text_indexes=None, packed_vae_token_indexes=None, mode="und"):
         if self.use_moe:
             if mode == "und":

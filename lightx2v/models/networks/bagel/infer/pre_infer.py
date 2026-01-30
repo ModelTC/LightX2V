@@ -1,7 +1,6 @@
-from loguru import logger
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from loguru import logger
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 
 from lightx2v.utils.envs import *
@@ -20,16 +19,13 @@ class Qwen2RotaryEmbedding(nn.Module):
         device=None,
         scaling_factor=1.0,
         rope_type="default",
-        config= None,
+        config=None,
     ):
         super().__init__()
         # TODO (joao): remove the `if` below, only used for BC
         self.rope_kwargs = {}
         if config is None:
-            logger.warning_once(
-                "`Qwen2RotaryEmbedding` can now be fully parameterized by passing the model config through the "
-                "`config` argument. All other arguments will be removed in v4.46"
-            )
+            logger.warning_once("`Qwen2RotaryEmbedding` can now be fully parameterized by passing the model config through the `config` argument. All other arguments will be removed in v4.46")
             self.rope_kwargs = {
                 "rope_type": rope_type,
                 "factor": scaling_factor,
@@ -64,9 +60,7 @@ class Qwen2RotaryEmbedding(nn.Module):
         """
         seq_len = torch.max(position_ids) + 1
         if seq_len > self.max_seq_len_cached:  # growth
-            inv_freq, self.attention_scaling = self.rope_init_fn(
-                self.config, device, seq_len=seq_len, **self.rope_kwargs
-            )
+            inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device, seq_len=seq_len, **self.rope_kwargs)
             self.register_buffer("inv_freq", inv_freq, persistent=False)  # TODO joao: may break with compilation
             self.max_seq_len_cached = seq_len
 
@@ -102,15 +96,15 @@ class BagelPreInfer:
     def __init__(self, config, llm_config):
         self.config = config
         self.rotary_emb = Qwen2RotaryEmbedding(config=llm_config)
-    
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-        
+
     def embed_tokens(self, weights, packed_text_ids):
         packed_text_ids = packed_text_ids.to(AI_DEVICE)
         embeds = weights.embed_tokens.apply(packed_text_ids)
         return embeds
-    
+
     def infer(self, weights, packed_sequence, packed_position_ids):
         # create position embeddings to be shared across the decoder layers
         cos, sin = self.rotary_emb(packed_sequence, packed_position_ids.unsqueeze(0))
@@ -118,7 +112,7 @@ class BagelPreInfer:
         sin = sin.squeeze(0).to(AI_DEVICE)
         packed_position_embeddings = (cos, sin)
         return packed_position_embeddings
-        
+
     def vae2llm(self, weights, x):
         x = x.to(AI_DEVICE).to(torch.bfloat16)
         x = weights.vae2llm.apply(x)
