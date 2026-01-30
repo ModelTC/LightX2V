@@ -170,6 +170,41 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
+    def run_segment(self, segment_idx=0):
+        infer_steps = self.model.scheduler.infer_steps
+
+        for step_index in range(infer_steps):
+            # only for single segment, check stop signal every step
+            with ProfilingContext4DebugL1(
+                f"Run Dit every step",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
+                metrics_labels=[step_index + 1, infer_steps],
+            ):
+                if self.video_segment_num == 1:
+                    self.check_stop()
+                logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
+
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
+
+                if self.progress_callback:
+                    current_step = segment_idx * infer_steps + step_index + 1
+                    total_all_steps = self.video_segment_num * infer_steps
+                    self.progress_callback((current_step / total_all_steps) * 100, 100)
+
+        if segment_idx is not None and segment_idx == self.video_segment_num - 1:
+            del self.inputs
+            torch_device_module.empty_cache()
+
+        return self.model.scheduler.latents
+
     def run_step(self):
         self.inputs = self.run_input_encoder()
         if hasattr(self, "sr_version") and self.sr_version is not None is not None:

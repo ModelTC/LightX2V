@@ -491,3 +491,63 @@ class LTX2Runner(DefaultRunner):
                 )
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
+
+    def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
+        """
+        Run denoising loop for a segment.
+
+        Args:
+            segment_idx: Segment index (0-based). Use None for upsampler stage.
+            stage_name: Optional stage name for logging (e.g., "Stage 2"). If None, uses default logging.
+            cleanup_inputs: Whether to cleanup inputs after completion. If None, uses default logic:
+                - For upsampler (segment_idx=None): always cleanup
+                - For regular segments: cleanup only if last segment and not using upsampler
+        """
+        infer_steps = self.model.scheduler.infer_steps
+
+        # Determine cleanup behavior
+        if cleanup_inputs is None:
+            # Default logic: cleanup only for last segment when not using upsampler
+            cleanup_inputs = not self.config.get("use_upsampler", False) and segment_idx is not None and segment_idx == self.video_segment_num - 1
+        elif cleanup_inputs is True and segment_idx is None:
+            # Explicit cleanup for upsampler stage
+            cleanup_inputs = True
+
+        for step_index in range(infer_steps):
+            # only for single segment, check stop signal every step
+            with ProfilingContext4DebugL1(
+                f"Run Dit every step",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
+                metrics_labels=[step_index + 1, infer_steps],
+            ):
+                if self.video_segment_num == 1:
+                    self.check_stop()
+
+                # Use stage_name for logging if provided, otherwise use default
+                if stage_name:
+                    logger.info(f"==> {stage_name} step_index: {step_index + 1} / {infer_steps}")
+                else:
+                    logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
+
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
+
+                # Progress callback only for regular segments (not upsampler)
+                if self.progress_callback and segment_idx is not None:
+                    current_step = segment_idx * infer_steps + step_index + 1
+                    total_all_steps = self.video_segment_num * infer_steps
+                    self.progress_callback((current_step / total_all_steps) * 100, 100)
+
+        # Cleanup inputs if needed
+        if cleanup_inputs:
+            del self.inputs
+            torch_device_module.empty_cache()
+
+        return self.model.scheduler.video_latent_state.latent, self.model.scheduler.audio_latent_state.latent
