@@ -120,8 +120,9 @@ class ShotPipeline:
         self.progress_callback = callback
 
     def create_clip_generator(self, clip_config: ClipConfig):
-        config = self.get_config_json(clip_config.config_json)
-        config = set_config(Namespace(**config))
+        clip_config.config_json = self.get_config_json(clip_config.config_json)
+        config_json = clip_config.config_json
+        config = set_config(Namespace(**config_json))
         print_config(config)
 
         runner = self._init_runner(config)

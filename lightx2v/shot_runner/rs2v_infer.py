@@ -84,7 +84,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
 
             video_pad_len = pad_len // audio_per_frame
-            gen_video_list.append(gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len])
+            gen_video_list.append(gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len].clone())
             cut_audio_list.append(audio_clip[: audio_clip.shape[0] - pad_len])
             inputs.overlap_latent = gen_latents[:, -1:]
 
