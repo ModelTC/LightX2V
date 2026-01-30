@@ -72,6 +72,7 @@ class HunyuanVideo15PreInfer:
         self.heads_num = config["heads_num"]
         self.frequency_embedding_size = 256
         self.max_period = 10000
+        self.cos_sin = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -184,13 +185,16 @@ class HunyuanVideo15PreInfer:
         txt = txt[:, : text_mask.sum(), :]
 
         grid_sizes = (grid_sizes_t, grid_sizes_h, grid_sizes_w)
-        cos_sin = self.prepare_cos_sin(grid_sizes)
+
+        if self.cos_sin is None:
+            self.cos_sin = self.prepare_cos_sin(grid_sizes)
+
         return HunyuanVideo15InferModuleOutput(
             img=img.contiguous(),
             txt=txt.contiguous(),
             vec=torch.nn.functional.silu(vec),
             grid_sizes=grid_sizes,
-            cos_sin=cos_sin,
+            cos_sin=self.cos_sin,
         )
 
     def run_individual_token_refiner(self, weights, out, mask, c):
