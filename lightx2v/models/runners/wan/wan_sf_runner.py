@@ -59,30 +59,6 @@ class WanSFRunner(WanRunner):
     def init_run(self):
         super().init_run()
 
-    def run_segment(self, segment_idx=0):
-        infer_steps = self.model.scheduler.infer_steps
-        for step_index in range(infer_steps):
-            # only for single segment, check stop signal every step
-            if self.video_segment_num == 1:
-                self.check_stop()
-            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
-
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(seg_index=segment_idx, step_index=step_index, is_rerun=False)
-
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                self.model.infer(self.inputs)
-
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
-
-            if self.progress_callback:
-                current_step = segment_idx * infer_steps + step_index + 1
-                total_all_steps = self.video_segment_num * infer_steps
-                self.progress_callback((current_step / total_all_steps) * 100, 100)
-
-        return self.model.scheduler.stream_output
-
     def get_rank_and_world_size(self):
         rank = 0
         world_size = 1
