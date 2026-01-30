@@ -12,7 +12,7 @@
     "enable_cfg": false,
     "cpu_offload": false,
     "denoising_step_list": [1000, 750, 500, 250],
-    "dit_original_ckpt": "/home/user/models/Wan-AI/Wan2.1-Distill-Models/wan2.1_t2v_14b_lightx2v_4step.safetensors",
+    "dit_original_ckpt": "lightx2v/Wan2.1-Distill-Models/wan2.1_t2v_14b_lightx2v_4step.safetensors",
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",

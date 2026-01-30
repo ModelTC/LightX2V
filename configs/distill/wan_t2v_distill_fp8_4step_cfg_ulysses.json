@@ -13,7 +13,7 @@
     "cpu_offload": false,
     "denoising_step_list": [1000, 750, 500, 250],
     "dit_quantized": true,
-    "dit_quantized_ckpt": "/home/user/models/Wan-AI/Wan2.1-Distill-Models/wan2.1_t2v_14b_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "dit_quantized_ckpt": "lightx2v/Wan2.1-Distill-Models/wan2.1_t2v_14b_scaled_fp8_e4m3_lightx2v_4step.safetensors",
     "dit_quant_scheme": "fp8-sgl",
     "parallel": {
         "seq_p_size": 4,
