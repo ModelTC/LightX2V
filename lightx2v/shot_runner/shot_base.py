@@ -2,6 +2,7 @@ import json
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
@@ -27,7 +28,7 @@ def load_clip_configs(main_json_path: str):
 @dataclass
 class ClipConfig:
     name: str
-    config_json: str
+    config_json: str | dict[str, Any]
 
 
 @dataclass
@@ -87,10 +88,15 @@ class ShotPipeline:
         return runner
 
     def get_config_json(self, config_json):
-        logger.info(f"Loading infer config from {config_json}")
-        with open(config_json, "r") as f:
-            config = json.load(f)
-        return config
+        if isinstance(config_json, dict):
+            logger.info("Using infer config from dict")
+            return config_json
+        if isinstance(config_json, str):
+            logger.info(f"Loading infer config from {config_json}")
+            with open(config_json, "r") as f:
+                config = json.load(f)
+            return config
+        raise TypeError("config_json must be str or dict")
 
     @torch.no_grad()
     def generate(self):
