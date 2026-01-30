@@ -1,0 +1,36 @@
+{
+    "infer_steps": 50,
+    "inference_hyper": {
+        "cfg_text_scale": 4.0,
+        "cfg_img_scale": 1.0,
+        "cfg_interval": [0.4, 1.0],
+        "timestep_shift": 3.0,
+        "num_timesteps": 50,
+        "cfg_renorm_min": 0.0,
+        "cfg_renorm_type": "global"
+    },
+    "think": false,
+    "understanding_output": false,
+    "do_sample": false,
+    "text_temperature": 0.3,
+    "max_think_token_n": 1000,
+    "interpolate_pos": false,
+    "visual_gen": true,
+    "visual_und": true,
+    "vit_max_num_patch_per_side": 70,
+    "connector_act": "gelu_pytorch_tanh",
+    "latent_patch_size": 2,
+    "max_latent_size_update": 64,
+    "llm_config_update": {
+        "dtype": "bfloat16",
+        "freeze_und": false,
+        "is_causal": true,
+        "layer_module": "Qwen2MoTDecoderLayer",
+        "qk_norm": true,
+        "rope_scaling": null,
+        "sliding_window": null,
+        "transformers_version": "4.57.1",
+        "use_cache": true
+    }
+}
+    
