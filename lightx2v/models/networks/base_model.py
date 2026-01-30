@@ -3,7 +3,7 @@ Base model class for all transformer models in the networks module.
 
 This base class provides common functionality for:
 - Weight loading (original and quantized)
-- CPU/CUDA offloading
+- CPU offloading
 - Lazy loading
 - Distributed weight loading
 - Inference setup
