@@ -26,10 +26,7 @@
         "freeze_und": false,
         "is_causal": true,
         "layer_module": "Qwen2MoTDecoderLayer",
-        "qk_norm": true,
         "rope_scaling": null,
-        "sliding_window": null,
-        "transformers_version": "4.57.1",
-        "use_cache": true
+        "sliding_window": null
     }
 }
