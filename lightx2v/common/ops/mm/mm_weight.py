@@ -242,7 +242,7 @@ class MMWeight(MMWeightTemplate):
     def __init__(
         self,
         weight_name,
-        bias_name,
+        bias_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
