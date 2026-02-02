@@ -2,6 +2,7 @@ import gc
 import math
 
 import torch
+import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
@@ -381,17 +382,18 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor:
-            image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
-            image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
-            if isinstance(images[0], list) and len(images[0]) > 1:
-                for idx, image in enumerate(images[0]):
-                    image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
-                    logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
-            else:
-                image = images[0]
-                image.save(f"{image_prefix}.{image_suffix}")
-                logger.info(f"Image saved: {image_prefix}.{image_suffix}")
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            if not input_info.return_result_tensor:
+                image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+                image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+                if isinstance(images[0], list) and len(images[0]) > 1:
+                    for idx, image in enumerate(images[0]):
+                        image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                        logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
+                else:
+                    image = images[0]
+                    image.save(f"{image_prefix}.{image_suffix}")
+                    logger.info(f"Image saved: {image_prefix}.{image_suffix}")
 
         del latents, generator
         torch_device_module.empty_cache()
