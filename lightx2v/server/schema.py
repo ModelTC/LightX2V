@@ -25,8 +25,8 @@ class BaseTaskRequest(BaseModel):
     infer_steps: int = Field(5, description="Inference steps")
     seed: int = Field(default_factory=generate_random_seed, description="Random seed (auto-generated if not set)")
     target_shape: list[int] = Field([], description="Return video or image shape")
-    lora_name: Optional[str] = Field(None, description="LoRA name (without .safetensors extension) to load from lora_dir, None to disable LoRA")
-    lora_strength: float = Field(1.0, description="LoRA strength (0.0-2.0)")
+    lora_name: Optional[str] = Field(None, description="LoRA filename to load from lora_dir, None to disable LoRA")
+    lora_strength: float = Field(1.0, description="LoRA strength")
 
     def __init__(self, **data):
         super().__init__(**data)
