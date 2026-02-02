@@ -154,7 +154,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
         else:
             self.transformer_weights = self.transformer_weight_class(self.config)
-        if hasattr(self, "post_weight_class"):
+        if hasattr(self, "post_weight_class") and self.post_weight_class is not None:
             self.post_weight = self.post_weight_class(self.config)
 
         if not self._should_init_empty_model():
