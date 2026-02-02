@@ -32,7 +32,7 @@
         },
         {
             "name": "low_noise_model",
-            "path": "lightx2vWan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors",
+            "path": "lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors",
             "strength": 1.0
         }
     ]
