@@ -67,7 +67,7 @@ class LongCatImageRunner(DefaultRunner):
         self.resolution = self.config.get("resolution", 1024)
 
     def load_transformer(self):
-        model = LongCatImageTransformerModel(self.config)
+        model = LongCatImageTransformerModel(os.path.join(self.config["model_path"], "transformer"), self.config, self.init_device)
         return model
 
     def load_text_encoder(self):

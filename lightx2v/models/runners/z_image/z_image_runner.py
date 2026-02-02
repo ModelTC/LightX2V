@@ -45,7 +45,7 @@ class ZImageRunner(DefaultRunner):
         self.vae = self.load_vae()
 
     def load_transformer(self):
-        model = ZImageTransformerModel(self.config)
+        model = ZImageTransformerModel(os.path.join(self.config["model_path"], "transformer"), self.config, self.init_device)
         return model
 
     def load_text_encoder(self):
