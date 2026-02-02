@@ -30,11 +30,31 @@ def set_config(
         task,
         model_cls,
         config_path=None,
+        attn_mode="flash_attn2",
+        rope_type="torch",
+        infer_steps=50,
+        target_video_length=81,
+        target_height=480,
+        target_width=832,
+        sample_guide_scale=5.0,
+        sample_shift=5.0,
+        fps=16,
+        aspect_ratio="16:9",
+        boundary=0.900,
+        boundary_step_index=2,
+        denoising_step_list=None,
+        audio_fps=24000,
+        double_precision_rope=True,
+        norm_modulate_backend="torch",
+        distilled_sigma_values=None,
         **kwargs
     ):
     """
     Load configuration for Wan model.
     """
+    if denoising_step_list is None:
+        denoising_step_list = [1000, 750, 500, 250]
+
     # Create arguments object similar to what set_config expects
     args_dict = {
         "task": task,
@@ -42,6 +62,53 @@ def set_config(
         "model_cls": model_cls,
         "config_json": config_path,
     }
+
+    # Simulate logic from LightX2VPipeline.create_generator
+    # which calls set_infer_config / set_infer_config_json
+    # Here we directly populate args_dict with the required inference config
+    
+    if config_path is not None:
+        with open(config_path, "r") as f:
+            config_json_content = json.load(f)
+        args_dict.update(config_json_content)
+    else:
+        # Replicating set_infer_config logic
+        if model_cls == "ltx2":
+             args_dict["distilled_sigma_values"] = distilled_sigma_values
+             args_dict["infer_steps"] = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
+        else:
+            args_dict["infer_steps"] = infer_steps
+
+        args_dict["target_width"] = target_width
+        args_dict["target_height"] = target_height
+        args_dict["target_video_length"] = target_video_length
+        args_dict["sample_guide_scale"] = sample_guide_scale
+        args_dict["sample_shift"] = sample_shift
+        
+        if sample_guide_scale == 1 or (model_cls == "z_image" and sample_guide_scale == 0):
+            args_dict["enable_cfg"] = False
+        else:
+            args_dict["enable_cfg"] = True
+            
+        args_dict["rope_type"] = rope_type
+        args_dict["fps"] = fps
+        args_dict["aspect_ratio"] = aspect_ratio
+        args_dict["boundary"] = boundary
+        args_dict["boundary_step_index"] = boundary_step_index
+        args_dict["denoising_step_list"] = denoising_step_list
+        args_dict["audio_fps"] = audio_fps
+        args_dict["double_precision_rope"] = double_precision_rope
+        
+        if model_cls.startswith("wan"):
+            # Set all attention types to the provided attn_mode
+            args_dict["self_attn_1_type"] = attn_mode
+            args_dict["cross_attn_1_type"] = attn_mode
+            args_dict["cross_attn_2_type"] = attn_mode
+        elif model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image"]:
+            args_dict["attn_type"] = attn_mode
+            
+        args_dict["norm_modulate_backend"] = norm_modulate_backend
+
     args_dict.update(kwargs)
     
     # Convert to object for set_config compatibility
