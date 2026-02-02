@@ -173,7 +173,8 @@ class VisionEncoder(nn.Module):
         """
         if self.cpu_offload:
             self.model = self.model.to(AI_DEVICE)
-            self.processor = self.processor.to(AI_DEVICE)
+            if hasattr(self.processor, 'to'):
+                self.processor = self.processor.to("cpu")
 
         if isinstance(images, np.ndarray):
             # Preprocess images if they're numpy arrays
@@ -186,7 +187,8 @@ class VisionEncoder(nn.Module):
 
         if self.cpu_offload:
             self.model = self.model.to("cpu")
-            self.processor = self.processor.to("cpu")
+            if hasattr(self.processor, 'to'):
+                self.processor = self.processor.to("cpu")
 
         return VisionEncoderModelOutput(
             last_hidden_state=outputs.last_hidden_state,
