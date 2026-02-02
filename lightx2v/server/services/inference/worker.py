@@ -22,6 +22,7 @@ class TorchrunInferenceWorker:
         self.processing = False
         self.lora_dir = None
         self.current_lora_name = None
+        self.current_lora_strength = None
 
     def init(self, args) -> bool:
         try:
@@ -127,31 +128,29 @@ class TorchrunInferenceWorker:
             if lora_name is None:
                 if self.current_lora_name is not None:
                     logger.info(f"Removing LoRA: {self.current_lora_name}")
-                    if hasattr(self.runner.model, "remove_lora"):
-                        self.runner.model.remove_lora()
+                    if hasattr(self.runner.model, "_remove_lora"):
+                        self.runner.model._remove_lora()
                     self.current_lora_name = None
+                    if hasattr(self, "current_lora_strength"):
+                        del self.current_lora_strength
                 return
 
-            if lora_name != self.current_lora_name:
+            current_strength = getattr(self, "current_lora_strength", None)
+
+            if lora_name != self.current_lora_name or lora_strength != current_strength:
                 lora_path = self._lora_path(lora_name)
                 if lora_path is None:
                     logger.warning(f"LoRA file not found for: {lora_name}")
                     return
 
-                logger.info(f"Loading LoRA: {lora_name} from {lora_path} with strength={lora_strength}")
-                if hasattr(self.runner.model, "update_lora"):
-                    self.runner.model.update_lora(lora_path, lora_strength)
+                logger.info(f"Applying LoRA: {lora_name} from {lora_path} with strength={lora_strength}")
+                if hasattr(self.runner.model, "_update_lora"):
+                    self.runner.model._update_lora(lora_path, lora_strength)
+                    self.current_lora_name = lora_name
+                    self.current_lora_strength = lora_strength
+                    logger.info(f"LoRA applied successfully: {lora_name}")
                 else:
                     logger.warning("Model does not support dynamic LoRA loading")
-                    return
-                self.current_lora_name = lora_name
-                logger.info(f"LoRA loaded successfully: {lora_name}")
-
-            elif lora_strength != getattr(self.runner.model, "lora_strength", 1.0):
-                # Same LoRA but different strength - just update strength
-                logger.info(f"Updating LoRA strength to {lora_strength}")
-                if hasattr(self.runner.model, "lora_strength"):
-                    self.runner.model.lora_strength = lora_strength
 
         except Exception as e:
             logger.error(f"Failed to handle LoRA switching: {e}")
