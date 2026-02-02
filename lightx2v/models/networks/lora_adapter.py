@@ -9,15 +9,11 @@ from lightx2v.utils.lora_loader import LoRALoader
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-class LTX2LoraWrapper:
-    """LoRA wrapper for LTX2 models with proper key prefix handling."""
-
-    def __init__(self, ltx2_model):
-        self.model = ltx2_model
+class LoraAdapter:
+    def __init__(self, model, model_prefix=None):
+        self.model = model
         self.lora_metadata = {}
-        # Use model_prefix to add "model.diffusion_model." prefix to LoRA keys
-        # This matches the key format in LTX2 models
-        self.lora_loader = LoRALoader(model_prefix="model.diffusion_model.")
+        self.lora_loader = LoRALoader(model_prefix=model_prefix)
         self.device = torch.device(AI_DEVICE) if not self.model.config.get("cpu_offload", False) else torch.device("cpu")
 
     def _load_lora_file(self, file_path):
@@ -25,7 +21,7 @@ class LTX2LoraWrapper:
             tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).to(self.device) for key in f.keys()}
         return tensor_dict
 
-    def apply_lora(self, lora_configs, model_type="ltx2"):
+    def apply_lora(self, lora_configs, model_type=None):
         if not hasattr(self.model, "original_weight_dict"):
             logger.error("Model does not have 'original_weight_dict'. Cannot apply LoRA.")
             return False
@@ -38,7 +34,10 @@ class LTX2LoraWrapper:
                 lora_weights=lora_weights,
                 strength=lora_strength,
             )
-            logger.info(f"Successfully applied LoRA to {model_type} model: {lora_config['path']} (strength: {lora_strength})")
+            if model_type is not None:
+                logger.info(f"Successfully applied LoRA to {model_type} model: {lora_config['path']} (strength: {lora_strength})")
+            else:
+                logger.info(f"Successfully applied LoRA to model: {lora_config['path']} (strength: {lora_strength})")
             del lora_weights
             gc.collect()
 

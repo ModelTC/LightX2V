@@ -22,15 +22,18 @@ class WanVaceModel(WanModel):
     def _init_infer(self):
         super()._init_infer()
         if hasattr(self.transformer_infer, "offload_manager"):
-            self.transformer_infer.offload_block_cuda_buffers = self.transformer_weights.offload_block_cuda_buffers
-            self.transformer_infer.offload_phase_cuda_buffers = self.transformer_weights.offload_phase_cuda_buffers
-            self.transformer_infer.vace_offload_block_cuda_buffers = self.transformer_weights.vace_offload_block_cuda_buffers
-            self.transformer_infer.vace_offload_phase_cuda_buffers = self.transformer_weights.vace_offload_phase_cuda_buffers
-            if self.lazy_load:
-                self.transformer_infer.offload_block_cpu_buffers = self.transformer_weights.offload_block_cpu_buffers
-                self.transformer_infer.offload_phase_cpu_buffers = self.transformer_weights.offload_phase_cpu_buffers
-                self.transformer_infer.vace_offload_block_cpu_buffers = self.transformer_weights.vace_offload_block_cpu_buffers
-                self.transformer_infer.vace_offload_phase_cpu_buffers = self.transformer_weights.vace_offload_phase_cpu_buffers
+            self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        self.transformer_infer.offload_block_cuda_buffers = self.transformer_weights.offload_block_cuda_buffers
+        self.transformer_infer.offload_phase_cuda_buffers = self.transformer_weights.offload_phase_cuda_buffers
+        self.transformer_infer.vace_offload_block_cuda_buffers = self.transformer_weights.vace_offload_block_cuda_buffers
+        self.transformer_infer.vace_offload_phase_cuda_buffers = self.transformer_weights.vace_offload_phase_cuda_buffers
+        if self.lazy_load:
+            self.transformer_infer.offload_block_cpu_buffers = self.transformer_weights.offload_block_cpu_buffers
+            self.transformer_infer.offload_phase_cpu_buffers = self.transformer_weights.offload_phase_cpu_buffers
+            self.transformer_infer.vace_offload_block_cpu_buffers = self.transformer_weights.vace_offload_block_cpu_buffers
+            self.transformer_infer.vace_offload_phase_cpu_buffers = self.transformer_weights.vace_offload_phase_cpu_buffers
 
     def _init_infer_class(self):
         self.pre_infer_class = WanPreInfer
