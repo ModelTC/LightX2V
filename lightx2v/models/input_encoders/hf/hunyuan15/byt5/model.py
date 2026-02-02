@@ -366,6 +366,74 @@ class ByT5TextEncoder:
         return byt5_features, byt5_masks
 
 
+class ByT5TextEncoderForBI(ByT5TextEncoder):
+    """
+    ByT5TextEncoder variant for WorldPlay BI model.
+
+    Loads byt5_in (mapper) weights from the BI model's action_ckpt
+    instead of the base HunyuanVideo model path.
+    """
+
+    def __init__(
+        self,
+        config,
+        device=torch.device("cpu"),
+        checkpoint_path=None,
+        action_ckpt=None,
+        byt5_max_length=256,
+        cpu_offload=False,
+    ):
+        # Don't call super().__init__() directly, we need to customize byt5_mapper loading
+        self.cpu_offload = cpu_offload
+        self.config = config
+        self.byt5_max_length = byt5_max_length
+        self.enable_cfg = config.get("enable_cfg", False)
+
+        # Load base ByT5 model from checkpoint_path
+        byT5_google_path = os.path.join(checkpoint_path, "text_encoder", "byt5-small")
+        byT5_ckpt_path = os.path.join(checkpoint_path, "text_encoder", "Glyph-SDXL-v2", "checkpoints/byt5_model.pt")
+        multilingual_prompt_format_color_path = os.path.join(checkpoint_path, "text_encoder", "Glyph-SDXL-v2", "assets/color_idx.json")
+        multilingual_prompt_format_font_path = os.path.join(checkpoint_path, "text_encoder", "Glyph-SDXL-v2", "assets/multilingual_10-lang_idx.json")
+        byt5_args = dict(
+            byT5_google_path=byT5_google_path,
+            byT5_ckpt_path=byT5_ckpt_path,
+            multilingual_prompt_format_color_path=multilingual_prompt_format_color_path,
+            multilingual_prompt_format_font_path=multilingual_prompt_format_font_path,
+            byt5_max_length=byt5_max_length,
+        )
+        self.byt5_tokenizer, self.byt5_model, self.byt5_max_length = self.create_byt5(byt5_args, device)
+        self.byt5_model = self.byt5_model.to(device=device)
+        self.prompt_format = MultilingualPromptFormat(font_path=multilingual_prompt_format_font_path, color_path=multilingual_prompt_format_color_path)
+
+        # Create byt5_mapper with BI model's hidden_size
+        self.byt5_mapper = ByT5Mapper(in_dim=1472, out_dim=2048, hidden_dim=2048, out_dim1=self.config["hidden_size"], use_residual=False).to(torch.bfloat16)
+
+        # Load byt5_in weights from action_ckpt (BI model)
+        if action_ckpt is not None:
+            from loguru import logger
+
+            logger.info(f"Loading byt5_in weights from BI model: {action_ckpt}")
+            byt5_mapper_state_dict = {}
+            with safe_open(action_ckpt, framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    if "byt5_in" in key:
+                        new_key = key.replace("byt5_in.", "")
+                        byt5_mapper_state_dict[new_key] = f.get_tensor(key).to(torch.bfloat16)
+
+            self.byt5_mapper.load_state_dict(byt5_mapper_state_dict)
+        else:
+            # Fallback to base model path
+            byt5_mapper_model_path = os.path.join(checkpoint_path, "transformer", self.config["transformer_model_name"])
+            safetensors_files = glob.glob(os.path.join(byt5_mapper_model_path, "*.safetensors"))
+            byt5_mapper_state_dict = {}
+            for safetensor_path in safetensors_files:
+                with safe_open(safetensor_path, framework="pt", device="cpu") as f:
+                    byt5_mapper_state_dict.update({key.replace("byt5_in.", ""): f.get_tensor(key).to(torch.bfloat16) for key in f.keys() if "byt5_in" in key})
+            self.byt5_mapper.load_state_dict(byt5_mapper_state_dict)
+
+        self.byt5_mapper.to(device=device)
+
+
 if __name__ == "__main__":
     byt5 = ByT5TextEncoder(config={"transformer_model_name": "480p_t2v", "hidden_size": 2048}, device="cuda", checkpoint_path="/data/nvme1/yongyang/models/HunyuanVideo-1.5/ckpts/hunyuanvideo-1.5")
     prompt = "A close-up shot captures a scene on a polished, light-colored granite kitchen counter, illuminated by soft natural light from an unseen window. Initially, the frame focuses on a tall, clear glass filled with golden, translucent apple juice standing next to a single, shiny red apple with a green leaf still attached to its stem. The camera moves horizontally to the right. As the shot progresses, a white ceramic plate smoothly enters the frame, revealing a fresh arrangement of about seven or eight more apples, a mix of vibrant reds and greens, piled neatly upon it. A shallow depth of field keeps the focus sharply on the fruit and glass, while the kitchen backsplash in the background remains softly blurred. The scene is in a realistic style."

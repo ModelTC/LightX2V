@@ -19,6 +19,9 @@ from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
@@ -62,6 +65,9 @@ def main():
             "wan2.2_animate",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
+            "worldplay_distill",
+            "worldplay_ar",
+            "worldplay_bi",
             "z_image",
             "ltx2",
             "bagel",
@@ -129,6 +135,18 @@ def main():
         type=str,
         default=None,
         help="The file of the source mask. Default None.",
+    )
+    parser.add_argument(
+        "--pose",
+        type=str,
+        default=None,
+        help="Pose string (e.g., 'w-3, right-0.5') or JSON file path for WorldPlay models.",
+    )
+    parser.add_argument(
+        "--action_ckpt",
+        type=str,
+        default=None,
+        help="Path to action model checkpoint for WorldPlay models.",
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")

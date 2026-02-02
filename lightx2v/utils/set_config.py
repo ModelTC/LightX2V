@@ -50,6 +50,12 @@ def set_config(args):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] in ["worldplay_distill", "worldplay_ar", "worldplay_bi"]:  # Special config for WorldPlay models
+        config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])
+        if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
+            with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
