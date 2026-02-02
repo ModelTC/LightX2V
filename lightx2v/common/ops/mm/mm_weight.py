@@ -204,6 +204,18 @@ class MMWeightTemplate(metaclass=ABCMeta):
                 else:
                     self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
                 logger.debug(f"Update LoRA to {self.weight_name}")
+    
+    def remove_lora(self):
+        if hasattr(self, "lora_down"):
+            del self.lora_down
+        if hasattr(self, "lora_up"):
+            del self.lora_up
+        if hasattr(self, "lora_alpha"):
+            del self.lora_alpha
+        if hasattr(self, "lora_scale"):
+            del self.lora_scale
+        self.has_lora_branch = False
+        logger.debug(f"Remove LoRA from {self.weight_name}")
 
     def state_dict(self, destination=None):
         return state_dict(self, self.base_attrs, self.lora_attrs, destination)

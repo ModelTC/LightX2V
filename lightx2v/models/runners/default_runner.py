@@ -478,10 +478,13 @@ class DefaultRunner(BaseRunner):
     def switch_lora(self, lora_path: str, strength: float = 1.0):
         """
         Switch LoRA weights dynamically by calling weight modules' update_lora method.
+        If an empty lora_path is provided, it removes LoRA weights by calling weight 
+        modules' remove_lora method.
 
         This method allows switching LoRA weights at runtime without reloading the model.
         It calls the model's _update_lora method, which updates LoRA weights in pre_weight,
-        transformer_weights, and post_weight modules.
+        transformer_weights, and post_weight modules. Or removes LoRA weights if lora_path 
+        is empty.
 
         Args:
             lora_path: Path to the LoRA safetensors file
@@ -497,11 +500,17 @@ class DefaultRunner(BaseRunner):
         if not hasattr(self.model, "_update_lora"):
             logger.error("Model does not support LoRA switching")
             return False
-
+        
         try:
-            logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
-            self.model._update_lora(lora_path, strength)
-            logger.info("LoRA switched successfully")
+            if lora_path == "":
+                logger.info("Removing LoRA weights")
+                self.model._remove_lora()
+                logger.info("LoRA removed successfully")
+                return True
+            else:
+                logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+                self.model._update_lora(lora_path, strength)
+                logger.info("LoRA switched successfully")
             return True
         except Exception as e:
             logger.error(f"Failed to switch LoRA: {e}")
