@@ -5,7 +5,11 @@ import json
 
 import numpy as np
 import torch
-from scipy.spatial.transform import Rotation as R
+
+try:
+    from scipy.spatial.transform import Rotation as R
+except ImportError:
+    R = None
 
 # Mapping from one-hot action vectors to discrete labels
 ACTION_MAPPING = {
