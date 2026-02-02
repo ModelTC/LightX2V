@@ -10,7 +10,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source ${lightx2v_path}/scripts/base/base.sh
 
 torchrun --nproc_per_node=8 -m lightx2v.infer \
---model_cls wan2.1 \
+--model_cls wan2.1_distill \
 --task t2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/wan21/wan_t2v_distill_fp8_4step_cfg_ulysses.json \
