@@ -24,5 +24,7 @@
         750,
         500,
         250
-    ]
+    ],
+    "high_noise_original_ckpt": "lightx2v/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
+    "low_noise_original_ckpt": "lightx2v/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
 }

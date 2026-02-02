@@ -14,7 +14,6 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.ltx2_media_io import load_image_conditioning
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -493,7 +492,6 @@ class LTX2Runner(DefaultRunner):
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 
-    @peak_memory_decorator
     def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
         """
         Run denoising loop for a segment.
