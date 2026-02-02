@@ -1,5 +1,6 @@
-from os import name
 import requests
+import base64
+from loguru import logger
 
 def image_to_base64(image_path):
     """Convert an image file to base64 string"""
@@ -7,7 +8,7 @@ def image_to_base64(image_path):
         image_data = f.read()
     return base64.b64encode(image_data).decode("utf-8")
     
-if name == "__main__":
+if __name__ == "__main__":
 
     url = "http://localhost:8000/v1/tasks/image/"
 
