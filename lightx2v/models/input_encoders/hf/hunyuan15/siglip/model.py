@@ -173,7 +173,7 @@ class VisionEncoder(nn.Module):
         """
         if self.cpu_offload:
             self.model = self.model.to(AI_DEVICE)
-            if hasattr(self.processor, 'to'):
+            if hasattr(self.processor, "to"):
                 self.processor = self.processor.to("cpu")
 
         if isinstance(images, np.ndarray):
@@ -187,7 +187,7 @@ class VisionEncoder(nn.Module):
 
         if self.cpu_offload:
             self.model = self.model.to("cpu")
-            if hasattr(self.processor, 'to'):
+            if hasattr(self.processor, "to"):
                 self.processor = self.processor.to("cpu")
 
         return VisionEncoderModelOutput(
