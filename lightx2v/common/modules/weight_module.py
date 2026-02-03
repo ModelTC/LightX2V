@@ -49,7 +49,7 @@ class WeightModule:
         for _, parameter in self._parameters.items():
             if hasattr(parameter, "update_lora"):
                 parameter.update_lora(weight_dict, strength)
-    
+
     def remove_lora(self):
         for _, module in self._modules.items():
             if hasattr(module, "remove_lora"):

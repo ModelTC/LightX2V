@@ -19,7 +19,7 @@ class ServerConfig:
 
     cache_dir: str = str(Path(__file__).parent.parent / "server_cache")
     max_upload_size: int = 500 * 1024 * 1024  # 500MB
-    
+
     lora_dir: str = None  # Directory for LoRA files
 
     @classmethod

@@ -74,7 +74,7 @@ class TorchrunInferenceWorker:
             # Handle dynamic LoRA loading
             lora_name = task_data.pop("lora_name", None)
             lora_strength = task_data.pop("lora_strength", 1.0)
-            
+
             if self.lora_dir:
                 self.switch_lora(lora_name, lora_strength)
 

@@ -254,7 +254,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         self.pre_weight.update_lora(lora_weight, strength)
         self.transformer_weights.update_lora(lora_weight, strength)
         self.post_weight.update_lora(lora_weight, strength)
-    
+
     def _remove_lora(self):
         self.pre_weight.remove_lora()
         self.transformer_weights.remove_lora()

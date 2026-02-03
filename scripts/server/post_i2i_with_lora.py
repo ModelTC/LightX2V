@@ -1,15 +1,17 @@
-import requests
 import base64
+
+import requests
 from loguru import logger
+
 
 def image_to_base64(image_path):
     """Convert an image file to base64 string"""
     with open(image_path, "rb") as f:
         image_data = f.read()
     return base64.b64encode(image_data).decode("utf-8")
-    
-if __name__ == "__main__":
 
+
+if __name__ == "__main__":
     url = "http://localhost:8000/v1/tasks/image/"
 
     message = {
@@ -22,5 +24,5 @@ if __name__ == "__main__":
     logger.info(f"message: {message}")
 
     response = requests.post(url, json=message)
-    
+
     logger.info(f"response: {response.json()}")
