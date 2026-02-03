@@ -1,5 +1,6 @@
 import asyncio
 import os
+from pathlib import Path
 from typing import Any, Dict
 
 import torch
@@ -19,6 +20,9 @@ class TorchrunInferenceWorker:
         self.runner = None
         self.dist_manager = DistributedManager()
         self.processing = False
+        self.lora_dir = None
+        self.current_lora_name = None
+        self.current_lora_strength = None
 
     def init(self, args) -> bool:
         try:
@@ -30,6 +34,15 @@ class TorchrunInferenceWorker:
                 self.dist_manager.world_size = 1
                 self.dist_manager.device = "cuda:0" if torch.cuda.is_available() else "cpu"
                 self.dist_manager.is_initialized = False
+
+            self.lora_dir = getattr(args, "lora_dir", None)
+            if self.lora_dir:
+                self.lora_dir = Path(self.lora_dir)
+                if not self.lora_dir.exists():
+                    logger.warning(f"LoRA directory does not exist: {self.lora_dir}")
+                    self.lora_dir = None
+                else:
+                    logger.info(f"LoRA directory set to: {self.lora_dir}")
 
             config = set_config(args)
 
@@ -57,6 +70,13 @@ class TorchrunInferenceWorker:
         try:
             if self.world_size > 1 and self.rank == 0:
                 task_data = self.dist_manager.broadcast_task_data(task_data)
+
+            # Handle dynamic LoRA loading
+            lora_name = task_data.pop("lora_name", None)
+            lora_strength = task_data.pop("lora_strength", 1.0)
+
+            if self.lora_dir:
+                self.switch_lora(lora_name, lora_strength)
 
             task_data["task"] = self.runner.config["task"]
             task_data["return_result_tensor"] = False
@@ -102,6 +122,47 @@ class TorchrunInferenceWorker:
                 }
         else:
             return None
+
+    def switch_lora(self, lora_name: str, lora_strength: float):
+        try:
+            if lora_name is None:
+                if self.current_lora_name is not None:
+                    logger.info(f"Removing LoRA: {self.current_lora_name}")
+                    if hasattr(self.runner.model, "_remove_lora"):
+                        self.runner.model._remove_lora()
+                    self.current_lora_name = None
+                    if hasattr(self, "current_lora_strength"):
+                        del self.current_lora_strength
+                return
+
+            current_strength = getattr(self, "current_lora_strength", None)
+
+            if lora_name != self.current_lora_name or lora_strength != current_strength:
+                lora_path = self._lora_path(lora_name)
+                if lora_path is None:
+                    logger.warning(f"LoRA file not found for: {lora_name}")
+                    return
+
+                logger.info(f"Applying LoRA: {lora_name} from {lora_path} with strength={lora_strength}")
+                if hasattr(self.runner.model, "_update_lora"):
+                    self.runner.model._update_lora(lora_path, lora_strength)
+                    self.current_lora_name = lora_name
+                    self.current_lora_strength = lora_strength
+                    logger.info(f"LoRA applied successfully: {lora_name}")
+                else:
+                    logger.warning("Model does not support dynamic LoRA loading")
+
+        except Exception as e:
+            logger.error(f"Failed to handle LoRA switching: {e}")
+            raise
+
+    def _lora_path(self, lora_name: str) -> str:
+        if not self.lora_dir:
+            return None
+        lora_file = self.lora_dir / lora_name
+        if lora_file.exists():
+            return str(lora_file)
+        return None
 
     async def worker_loop(self):
         while True:
