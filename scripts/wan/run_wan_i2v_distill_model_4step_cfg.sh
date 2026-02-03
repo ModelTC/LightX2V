@@ -9,7 +9,7 @@ export CUDA_VISIBLE_DEVICES=0
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
-torchrun --nproc_per_node=8 -m lightx2v.infer \
+python -m lightx2v.infer \
 --model_cls wan2.1_distill \
 --task i2v \
 --model_path $model_path \
