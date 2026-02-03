@@ -1,10 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils.registry_factory import (
-    CONV3D_WEIGHT_REGISTER,
-    LN_WEIGHT_REGISTER,
-    MM_WEIGHT_REGISTER,
-    TENSOR_REGISTER,
-)
+from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER, EMBEDDING_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
 
 
 class WanPreWeights(WeightModule):
@@ -24,6 +19,42 @@ class WanPreWeights(WeightModule):
                 lora_prefix="diffusion_model.patch_embedding",
             ),
         )
+
+        if config["task"] in ["rs2v"]:
+            self.add_module(
+                "ref_patch_embedding",
+                CONV3D_WEIGHT_REGISTER["Default"](
+                    "ref_patch_embedding.weight",
+                    "ref_patch_embedding.bias",
+                    stride=self.patch_size,
+                    lora_prefix="diffusion_model.ref_patch_embedding",
+                ),
+            )
+            self.add_module(
+                "prev_patch_embedding",
+                CONV3D_WEIGHT_REGISTER["Default"](
+                    "prev_patch_embedding.weight",
+                    "prev_patch_embedding.bias",
+                    stride=self.patch_size,
+                    lora_prefix="diffusion_model.prev_patch_embedding",
+                ),
+            )
+            self.add_module(
+                "cont_patch_embedding",
+                CONV3D_WEIGHT_REGISTER["Default"](
+                    "cont_patch_embedding.weight",
+                    "cont_patch_embedding.bias",
+                    stride=self.patch_size,
+                    lora_prefix="diffusion_model.cont_patch_embedding",
+                ),
+            )
+            self.add_module(
+                "state_embedding",
+                EMBEDDING_WEIGHT_REGISTER["Default"](
+                    "state_embedding.weight",
+                ),
+            )
+
         self.add_module(
             "text_embedding_0",
             MM_WEIGHT_REGISTER["Default"](
@@ -65,7 +96,7 @@ class WanPreWeights(WeightModule):
             ),
         )
 
-        if config["task"] in ["i2v", "flf2v", "animate", "s2v"] and config.get("use_image_encoder", True):
+        if config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and config.get("use_image_encoder", True):
             self.add_module(
                 "proj_0",
                 LN_WEIGHT_REGISTER["torch"](

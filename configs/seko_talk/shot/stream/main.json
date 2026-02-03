@@ -3,11 +3,11 @@
     "clip_configs": [
         {
             "name":"s2v_clip",
-            "path": "configs/seko_talk/shot_stream/s2v.json"
+            "path": "configs/seko_talk/shot/stream/s2v.json"
         },
         {
             "name":"f2v_clip",
-            "path": "configs/seko_talk/shot_stream/f2v.json"
+            "path": "configs/seko_talk/shot/stream/f2v.json"
         }
     ]
 }

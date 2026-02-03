@@ -21,7 +21,6 @@ class WanStepDistillScheduler(WanScheduler):
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         self.set_denoising_timesteps(device=AI_DEVICE)
-        self.cos_sin = self.prepare_cos_sin((latent_shape[1] // self.patch_size[0], latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
         sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min)
@@ -57,7 +56,7 @@ class Wan21MeanFlowStepDistillScheduler(WanStepDistillScheduler):
     def step_pre(self, step_index):
         super().step_pre(step_index)
         self.timestep_input = torch.stack([self.timesteps[self.step_index]])
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.timestep_input = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
         if self.config["model_cls"] == "wan2.1_mean_flow_distill":
             t_next = self.timesteps[self.step_index + 1] if self.step_index < self.infer_steps - 1 else torch.zeros_like(self.timestep_input)
