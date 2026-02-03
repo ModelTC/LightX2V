@@ -13,6 +13,6 @@
     "cpu_offload": false,
     "offload_granularity": "model",
     "denoising_step_list": [1000, 750, 500, 250],
-    "dit_original_ckpt": "/models/Wan-AI/Wan2.1-Distill-Models/wan2.1_i2v_480p_int8_lightx2v_4step.safetensors"
+    "dit_original_ckpt": "lightx2v/Wan2.1-Distill-Models/wan2.1_i2v_480p_int8_lightx2v_4step.safetensors"
 
   }
