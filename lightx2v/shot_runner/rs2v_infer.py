@@ -70,7 +70,6 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
             pipe = rs2v
             inputs = self.clip_inputs["rs2v_clip"]
-
             inputs.is_first = is_first
             inputs.is_last = is_last
             inputs.ref_state = ref_state_sq[idx % len(ref_state_sq)]
