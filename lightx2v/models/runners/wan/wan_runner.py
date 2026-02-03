@@ -80,7 +80,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             # offload config
             clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
             if clip_offload:
@@ -181,7 +181,7 @@ class WanRunner(DefaultRunner):
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
         }
-        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
         else:
             return self.vae_cls(**vae_config)
