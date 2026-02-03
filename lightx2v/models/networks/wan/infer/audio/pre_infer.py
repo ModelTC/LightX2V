@@ -31,7 +31,6 @@ class WanAudioPreInfer(WanPreInfer):
         return freqs
 
     def init_rope_param(self, grid_sizes, valid_latent_num=None, ref_latent_num=None, prev_latent_num=None):
-        grid_sizes_t, _, _ = grid_sizes
         freqs = self.freqs.clone()  # self.freqs init param can not be changed
         if self.task in ["rs2v"]:
             # using neg temporal rope
@@ -49,7 +48,7 @@ class WanAudioPreInfer(WanPreInfer):
             # init rope
             cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
         else:
-            freqs[grid_sizes_t:, : self.rope_t_dim] = 0  # set ref_latent index temporal to zero
+            freqs[valid_latent_num:, : self.rope_t_dim] = 0  # set ref_latent index temporal to zero
             cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
 
         return cos_sin
@@ -190,7 +189,7 @@ class WanAudioPreInfer(WanPreInfer):
             if self.task in ["rs2v"]:
                 self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num, ref_latent_num, prev_latent_num)
             else:
-                self.cos_sin = self.init_rope_param(grid_sizes.tuple)
+                self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num)
 
         return WanPreInferModuleOutput(
             embed=embed,

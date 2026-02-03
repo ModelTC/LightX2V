@@ -24,7 +24,7 @@
     "ln_type": "Default",
     "cpu_offload": true,
     "clip_cpu_offload": false,
-    "use_31_block": false,
+    "use_31_block": true,
     "t5_cpu_offload": false,
     "audio_adapter_cpu_offload": false,
     "offload_granularity": "block",
