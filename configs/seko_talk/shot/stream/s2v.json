@@ -1,7 +1,7 @@
 {
     "model_cls": "seko_talk",
     "task": "s2v",
-    "model_path":"/mnt/afs1/wangshankun/HF_Cache/Wan2.1-R2V721-Audio-14B-720P/",
+    "model_path":"Wan2.1-R2V721-Audio-14B-720P/",
     "infer_steps": 4,
     "target_fps": 16,
     "audio_sr": 16000,

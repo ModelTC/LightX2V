@@ -1,5 +1,5 @@
 #!/bin/bash
-lightx2v_path=/mnt/afs1/wangshankun/LightX2V
+lightx2v_path=
 
 export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
 export TOKENIZERS_PARALLELISM=false
