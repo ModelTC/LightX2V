@@ -6,7 +6,7 @@ from enum import Enum
 from loguru import logger
 
 from lightx2v.deploy.common.utils import class_try_catch_async
-from lightx2v.deploy.task_manager import TaskStatus
+from lightx2v.deploy.task_manager import ActiveStatus, FinishedStatus, TaskStatus
 
 
 class WorkerStatus(Enum):
@@ -252,13 +252,12 @@ class ServerMonitor:
 
         if active_new_task:
             # check if user has too many active tasks
-            active_statuses = [TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.CREATED]
-            active_tasks = await self.task_manager.list_tasks(status=active_statuses, user_id=user_id)
+            active_tasks = await self.task_manager.list_tasks(status=ActiveStatus, user_id=user_id)
             if len(active_tasks) >= self.user_max_active_tasks:
                 return f"User {user_id} has too many active tasks, {len(active_tasks)} vs {self.user_max_active_tasks}"
 
             # check if user has too many daily tasks
-            daily_statuses = active_statuses + [TaskStatus.SUCCEED, TaskStatus.CANCEL, TaskStatus.FAILED]
+            daily_statuses = ActiveStatus + FinishedStatus
             daily_tasks = await self.task_manager.list_tasks(status=daily_statuses, user_id=user_id, start_created_t=cur_t - 86400, include_delete=True)
             if len(daily_tasks) >= self.user_max_daily_tasks:
                 return f"User {user_id} has too many daily tasks, {len(daily_tasks)} vs {self.user_max_daily_tasks}"

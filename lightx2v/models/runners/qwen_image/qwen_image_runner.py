@@ -2,12 +2,13 @@ import gc
 import math
 
 import torch
+import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
-from lightx2v.models.networks.qwen_image.lora_adapter import QwenImageLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
@@ -44,8 +45,8 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = qwen_module(**model_kwargs)
-        lora_wrapper = QwenImageLoraWrapper(model)
-        lora_wrapper.apply_lora(lora_configs)
+        lora_adapter = LoraAdapter(model)
+        lora_adapter.apply_lora(lora_configs)
     return model
 
 
@@ -75,7 +76,9 @@ class QwenImageRunner(DefaultRunner):
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
+            "model_path": os.path.join(self.config["model_path"], "transformer"),
             "config": self.config,
+            "device": self.init_device,
         }
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
@@ -367,6 +370,7 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
+    @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
@@ -378,19 +382,24 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            image_prefix = f"{input_info.save_result_path}".split(".")[0]
-            for idx, image in enumerate(images[0]):
-                image.save(f"{image_prefix}_{idx}.png")
-                logger.info(f"Image saved: {image_prefix}_{idx}.png")
-        else:
-            image = images[0]
-            image.save(f"{input_info.save_result_path}")
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            if not input_info.return_result_tensor:
+                image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+                image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+                if isinstance(images[0], list) and len(images[0]) > 1:
+                    for idx, image in enumerate(images[0]):
+                        image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                        logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
+                else:
+                    image = images[0]
+                    image.save(f"{image_prefix}.{image_suffix}")
+                    logger.info(f"Image saved: {image_prefix}.{image_suffix}")
 
         del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}

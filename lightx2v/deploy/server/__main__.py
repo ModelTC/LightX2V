@@ -331,7 +331,7 @@ async def prepare_subtasks(task_id):
 
 
 def format_task(task):
-    task["status"] = task["status"].name
+    task["status"] = task["status"].name if task["status"] != TaskStatus.REJECT else TaskStatus.FAILED.name
     task["model_cls"] = model_pipelines.outer_model_name(task["model_cls"])
 
 
@@ -430,6 +430,8 @@ async def api_v1_task_list(request: Request, user=Depends(verify_user_access)):
 
         query_params = {"user_id": user_id}
         if status_filter and status_filter != "ALL":
+            if status_filter.upper() == TaskStatus.REJECT.name:
+                status_filter = TaskStatus.FAILED.name
             query_params["status"] = TaskStatus[status_filter.upper()]
 
         total_tasks = await task_manager.list_tasks(count=True, **query_params)
@@ -694,7 +696,7 @@ async def api_v1_worker_report(request: Request, valid=Depends(verify_worker_acc
         ret = await task_manager.finish_subtasks(task_id, status, worker_identity=identity, worker_name=worker_name, fail_msg=fail_msg, should_running=True)
 
         # not all subtasks finished, prepare new ready subtasks
-        if ret not in [TaskStatus.SUCCEED, TaskStatus.FAILED]:
+        if ret not in FinishedStatus:
             await prepare_subtasks(task_id)
 
         # all subtasks succeed, delete temp data
@@ -710,6 +712,10 @@ async def api_v1_worker_report(request: Request, valid=Depends(verify_worker_acc
 
         elif ret == TaskStatus.FAILED:
             logger.warning(f"Task {task_id} failed")
+        elif ret == TaskStatus.CANCEL:
+            logger.warning(f"Task {task_id} cancel")
+        elif ret == TaskStatus.REJECT:
+            logger.warning(f"Task {task_id} reject")
 
         return {"msg": "ok"}
 

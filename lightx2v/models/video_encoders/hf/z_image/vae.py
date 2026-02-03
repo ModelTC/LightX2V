@@ -4,7 +4,6 @@ import os
 import torch
 
 from lightx2v.utils.envs import *
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     from diffusers import AutoencoderKL
@@ -12,6 +11,9 @@ try:
 except ImportError:
     AutoencoderKL = None
     VaeImageProcessor = None
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 ASPECT_RATIO_MAP = {
     "16:9": [1664, 928],
@@ -38,7 +40,7 @@ class AutoencoderKLZImageVAE:
         self.load()
 
     def load(self):
-        self.model = AutoencoderKL.from_pretrained(os.path.join(self.config["model_path"], "vae")).to(self.device).to(torch.bfloat16)
+        self.model = AutoencoderKL.from_pretrained(os.path.join(self.config["model_path"], "vae")).to(self.device).to(GET_DTYPE())
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
 
     @staticmethod
@@ -58,7 +60,7 @@ class AutoencoderKLZImageVAE:
     @torch.no_grad()
     def decode(self, latents, input_info):
         if self.cpu_offload:
-            self.model.to(torch.device("cuda"))
+            self.model.to(torch.device(AI_DEVICE))
 
         latents = latents.to(next(self.model.parameters()).dtype)
         if hasattr(self.model.config, "scaling_factor") and hasattr(self.model.config, "shift_factor"):
@@ -67,8 +69,7 @@ class AutoencoderKLZImageVAE:
             latents = (latents / scaling_factor) + shift_factor
         images = self.model.decode(latents, return_dict=False)[0]
 
-        images_postprocessed = self.image_processor.postprocess(images, output_type="pil")
-        images = images_postprocessed
+        images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
             torch.cuda.empty_cache()
@@ -96,7 +97,7 @@ class AutoencoderKLZImageVAE:
     @torch.no_grad()
     def encode_vae_image(self, image):
         if self.cpu_offload:
-            self.model.to(torch.device("cuda"))
+            self.model.to(torch.device(AI_DEVICE))
 
         image = image.to(self.model.device)
 

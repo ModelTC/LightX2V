@@ -1,7 +1,6 @@
 {
     "infer_steps": 40,
     "target_video_length": 121,
-    "text_len": 512,
     "target_height": 512,
     "target_width": 768,
     "attn_type": "sage_attn2",
@@ -14,5 +13,6 @@
     "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
-    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev.safetensors"
+    "use_tiling_vae": false,
+    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
 }

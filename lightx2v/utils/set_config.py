@@ -50,6 +50,12 @@ def set_config(args):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] in ["worldplay_distill", "worldplay_ar", "worldplay_bi"]:  # Special config for WorldPlay models
+        config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])
+        if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
+            with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -123,16 +129,29 @@ def set_config(args):
 
 def set_parallel_config(config):
     if config["parallel"]:
-        cfg_p_size = config["parallel"].get("cfg_p_size", 1)
-        seq_p_size = config["parallel"].get("seq_p_size", 1)
-        assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size * seq_p_size must be equal to world_size"
-        config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+        tensor_p_size = config["parallel"].get("tensor_p_size", 1)
 
-        if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
-            config["seq_parallel"] = True
+        if tensor_p_size > 1:
+            # Tensor parallel only: 1D mesh
+            assert tensor_p_size == dist.get_world_size(), f"tensor_p_size ({tensor_p_size}) must be equal to world_size ({dist.get_world_size()})"
+            config["device_mesh"] = init_device_mesh(AI_DEVICE, (tensor_p_size,), mesh_dim_names=("tensor_p",))
+            config["tensor_parallel"] = True
+            config["seq_parallel"] = False
+            config["cfg_parallel"] = False
+        else:
+            # Original 2D mesh for cfg_p and seq_p
+            cfg_p_size = config["parallel"].get("cfg_p_size", 1)
+            seq_p_size = config["parallel"].get("seq_p_size", 1)
+            assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) must be equal to world_size ({dist.get_world_size()})"
+            config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+            config["tensor_parallel"] = False
 
-        if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
-            config["cfg_parallel"] = True
+            if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
+                config["seq_parallel"] = True
+
+            if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
+                config["cfg_parallel"] = True
+
         # warmup dist
         _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
         dist.all_reduce(_a)

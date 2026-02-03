@@ -10,7 +10,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
@@ -53,10 +53,10 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = wan_module(**model_kwargs)
-        lora_wrapper = WanLoraWrapper(model)
+        lora_adapter = LoraAdapter(model)
         if model_type in ["high_noise_model", "low_noise_model"]:
             lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
-        lora_wrapper.apply_lora(lora_configs, model_type=model_type)
+        lora_adapter.apply_lora(lora_configs, model_type=model_type)
     return model
 
 
@@ -582,17 +582,23 @@ class MultiModelStruct:
 class Wan22MoeRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
         if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
             self.high_noise_model_path = self.config["high_noise_quantized_ckpt"]
         elif self.config.get("high_noise_original_ckpt", None):
             self.high_noise_model_path = self.config["high_noise_original_ckpt"]
+        else:
+            self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
+            if not os.path.isdir(self.high_noise_model_path):
+                raise FileNotFoundError(f"High Noise Model does not find")
 
-        self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
         if self.config.get("dit_quantized", False) and self.config.get("low_noise_quantized_ckpt", None):
             self.low_noise_model_path = self.config["low_noise_quantized_ckpt"]
         elif not self.config.get("dit_quantized", False) and self.config.get("low_noise_original_ckpt", None):
             self.low_noise_model_path = self.config["low_noise_original_ckpt"]
+        else:
+            self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
+            if not os.path.isdir(self.low_noise_model_path):
+                raise FileNotFoundError(f"Low Noise Model does not find")
 
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output

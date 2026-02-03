@@ -33,6 +33,8 @@ class I2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    # WorldPlay-specific: pose/action conditioning (optional)
+    pose: str = field(default_factory=lambda: None)
 
 
 @dataclass
@@ -161,6 +163,7 @@ class T2IInputInfo:
     prompt: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
@@ -176,6 +179,7 @@ class I2IInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
@@ -208,18 +212,66 @@ class I2AVInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
-    # Image conditioning: list of (image_path, frame_idx, strength) tuples
-    # frame_idx: which frame to replace with the image (0-indexed)
-    # strength: conditioning strength (0.0-1.0, typically 1.0 for full replacement)
-    images: list = field(default_factory=list)  # list[tuple[str, int, float]]
     # shape related
     resize_mode: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+
+
+@dataclass
+class WorldPlayI2VInputInfo:
+    """Input info for WorldPlay model (image-to-video with action/pose conditioning)."""
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    # WorldPlay-specific: pose/action conditioning
+    pose: str = field(default_factory=str)  # Pose string (e.g., "w-3, right-0.5") or JSON path
+    model_type: str = field(default_factory=lambda: "ar")  # "ar" (autoregressive) or "bi" (bidirectional)
+    chunk_latent_frames: int = field(default_factory=lambda: 4)
+    # Computed pose tensors (set during processing)
+    viewmats: torch.Tensor = field(default_factory=lambda: None)
+    Ks: torch.Tensor = field(default_factory=lambda: None)
+    action: torch.Tensor = field(default_factory=lambda: None)
+
+
+@dataclass
+class WorldPlayT2VInputInfo:
+    """Input info for WorldPlay model (text-to-video with action/pose conditioning)."""
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    # WorldPlay-specific: pose/action conditioning
+    pose: str = field(default_factory=str)  # Pose string (e.g., "w-3, right-0.5") or JSON path
+    model_type: str = field(default_factory=lambda: "ar")  # "ar" (autoregressive) or "bi" (bidirectional)
+    chunk_latent_frames: int = field(default_factory=lambda: 4)
+    # Computed pose tensors (set during processing)
+    viewmats: torch.Tensor = field(default_factory=lambda: None)
+    Ks: torch.Tensor = field(default_factory=lambda: None)
+    action: torch.Tensor = field(default_factory=lambda: None)
 
 
 def init_empty_input_info(task):
@@ -245,6 +297,10 @@ def init_empty_input_info(task):
         return T2AVInputInfo()
     elif task == "i2av":
         return I2AVInputInfo()
+    elif task == "worldplay_i2v":
+        return WorldPlayI2VInputInfo()
+    elif task == "worldplay_t2v":
+        return WorldPlayT2VInputInfo()
     else:
         raise ValueError(f"Unsupported task: {task}")
 

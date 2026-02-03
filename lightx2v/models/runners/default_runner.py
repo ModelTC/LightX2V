@@ -14,9 +14,8 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, vae_to_comfyui_image
+from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -171,7 +170,6 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    @peak_memory_decorator
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
 
@@ -433,7 +431,7 @@ class DefaultRunner(BaseRunner):
                     return enhanced_prompt
 
     def process_images_after_vae_decoder(self):
-        self.gen_video_final = vae_to_comfyui_image(self.gen_video_final)
+        self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
@@ -476,6 +474,51 @@ class DefaultRunner(BaseRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video_final
+
+    def switch_lora(self, lora_path: str, strength: float = 1.0):
+        """
+        Switch LoRA weights dynamically by calling weight modules' update_lora method.
+        If an empty lora_path is provided, it removes LoRA weights by calling weight
+        modules' remove_lora method.
+
+        This method allows switching LoRA weights at runtime without reloading the model.
+        It calls the model's _update_lora method, which updates LoRA weights in pre_weight,
+        transformer_weights, and post_weight modules. Or removes LoRA weights if lora_path
+        is empty.
+
+        Args:
+            lora_path: Path to the LoRA safetensors file
+            strength: LoRA strength (default: 1.0)
+
+        Returns:
+            bool: True if LoRA was successfully switched, False otherwise
+        """
+        if not hasattr(self, "model") or self.model is None:
+            logger.error("Model not loaded. Please load model first.")
+            return False
+
+        if not hasattr(self.model, "_update_lora"):
+            logger.error("Model does not support LoRA switching")
+            return False
+
+        try:
+            if lora_path == "":
+                if hasattr(self.model, "_remove_lora"):
+                    logger.info("Removing LoRA weights")
+                    self.model._remove_lora()
+                    logger.info("LoRA removed successfully")
+                    return True
+                else:
+                    logger.error("Model does not support LoRA removal.")
+                    return False
+            else:
+                logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+                self.model._update_lora(lora_path, strength)
+                logger.info("LoRA switched successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to switch LoRA: {e}")
+            return False
 
     def __del__(self):
         if hasattr(self, "model"):

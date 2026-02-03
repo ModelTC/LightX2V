@@ -98,6 +98,20 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         k_flat = half(k)
         v_flat = half(v)
 
+        # Ensure cu_seqlens tensors are on the same device as q and have correct dtype
+        # Flash Attention requires these tensors to be on CUDA device with int32 dtype
+        device = q.device
+        if cu_seqlens_q is not None:
+            if cu_seqlens_q.device != device:
+                cu_seqlens_q = cu_seqlens_q.to(device, non_blocking=True)
+            if cu_seqlens_q.dtype != torch.int32:
+                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+        if cu_seqlens_kv is not None:
+            if cu_seqlens_kv.device != device:
+                cu_seqlens_kv = cu_seqlens_kv.to(device, non_blocking=True)
+            if cu_seqlens_kv.dtype != torch.int32:
+                cu_seqlens_kv = cu_seqlens_kv.to(torch.int32)
+
         # Compute softmax scale if not provided
         if softmax_scale is None:
             softmax_scale = 1.0 / math.sqrt(q.shape[-1])

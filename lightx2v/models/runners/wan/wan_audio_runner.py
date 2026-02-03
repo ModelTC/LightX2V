@@ -26,7 +26,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, vae_to_comfyui_image_inplace
+from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -594,7 +594,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         video_seg = self.gen_video[:, :, :useful_length].cpu()
         audio_seg = self.segment.audio_array[:, : useful_length * self._audio_processor.audio_frame_rate]
         audio_seg = audio_seg.sum(dim=0)  # Multiple audio tracks, mixed into one track
-        video_seg = vae_to_comfyui_image_inplace(video_seg)
+        video_seg = wan_vae_to_comfy(video_seg)
 
         # [Warning] Need check whether video segment interpolation works...
         if "video_frame_interpolation" in self.config and self.vfi_model is not None:
@@ -642,7 +642,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             origin_seg = torch.clamp(origin_seg, -1, 1).to(torch.float)
             valid_T = min(valid_length - frame_idx, origin_seg.shape[2])
 
-            video_seg = vae_to_comfyui_image_inplace(origin_seg[:, :, :valid_T].cpu())
+            video_seg = wan_vae_to_comfy(origin_seg[:, :, :valid_T].cpu())
             audio_start = frame_idx * self._audio_processor.audio_frame_rate
             audio_end = (frame_idx + valid_T) * self._audio_processor.audio_frame_rate
             audio_seg = self.segment.audio_array[:, audio_start:audio_end].sum(dim=0)

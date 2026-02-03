@@ -1,3 +1,5 @@
+import torch.distributed as dist
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -138,9 +140,34 @@ class LTX2TransformerBlock(WeightModule):
             self.scale_shift_table_a2v_ca_video,
         )
 
+        # Check if tensor parallel is enabled
+        use_tp = config.get("tensor_parallel", False)
+        if use_tp:
+            tp_group = config.get("device_mesh").get_group(mesh_dim="tensor_p")
+            tp_rank = dist.get_rank(tp_group)
+            tp_size = dist.get_world_size(tp_group)
+        else:
+            tp_group = None
+            tp_rank = 0
+            tp_size = 1
+
+        # Create attention and FFN modules based on tensor parallel config
+        if use_tp:
+            AttentionClass = LTX2AttentionTP
+            FFNClass = LTX2FFNTP
+            tp_kwargs = {
+                "tp_group": tp_group,
+                "tp_rank": tp_rank,
+                "tp_size": tp_size,
+            }
+        else:
+            AttentionClass = LTX2Attention
+            FFNClass = LTX2FFN
+            tp_kwargs = {}
+
         self.compute_phases = WeightModuleList(
             [
-                LTX2Attention(
+                AttentionClass(
                     block_index=block_index,
                     attn_prefix="attn1",
                     block_prefix=block_prefix,
@@ -152,8 +179,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2Attention(
+                AttentionClass(
                     block_index=block_index,
                     attn_prefix="attn2",
                     block_prefix=block_prefix,
@@ -165,8 +193,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2Attention(
+                AttentionClass(
                     block_index=block_index,
                     attn_prefix="audio_attn1",
                     block_prefix=block_prefix,
@@ -178,8 +207,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2Attention(
+                AttentionClass(
                     block_index=block_index,
                     attn_prefix="audio_attn2",
                     block_prefix=block_prefix,
@@ -191,8 +221,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2Attention(
+                AttentionClass(
                     block_index=block_index,
                     attn_prefix="audio_to_video_attn",
                     block_prefix=block_prefix,
@@ -204,8 +235,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2Attention(
+                AttentionClass(
                     block_index=block_index,
                     attn_prefix="video_to_audio_attn",
                     block_prefix=block_prefix,
@@ -217,8 +249,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2FFN(
+                FFNClass(
                     block_index=block_index,
                     ffn_prefix="ff",
                     block_prefix=block_prefix,
@@ -230,8 +263,9 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
-                LTX2FFN(
+                FFNClass(
                     block_index=block_index,
                     ffn_prefix="audio_ff",
                     block_prefix=block_prefix,
@@ -243,6 +277,7 @@ class LTX2TransformerBlock(WeightModule):
                     lazy_load=self.lazy_load,
                     lazy_load_file=self.lazy_load_file,
                     lora_path=lora_path,
+                    **tp_kwargs,
                 ),
             ]
         )
@@ -277,15 +312,23 @@ class LTX2Attention(WeightModule):
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-        self.attn_rms_type = self.config.get("rms_type", "sgl-kernel")
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
 
         self.add_module("attn_func", ATTN_WEIGHT_REGISTER[self.config["attn_type"]]())
+
+        # Add parallel attention module for sequence parallelism
+        if self.config.get("seq_parallel", False):
+            self.add_module(
+                "attn_func_parallel",
+                ATTN_WEIGHT_REGISTER[self.config.get("parallel", {}).get("seq_p_attn_type", "ulysses")](),
+            )
+
         self.add_module(
             f"q_norm",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.q_norm.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
@@ -297,7 +340,7 @@ class LTX2Attention(WeightModule):
         )
         self.add_module(
             f"k_norm",
-            RMS_WEIGHT_REGISTER[self.attn_rms_type](
+            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
                 weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.k_norm.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
@@ -405,6 +448,239 @@ class LTX2FFN(WeightModule):
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.weight",
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+            ),
+        )
+
+
+class LTX2AttentionTP(WeightModule):
+    """
+    Tensor Parallel version of LTX2Attention.
+
+    QKV projections are split column-wise, output projection is split row-wise.
+    """
+
+    def __init__(
+        self,
+        block_index,
+        attn_prefix,
+        block_prefix,
+        task,
+        mm_type,
+        config,
+        tp_group=None,
+        tp_rank=0,
+        tp_size=1,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        lora_path=None,
+    ):
+        super().__init__()
+        self.block_index = block_index
+        self.mm_type = mm_type
+        self.task = task
+        self.config = config
+        self.quant_method = config.get("quant_method", None)
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+
+        block_lora_prefix = "model.diffusion_model.blocks"
+        model_prefix = "model.diffusion_model"
+
+        self.add_module("attn_func", ATTN_WEIGHT_REGISTER[self.config["attn_type"]]())
+
+        # Use TP version of norm if tensor parallel is enabled
+        # Note: In TP, QKV outputs are split, so norm weights must also be split
+        norm_class = RMS_WEIGHT_REGISTER["TensorParallel"]
+        norm_kwargs = {
+            "tp_group": tp_group,
+            "tp_rank": tp_rank,
+            "tp_size": tp_size,
+        }
+
+        self.add_module(
+            f"q_norm",
+            norm_class(
+                weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.q_norm.weight",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+                **norm_kwargs,
+            ),
+        )
+        self.add_module(
+            f"k_norm",
+            norm_class(
+                weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.k_norm.weight",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+                **norm_kwargs,
+            ),
+        )
+        # QKV projections: column split
+        self.add_module(
+            f"to_q",
+            MM_WEIGHT_REGISTER["TensorParallel"](
+                weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_q.weight",
+                bias_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_q.bias",
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+            ),
+        )
+        self.add_module(
+            f"to_k",
+            MM_WEIGHT_REGISTER["TensorParallel"](
+                weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_k.weight",
+                bias_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_k.bias",
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+            ),
+        )
+        self.add_module(
+            f"to_v",
+            MM_WEIGHT_REGISTER["TensorParallel"](
+                weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_v.weight",
+                bias_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_v.bias",
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+            ),
+        )
+        # Output projection: row split (needs all-reduce)
+        self.add_module(
+            f"to_out",
+            MM_WEIGHT_REGISTER["TensorParallel"](
+                weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_out.0.weight",
+                bias_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_out.0.bias",
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim="row",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+            ),
+        )
+
+
+class LTX2FFNTP(WeightModule):
+    """
+    Tensor Parallel version of LTX2FFN.
+
+    First layer (net_0_proj) is split column-wise, second layer (net_2) is split row-wise.
+    """
+
+    def __init__(
+        self,
+        block_index,
+        block_prefix,
+        ffn_prefix,
+        task,
+        mm_type,
+        config,
+        tp_group=None,
+        tp_rank=0,
+        tp_size=1,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        lora_path=None,
+    ):
+        super().__init__()
+        self.block_index = block_index
+        self.mm_type = mm_type
+        self.task = task
+        self.config = config
+        self.quant_method = config.get("quant_method", None)
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
+        block_lora_prefix = "model.diffusion_model.blocks"
+        model_prefix = "model.diffusion_model"
+
+        # First layer: column split
+        self.add_module(
+            f"net_0_proj",
+            MM_WEIGHT_REGISTER["TensorParallel"](
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.weight",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias",
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+                lora_prefix=block_lora_prefix,
+                lora_path=lora_path,
+            ),
+        )
+        # Second layer: row split (needs all-reduce)
+        self.add_module(
+            f"net_2",
+            MM_WEIGHT_REGISTER["TensorParallel"](
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.weight",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias",
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim="row",
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,

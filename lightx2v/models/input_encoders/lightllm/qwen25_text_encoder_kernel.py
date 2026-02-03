@@ -2,17 +2,8 @@
 Kernel-Optimized Text Encoder
 
 Key optimizations:
-1. Flash Attention (No-Padding) - ~40% of inference time
-2. Fused RMSNorm - frequent operation
-
-Performance target:
-- Speed: 1.13x faster than Baseline (81.23ms vs 92.23ms)
-- Precision: >0.99 cosine similarity
-- Memory: Similar to Lite (~125MB VRAM)
-
-Usage:
-    encoder = LightLLMKernelTextEncoder(config)
-    hidden_states, mask, image_info = encoder.infer(text, image_list)
+1. Flash Attention
+2. Fused RMSNorm - frequent operation (sgl_kernel version)
 """
 
 import math
@@ -101,9 +92,12 @@ class LightLLMKernelTextEncoder:
         # Select attention implementation
         # NOTE: torch.compile is incompatible with flash_attention_2
         if self.use_flash_attention_kernel:
-            attn_impl = "flash_attention_2"
+            if self.use_flash_attention_kernel == "flash_attention_3":
+                attn_impl = "flash_attention_3"
+            else:
+                attn_impl = "flash_attention_2"
         else:
-            attn_impl = "eager"  # Compatible with torch.compile
+            attn_impl = "sdpa"  # Compatible with torch.compile and much faster than eager
 
         logger.info(f"  Loading model from {text_encoder_path}...")
         logger.info(f"  Attention implementation: {attn_impl}")

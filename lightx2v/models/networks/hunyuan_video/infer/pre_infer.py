@@ -7,11 +7,18 @@ from einops import rearrange
 from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
 from .posemb_layers import get_nd_rotary_pos_embed
+
+try:
+    from sgl_kernel.elementwise import timestep_embedding as timestep_embedding_cuda
+
+    TIMESTEP_EMBEDDING_CUDA_AVAILABLE = PLATFORM == "cuda"
+except ImportError:
+    TIMESTEP_EMBEDDING_CUDA_AVAILABLE = False
 
 
 def apply_gate(x, gate=None, tanh=False):
@@ -232,6 +239,14 @@ class HunyuanVideo15PreInfer:
 
         .. ref_link: https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         """
+        if TIMESTEP_EMBEDDING_CUDA_AVAILABLE:
+            return timestep_embedding_cuda(
+                t,
+                dim,
+                flip_sin_to_cos=True,
+                max_period=max_period,
+            )
+
         half = dim // 2
         freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(device=t.device)
         args = t[:, None].float() * freqs[None]
