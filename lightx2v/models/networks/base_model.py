@@ -255,6 +255,11 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         self.transformer_weights.update_lora(lora_weight, strength)
         self.post_weight.update_lora(lora_weight, strength)
 
+    def _remove_lora(self):
+        self.pre_weight.remove_lora()
+        self.transformer_weights.remove_lora()
+        self.post_weight.remove_lora()
+
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         """Load a safetensors file into a dictionary.
 
