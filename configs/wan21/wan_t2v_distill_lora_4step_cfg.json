@@ -15,7 +15,7 @@
   "denoising_step_list": [1000, 750, 500, 250],
   "lora_configs": [
     {
-      "path": "/models/Wan-AI/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",
+      "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",
       "strength": 1.0
     }
   ]
