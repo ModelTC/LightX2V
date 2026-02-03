@@ -118,6 +118,31 @@ class QwenImageRunner(DefaultRunner):
         pass
 
     def load_vae(self):
+        """Load VAE based on vae_type configuration.
+
+        Supported types:
+        - "tensorrt": TensorRT-accelerated VAE (requires pre-built engines)
+        - "baseline" (default): HuggingFace baseline implementation
+        """
+        vae_type = self.config.get("vae_type", "baseline")
+        trt_vae_config = self.config.get("trt_vae_config", {})
+
+        if vae_type == "tensorrt":
+            try:
+                from lightx2v.models.video_encoders.hf.qwen_image.vae_trt import TensorRTVAE
+
+                logger.info("Loading TensorRT-accelerated VAE")
+                vae = TensorRTVAE(self.config)
+                return vae
+            except ImportError as e:
+                logger.warning(f"TensorRT not available, falling back to PyTorch VAE: {e}")
+            except FileNotFoundError as e:
+                logger.warning(f"TensorRT engine files not found, falling back to PyTorch VAE: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to load TensorRT VAE, falling back to PyTorch VAE: {e}")
+
+        # Baseline or fallback
+        logger.info("Loading PyTorch baseline VAE")
         vae = AutoencoderKLQwenImageVAE(self.config)
         return vae
 

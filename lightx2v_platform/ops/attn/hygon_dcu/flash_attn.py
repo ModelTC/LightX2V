@@ -1,13 +1,20 @@
 import torch
+import os
 from loguru import logger
 
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
+try:
+    from flash_attn import sparse_attn_with_sla
+    SAPRDE_LINEAR_ATTN = True
+except ModuleNotFoundError:
+    SAPRDE_LINEAR_ATTN = False
+
 # Try to import Flash Attention (ROCm version 2.6.1)
 try:
     from flash_attn import flash_attn_varlen_func
-
+    #import phb
     FLASH_ATTN_AVAILABLE = True
     logger.info(f"Flash Attention (ROCm) is available")
 except ImportError:
@@ -49,6 +56,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         cu_seqlens_kv=None,
         max_seqlen_q=None,
         max_seqlen_kv=None,
+        model_cls=None,
         dropout_p=0.0,
         softmax_scale=None,
         causal=False,
@@ -76,6 +84,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
             causal: Whether to apply causal mask
             window_size: Sliding window size tuple (left, right)
             deterministic: Whether to use deterministic algorithm
+            **kwargs: Additional keyword arguments (accepted for interface compatibility, but not used)
         Returns:
             Output tensor: [B*Lq, C2] (flattened batch)
         """
@@ -98,39 +107,38 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         k_flat = half(k)
         v_flat = half(v)
 
-        # Ensure cu_seqlens tensors are on the same device as q and have correct dtype
-        # Flash Attention requires these tensors to be on CUDA device with int32 dtype
-        device = q.device
-        if cu_seqlens_q is not None:
-            if cu_seqlens_q.device != device:
-                cu_seqlens_q = cu_seqlens_q.to(device, non_blocking=True)
-            if cu_seqlens_q.dtype != torch.int32:
-                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
-        if cu_seqlens_kv is not None:
-            if cu_seqlens_kv.device != device:
-                cu_seqlens_kv = cu_seqlens_kv.to(device, non_blocking=True)
-            if cu_seqlens_kv.dtype != torch.int32:
-                cu_seqlens_kv = cu_seqlens_kv.to(torch.int32)
-
         # Compute softmax scale if not provided
         if softmax_scale is None:
             softmax_scale = 1.0 / math.sqrt(q.shape[-1])
-
         # Use Flash Attention 2.6.1 (ROCm version) with varlen interface
-        output = flash_attn_varlen_func(
-            q=q_flat,
-            k=k_flat,
-            v=v_flat,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_k=cu_seqlens_kv,
-            max_seqlen_q=max_seqlen_q,
-            max_seqlen_k=max_seqlen_kv,
-            dropout_p=dropout_p,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size=window_size,
-            deterministic=deterministic,
-        )
+        if SAPRDE_LINEAR_ATTN and int(os.getenv('USE_SLA', 0)) and q.shape[1] == k.shape[1]:
+            topk_value = float(os.getenv("SPARSE_ATTN_TOPK", "0.5"))
+            
+            q = q_flat.unsqueeze(0)
+            k = k_flat.unsqueeze(0)
+            v = v_flat.unsqueeze(0)
+            
+            output = sparse_attn_with_sla(
+                q,
+                k,
+                v,
+                topk=0.4,
+            )
+        else:
+            output = flash_attn_varlen_func(
+                q=q_flat,
+                k=k_flat,
+                v=v_flat,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_kv,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_kv,
+                dropout_p=dropout_p,
+                softmax_scale=softmax_scale,
+                causal=causal,
+                window_size=window_size,
+                deterministic=deterministic,
+            )
 
         # Reshape to [B*max_seqlen_q, num_heads * head_dim]
         bs = cu_seqlens_q.shape[0] - 1
@@ -154,7 +162,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         """
         # Reshape from flattened format to batched format
         bs = cu_seqlens_q.shape[0] - 1
-
+        #print("k.numel():", k.numel())
         # Reshape q, k, v to [B, L, Nq, C]
         q = q.reshape(bs, max_seqlen_q, q.shape[-2], q.shape[-1])
         k = k.reshape(bs, max_seqlen_q, k.shape[-2], k.shape[-1])

@@ -5,7 +5,7 @@
     "target_width": 832,
     "self_attn_1_type": "sla_attn",
     "sla_attn_setting": {
-        "sparsity_ratio": 0.8,
+        "sparsity_ratio": 0.6,
         "operator": "triton"
     },
     "cross_attn_1_type": "flash_attn3",
