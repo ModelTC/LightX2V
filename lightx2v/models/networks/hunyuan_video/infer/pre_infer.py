@@ -80,6 +80,7 @@ class HunyuanVideo15PreInfer:
         self.frequency_embedding_size = 256
         self.max_period = 10000
         self.cos_sin = None
+        self.grid_sizes = (0, 0, 0)  # (t, h, w)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -193,7 +194,8 @@ class HunyuanVideo15PreInfer:
 
         grid_sizes = (grid_sizes_t, grid_sizes_h, grid_sizes_w)
 
-        if self.cos_sin is None:
+        if self.cos_sin is None or self.grid_sizes != grid_sizes:
+            self.grid_sizes = grid_sizes
             self.cos_sin = self.prepare_cos_sin(grid_sizes)
 
         return HunyuanVideo15InferModuleOutput(
