@@ -15,7 +15,6 @@ class BagelVae:
 
     def decode(self, latents, decode_info):
         latents = latents.split((decode_info["packed_seqlens"] - 2).tolist())
-        data = torch.load("/data/nvme2/wushuo/Bagel/unpacked_latent.pt")
 
         H, W = decode_info["image_shape"]
         h, w = H // decode_info["latent_downsample"], W // decode_info["latent_downsample"]
