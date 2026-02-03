@@ -47,6 +47,11 @@ def set_config(
         double_precision_rope=True,
         norm_modulate_backend="torch",
         distilled_sigma_values=None,
+        cpu_offload=False,
+        offload_granularity="block",
+        text_encoder_offload=False,
+        image_encoder_offload=False,
+        vae_offload=False,
         **kwargs
     ):
     """
@@ -61,6 +66,11 @@ def set_config(
         "model_path": model_path,
         "model_cls": model_cls,
         "config_json": config_path,
+        "cpu_offload": cpu_offload,
+        "offload_granularity": offload_granularity,
+        "t5_cpu_offload": text_encoder_offload, # Map to internal keys
+        "clip_cpu_offload": image_encoder_offload, # Map to internal keys
+        "vae_cpu_offload": vae_offload, # Map to internal keys
     }
 
     # Simulate logic from LightX2VPipeline.create_generator
@@ -304,10 +314,60 @@ def load_wan_transformer(config: Dict[str, Any]):
         init_device = torch.device("cpu")
     else:
         init_device = torch.device(AI_DEVICE)
-    wan_model_kwargs = {"model_path": config["model_path"], "config": config, "device": init_device}
-    lora_configs = config.get("lora_configs")
-    if not lora_configs:
-        model = WanModel(**wan_model_kwargs)
+
+    if config.get("model_cls") == "wan2.1":
+        wan_model_kwargs = {"model_path": config["model_path"], "config": config, "device": init_device}
+        lora_configs = config.get("lora_configs")
+        if not lora_configs:
+            model = WanModel(**wan_model_kwargs)
+        else:
+            model = build_wan_model_with_lora(WanModel, config, wan_model_kwargs, lora_configs, model_type="wan2.1")
+        return model
+    elif config.get("model_cls") == "wan2.2_moe":
+        from lightx2v.models.runners.wan.wan_runner import MultiModelStruct
+
+        high_noise_model_path = os.path.join(config["model_path"], "high_noise_model")
+        if config.get("dit_quantized", False) and config.get("high_noise_quantized_ckpt", None):
+            high_noise_model_path = config["high_noise_quantized_ckpt"]
+        elif config.get("high_noise_original_ckpt", None):
+            high_noise_model_path = config["high_noise_original_ckpt"]
+
+        low_noise_model_path = os.path.join(config["model_path"], "low_noise_model")
+        if config.get("dit_quantized", False) and config.get("low_noise_quantized_ckpt", None):
+            low_noise_model_path = config["low_noise_quantized_ckpt"]
+        elif not config.get("dit_quantized", False) and config.get("low_noise_original_ckpt", None):
+            low_noise_model_path = config["low_noise_original_ckpt"]
+
+        if not config.get("lazy_load", False) and not config.get("unload_modules", False):
+            lora_configs = config.get("lora_configs")
+            high_model_kwargs = {
+                "model_path": high_noise_model_path,
+                "config": config,
+                "device": init_device,
+                "model_type": "wan2.2_moe_high_noise",
+            }
+            low_model_kwargs = {
+                "model_path": low_noise_model_path,
+                "config": config,
+                "device": init_device,
+                "model_type": "wan2.2_moe_low_noise",
+            }
+            if not lora_configs:
+                high_noise_model = WanModel(**high_model_kwargs)
+                low_noise_model = WanModel(**low_model_kwargs)
+            else:
+                high_noise_model = build_wan_model_with_lora(WanModel, config, high_model_kwargs, lora_configs, model_type="high_noise_model")
+                low_noise_model = build_wan_model_with_lora(WanModel, config, low_model_kwargs, lora_configs, model_type="low_noise_model")
+
+            return MultiModelStruct([high_noise_model, low_noise_model], config, config.get("boundary", 0.875))
+        else:
+            model_struct = MultiModelStruct([None, None], config, config.get("boundary", 0.875))
+            model_struct.low_noise_model_path = low_noise_model_path
+            model_struct.high_noise_model_path = high_noise_model_path
+            model_struct.init_device = init_device
+            return model_struct
     else:
-        model = build_wan_model_with_lora(WanModel, config, wan_model_kwargs, lora_configs, model_type="wan2.1")
-    return model
+        logger.error(f"Unsupported model_cls: {config.get('model_cls')}")
+        raise ValueError(f"Unsupported model_cls: {config.get('model_cls')}")
+
+    
