@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data1/yongyang/huangli/tap/LightX2V
-model_path=/models/Wan-AI/Wan2.1-T2V-14B
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=0
 
