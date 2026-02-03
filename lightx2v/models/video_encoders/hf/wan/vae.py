@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 
+from lightx2v.utils.envs import GET_USE_CHANNELS_LAST_3D
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -22,7 +23,7 @@ CACHE_T = 2
 
 class CausalConv3d(nn.Conv3d):
     """
-    Causal 3d convolusion.
+    Causal 3d convolution.
     """
 
     def __init__(self, *args, **kwargs):
@@ -46,6 +47,18 @@ class CausalConv3d(nn.Conv3d):
         x = F.pad(x, padding)
 
         return super().forward(x)
+
+
+def convert_to_channels_last_3d(module):
+    """
+    Recursively convert all Conv3d weights in module to channels_last_3d format.
+    This eliminates NCHW<->NHWC format conversion overhead in cuDNN.
+    """
+    for child in module.children():
+        if isinstance(child, nn.Conv3d):
+            child.weight.data = child.weight.data.to(memory_format=torch.channels_last_3d)
+        else:
+            convert_to_channels_last_3d(child)
 
 
 class RMS_norm(nn.Module):
@@ -827,6 +840,11 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
         if weights_dict[k].dtype != dtype:
             weights_dict[k] = weights_dict[k].to(dtype)
     model.load_state_dict(weights_dict, assign=True)
+
+    # Convert Conv3d weights to channels_last_3d for cuDNN optimization
+    if GET_USE_CHANNELS_LAST_3D():
+        convert_to_channels_last_3d(model)
+        logger.info("VAE: Converted Conv3d weights to channels_last_3d format")
 
     return model
 
