@@ -401,7 +401,6 @@ class LoRALoader:
 
                     param.data += lora_delta
                     applied_count += 1
-                    logger.debug(f"Applied LoRA to {model_key} with lora_scale={lora_scale}")
                 else:
                     logger.warning(f"Unexpected LoRA shape for {model_key}: down={lora_down.shape}, up={lora_up.shape}")
 
@@ -428,7 +427,6 @@ class LoRALoader:
                 else:
                     param.data += lora_diff * (float(strength) if strength is not None else 1.0)
                 applied_count += 1
-                logger.debug(f"Applied LoRA diff to {model_key} (type: {diff_info['type']})")
             except Exception as e:
                 logger.warning(f"Failed to apply LoRA diff for {model_key}: {e}")
 

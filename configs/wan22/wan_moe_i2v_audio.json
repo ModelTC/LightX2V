@@ -22,7 +22,7 @@
     "vae_cpu_offload": false,
     "boundary": 0.900,
     "use_image_encoder": false,
-    "use_31_block": false,
+    "use_31_block": true,
     "lora_configs": [
         {
             "name": "high_noise_model",

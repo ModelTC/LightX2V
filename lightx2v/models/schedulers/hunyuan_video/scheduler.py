@@ -1,12 +1,9 @@
 import torch
-import torch.distributed as dist
 from einops import rearrange
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-from .posemb_layers import get_nd_rotary_pos_embed
 
 
 class HunyuanVideo15Scheduler(BaseScheduler):
@@ -28,7 +25,6 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
         self.multitask_mask = self.get_task_mask(self.config["task"], latent_shape[-3])
         self.cond_latents_concat, self.mask_concat = self._prepare_cond_latents_and_mask(self.config["task"], image_encoder_output["cond_latents"], self.latents, self.multitask_mask, self.reorg_token)
-        self.cos_sin = self.prepare_cos_sin((latent_shape[1], latent_shape[2], latent_shape[3]))
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.bfloat16):
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
@@ -120,27 +116,6 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
         self.latents = sample + model_output * dt
 
-    def prepare_cos_sin(self, rope_sizes):
-        target_ndim = 3
-        head_dim = self.config["hidden_size"] // self.config["heads_num"]
-        rope_dim_list = self.config["rope_dim_list"]
-        if rope_dim_list is None:
-            rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
-        assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal to head_dim of attention layer"
-        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(rope_dim_list, rope_sizes, theta=self.config["rope_theta"], use_real=True, theta_rescale_factor=1, device=AI_DEVICE)
-        cos_half = freqs_cos[:, ::2].contiguous()
-        sin_half = freqs_sin[:, ::2].contiguous()
-        cos_sin = torch.cat([cos_half, sin_half], dim=-1)
-        if self.seq_p_group is not None:
-            world_size = dist.get_world_size(self.seq_p_group)
-            cur_rank = dist.get_rank(self.seq_p_group)
-            seqlen = cos_sin.shape[0]
-            padding_size = (world_size - (seqlen % world_size)) % world_size
-            if padding_size > 0:
-                cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
-            cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
-        return cos_sin
-
 
 class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
     def __init__(self, config):
@@ -151,7 +126,6 @@ class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
         dtype = lq_latents.dtype
         self.prepare_latents(seed, latent_shape, lq_latents, dtype=dtype)
         self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
-        self.cos_sin = self.prepare_cos_sin((latent_shape[1], latent_shape[2], latent_shape[3]))
 
         tgt_shape = latent_shape[-2:]
         bsz = lq_latents.shape[0]

@@ -13,7 +13,7 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         self.vace_blocks_mapping = {orig_idx: seq_idx for seq_idx, orig_idx in enumerate(self.config["vace_layers"])}
 
     def infer(self, weights, pre_infer_out):
-        self.get_scheduler_values()
+        self.cos_sin = pre_infer_out.cos_sin
         self.reset_infer_states()
         pre_infer_out.c = self.vace_pre_process(weights.vace_patch_embedding, pre_infer_out.vace_context)
 

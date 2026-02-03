@@ -2,6 +2,7 @@ import torch
 
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 from ..module_io import GridOutput, WanPreInferModuleOutput
 from ..utils import sinusoidal_embedding_1d
@@ -10,21 +11,54 @@ from ..utils import sinusoidal_embedding_1d
 class WanAudioPreInfer(WanPreInfer):
     def __init__(self, config):
         super().__init__(config)
-        assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
-        self.config = config
-        self.task = config["task"]
-        self.freq_dim = config["freq_dim"]
-        self.dim = config["dim"]
-        self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.infer_dtype = GET_DTYPE()
-        self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
+        if self.task in ["rs2v"]:
+            self.freqs = torch.cat(
+                [
+                    self.neg_temporal_rope_params(1024, self.head_size - 4 * (self.head_size // 6)),
+                    self.neg_temporal_rope_params(1024, 2 * (self.head_size // 6)),
+                    self.neg_temporal_rope_params(1024, 2 * (self.head_size // 6)),
+                ],
+                dim=1,
+            ).to(torch.device(AI_DEVICE))
+
+    def neg_temporal_rope_params(self, max_seq_len, dim, theta=10000):
+        assert dim % 2 == 0
+        freqs = torch.outer(
+            torch.arange(-1, max_seq_len),
+            1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)),
+        )
+        freqs = torch.polar(torch.ones_like(freqs), freqs)
+        return freqs
+
+    def init_rope_param(self, grid_sizes, valid_latent_num=None, ref_latent_num=None, prev_latent_num=None):
+        freqs = self.freqs.clone()  # self.freqs init param can not be changed
+        if self.task in ["rs2v"]:
+            # using neg temporal rope
+            # set ref_latent index temporal to zero
+            s = valid_latent_num + 1  ## neg temporal start from -1
+            e = s + ref_latent_num
+            freqs[s:e, : self.rope_t_dim] = 0
+            # move neg temporal to prve_latent index
+            if prev_latent_num != 0:
+                s = e
+                e = s + prev_latent_num
+                freqs[s:e, : self.rope_t_dim] = freqs[0:1, : self.rope_t_dim]
+            # Cut out neg temporal
+            freqs = freqs[1:, :]
+            # init rope
+            cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
+        else:
+            freqs[valid_latent_num:, : self.rope_t_dim] = 0  # set ref_latent index temporal to zero
+            cos_sin = self.prepare_cos_sin(grid_sizes, freqs)
+
+        return cos_sin
 
     @torch.no_grad()
     def infer(self, weights, inputs):
         infer_condition, latents, timestep_input = self.scheduler.infer_condition, self.scheduler.latents, self.scheduler.timestep_input
         prev_latents = inputs["previmg_encoder_output"]["prev_latents"]
         hidden_states = latents
-        if self.config["model_cls"] != "wan2.2_audio":
+        if self.config["model_cls"] != "wan2.2_audio" and self.task != "rs2v":
             prev_mask = inputs["previmg_encoder_output"]["prev_mask"]
             hidden_states = torch.cat([hidden_states, prev_mask, prev_latents], dim=0)
 
@@ -49,21 +83,59 @@ class WanAudioPreInfer(WanPreInfer):
                 device=latents.device,
             )
             ref_image_encoder = torch.concat([ref_image_encoder, zero_padding], dim=0)
-        y = ref_image_encoder
 
-        # embeddings
-        x = weights.patch_embedding.apply(x.unsqueeze(0))
-        grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
-        x = x.flatten(2).transpose(1, 2).contiguous()
-        # seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
+        if self.task in ["rs2v"]:
+            if prev_latents is not None:
+                nchannels, nframes, _, _ = prev_latents.shape
+                prev_latents = prev_latents.to(latents.dtype)
+                if nchannels != num_channels:
+                    zero_padding = torch.zeros(
+                        (num_channels - nchannels, nframes, height, width),
+                        dtype=latents.dtype,
+                        device=latents.device,
+                    )
+                    prev_latents = torch.concat([prev_latents, zero_padding], dim=0)
 
-        y = weights.patch_embedding.apply(y.unsqueeze(0))
-        y = y.flatten(2).transpose(1, 2).contiguous()
-        if not self.config.get("f2v_process", False):
-            x = torch.cat([x, y], dim=1).squeeze(0)
-            grid_sizes_t += 1
+            if prev_latents is not None:
+                x = weights.cont_patch_embedding.apply(x.unsqueeze(0))
+            else:
+                x = weights.patch_embedding.apply(x.unsqueeze(0))
+            valid_latent_num, grid_sizes_h, grid_sizes_w = x.shape[2:]
+            x = x.flatten(2).transpose(1, 2).contiguous()
+            valid_token_len = x.size(1)
+
+            ref_image_encoder = weights.ref_patch_embedding.apply(ref_image_encoder.unsqueeze(0))
+            ref_latent_num = ref_image_encoder.shape[0]
+            ref_image_encoder = ref_image_encoder.flatten(2).transpose(1, 2).contiguous()
+
+            # reference state embedding
+            state_ids = torch.zeros(ref_image_encoder.shape[1], dtype=torch.long, device=ref_image_encoder.device)
+            state_ids.fill_(inputs["ref_state"])
+            state_emb = weights.state_embedding.apply(state_ids).contiguous()
+            ref_image_encoder = ref_image_encoder + state_emb
+            x = torch.cat([x, ref_image_encoder], dim=1)
+
+            if prev_latents is not None:
+                prev_latents = weights.prev_patch_embedding.apply(prev_latents.unsqueeze(0))
+                prev_latent_num = prev_latents.shape[0]
+                prev_latents = prev_latents.flatten(2).transpose(1, 2).contiguous()
+                x = torch.cat([x, prev_latents], dim=1)
+            else:
+                prev_latent_num = 0
         else:
-            x = x.squeeze(0)
+            y = ref_image_encoder
+            # embeddings
+            x = weights.patch_embedding.apply(x.unsqueeze(0))
+            valid_latent_num, grid_sizes_h, grid_sizes_w = x.shape[2:]
+            x = x.flatten(2).transpose(1, 2).contiguous()
+            valid_token_len = x.size(1)
+
+            y = weights.patch_embedding.apply(y.unsqueeze(0))
+            y = y.flatten(2).transpose(1, 2).contiguous()
+            if not self.config.get("f2v_process", False):
+                x = torch.cat([x, y], dim=1)
+
+        grid_sizes_t = x.shape[1] // (grid_sizes_h * grid_sizes_w)
 
         person_mask_latens = inputs["person_mask_latens"]
         if person_mask_latens is not None:
@@ -92,7 +164,7 @@ class WanAudioPreInfer(WanPreInfer):
             del out
             torch.cuda.empty_cache()
 
-        if self.task in ["i2v", "s2v"] and self.config.get("use_image_encoder", True):
+        if self.task in ["i2v", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             context_clip = weights.proj_0.apply(clip_fea)
             if self.clean_cuda_cache:
                 del clip_fea
@@ -111,11 +183,22 @@ class WanAudioPreInfer(WanPreInfer):
             torch.cuda.empty_cache()
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
+
+        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
+            self.grid_sizes = grid_sizes.tuple
+            if self.task in ["rs2v"]:
+                self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num, ref_latent_num, prev_latent_num)
+            else:
+                self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num)
+
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
-            x=x,
+            x=x.squeeze(0),
             embed0=embed0.squeeze(0),
             context=context,
+            cos_sin=self.cos_sin,
+            valid_token_len=valid_token_len,
+            valid_latent_num=valid_latent_num,
             adapter_args={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
         )

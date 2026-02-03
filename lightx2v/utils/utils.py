@@ -106,6 +106,70 @@ def cache_video(
         return None
 
 
+def vae_to_comfyui_image(vae_output: torch.Tensor) -> torch.Tensor:
+    """
+    Convert VAE decoder output to ComfyUI Image format
+
+    Args:
+        vae_output: VAE decoder output tensor, typically in range [-1, 1]
+                    Shape: [B, C, T, H, W] or [B, C, H, W]
+
+    Returns:
+        ComfyUI Image tensor in range [0, 1]
+        Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
+    """
+    # Handle video tensor (5D) vs image tensor (4D)
+    if vae_output.dim() == 5:
+        # Video tensor: [B, C, T, H, W]
+        B, C, T, H, W = vae_output.shape
+        # Reshape to [B*T, C, H, W] for processing
+        vae_output = vae_output.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+
+    # Normalize from [-1, 1] to [0, 1]
+    images = (vae_output + 1) / 2
+
+    # Clamp values to [0, 1]
+    images = torch.clamp(images, 0, 1)
+
+    # Convert from [B, C, H, W] to [B, H, W, C]
+    images = images.permute(0, 2, 3, 1).cpu()
+
+    return images
+
+
+def vae_to_comfyui_image_inplace(vae_output: torch.Tensor) -> torch.Tensor:
+    """
+    Convert VAE decoder output to ComfyUI Image format (inplace operation)
+
+    Args:
+        vae_output: VAE decoder output tensor, typically in range [-1, 1]
+                    Shape: [B, C, T, H, W] or [B, C, H, W]
+                    WARNING: This tensor will be modified in-place!
+
+    Returns:
+        ComfyUI Image tensor in range [0, 1]
+        Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
+        Note: The returned tensor is the same object as input (modified in-place)
+    """
+    # Handle video tensor (5D) vs image tensor (4D)
+    if vae_output.dim() == 5:
+        # Video tensor: [B, C, T, H, W]
+        B, C, T, H, W = vae_output.shape
+        # Reshape to [B*T, C, H, W] for processing (inplace view)
+        vae_output = vae_output.permute(0, 2, 1, 3, 4).contiguous().view(B * T, C, H, W)
+
+    # Normalize from [-1, 1] to [0, 1] (inplace)
+    vae_output.add_(1).div_(2)
+
+    # Clamp values to [0, 1] (inplace)
+    vae_output.clamp_(0, 1)
+
+    # Convert from [B, C, H, W] to [B, H, W, C] and move to CPU
+    vae_output = vae_output.permute(0, 2, 3, 1).cpu()
+
+    return vae_output
+
+
 def wan_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
     """
     Convert VAE decoder output to ComfyUI Image format (inplace operation)
@@ -585,6 +649,7 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
         "i2v": {"required_paths": ["image_path"], "description": "Image-to-Video task requires --image_path"},
         "flf2v": {"required_paths": ["image_path", "last_frame_path"], "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"},
         "s2v": {"required_paths": ["image_path", "audio_path"], "description": "Speech-to-Video task requires --image_path and --audio_path"},
+        "rs2v": {"required_paths": ["image_path", "audio_path"], "description": "Ref-speech-to-Video task requires --image_path and --audio_path"},
         "vace": {"required_paths": ["src_ref_images"], "description": "Video Appearance Change Editing task requires --src_ref_images"},
         "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
         "t2v": {"required_paths": [], "description": "Text-to-Video task"},

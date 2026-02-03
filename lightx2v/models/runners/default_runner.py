@@ -85,7 +85,7 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_vace
         elif self.config["task"] == "animate":
             self.run_input_encoder = self._run_input_encoder_local_animate
-        elif self.config["task"] == "s2v":
+        elif self.config["task"] in ["s2v", "rs2v"]:
             self.run_input_encoder = self._run_input_encoder_local_s2v
         elif self.config["task"] == "t2av":
             self.run_input_encoder = self._run_input_encoder_local_t2av
@@ -347,7 +347,7 @@ class DefaultRunner(BaseRunner):
             self.model.set_scheduler(self.scheduler)
 
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
         if hasattr(self, "sr_version") and self.sr_version is not None:

@@ -11,7 +11,7 @@
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,
-    "use_31_block": false,
+    "use_31_block": true,
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-q8f",
     "dit_quantized": true,

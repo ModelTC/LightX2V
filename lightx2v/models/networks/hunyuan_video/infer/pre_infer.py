@@ -2,13 +2,16 @@ import math
 from typing import Optional
 
 import torch
+import torch.distributed as dist
 from einops import rearrange
+from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
 from .module_io import HunyuanVideo15InferModuleOutput
+from .posemb_layers import get_nd_rotary_pos_embed
 
 try:
     from sgl_kernel.elementwise import timestep_embedding as timestep_embedding_cuda
@@ -76,9 +79,32 @@ class HunyuanVideo15PreInfer:
         self.heads_num = config["heads_num"]
         self.frequency_embedding_size = 256
         self.max_period = 10000
+        self.cos_sin = None
+        self.grid_sizes = (0, 0, 0)  # (t, h, w)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+
+    def prepare_cos_sin(self, rope_sizes):
+        target_ndim = 3
+        head_dim = self.config["hidden_size"] // self.config["heads_num"]
+        rope_dim_list = self.config["rope_dim_list"]
+        if rope_dim_list is None:
+            rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
+        assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal to head_dim of attention layer"
+        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(rope_dim_list, rope_sizes, theta=self.config["rope_theta"], use_real=True, theta_rescale_factor=1, device=AI_DEVICE)
+        cos_half = freqs_cos[:, ::2].contiguous()
+        sin_half = freqs_sin[:, ::2].contiguous()
+        cos_sin = torch.cat([cos_half, sin_half], dim=-1)
+        if self.seq_p_group is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+            seqlen = cos_sin.shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
+            cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
+        return cos_sin
 
     @torch.no_grad()
     def infer(self, weights, inputs):
@@ -166,11 +192,18 @@ class HunyuanVideo15PreInfer:
         txt, text_mask = self.reorder_txt_token(siglip_output, txt, siglip_mask, text_mask)
         txt = txt[:, : text_mask.sum(), :]
 
+        grid_sizes = (grid_sizes_t, grid_sizes_h, grid_sizes_w)
+
+        if self.cos_sin is None or self.grid_sizes != grid_sizes:
+            self.grid_sizes = grid_sizes
+            self.cos_sin = self.prepare_cos_sin(grid_sizes)
+
         return HunyuanVideo15InferModuleOutput(
             img=img.contiguous(),
             txt=txt.contiguous(),
             vec=torch.nn.functional.silu(vec),
-            grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
+            grid_sizes=grid_sizes,
+            cos_sin=self.cos_sin,
         )
 
     def run_individual_token_refiner(self, weights, out, mask, c):

@@ -1,0 +1,9 @@
+{
+    "lightx2v_path": "",
+    "clip_configs": [
+        {
+            "name":"rs2v_clip",
+            "path": "configs/seko_talk/shot/rs2v/rs2v.json"
+        }
+    ]
+}

@@ -12,7 +12,7 @@
     "sample_guide_scale": 1,
     "sample_shift": 5,
     "enable_cfg": false,
-    "use_31_block": false,
+    "use_31_block": true,
     "cpu_offload": true,
     "offload_granularity": "block",
     "offload_ratio": 1,
