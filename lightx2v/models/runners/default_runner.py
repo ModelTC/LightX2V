@@ -503,10 +503,14 @@ class DefaultRunner(BaseRunner):
         
         try:
             if lora_path == "":
-                logger.info("Removing LoRA weights")
-                self.model._remove_lora()
-                logger.info("LoRA removed successfully")
-                return True
+                if hasattr(self.model, "_remove_lora"):
+                    logger.info("Removing LoRA weights")
+                    self.model._remove_lora()
+                    logger.info("LoRA removed successfully")
+                    return True
+                else:
+                    logger.error("Model does not support LoRA removal.")
+                    return False
             else:
                 logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
                 self.model._update_lora(lora_path, strength)
