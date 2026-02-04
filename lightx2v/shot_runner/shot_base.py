@@ -48,7 +48,7 @@ def load_clip_configs(main_json_path: str):
     with open(main_json_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    if "parallel" in cfg:  # Add parallel config to clip json
+    if "parallel" in cfg:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
         platform_device.init_parallel_env()
 
