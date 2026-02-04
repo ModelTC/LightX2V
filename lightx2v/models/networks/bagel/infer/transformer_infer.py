@@ -3,7 +3,11 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
-from flash_attn import flash_attn_varlen_func
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.bagel.model_io import NaiveCache

@@ -234,12 +234,26 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             device = f"{AI_DEVICE}:{dist.get_rank()}"
         else:
             device = str(self.device)
+
+        prefixes_to_remove = ["diffusion_model.", "transformer.", "model.diffusion_model."]
+
+        def remove_prefix(key):
+            return_key = key
+            for prefix in prefixes_to_remove:
+                if key.startswith(prefix):
+                    return_key = key[len(prefix) :]
+            if "lora_A" in return_key:
+                return_key = return_key.replace("lora_A", "lora_down")
+            if "lora_B" in return_key:
+                return_key = return_key.replace("lora_B", "lora_up")
+            return return_key
+
         if device == "cpu":
             with safe_open(file_path, framework="pt", device=device) as f:
-                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()).pin_memory() for key in f.keys()}
+                tensor_dict = {remove_prefix(key): f.get_tensor(key).to(GET_DTYPE()).pin_memory() for key in f.keys()}
         else:
             with safe_open(file_path, framework="pt", device=device) as f:
-                tensor_dict = {key: f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
+                tensor_dict = {remove_prefix(key): f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
         return tensor_dict
 
     def _register_lora(self, lora_path, strength):
