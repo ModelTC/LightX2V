@@ -13,7 +13,7 @@
     ],
     "sample_shift": 5.0,
     "enable_cfg": true,
-    "cpu_offload": true,
+    "cpu_offload": false,
     "offload_granularity": "model",
     "boundary": 0.900,
     "use_image_encoder": false,
