@@ -3,14 +3,13 @@ import os
 
 import numpy as np
 import torch
-import torch.distributed as dist
 import torchaudio as ta
 from loguru import logger
 
 from lightx2v.shot_runner.shot_base import ShotConfig, ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import seed_all, vae_to_comfyui_image
+from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image
 
 
 def get_reference_state_sequence(frames_per_clip=17, target_fps=16):
@@ -90,7 +89,8 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()
         gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
         merge_audio = np.concatenate(cut_audio_list, axis=0).astype(np.float32)
-        if self.shot_cfg.save_result_path:
+
+        if is_main_process() and self.shot_cfg.save_result_path:
             out_path = os.path.join("./", "video_merge.mp4")
             audio_file = os.path.join("./", "audio_merge.wav")
 
