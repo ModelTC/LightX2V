@@ -48,6 +48,10 @@ def load_clip_configs(main_json_path: str):
     with open(main_json_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
+    if "parallel" in cfg:  # Add parallel config to clip json
+        platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+        platform_device.init_parallel_env()
+
     lightx2v_path = cfg["lightx2v_path"]
     clip_configs_raw = cfg["clip_configs"]
 
@@ -62,10 +66,9 @@ def load_clip_configs(main_json_path: str):
         config = set_config(Namespace(**config))
 
         if "parallel" in cfg:  # Add parallel config to clip json
-            platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
-            platform_device.init_parallel_env()
             config["parallel"] = cfg["parallel"]
             set_parallel_config(config)
+
         clip_configs.append(ClipConfig(name=item["name"], config_json=config))
     return clip_configs
 
