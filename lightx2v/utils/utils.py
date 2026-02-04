@@ -21,6 +21,10 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def is_main_process():
+    return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
+
+
 def seed_all(seed):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)

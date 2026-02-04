@@ -10,25 +10,8 @@ from loguru import logger
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import print_config, set_config
-
-
-def load_clip_configs(main_json_path: str):
-    with open(main_json_path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-
-    lightx2v_path = cfg["lightx2v_path"]
-    clip_configs_raw = cfg["clip_configs"]
-
-    clip_configs = []
-    for item in clip_configs_raw:
-        if "config" in item:
-            config_json = item["config"]
-        else:
-            config_json = str(Path(lightx2v_path) / item["path"])
-        clip_configs.append(ClipConfig(name=item["name"], config_json=config_json))
-
-    return clip_configs
+from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 @dataclass
@@ -47,6 +30,47 @@ class ShotConfig:
     save_result_path: str
     clip_configs: list[ClipConfig]
     target_shape: list[int]
+
+
+def get_config_json(config_json):
+    if isinstance(config_json, dict):
+        logger.info("Using infer config from dict")
+        return config_json
+    if isinstance(config_json, str):
+        logger.info(f"Loading infer config from {config_json}")
+        with open(config_json, "r") as f:
+            config = json.load(f)
+        return config
+    raise TypeError("config_json must be str or dict")
+
+
+def load_clip_configs(main_json_path: str):
+    with open(main_json_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    if "parallel" in cfg:
+        platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+        platform_device.init_parallel_env()
+
+    lightx2v_path = cfg["lightx2v_path"]
+    clip_configs_raw = cfg["clip_configs"]
+
+    clip_configs = []
+    for item in clip_configs_raw:
+        if "config" in item:
+            config_json = item["config"]
+        else:
+            config_json = str(Path(lightx2v_path) / item["path"])
+
+        config = get_config_json(config_json)
+        config = set_config(Namespace(**config))
+
+        if "parallel" in cfg:  # Add parallel config to clip json
+            config["parallel"] = cfg["parallel"]
+            set_parallel_config(config)
+
+        clip_configs.append(ClipConfig(name=item["name"], config_json=config))
+    return clip_configs
 
 
 class ShotPipeline:
@@ -120,25 +144,10 @@ class ShotPipeline:
         self.progress_callback = callback
 
     def create_clip_generator(self, clip_config: ClipConfig):
-        clip_config.config_json = self.get_config_json(clip_config.config_json)
-        config_json = clip_config.config_json
-        config = set_config(Namespace(**config_json))
-        print_config(config)
-
-        runner = self._init_runner(config)
+        runner = self._init_runner(clip_config.config_json)
         logger.info(f"Clip {clip_config.name} initialized successfully!")
+        print_config(clip_config.config_json)
         return runner
-
-    def get_config_json(self, config_json):
-        if isinstance(config_json, dict):
-            logger.info("Using infer config from dict")
-            return config_json
-        if isinstance(config_json, str):
-            logger.info(f"Loading infer config from {config_json}")
-            with open(config_json, "r") as f:
-                config = json.load(f)
-            return config
-        raise TypeError("config_json must be str or dict")
 
     @torch.no_grad()
     def generate(self):
