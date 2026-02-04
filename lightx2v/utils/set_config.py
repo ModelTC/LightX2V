@@ -8,6 +8,7 @@ from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
+from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -159,9 +160,5 @@ def set_parallel_config(config):
 
 def print_config(config):
     config_to_print = config.copy()
-    config_to_print.pop("device_mesh", None)
-    if config["parallel"]:
-        if dist.get_rank() == 0:
-            logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4)}")
-    else:
-        logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4)}")
+    if is_main_process():
+        logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4, default=str)}")
