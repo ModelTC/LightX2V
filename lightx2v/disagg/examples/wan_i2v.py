@@ -13,6 +13,7 @@ from lightx2v.disagg.utils import (
     load_wan_vae_encoder,
     load_wan_transformer,
     set_config,
+    read_image_input,
 )
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.utils.envs import GET_DTYPE
@@ -21,12 +22,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
-
-
-def read_image_input(image_path):
-    img_ori = Image.open(image_path).convert("RGB")
-    img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
-    return img, img_ori
 
 
 def get_latent_shape_with_lat_hw(config, latent_h, latent_w):
@@ -90,7 +85,7 @@ def get_vae_encoder_output(vae_encoder, config, first_frame, latent_h, latent_w)
 
 def main():
     # 1. Configuration
-    model_path = "/root/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B"
+    model_path = "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B"
     task = "i2v"
     model_cls = "wan2.2_moe"
 
@@ -110,8 +105,8 @@ def main():
         "画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，"
         "三条腿，背景人很多，倒着走"
     )
-    image_path = "/root/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B/examples/i2v_input.JPG"
-    save_result_path = "/root/LightX2V/save_results/wan_i2v_A14B_disagg.mp4"
+    image_path = "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B/examples/i2v_input.JPG"
+    save_result_path = "/root/zht/LightX2V/save_results/wan_i2v_A14B_disagg.mp4"
 
     # Initialize configuration
     config = set_config(

@@ -18,10 +18,10 @@ logging.basicConfig(level=logging.INFO)
 
 def main():
     # 1. Configuration
-    model_path = "/root/LightX2V/models/Wan-AI/Wan2.1-T2V-1.3B"
+    model_path = "/root/zht/LightX2V/models/Wan-AI/Wan2.1-T2V-1.3B"
     task = "t2v"
     model_cls = "wan2.1"
-    save_result_path = "/root/LightX2V/save_results/test_disagg.mp4"
+    save_result_path = "/root/zht/LightX2V/save_results/test_disagg.mp4"
     
     # Generation parameters
     seed = 42

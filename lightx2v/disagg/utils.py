@@ -3,6 +3,8 @@ import logging
 import os
 import torch
 import torch.distributed as dist
+import torchvision.transforms.functional as TF
+from PIL import Image
 from typing import Dict, Any, Optional
 
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -24,6 +26,11 @@ class ConfigObj:
     """Helper class to convert dictionary to object with attributes"""
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
+def read_image_input(image_path):
+    img_ori = Image.open(image_path).convert("RGB")
+    img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
+    return img, img_ori
 
 def set_config(
         model_path,
