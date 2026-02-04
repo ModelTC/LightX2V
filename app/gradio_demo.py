@@ -43,6 +43,10 @@ logger.add(
 global_runner = None
 current_config = None
 cur_dit_path = None
+cur_use_lora = None
+cur_lora_path = None
+cur_high_lora_path = None
+cur_low_lora_path = None
 
 
 def run_inference(
@@ -142,7 +146,7 @@ def run_inference(
     model_cls = model_config["model_cls"]
     model_path = model_config["model_path"]
 
-    global global_runner, current_config, cur_dit_path
+    global global_runner, current_config, cur_dit_path, cur_use_lora, cur_lora_path, cur_high_lora_path, cur_low_lora_path
 
     logger.info(f"Auto-determined model_cls: {model_cls} (model type: {model_type_input})")
 
@@ -151,7 +155,7 @@ def run_inference(
     else:
         current_dit_path = dit_path_input
 
-    needs_reinit = lazy_load or unload_modules or global_runner is None or cur_dit_path != current_dit_path
+    needs_reinit = lazy_load or unload_modules or global_runner is None or cur_dit_path != current_dit_path or cur_use_lora != use_lora
 
     config_graio = {
         "infer_steps": infer_steps,
@@ -248,6 +252,19 @@ def run_inference(
 
         current_config = config
         cur_dit_path = current_dit_path
+        cur_use_lora = use_lora
+        cur_lora_path = lora_path
+
+        # 保存 Wan2.2 的 LoRA 路径
+        if model_cls.startswith("wan2.2"):
+            lora_configs = config.get("lora_configs")
+            if lora_configs:
+                lora_name_to_info = {item["name"]: item for item in lora_configs}
+                cur_high_lora_path = lora_name_to_info.get("high_noise_model", {}).get("path")
+                cur_low_lora_path = lora_name_to_info.get("low_noise_model", {}).get("path")
+            else:
+                cur_high_lora_path = None
+                cur_low_lora_path = None
 
         if not lazy_load:
             global_runner = runner
@@ -255,6 +272,53 @@ def run_inference(
         runner.config = config
         data = args.__dict__
         update_input_info_from_dict(input_info, data)
+
+        # 如果 use_lora 为 True 且 lora_path 变化了，调用 switch_lora
+        if use_lora:
+            lora_configs = config.get("lora_configs")
+            if model_cls.startswith("wan2.2") and lora_configs:
+                # 对于 Wan2.2 模型，从 lora_configs 中获取 high_noise 和 low_noise 的 LoRA 路径
+                lora_name_to_info = {item["name"]: item for item in lora_configs}
+                high_lora_path = None
+                high_lora_strength = 1.0
+                low_lora_path = None
+                low_lora_strength = 1.0
+
+                if "high_noise_model" in lora_name_to_info:
+                    high_lora_info = lora_name_to_info["high_noise_model"]
+                    high_lora_path = high_lora_info["path"]
+                    high_lora_strength = high_lora_info.get("strength", 1.0)
+
+                if "low_noise_model" in lora_name_to_info:
+                    low_lora_info = lora_name_to_info["low_noise_model"]
+                    low_lora_path = low_lora_info["path"]
+                    low_lora_strength = low_lora_info.get("strength", 1.0)
+
+                # 检查 high_lora_path 和 low_lora_path 是否变化
+                high_lora_changed = high_lora_path != cur_high_lora_path
+                low_lora_changed = low_lora_path != cur_low_lora_path
+
+                if high_lora_changed or low_lora_changed:
+                    if hasattr(runner, "switch_lora"):
+                        runner.switch_lora(
+                            high_lora_path=high_lora_path,
+                            high_lora_strength=high_lora_strength,
+                            low_lora_path=low_lora_path,
+                            low_lora_strength=low_lora_strength,
+                        )
+                        logger.info(f"Switched LoRA for Wan2.2: high={high_lora_path}, low={low_lora_path}")
+                        cur_high_lora_path = high_lora_path
+                        cur_low_lora_path = low_lora_path
+                    else:
+                        logger.warning("Runner does not support switch_lora method")
+            elif lora_path and lora_path != cur_lora_path:
+                lora_strength_val = float(lora_strength) if lora_strength is not None else 1.0
+                if hasattr(runner, "switch_lora"):
+                    runner.switch_lora(lora_path, lora_strength_val)
+                    logger.info(f"Switched LoRA to: {lora_path} with strength={lora_strength_val}")
+                else:
+                    logger.warning("Runner does not support switch_lora method")
+                cur_lora_path = lora_path
 
     runner.run_pipeline(input_info)
     cleanup_memory()

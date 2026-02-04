@@ -631,6 +631,39 @@ class Wan22MoeRunner(WanRunner):
             model_struct.init_device = self.init_device
             return model_struct
 
+    def switch_lora(self, high_lora_path: str = None, high_lora_strength: float = 1.0, low_lora_path: str = None, low_lora_strength: float = 1.0):
+        """
+        Switch LoRA weights dynamically for Wan2.2 MoE models.
+        This method handles both high_noise_model and low_noise_model separately.
+
+        Args:
+            lora_path: Path to the LoRA safetensors file (for backward compatibility)
+            strength: LoRA strength (default: 1.0) (for backward compatibility)
+            high_lora_path: Path to the high_noise_model LoRA safetensors file
+            high_lora_strength: High noise model LoRA strength (default: 1.0)
+            low_lora_path: Path to the low_noise_model LoRA safetensors file
+            low_lora_strength: Low noise model LoRA strength (default: 1.0)
+
+        Returns:
+            bool: True if LoRA was successfully switched, False otherwise
+        """
+        if not hasattr(self, "model") or self.model is None:
+            logger.error("Model not loaded. Please load model first.")
+            return False
+
+        if high_lora_path is not None:
+            if self.model.model[0] is not None and hasattr(self.model.model[0], "_update_lora"):
+                logger.info(f"Switching high_noise_model LoRA to: {high_lora_path} with strength={high_lora_strength}")
+                self.model.model[0]._update_lora(high_lora_path, high_lora_strength)
+
+        if low_lora_path is not None:
+            if self.model.model[1] is not None and hasattr(self.model.model[1], "_update_lora"):
+                logger.info(f"Switching low_noise_model LoRA to: {low_lora_path} with strength={low_lora_strength}")
+                self.model.model[1]._update_lora(low_lora_path, low_lora_strength)
+
+        logger.info("LoRA switched successfully for Wan2.2 MoE models")
+        return True
+
 
 @RUNNER_REGISTER("wan2.2")
 class Wan22DenseRunner(WanRunner):

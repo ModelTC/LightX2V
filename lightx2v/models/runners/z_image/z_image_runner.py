@@ -299,7 +299,7 @@ class ZImageRunner(DefaultRunner):
 
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
-            logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
+            logger.info(f"Z Image Runner got aspect ratio: {aspect_ratio}")
             width, height = as_maps[aspect_ratio]
             return (width, height)
         logger.warning(f"Invalid aspect ratio: {aspect_ratio}, not in {as_maps.keys()}")
