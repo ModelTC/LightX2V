@@ -1,4 +1,3 @@
-
 from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Wan2.2 T2V task
@@ -12,7 +11,7 @@ pipe = LightX2VPipeline(
 pipe.create_generator(config_json="/home/user/LightX2V/configs/wan22/wan_moe_t2v.json")
 
 # Create generator with specified parameters
-#pipe.create_generator(
+# pipe.create_generator(
 #   attn_mode="sage_attn2",
 #   infer_steps=50,
 #    height=480,  # Can be set to 720 for higher resolution
@@ -20,7 +19,7 @@ pipe.create_generator(config_json="/home/user/LightX2V/configs/wan22/wan_moe_t2v
 #    num_frames=81,
 #    guidance_scale=5.0,
 #    sample_shift=5.0,
-#)
+# )
 
 seed = 42
 prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
