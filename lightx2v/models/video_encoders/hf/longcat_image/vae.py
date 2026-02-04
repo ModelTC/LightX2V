@@ -106,6 +106,10 @@ class LongCatImageVAE:
 
         # Decode - latents is now [B, 16, H, W]
         images = self.model.decode(latents, return_dict=False)[0]
+        # 清理无效值（NaN 和 inf），避免在 postprocess 时出现警告
+        if torch.isnan(images).any() or torch.isinf(images).any():
+            images = torch.nan_to_num(images, nan=0.0, posinf=1.0, neginf=-1.0)
+            images = torch.clamp(images, 0.0, 1.0)
         images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
 
         if self.cpu_offload:

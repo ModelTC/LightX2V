@@ -66,6 +66,7 @@ class AutoencoderKLZImageVAE:
         if hasattr(self.model.config, "scaling_factor") and hasattr(self.model.config, "shift_factor"):
             scaling_factor = self.model.config.scaling_factor
             shift_factor = self.model.config.shift_factor
+            print(scaling_factor, shift_factor)
             latents = (latents / scaling_factor) + shift_factor
         images = self.model.decode(latents, return_dict=False)[0]
 
