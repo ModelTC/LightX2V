@@ -22,7 +22,7 @@ model_path=/models/
 
 # Server configuration
 server_name="0.0.0.0"
-server_port=8033
+server_port=8036
 
 # Output directory configuration
 output_dir="./outputs"
@@ -115,14 +115,9 @@ if [[ ! -d "$model_path" ]]; then
     exit 1
 fi
 
-# Select demo file based on language
-if [[ "$lang" == "zh" ]]; then
-    demo_file="gradio_demo_zh.py"
-    echo "🌏 Using Chinese interface"
-else
-    demo_file="gradio_demo.py"
-    echo "🌏 Using English interface"
-fi
+# 使用新的统一入口文件
+demo_file="gradio_demo.py"
+echo "🌏 Using unified interface (language: $lang)"
 
 # Check if demo file exists
 if [[ ! -f "$demo_file" ]]; then
@@ -168,11 +163,20 @@ echo "🔄 First startup may take several minutes to load resources..."
 echo "=========================================="
 
 # Start Python demo
+if [[ "$demo_file" == "gradio_demo.py" ]]; then
+    python $demo_file \
+        --model_path "$model_path" \
+        --server_name "$server_name" \
+        --server_port "$server_port" \
+        --output_dir "$output_dir" \
+        --lang "$lang"
+else
 python $demo_file \
     --model_path "$model_path" \
     --server_name "$server_name" \
     --server_port "$server_port" \
     --output_dir "$output_dir"
+fi
 
 # Display final system resource usage
 echo ""
