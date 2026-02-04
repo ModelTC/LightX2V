@@ -113,6 +113,7 @@ def build_image_page(
                     file_types=["image"],
                     height=150,
                     interactive=True,
+                    show_label=True,
                 )
                 image_gallery = gr.Gallery(
                     label=t("image_preview", lang),
