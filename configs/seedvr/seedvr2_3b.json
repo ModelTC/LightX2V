@@ -1,0 +1,7 @@
+{
+  "target_video_length": 81,
+  "target_height": 720,
+  "target_width": 1280,
+  "infer_steps": 1,
+  "fps": 16
+}

@@ -18,6 +18,7 @@ from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # n
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
@@ -401,6 +402,7 @@ class LightX2VPipeline:
         negative_prompt,
         save_result_path,
         image_path=None,
+        video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
         last_frame_path=None,
         audio_path=None,
@@ -415,6 +417,7 @@ class LightX2VPipeline:
         # image_strength can be a scalar (float/int) or a list matching the number of images
         self.seed = seed
         self.image_path = image_path
+        self.video_path = video_path  # For SR task
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
         self.src_ref_images = src_ref_images

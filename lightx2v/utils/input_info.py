@@ -36,6 +36,26 @@ class I2VInputInfo:
     # WorldPlay-specific: pose/action conditioning (optional)
     pose: str = field(default_factory=lambda: None)
 
+@dataclass
+class SRInputInfo:
+    """Input info for video/image super-resolution (SR) task.
+
+    Supports both image and video inputs for super-resolution.
+    """
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)  # Single image input
+    video_path: str = field(default_factory=str)  # Video input for SR
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
 
 @dataclass
 class Flf2vInputInfo:
@@ -247,6 +267,8 @@ def init_empty_input_info(task):
         return T2VInputInfo()
     elif task == "i2v":
         return I2VInputInfo()
+    elif task == "sr":
+        return SRInputInfo()  # SR uses dedicated SRInputInfo
     elif task == "flf2v":
         return Flf2vInputInfo()
     elif task == "vace":

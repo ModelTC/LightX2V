@@ -91,6 +91,8 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_t2av
         elif self.config["task"] == "i2av":
             self.run_input_encoder = self._run_input_encoder_local_i2av
+        elif self.config["task"] == "sr":
+            self.run_input_encoder = self._run_input_encoder_local_sr
         self.config.lock()  # lock config to avoid modification
         if self.config.get("compile", False) and hasattr(self.model, "compile"):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
