@@ -1,4 +1,4 @@
-#从Wan2.2体验MoE
+# 从Wan2.2体验MoE
 
 本文档包含 Wan2.2-T2V-A14B 和 Wan2.2-I2V-A14B 模型的使用示例。
 
