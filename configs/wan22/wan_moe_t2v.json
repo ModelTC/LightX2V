@@ -13,7 +13,7 @@
     ],
     "sample_shift": 12.0,
     "enable_cfg": true,
-    "cpu_offload": true,
+    "cpu_offload": false,
     "offload_granularity": "model",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
