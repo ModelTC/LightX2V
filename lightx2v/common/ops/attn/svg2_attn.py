@@ -198,9 +198,9 @@ class Svg2AttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
-        q = q.unsqueeze(0).transpose(1, 2)
-        k = k.unsqueeze(0).transpose(1, 2)
-        v = v.unsqueeze(0).transpose(1, 2)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
         bs, num_heads, seq_len, dim = q.size()
         q_perm, k_perm, v_perm, dyn_map, qc_sz_s, kc_sz_s, q_sorted_indices = self.semantic_aware_permutation(q, k, v)
 
