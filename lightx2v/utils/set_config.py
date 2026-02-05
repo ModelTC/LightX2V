@@ -35,10 +35,13 @@ def get_default_config():
     return default_config
 
 
-def set_config(args):
+def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
+    return config
 
+
+def auto_calc_config(config):
     if config.get("config_json", None) is not None:
         logger.info(f"Loading some config from {config['config_json']}")
         with open(config["config_json"], "r") as f:
@@ -125,6 +128,12 @@ def set_config(args):
             elif "block_out_channels" in vae_config:
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
 
+    return config
+
+
+def set_config(args):
+    config = set_args2config(args)
+    config = auto_calc_config(config)
     return config
 
 
