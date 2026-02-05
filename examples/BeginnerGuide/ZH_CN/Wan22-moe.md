@@ -405,7 +405,7 @@ wan_moe_i2v_distill_quant.json内容如下：
 # 运行下面的脚本之前，需要将脚本中的lightx2v_path、model_path以及config_json替换为实际路径
 # 例如：lightx2v_path=/home/user/LightX2V
 # 例如：model_path=/home/user/models/Wan-AI/Wan2.2-T2V-A14B
-# 例如：config_json ${lightx2v_path}/configs/wan/wan_t2v.json
+# 例如：config_json ${lightx2v_path}/configs/wan22/wan_moe_t2v.json
 ```
 启动服务
 ```
