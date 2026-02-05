@@ -4,8 +4,10 @@ from loguru import logger
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .kernels.sla_kernel import _attention
+from .kernels.sla_kernel_ar import _attention_ar
 from .template import AttnWeightTemplate
 from .utils.sla_util import get_block_map, get_cuda_arch
+from .utils.sla_util_blhd import get_block_map_blhd
 
 try:
     import spas_sage_attn._fused as fused
@@ -39,6 +41,9 @@ class SlaAttnWeight(AttnWeightTemplate):
         if self.operator == "triton":
             self.BLKQ, self.BLKK = 128, 128
             self.apply_func = self.apply_triton
+        elif self.operator == "triton_ar":  # triton for AR models
+            self.BLKQ, self.BLKK = 128, 128
+            self.apply_func = self.apply_triton_ar
         elif self.operator == "sage":
             if self.arch == "sm90":
                 self.BLKQ, self.BLKK = 64, 128
@@ -86,6 +91,29 @@ class SlaAttnWeight(AttnWeightTemplate):
 
         out = _attention.apply(q, k, v, sparse_map, lut, real_topk, self.BLKQ, self.BLKK)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
+
+        return out
+
+    def apply_triton_ar(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0)
+        k = k.unsqueeze(0)
+        v = v.unsqueeze(0)
+
+        sparse_map, lut, real_topk = get_block_map_blhd(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+
+        out = _attention_ar.apply(q, k, v, sparse_map, lut, real_topk, self.BLKQ, self.BLKK)
+        out = out.reshape(max_seqlen_q, -1)
 
         return out
 

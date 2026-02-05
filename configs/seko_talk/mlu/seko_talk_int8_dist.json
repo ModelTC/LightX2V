@@ -13,7 +13,7 @@
     "sample_shift": 5,
     "enable_cfg": false,
     "cpu_offload": false,
-    "use_31_block": false,
+    "use_31_block": true,
     "clip_quantized": false,
     "clip_quant_scheme": "int8-tmo",
     "dit_quantized": true,
@@ -24,8 +24,8 @@
     "t5_quant_scheme": "int8-tmo",
     "modulate_type": "torch",
     "rope_type": "torch",
-    "ln_type": "Default",
-    "rms_type": "Default",
+    "layer_norm_type": "torch",
+    "rms_norm_type": "torch",
     "parallel": {
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"

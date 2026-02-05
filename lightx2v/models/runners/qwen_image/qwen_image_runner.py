@@ -2,12 +2,13 @@ import gc
 import math
 
 import torch
+import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
-from lightx2v.models.networks.qwen_image.lora_adapter import QwenImageLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
@@ -44,13 +45,8 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = qwen_module(**model_kwargs)
-        lora_wrapper = QwenImageLoraWrapper(model)
-        for lora_config in lora_configs:
-            lora_path = lora_config["path"]
-            strength = lora_config.get("strength", 1.0)
-            lora_name = lora_wrapper.load_lora(lora_path)
-            lora_wrapper.apply_lora(lora_name, strength)
-            logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        lora_adapter = LoraAdapter(model)
+        lora_adapter.apply_lora(lora_configs)
     return model
 
 
@@ -66,6 +62,12 @@ class QwenImageRunner(DefaultRunner):
             self.layers = self.config.get("layers", 4)
         self.resolution = self.config.get("resolution", 1024)
 
+        # Text encoder type: "lightllm_service", "lightllm_kernel", or default (baseline)
+        self.text_encoder_type = config.get("text_encoder_type", "baseline")
+
+        if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
+            logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
+
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
@@ -74,7 +76,9 @@ class QwenImageRunner(DefaultRunner):
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
+            "model_path": os.path.join(self.config["model_path"], "transformer"),
             "config": self.config,
+            "device": self.init_device,
         }
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
@@ -84,7 +88,32 @@ class QwenImageRunner(DefaultRunner):
         return model
 
     def load_text_encoder(self):
-        text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
+        """Load text encoder based on text_encoder_type configuration.
+
+        Supported types:
+        - "lightllm_service": LightLLM HTTP service mode
+        - "lightllm_kernel": HuggingFace model with Triton kernel optimizations
+        - "baseline" (default): HuggingFace baseline implementation
+        """
+        # Prepare encoder config by merging lightllm_config if present
+        encoder_config = self.config.copy()
+        lightllm_config = self.config.get("lightllm_config", {})
+        encoder_config.update(lightllm_config)
+
+        if self.text_encoder_type == "lightllm_service":
+            from lightx2v.models.input_encoders.lightllm import LightLLMServiceTextEncoder
+
+            logger.info("Loading LightLLM service-based text encoder")
+            text_encoder = LightLLMServiceTextEncoder(encoder_config)
+        elif self.text_encoder_type == "lightllm_kernel":
+            from lightx2v.models.input_encoders.lightllm import LightLLMKernelTextEncoder
+
+            logger.info("Loading LightLLM Kernel-optimized text encoder")
+            text_encoder = LightLLMKernelTextEncoder(encoder_config)
+        else:  # baseline or default
+            logger.info("Loading HuggingFace baseline text encoder")
+            text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
+
         text_encoders = [text_encoder]
         return text_encoders
 
@@ -162,7 +191,11 @@ class QwenImageRunner(DefaultRunner):
             self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, images_list, neg_prompt=self.input_info.negative_prompt)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.text_encoders[0]
+            # Offload text encoder (service mode doesn't need offload)
+            if self.text_encoder_type == "lightllm_service":
+                pass  # Service mode: no local model to offload
+            else:
+                del self.text_encoders[0]
         image_encoder_output_list = []
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
             image_encoder_output = self.run_vae_encoder(image=vae_image)
@@ -337,6 +370,7 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
+    @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
@@ -348,19 +382,24 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            image_prefix = f"{input_info.save_result_path}".split(".")[0]
-            for idx, image in enumerate(images[0]):
-                image.save(f"{image_prefix}_{idx}.png")
-                logger.info(f"Image saved: {image_prefix}_{idx}.png")
-        else:
-            image = images[0]
-            image.save(f"{input_info.save_result_path}")
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            if not input_info.return_result_tensor:
+                image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+                image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+                if isinstance(images[0], list) and len(images[0]) > 1:
+                    for idx, image in enumerate(images[0]):
+                        image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                        logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
+                else:
+                    image = images[0]
+                    image.save(f"{image_prefix}.{image_suffix}")
+                    logger.info(f"Image saved: {image_prefix}.{image_suffix}")
 
         del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}

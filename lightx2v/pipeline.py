@@ -1,18 +1,18 @@
-# please do not set envs in this file, it will be imported by the __init__.py file
-# os.environ["TOKENIZERS_PARALLELISM"] = "false"
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-# os.environ["DTYPE"] = "BF16"
-# os.environ["SENSITIVE_LAYER_DTYPE"] = "None"
-# os.environ["PROFILING_DEBUG_LEVEL"] = "2"
-
 import json
+import os
 
+os.environ["PROFILING_DEBUG_LEVEL"] = "2"
+os.environ["DTYPE"] = "BF16"
+os.environ["SENSITIVE_LAYER_DTYPE"] = "None"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -21,11 +21,15 @@ from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
-from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_object
+from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
-from lightx2v.utils.utils import seed_all
+from lightx2v.utils.utils import seed_all, validate_config_paths
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 def dict_like(cls):
@@ -98,6 +102,9 @@ class LightX2VPipeline:
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
+        elif self.model_cls in ["ltx2"]:
+            self.num_channels_latents = 128
+            self.audio_mel_bins = 16
 
         if model_cls in ["qwen-image", "qwen-image-2512", "qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
             self.CONDITION_IMAGE_SIZE = 147456
@@ -136,6 +143,10 @@ class LightX2VPipeline:
         config_json=None,
         rope_type="torch",
         resize_mode=None,
+        audio_fps=24000,
+        double_precision_rope=True,
+        norm_modulate_backend="torch",
+        distilled_sigma_values=None,
     ):
         self.resize_mode = resize_mode
         if config_json is not None:
@@ -155,11 +166,22 @@ class LightX2VPipeline:
                 boundary,
                 boundary_step_index,
                 denoising_step_list,
+                audio_fps,
+                double_precision_rope,
+                norm_modulate_backend,
+                distilled_sigma_values,
             )
 
         config = set_config(self)
-        print(config)
+        validate_config_paths(config)
+
+        if config["parallel"]:
+            platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+            platform_device.init_parallel_env()
+            set_parallel_config(config)
+
         self.runner = self._init_runner(config)
+        print(self.runner.config)
         logger.info(f"Initializing {self.model_cls} runner for {self.task} task...")
         logger.info(f"Model path: {self.model_path}")
         logger.info("LightGenerator initialized successfully!")
@@ -179,8 +201,16 @@ class LightX2VPipeline:
         boundary,
         boundary_step_index,
         denoising_step_list,
+        audio_fps,
+        double_precision_rope,
+        norm_modulate_backend,
+        distilled_sigma_values,
     ):
-        self.infer_steps = infer_steps
+        if self.model_cls == "ltx2":
+            self.distilled_sigma_values = distilled_sigma_values
+            self.infer_steps = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
+        else:
+            self.infer_steps = infer_steps
         self.target_width = width
         self.target_height = height
         self.target_video_length = num_frames
@@ -196,12 +226,15 @@ class LightX2VPipeline:
         self.boundary = boundary
         self.boundary_step_index = boundary_step_index
         self.denoising_step_list = denoising_step_list
+        self.audio_fps = audio_fps
+        self.double_precision_rope = double_precision_rope
         if self.model_cls.startswith("wan"):
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             self.attn_type = attn_mode
+        self.norm_modulate_backend = norm_modulate_backend
 
     def set_infer_config_json(self, config_json):
         logger.info(f"Loading infer config from {config_json}")
@@ -236,6 +269,7 @@ class LightX2VPipeline:
         image_encoder_quantized_ckpt=False,
         quant_scheme="fp8-sgl",
         text_encoder_quant_scheme=None,
+        skip_fp8_block_index=[0, 43, 44, 45, 46, 47],
     ):
         self.dit_quantized = dit_quantized
         self.dit_quant_scheme = quant_scheme
@@ -250,17 +284,16 @@ class LightX2VPipeline:
             self.clip_quant_scheme = quant_scheme
             self.clip_quantized = image_encoder_quantized
             self.clip_quantized_ckpt = image_encoder_quantized_ckpt
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image"]:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
-            self.qwen25vl_quant_scheme = quant_scheme
-        elif self.model_cls in ["qwen_image"]:
-            self.qwen25vl_quantized = text_encoder_quantized
-            self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
-            if text_encoder_quant_scheme is not None:
-                self.qwen25vl_quant_scheme = text_encoder_quant_scheme
-            else:
-                self.qwen25vl_quant_scheme = quant_scheme
+            self.qwen25vl_quant_scheme = text_encoder_quant_scheme
+        elif self.model_cls in ["ltx2"]:
+            self.skip_fp8_block_index = skip_fp8_block_index
+        elif self.model_cls == "z_image":
+            self.qwen3_quantized = text_encoder_quantized
+            self.qwen3_quantized_ckpt = text_encoder_quantized_ckpt
+            self.qwen3_quant_scheme = text_encoder_quant_scheme
 
     def enable_offload(
         self,
@@ -272,7 +305,7 @@ class LightX2VPipeline:
     ):
         self.cpu_offload = cpu_offload
         self.offload_granularity = offload_granularity
-        self.vae_offload = vae_offload
+        self.vae_cpu_offload = vae_offload
         if self.model_cls in [
             "wan2.1",
             "wan2.1_distill",
@@ -296,6 +329,10 @@ class LightX2VPipeline:
             self.byt5_cpu_offload = image_encoder_offload
         elif self.model_cls in ["qwen_image", "longcat_image"]:
             self.qwen25vl_cpu_offload = text_encoder_offload
+        elif self.model_cls == "ltx2":
+            self.gemma_cpu_offload = text_encoder_offload
+        elif self.model_cls == "z_image":
+            self.qwen3_cpu_offload = text_encoder_offload
 
     def enable_compile(
         self,
@@ -317,6 +354,16 @@ class LightX2VPipeline:
     def enable_lora(self, lora_configs, lora_dynamic_apply=False):
         self.lora_configs = lora_configs
         self.lora_dynamic_apply = lora_dynamic_apply
+
+    def switch_lora(self, lora_path: str, strength: float = 1.0):
+        if lora_path == "":
+            logger.info("Removing LoRA weights")
+        else:
+            logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+        if not self.lora_dynamic_apply:
+            logger.error("LoRA dynamic apply is not enabled. Please enable it first.")
+            return
+        self.runner.switch_lora(lora_path, strength)
 
     def enable_cache(
         self,
@@ -343,13 +390,11 @@ class LightX2VPipeline:
             self.magcache_ratios = magcache_ratios
 
     def enable_parallel(self, cfg_p_size=1, seq_p_size=1, seq_p_attn_type="ulysses"):
-        self._init_parallel()
         self.parallel = {
             "cfg_p_size": cfg_p_size,
             "seq_p_size": seq_p_size,
             "seq_p_attn_type": seq_p_attn_type,
         }
-        set_parallel_config(self)
 
     @torch.no_grad()
     def generate(
@@ -359,6 +404,7 @@ class LightX2VPipeline:
         negative_prompt,
         save_result_path,
         image_path=None,
+        image_strength=None,
         last_frame_path=None,
         audio_path=None,
         src_ref_images=None,
@@ -368,6 +414,8 @@ class LightX2VPipeline:
         target_shape=[],
     ):
         # Run inference (following LightX2V pattern)
+        # Note: image_path supports comma-separated paths for multiple images
+        # image_strength can be a scalar (float/int) or a list matching the number of images
         self.seed = seed
         self.image_path = image_path
         self.last_frame_path = last_frame_path
@@ -380,9 +428,12 @@ class LightX2VPipeline:
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
+        self.image_strength = image_strength
+
+        input_info = init_empty_input_info(self.task)
         seed_all(self.seed)
-        update_input_info_from_object(self.input_info, self)
-        self.runner.run_pipeline(self.input_info)
+        update_input_info_from_dict(input_info, self)
+        self.runner.run_pipeline(input_info)
         logger.info("Video generated successfully!")
         logger.info(f"Video Saved in {save_result_path}")
 

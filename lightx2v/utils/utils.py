@@ -21,6 +21,10 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def is_main_process():
+    return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
+
+
 def seed_all(seed):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -168,6 +172,44 @@ def vae_to_comfyui_image_inplace(vae_output: torch.Tensor) -> torch.Tensor:
     vae_output = vae_output.permute(0, 2, 3, 1).cpu()
 
     return vae_output
+
+
+def wan_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
+    """
+    Convert VAE decoder output to ComfyUI Image format (inplace operation)
+
+    Args:
+        vae_output: VAE decoder output tensor, typically in range [-1, 1]
+                    Shape: [B, C, T, H, W] or [B, C, H, W]
+                    WARNING: This tensor will be modified in-place!
+
+    Returns:
+        ComfyUI Image tensor in range [0, 1]
+        Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
+        Note: The returned tensor is the same object as input (modified in-place)
+    """
+
+    vae_output.add_(1.0).mul_(0.5).clamp_(0.0, 1.0)
+
+    if vae_output.ndim == 5:
+        # Video: [B, C, T, H, W] -> [B, T, H, W, C]
+        vae_output = vae_output.permute(0, 2, 3, 4, 1)
+        # -> [B*T, H, W, C]
+        return vae_output.cpu().flatten(0, 1)
+    else:
+        # Image: [B, C, H, W] -> [B, H, W, C]
+        return vae_output.permute(0, 2, 3, 1).cpu()
+
+
+def diffusers_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
+    """
+    Convert Diffusers VAE decoder output to ComfyUI Image format
+    Image processor for VAE, return tensor in range [0, 1] when do_denormalize is True.
+
+    ref: https://github.com/huggingface/diffusers/blob/main/src/diffusers/image_processor.py#L744
+
+    """
+    return vae_output.permute(0, 2, 3, 1).cpu()
 
 
 def save_to_video(
@@ -598,6 +640,11 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
     Raises:
         AssertionError: If required arguments are missing or invalid for the task
     """
+    # Check model_path exists
+    model_path = getattr(args, "model_path", None)
+    if model_path:
+        check_path_exists(model_path)
+
     task = args.task
 
     # Define required file paths for each task
@@ -606,10 +653,12 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
         "i2v": {"required_paths": ["image_path"], "description": "Image-to-Video task requires --image_path"},
         "flf2v": {"required_paths": ["image_path", "last_frame_path"], "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"},
         "s2v": {"required_paths": ["image_path", "audio_path"], "description": "Speech-to-Video task requires --image_path and --audio_path"},
-        "vace": {"required_paths": ["src_video"], "description": "Video Appearance Change Editing task requires --src_video"},
+        "rs2v": {"required_paths": ["image_path", "audio_path"], "description": "Ref-speech-to-Video task requires --image_path and --audio_path"},
+        "vace": {"required_paths": ["src_ref_images"], "description": "Video Appearance Change Editing task requires --src_ref_images"},
         "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
         "t2v": {"required_paths": [], "description": "Text-to-Video task"},
         "t2i": {"required_paths": [], "description": "Text-to-Image task"},
+        "i2av": {"required_paths": ["image_path"], "description": "Image-to-Audio-Video task requires --image_path"},
     }
 
     if task not in task_requirements:
@@ -635,3 +684,46 @@ def validate_task_arguments(args: "argparse.Namespace") -> None:
             check_path_exists(path_value)
 
     logger.info(f"✓ Task '{task}' arguments validated successfully")
+
+
+def validate_config_paths(config: dict) -> None:
+    """
+    Validate checkpoint paths in config dictionary.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        FileNotFoundError: If any checkpoint path in config does not exist
+    """
+    # Check dit_quantized_ckpt or dit_original_ckpt
+    if "dit_quantized_ckpt" in config and config["dit_quantized_ckpt"] is not None:
+        check_path_exists(config["dit_quantized_ckpt"])
+        logger.debug(f"✓ Verified dit_quantized_ckpt: {config['dit_quantized_ckpt']}")
+
+    if "dit_original_ckpt" in config and config["dit_original_ckpt"] is not None:
+        check_path_exists(config["dit_original_ckpt"])
+        logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
+
+    # For wan2.2, check high and low noise checkpoints
+    model_cls = config.get("model_cls", "")
+    if model_cls and "wan2.2" in model_cls:
+        # Check high noise checkpoints
+        if "high_noise_original_ckpt" in config and config["high_noise_original_ckpt"] is not None:
+            check_path_exists(config["high_noise_original_ckpt"])
+            logger.debug(f"✓ Verified high_noise_original_ckpt: {config['high_noise_original_ckpt']}")
+
+        if "high_noise_quantized_ckpt" in config and config["high_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["high_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified high_noise_quantized_ckpt: {config['high_noise_quantized_ckpt']}")
+
+        # Check low noise checkpoints
+        if "low_noise_original_ckpt" in config and config["low_noise_original_ckpt"] is not None:
+            check_path_exists(config["low_noise_original_ckpt"])
+            logger.debug(f"✓ Verified low_noise_original_ckpt: {config['low_noise_original_ckpt']}")
+
+        if "low_noise_quantized_ckpt" in config and config["low_noise_quantized_ckpt"] is not None:
+            check_path_exists(config["low_noise_quantized_ckpt"])
+            logger.debug(f"✓ Verified low_noise_quantized_ckpt: {config['low_noise_quantized_ckpt']}")
+
+    logger.info("✓ Config checkpoint paths validated successfully")

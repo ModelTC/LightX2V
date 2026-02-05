@@ -12,6 +12,6 @@
     "offload_granularity": "model",
     "modulate_type": "torch",
     "rope_type": "torch",
-    "ln_type": "Default",
-    "rms_type": "Default"
+    "layer_norm_type": "torch",
+    "rms_norm_type": "torch"
 }

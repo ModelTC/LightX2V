@@ -13,8 +13,8 @@ class HunyuanVideo15TransformerWeights(WeightModule):
         self.config = config
         self.task = config["task"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self.ln_type = config.get("ln_type", "Triton")
-        self.rms_type = config.get("rms_type", "sgl-kernel")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
+        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.register_offload_buffers(config)
         self.add_module("double_blocks", WeightModuleList([MMDoubleStreamBlock(i, self.task, self.config, block_prefix="double_blocks") for i in range(self.double_blocks_num)]))
@@ -86,8 +86,8 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         self.lazy_load_file = None
 
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self.ln_type = config.get("ln_type", "Triton")
-        self.rms_type = config.get("rms_type", "sgl-kernel")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
+        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
         self.add_module(
             "img_mod",
@@ -102,7 +102,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         )
         self.add_module(
             "img_norm1",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 None,
                 None,
                 create_cuda_buffer,
@@ -146,7 +146,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         )
         self.add_module(
             "img_attn_q_norm",
-            RMS_WEIGHT_REGISTER[self.rms_type](
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
                 f"{block_prefix}.{self.block_index}.img_attn_q_norm.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -156,7 +156,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         )
         self.add_module(
             "img_attn_k_norm",
-            RMS_WEIGHT_REGISTER[self.rms_type](
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
                 f"{block_prefix}.{self.block_index}.img_attn_k_norm.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -177,7 +177,7 @@ class MMDoubleStreamBlockImgBranch(WeightModule):
         )
         self.add_module(
             "img_norm2",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 None,
                 None,
                 create_cuda_buffer,
@@ -221,8 +221,8 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         self.lazy_load_file = None
 
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self.ln_type = config.get("ln_type", "Triton")
-        self.rms_type = config.get("rms_type", "sgl-kernel")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
+        self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
         self.add_module(
             "txt_mod",
@@ -237,7 +237,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         )
         self.add_module(
             "txt_norm1",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 None,
                 None,
                 create_cuda_buffer,
@@ -281,7 +281,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         )
         self.add_module(
             "txt_attn_q_norm",
-            RMS_WEIGHT_REGISTER[self.rms_type](
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
                 f"{block_prefix}.{self.block_index}.txt_attn_q_norm.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -291,7 +291,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         )
         self.add_module(
             "txt_attn_k_norm",
-            RMS_WEIGHT_REGISTER[self.rms_type](
+            RMS_WEIGHT_REGISTER[self.rms_norm_type](
                 f"{block_prefix}.{self.block_index}.txt_attn_k_norm.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -312,7 +312,7 @@ class MMDoubleStreamBlockTxtBranch(WeightModule):
         )
         self.add_module(
             "txt_norm2",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 None,
                 None,
                 create_cuda_buffer,
@@ -353,7 +353,7 @@ class FinalLayerWeights(WeightModule):
         self.lazy_load_file = None
 
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self.ln_type = config.get("ln_type", "Triton")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
 
         self.add_module(
             "adaLN_modulation",
@@ -379,7 +379,7 @@ class FinalLayerWeights(WeightModule):
         )
         self.add_module(
             "norm_final",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 None,
                 None,
                 False,

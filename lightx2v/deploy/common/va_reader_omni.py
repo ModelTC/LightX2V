@@ -131,6 +131,10 @@ class ChatAdapter:
                     "provider": "huoshan_stream_tts",
                 }
             }
+        system_prompt = stream_config.get("system_prompt", "")
+        if system_prompt:
+            override_config["model"] = {"system_prompt": system_prompt}
+            logger.info(f"Omni use custom system prompt: {system_prompt}")
         with open(config_schema_path, "r") as f:
             schema = json.load(f)
         jsonschema.validate(instance=override_config, schema=schema)

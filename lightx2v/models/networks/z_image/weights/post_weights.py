@@ -10,29 +10,21 @@ class ZImagePostWeights(WeightModule):
         super().__init__()
         self.task = config["task"]
         self.config = config
-        self.lazy_load = self.config.get("lazy_load", False)
-        if self.lazy_load:
-            assert NotImplementedError
-        self.lazy_load_file = False
-
+        self.mm_type = config.get("dit_quant_scheme", "Default")
         self.add_module(
             "norm_out_linear",
-            MM_WEIGHT_REGISTER["Default"](
+            MM_WEIGHT_REGISTER[self.mm_type](
                 "all_final_layer.2-1.adaLN_modulation.1.weight",
                 "all_final_layer.2-1.adaLN_modulation.1.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
-        self.add_module("norm_out", LN_WEIGHT_REGISTER["Default"](eps=1e-6))
+        self.add_module("norm_out", LN_WEIGHT_REGISTER["torch"](eps=1e-6))
 
         self.add_module(
             "proj_out_linear",
-            MM_WEIGHT_REGISTER["Default"](
+            MM_WEIGHT_REGISTER[self.mm_type](
                 "all_final_layer.2-1.linear.weight",
                 "all_final_layer.2-1.linear.bias",
-                self.lazy_load,
-                self.lazy_load_file,
             ),
         )
 

@@ -26,7 +26,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, vae_to_comfyui_image_inplace
+from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -331,7 +331,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if os.path.isdir(audio_path):
             audio_files = []
             mask_files = []
-            logger.info(f"audio_path is a directory, loading config.json from {audio_path}")
             audio_config_path = os.path.join(audio_path, "config.json")
             assert os.path.exists(audio_config_path), "config.json not found in audio_path"
             with open(audio_config_path, "r") as f:
@@ -340,7 +339,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 audio_files.append(os.path.join(audio_path, talk_object["audio"]))
                 mask_files.append(os.path.join(audio_path, talk_object["mask"]))
         else:
-            logger.info(f"audio_path is a file without mask: {audio_path}")
             audio_files = [audio_path]
             mask_files = None
 
@@ -594,7 +592,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         video_seg = self.gen_video[:, :, :useful_length].cpu()
         audio_seg = self.segment.audio_array[:, : useful_length * self._audio_processor.audio_frame_rate]
         audio_seg = audio_seg.sum(dim=0)  # Multiple audio tracks, mixed into one track
-        video_seg = vae_to_comfyui_image_inplace(video_seg)
+        video_seg = wan_vae_to_comfy(video_seg)
 
         # [Warning] Need check whether video segment interpolation works...
         if "video_frame_interpolation" in self.config and self.vfi_model is not None:
@@ -642,7 +640,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             origin_seg = torch.clamp(origin_seg, -1, 1).to(torch.float)
             valid_T = min(valid_length - frame_idx, origin_seg.shape[2])
 
-            video_seg = vae_to_comfyui_image_inplace(origin_seg[:, :, :valid_T].cpu())
+            video_seg = wan_vae_to_comfy(origin_seg[:, :, :valid_T].cpu())
             audio_start = frame_idx * self._audio_processor.audio_frame_rate
             audio_end = (frame_idx + valid_T) * self._audio_processor.audio_frame_rate
             audio_seg = self.segment.audio_array[:, audio_start:audio_end].sum(dim=0)
@@ -797,9 +795,19 @@ class WanAudioRunner(WanRunner):  # type:ignore
         ]
         return latent_shape
 
+    @ProfilingContext4DebugL1("Run VAE Decoder")
+    def run_vae_cached_decoder_withflag(self, latents, is_first: bool, is_last: bool):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_decoder = self.load_vae_decoder()
+        images = self.vae_decoder.cached_decode_withflag(latents.to(GET_DTYPE()), is_first, is_last)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_decoder
+            torch.cuda.empty_cache()
+            gc.collect()
+        return images
+
     def run_clip(self):
         infer_steps = self.model.scheduler.infer_steps
-
         for step_index in range(infer_steps):
             self.model.scheduler.step_pre(step_index=step_index)
             self.model.infer(self.inputs)
@@ -810,7 +818,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def run_clip_main(self):
         self.scheduler.set_audio_adapter(self.audio_adapter)
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
         self.input_info.seed = self.input_info.seed
@@ -825,14 +833,21 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_features = self.audio_encoder.infer(audio_clip)
         audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
         self.inputs["audio_encoder_output"] = audio_features
-        # 处理前一帧图像输入
-        self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
+        # 处理前一帧图像或latent输入
+        if self.task in ["rs2v"]:
+            self.inputs["previmg_encoder_output"] = {"prev_latents": self.input_info.overlap_latent}
+            self.inputs["ref_state"] = self.input_info.ref_state
+        else:
+            self.inputs["previmg_encoder_output"] = self.prepare_prev_latents(self.input_info.overlap_frame, prev_frame_length=self.prev_frame_length)
         # 执行dit推理
         latents = self.run_clip()
         # 运行vae decoder
-        gen_video = self.run_vae_decoder(latents)
+        if self.task in ["rs2v"]:
+            gen_video = self.run_vae_cached_decoder_withflag(latents, self.input_info.is_first, self.input_info.is_last)
+        else:
+            gen_video = self.run_vae_decoder(latents)
 
-        return gen_video, audio_clip
+        return gen_video, audio_clip, latents
 
     def run_clip_pipeline(self, input_info):
         self.input_info = input_info
@@ -874,7 +889,7 @@ class Wan22AudioRunner(WanAudioRunner):
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
         }
-        if self.config.task not in ["i2v", "s2v"]:
+        if self.config.task not in ["i2v", "s2v", "rs2v"]:
             return None
         else:
             return Wan2_2_VAE(**vae_config)

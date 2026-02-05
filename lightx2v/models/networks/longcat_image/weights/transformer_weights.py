@@ -11,7 +11,7 @@ class LongCatImageDoubleBlockWeights(WeightModule):
         self.block_idx = block_idx
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self.rms_norm_type = config.get("rms_norm_type", "Default")
+        self.rms_norm_type = config.get("rms_norm_type", "torch")
         self.attn_type = config.get("attn_type", "flash_attn3")
 
         p = f"transformer_blocks.{self.block_idx}"
@@ -175,7 +175,7 @@ class LongCatImageSingleBlockWeights(WeightModule):
         self.block_idx = block_idx
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self.rms_norm_type = config.get("rms_norm_type", "Default")
+        self.rms_norm_type = config.get("rms_norm_type", "torch")
         self.attn_type = config.get("attn_type", "flash_attn3")
 
         p = f"single_transformer_blocks.{self.block_idx}"

@@ -9,6 +9,7 @@ if PLATFORM == "cambricon_mlu":
     from .norm.cambricon_mlu import *
 elif PLATFORM == "hygon_dcu":
     from .attn.hygon_dcu import *
+    from .mm.hygon_dcu import *
 elif PLATFORM == "amd_rocm":
     from .attn.amd_rocm import *
 elif PLATFORM == "ascend_npu":

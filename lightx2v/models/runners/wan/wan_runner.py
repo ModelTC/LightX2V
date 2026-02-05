@@ -10,7 +10,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
@@ -53,15 +53,10 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = wan_module(**model_kwargs)
-        lora_wrapper = WanLoraWrapper(model)
-        for lora_config in lora_configs:
-            if "name" in lora_config and lora_config["name"] != model_type:
-                continue
-            lora_path = lora_config["path"]
-            strength = lora_config.get("strength", 1.0)
-            lora_name = lora_wrapper.load_lora(lora_path, lora_name=lora_config.get("name"))
-            lora_wrapper.apply_lora(lora_name, strength)
-            logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
+        lora_adapter = LoraAdapter(model)
+        if model_type in ["high_noise_model", "low_noise_model"]:
+            lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
+        lora_adapter.apply_lora(lora_configs, model_type=model_type)
     return model
 
 
@@ -85,7 +80,7 @@ class WanRunner(DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v"] and self.config.get("use_image_encoder", True):
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             # offload config
             clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
             if clip_offload:
@@ -186,7 +181,7 @@ class WanRunner(DefaultRunner):
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
         }
-        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
         else:
             return self.vae_cls(**vae_config)
@@ -587,17 +582,23 @@ class MultiModelStruct:
 class Wan22MoeRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
         if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
             self.high_noise_model_path = self.config["high_noise_quantized_ckpt"]
         elif self.config.get("high_noise_original_ckpt", None):
             self.high_noise_model_path = self.config["high_noise_original_ckpt"]
+        else:
+            self.high_noise_model_path = os.path.join(self.config["model_path"], "high_noise_model")
+            if not os.path.isdir(self.high_noise_model_path):
+                raise FileNotFoundError(f"High Noise Model does not find")
 
-        self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
         if self.config.get("dit_quantized", False) and self.config.get("low_noise_quantized_ckpt", None):
             self.low_noise_model_path = self.config["low_noise_quantized_ckpt"]
         elif not self.config.get("dit_quantized", False) and self.config.get("low_noise_original_ckpt", None):
             self.low_noise_model_path = self.config["low_noise_original_ckpt"]
+        else:
+            self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
+            if not os.path.isdir(self.low_noise_model_path):
+                raise FileNotFoundError(f"Low Noise Model does not find")
 
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
@@ -629,6 +630,39 @@ class Wan22MoeRunner(WanRunner):
             model_struct.high_noise_model_path = self.high_noise_model_path
             model_struct.init_device = self.init_device
             return model_struct
+
+    def switch_lora(self, high_lora_path: str = None, high_lora_strength: float = 1.0, low_lora_path: str = None, low_lora_strength: float = 1.0):
+        """
+        Switch LoRA weights dynamically for Wan2.2 MoE models.
+        This method handles both high_noise_model and low_noise_model separately.
+
+        Args:
+            lora_path: Path to the LoRA safetensors file (for backward compatibility)
+            strength: LoRA strength (default: 1.0) (for backward compatibility)
+            high_lora_path: Path to the high_noise_model LoRA safetensors file
+            high_lora_strength: High noise model LoRA strength (default: 1.0)
+            low_lora_path: Path to the low_noise_model LoRA safetensors file
+            low_lora_strength: Low noise model LoRA strength (default: 1.0)
+
+        Returns:
+            bool: True if LoRA was successfully switched, False otherwise
+        """
+        if not hasattr(self, "model") or self.model is None:
+            logger.error("Model not loaded. Please load model first.")
+            return False
+
+        if high_lora_path is not None:
+            if self.model.model[0] is not None and hasattr(self.model.model[0], "_update_lora"):
+                logger.info(f"Switching high_noise_model LoRA to: {high_lora_path} with strength={high_lora_strength}")
+                self.model.model[0]._update_lora(high_lora_path, high_lora_strength)
+
+        if low_lora_path is not None:
+            if self.model.model[1] is not None and hasattr(self.model.model[1], "_update_lora"):
+                logger.info(f"Switching low_noise_model LoRA to: {low_lora_path} with strength={low_lora_strength}")
+                self.model.model[1]._update_lora(low_lora_path, low_lora_strength)
+
+        logger.info("LoRA switched successfully for Wan2.2 MoE models")
+        return True
 
 
 @RUNNER_REGISTER("wan2.2")

@@ -56,9 +56,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
         cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
         return cu_seqlens_q, cu_seqlens_k
 
-    def get_scheduler_values(self):
-        pass
-
     def _initialize_kv_cache(self, dtype, device):
         """
         Initialize a Per-GPU KV cache for the Wan model.

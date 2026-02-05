@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 
+from lightx2v.utils.envs import GET_USE_CHANNELS_LAST_3D
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -22,7 +23,7 @@ CACHE_T = 2
 
 class CausalConv3d(nn.Conv3d):
     """
-    Causal 3d convolusion.
+    Causal 3d convolution.
     """
 
     def __init__(self, *args, **kwargs):
@@ -46,6 +47,18 @@ class CausalConv3d(nn.Conv3d):
         x = F.pad(x, padding)
 
         return super().forward(x)
+
+
+def convert_to_channels_last_3d(module):
+    """
+    Recursively convert all Conv3d weights in module to channels_last_3d format.
+    This eliminates NCHW<->NHWC format conversion overhead in cuDNN.
+    """
+    for child in module.children():
+        if isinstance(child, nn.Conv3d):
+            child.weight.data = child.weight.data.to(memory_format=torch.channels_last_3d)
+        else:
+            convert_to_channels_last_3d(child)
 
 
 class RMS_norm(nn.Module):
@@ -566,7 +579,7 @@ class WanVAE_(nn.Module):
         for i in range(0, height, self.tile_sample_stride_height):
             row = []
             for j in range(0, width, self.tile_sample_stride_width):
-                self.clear_cache()
+                self.clear_encode_cache()
                 time = []
                 frame_range = 1 + (num_frames - 1) // 4
                 for k in range(frame_range):
@@ -592,7 +605,7 @@ class WanVAE_(nn.Module):
 
                 row.append(torch.cat(time, dim=2))
             rows.append(row)
-        self.clear_cache()
+        self.clear_encode_cache()
 
         result_rows = []
         for i, row in enumerate(rows):
@@ -634,7 +647,7 @@ class WanVAE_(nn.Module):
         for i in range(0, height, tile_latent_stride_height):
             row = []
             for j in range(0, width, tile_latent_stride_width):
-                self.clear_cache()
+                self.clear_decode_cache()
                 time = []
                 for k in range(num_frames):
                     self._conv_idx = [0]
@@ -644,7 +657,7 @@ class WanVAE_(nn.Module):
                     time.append(decoded)
                 row.append(torch.cat(time, dim=2))
             rows.append(row)
-        self.clear_cache()
+        self.clear_decode_cache()
 
         result_rows = []
         for i, row in enumerate(rows):
@@ -664,7 +677,7 @@ class WanVAE_(nn.Module):
         return dec
 
     def encode(self, x, scale, return_mu=False):
-        self.clear_cache()
+        self.clear_encode_cache()
         ## cache
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
@@ -689,14 +702,14 @@ class WanVAE_(nn.Module):
         else:
             mu = (mu - scale[0]) * scale[1]
 
-        self.clear_cache()
+        self.clear_encode_cache()
         if return_mu:
             return mu, log_var
         else:
             return mu
 
     def decode(self, z, scale):
-        self.clear_cache()
+        self.clear_decode_cache()
 
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
@@ -721,11 +734,11 @@ class WanVAE_(nn.Module):
                 )
                 out = torch.cat([out, out_], 2)
 
-        self.clear_cache()
+        self.clear_decode_cache()
         return out
 
     def decode_stream(self, z, scale):
-        self.clear_cache()
+        self.clear_decode_cache()
 
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
@@ -760,6 +773,30 @@ class WanVAE_(nn.Module):
                 out = torch.cat([out, out_], 2)
         return out
 
+    def cached_decode_withflag(self, z, scale, is_first_clip, is_last_clip):
+        # z: [b,c,t,h,w]
+        if isinstance(scale[0], torch.Tensor):
+            z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
+        else:
+            z = z / scale[1] + scale[0]
+        iter_ = z.shape[2]
+        x = self.conv2(z)
+
+        if is_first_clip:
+            self.clear_decode_cache()
+
+        for i in range(iter_):
+            self._conv_idx = [0]
+            if i == 0:
+                out = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
+            else:
+                out_ = self.decoder(x[:, :, i : i + 1, :, :], feat_cache=self._feat_map, feat_idx=self._conv_idx)
+                out = torch.cat([out, out_], 2)
+
+        if is_last_clip:
+            self.clear_decode_cache()
+        return out
+
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
@@ -773,9 +810,15 @@ class WanVAE_(nn.Module):
         return mu + std * torch.randn_like(std), mu, log_var
 
     def clear_cache(self):
+        self.clear_encode_cache()
+        self.clear_decode_cache()
+
+    def clear_decode_cache(self):
         self._conv_num = count_conv3d(self.decoder)
         self._conv_idx = [0]
         self._feat_map = [None] * self._conv_num
+
+    def clear_encode_cache(self):
         # cache encode
         self._enc_conv_num = count_conv3d(self.encoder)
         self._enc_conv_idx = [0]
@@ -828,6 +871,11 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
             weights_dict[k] = weights_dict[k].to(dtype)
     model.load_state_dict(weights_dict, assign=True)
 
+    # Convert Conv3d weights to channels_last_3d for cuDNN optimization
+    if GET_USE_CHANNELS_LAST_3D():
+        convert_to_channels_last_3d(model)
+        logger.info("VAE: Converted Conv3d weights to channels_last_3d format")
+
     return model
 
 
@@ -844,6 +892,7 @@ class WanVAE:
         use_2d_split=True,
         load_from_rank0=False,
         use_lightvae=False,
+        use_cache_vae=False,
     ):
         self.dtype = dtype
         self.device = device
@@ -851,6 +900,7 @@ class WanVAE:
         self.use_tiling = use_tiling
         self.cpu_offload = cpu_offload
         self.use_2d_split = use_2d_split
+        self.use_cache_vae = use_cache_vae
         if use_lightvae:
             pruning_rate = 0.75  # 0.75
         else:
@@ -1391,6 +1441,88 @@ class WanVAE:
 
             yield images
 
+    def cached_decode_dist_2d_withflag(self, zs, is_first, is_last, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
+        total_h = zs.shape[2]
+        total_w = zs.shape[3]
+
+        chunk_h = total_h // world_size_h
+        chunk_w = total_w // world_size_w
+
+        padding_size = 2
+
+        # Calculate H dimension slice
+        if cur_rank_h == 0:
+            h_start = 0
+            h_end = chunk_h + 2 * padding_size
+        elif cur_rank_h == world_size_h - 1:
+            h_start = total_h - (chunk_h + 2 * padding_size)
+            h_end = total_h
+        else:
+            h_start = cur_rank_h * chunk_h - padding_size
+            h_end = (cur_rank_h + 1) * chunk_h + padding_size
+
+        # Calculate W dimension slice
+        if cur_rank_w == 0:
+            w_start = 0
+            w_end = chunk_w + 2 * padding_size
+        elif cur_rank_w == world_size_w - 1:
+            w_start = total_w - (chunk_w + 2 * padding_size)
+            w_end = total_w
+        else:
+            w_start = cur_rank_w * chunk_w - padding_size
+            w_end = (cur_rank_w + 1) * chunk_w + padding_size
+
+        # Extract the latent chunk for this process
+        zs_chunk = zs[:, :, h_start:h_end, w_start:w_end].contiguous()
+
+        # Decode the chunk
+        images_chunk = self.model.cached_decode_withflag(zs_chunk.unsqueeze(0), self.scale, is_first, is_last)
+
+        # Remove padding from decoded chunk
+        spatial_ratio = 8
+        if cur_rank_h == 0:
+            decoded_h_start = 0
+            decoded_h_end = chunk_h * spatial_ratio
+        elif cur_rank_h == world_size_h - 1:
+            decoded_h_start = images_chunk.shape[3] - chunk_h * spatial_ratio
+            decoded_h_end = images_chunk.shape[3]
+        else:
+            decoded_h_start = padding_size * spatial_ratio
+            decoded_h_end = images_chunk.shape[3] - padding_size * spatial_ratio
+
+        if cur_rank_w == 0:
+            decoded_w_start = 0
+            decoded_w_end = chunk_w * spatial_ratio
+        elif cur_rank_w == world_size_w - 1:
+            decoded_w_start = images_chunk.shape[4] - chunk_w * spatial_ratio
+            decoded_w_end = images_chunk.shape[4]
+        else:
+            decoded_w_start = padding_size * spatial_ratio
+            decoded_w_end = images_chunk.shape[4] - padding_size * spatial_ratio
+
+        images_chunk = images_chunk[:, :, :, decoded_h_start:decoded_h_end, decoded_w_start:decoded_w_end].contiguous()
+
+        # Gather all chunks
+        total_processes = world_size_h * world_size_w
+        full_images = [torch.empty_like(images_chunk) for _ in range(total_processes)]
+
+        dist.all_gather(full_images, images_chunk)
+
+        self.device_synchronize()
+
+        # Reconstruct the full image tensor
+        image_rows = []
+        for h_idx in range(world_size_h):
+            image_cols = []
+            for w_idx in range(world_size_w):
+                process_idx = h_idx * world_size_w + w_idx
+                image_cols.append(full_images[process_idx])
+            image_rows.append(torch.cat(image_cols, dim=4))
+
+        images = torch.cat(image_rows, dim=3)
+
+        return images
+
     def decode(self, zs):
         if self.cpu_offload:
             self.to_cuda()
@@ -1417,6 +1549,31 @@ class WanVAE:
         else:
             decode_func = self.model.tiled_decode if self.use_tiling else self.model.decode
             images = decode_func(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
+
+        if self.cpu_offload:
+            images = images.cpu()
+            self.to_cpu()
+
+        return images
+
+    def cached_decode_withflag(self, zs, is_first, is_last):
+        if self.cpu_offload:
+            self.to_cuda()
+
+        if self.parallel:
+            world_size = dist.get_world_size()
+            cur_rank = dist.get_rank()
+            latent_height, latent_width = zs.shape[2], zs.shape[3]
+
+            world_size_h, world_size_w = self._calculate_2d_grid(latent_height, latent_width, world_size)
+            cur_rank_h = cur_rank // world_size_w
+            cur_rank_w = cur_rank % world_size_w
+
+            images = self.cached_decode_dist_2d_withflag(zs, is_first, is_last, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
+        else:
+            images = self.model.cached_decode_withflag(zs.unsqueeze(0), self.scale, is_first, is_last)
+
+        images = images.clamp_(-1, 1)
 
         if self.cpu_offload:
             images = images.cpu()

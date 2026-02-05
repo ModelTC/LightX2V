@@ -7,6 +7,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.z_image.qwen3_model import Qwen3Model_TextEncoder
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.z_image.model import ZImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.z_image.scheduler import ZImageScheduler
@@ -30,6 +31,24 @@ def calculate_dimensions(target_area, ratio):
     return width, height, None
 
 
+def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_configs):
+    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+
+    if lora_dynamic_apply:
+        lora_path = lora_configs[0]["path"]
+        lora_strength = lora_configs[0]["strength"]
+        model_kwargs["lora_path"] = lora_path
+        model_kwargs["lora_strength"] = lora_strength
+        model = z_image_module(**model_kwargs)
+    else:
+        assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
+        assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
+        model = z_image_module(**model_kwargs)
+        lora_adapter = LoraAdapter(model)
+        lora_adapter.apply_lora(lora_configs)
+    return model
+
+
 @RUNNER_REGISTER("z_image")
 class ZImageRunner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
@@ -45,7 +64,16 @@ class ZImageRunner(DefaultRunner):
         self.vae = self.load_vae()
 
     def load_transformer(self):
-        model = ZImageTransformerModel(self.config)
+        z_image_model_kwargs = {
+            "model_path": os.path.join(self.config["model_path"], "transformer"),
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = ZImageTransformerModel(**z_image_model_kwargs)
+        else:
+            model = build_z_image_model_with_lora(ZImageTransformerModel, self.config, z_image_model_kwargs, lora_configs)
         return model
 
     def load_text_encoder(self):
@@ -64,6 +92,7 @@ class ZImageRunner(DefaultRunner):
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
+            self.model.set_scheduler(self.scheduler)
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
@@ -74,12 +103,11 @@ class ZImageRunner(DefaultRunner):
         else:
             assert NotImplementedError
 
-        self.model.set_scheduler(self.scheduler)
-
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
         self.model.scheduler.prepare(self.input_info)
         latents, generator = self.run(total_steps)
         return latents, generator
@@ -87,7 +115,11 @@ class ZImageRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
         torch_device_module.empty_cache()
         gc.collect()
         return {
@@ -134,7 +166,11 @@ class ZImageRunner(DefaultRunner):
             images_list.append(image)
 
         prompt = self.input_info.prompt
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, images_list, neg_prompt=self.input_info.negative_prompt)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
 
         image_encoder_output_list = []
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
@@ -208,7 +244,13 @@ class ZImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration, metrics_labels=["ZImageRunner"])
     def run_vae_encoder(self, image):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae = self.load_vae()
         image_latents = self.vae.encode_vae_image(image.to(GET_DTYPE()))
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae
+            torch_device_module.empty_cache()
+            gc.collect()
         return {"image_latents": image_latents}
 
     def run(self, total_steps=None):
@@ -252,12 +294,12 @@ class ZImageRunner(DefaultRunner):
                 width, height = int(width * scale), int(height * scale)
                 logger.warning(f"Custom shape is too large, scaled to {width}x{height}")
             width, height = max(width, min_size), max(height, min_size)
-            logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
+            logger.info(f"Z Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
-            logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
+            logger.info(f"Z Image Runner got aspect ratio: {aspect_ratio}")
             width, height = as_maps[aspect_ratio]
             return (width, height)
         logger.warning(f"Invalid aspect ratio: {aspect_ratio}, not in {as_maps.keys()}")
@@ -318,14 +360,15 @@ class ZImageRunner(DefaultRunner):
     )
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae_decoder = self.load_vae()
+            self.vae = self.load_vae()
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.vae_decoder
+            del self.vae
             torch_device_module.empty_cache()
             gc.collect()
         return images
 
+    @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
@@ -342,13 +385,16 @@ class ZImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        image = images[0]
-        image.save(f"{input_info.save_result_path}")
-        logger.info(f"Image saved: {input_info.save_result_path}")
+        if not input_info.return_result_tensor:
+            image = images[0]
+            image.save(input_info.save_result_path)
+            logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 
-        # Return (images, audio) - audio is None for default runner
-        return images, None
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
+            return {"images": None}
