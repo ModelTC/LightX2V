@@ -17,8 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install aiter (AMD ROCm optimized kernels)
-# Commit: a7d3bf8cd47afbaf6a6133c1f12e3b01d2c27b0e
-ARG AITER_COMMIT=a7d3bf8cd47afbaf6a6133c1f12e3b01d2c27b0e
+# Commit: 3b2346f518bc6bcb5855d276fd3a462b32422fdb
+ARG AITER_COMMIT=3b2346f518bc6bcb5855d276fd3a462b32422fdb
 RUN git clone https://github.com/ROCm/aiter.git /tmp/aiter && \
     cd /tmp/aiter && \
     git checkout ${AITER_COMMIT} && \
@@ -33,10 +33,14 @@ COPY . /workspace/LightX2V
 
 # Install LightX2V dependencies
 WORKDIR /workspace/LightX2V
-RUN pip install --no-cache-dir -r requirements.txt
+RUN grep -vE '^(torch|torchvision|torchaudio)([<=>].*)?$' requirements.txt > /tmp/requirements.no-torch.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.no-torch.txt
 
 # Install LightX2V
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . --no-deps
+
+# Install av
+RUN pip install --no-cache-dir av
 
 # Set environment variables for AMD ROCm
 ENV HIP_VISIBLE_DEVICES=0
