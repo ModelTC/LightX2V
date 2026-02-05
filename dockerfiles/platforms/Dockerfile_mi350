@@ -42,6 +42,9 @@ RUN pip install --no-cache-dir -e . --no-deps
 # Install av
 RUN pip install --no-cache-dir av
 
+# Install flash-infer for ROCm
+RUN pip install amd-flashinfer --extra-index-url https://pypi.amd.com/rocm-7.1.1/simple
+
 # Set environment variables for AMD ROCm
 ENV HIP_VISIBLE_DEVICES=0
 ENV ROCM_PATH=/opt/rocm
