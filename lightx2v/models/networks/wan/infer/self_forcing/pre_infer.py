@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 
@@ -38,6 +38,9 @@ class WanSFPreInferModuleOutput:
     freqs: torch.Tensor
     context: torch.Tensor
     conditional_dict: Dict[str, Any] = field(default_factory=dict)
+
+    # 3D RoPE / position related
+    cos_sin: Optional[torch.Tensor] = None
 
 
 class WanSFPreInfer(WanPreInfer):
@@ -103,6 +106,11 @@ class WanSFPreInfer(WanPreInfer):
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
+        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
+            freqs = self.freqs.clone()  # self.freqs init param can not be changed
+            self.grid_sizes = grid_sizes.tuple
+            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+
         return WanSFPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
@@ -111,4 +119,5 @@ class WanSFPreInfer(WanPreInfer):
             seq_lens=seq_lens,
             freqs=self.freqs,
             context=context,
+            cos_sin=self.cos_sin,
         )
