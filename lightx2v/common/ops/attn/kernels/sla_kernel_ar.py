@@ -5,10 +5,14 @@ import triton.language as tl
 
 @triton.jit
 def _attn_fwd(
-    Q, K, V,
+    Q,
+    K,
+    V,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
-    LUT, LSE, OS,
+    LUT,
+    LSE,
+    OS,
     LQ: tl.constexpr,
     LK: tl.constexpr,
     M_BLOCKS: tl.constexpr,
@@ -77,7 +81,9 @@ def _attn_fwd(
 
 @triton.jit
 def _attn_bwd_preprocess(
-    OS, DOS, DELTAS,
+    OS,
+    DOS,
+    DELTAS,
     LQ: tl.constexpr,
     H: tl.constexpr,
     D: tl.constexpr,
@@ -105,8 +111,14 @@ def _attn_bwd_preprocess(
 
 @triton.jit
 def _attn_bwd_dq(
-    Q, K, V, LSE, DELTAS,
-    DOS, DQ, LUT,
+    Q,
+    K,
+    V,
+    LSE,
+    DELTAS,
+    DOS,
+    DQ,
+    LUT,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
     LQ: tl.constexpr,
@@ -169,8 +181,16 @@ def _attn_bwd_dq(
 
 @triton.jit
 def _attn_bwd_dkdv(
-    Q, K, V, DOS, DK, DV,
-    qk_scale, KBID, LSE, DELTAS,
+    Q,
+    K,
+    V,
+    DOS,
+    DK,
+    DV,
+    qk_scale,
+    KBID,
+    LSE,
+    DELTAS,
     LQ: tl.constexpr,
     LK: tl.constexpr,
     M_BLOCKS: tl.constexpr,
@@ -266,14 +286,7 @@ class _attention_ar(torch.autograd.Function):
         lse = torch.empty((B, H, LQ), device=q.device, dtype=torch.float32)
 
         grid = (M_BLOCKS, B * H)
-        _attn_fwd[grid](
-            q, k, v, qk_scale, topk,
-            lut, lse, o_s,
-            LQ, LK, M_BLOCKS,
-            H, D, BLOCK_M, BLOCK_N,
-            num_warps=4 if q.shape[-1] == 64 else 8,
-            num_stages=3
-        )
+        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, LQ, LK, M_BLOCKS, H, D, BLOCK_M, BLOCK_N, num_warps=4 if q.shape[-1] == 64 else 8, num_stages=3)
 
         ctx.save_for_backward(q, k, v, k_block_id, lut, lse, o_s)
         ctx.qk_scale = qk_scale
@@ -304,30 +317,61 @@ class _attention_ar(torch.autograd.Function):
 
         grid = (M_BLOCKS, B * H)
         _attn_bwd_preprocess[grid](
-            o_s, do_s, delta_s,
-            LQ, H, D, BLOCK_M,
+            o_s,
+            do_s,
+            delta_s,
+            LQ,
+            H,
+            D,
+            BLOCK_M,
         )
 
         grid = (M_BLOCKS, B * H)
         _attn_bwd_dq[grid](
-            q, k, v, lse, delta_s,
-            do_s, dq, lut,
-            ctx.qk_scale, ctx.topk,
-            LQ, LK, M_BLOCKS,
-            ctx.H, D, BLOCK_M, BLOCK_N,
+            q,
+            k,
+            v,
+            lse,
+            delta_s,
+            do_s,
+            dq,
+            lut,
+            ctx.qk_scale,
+            ctx.topk,
+            LQ,
+            LK,
+            M_BLOCKS,
+            ctx.H,
+            D,
+            BLOCK_M,
+            BLOCK_N,
             num_warps=4 if q.shape[-1] == 64 else 8,
-            num_stages=4 if q.shape[-1] == 64 else 5
+            num_stages=4 if q.shape[-1] == 64 else 5,
         )
 
         grid = (N_BLOCKS, B * H)
         _attn_bwd_dkdv[grid](
-            q, k, v, do_s, dk, dv,
-            ctx.qk_scale, k_block_id, lse, delta_s,
-            LQ, LK, M_BLOCKS, N_BLOCKS,
-            ctx.H, D, BLOCK_M, BLOCK_N,
+            q,
+            k,
+            v,
+            do_s,
+            dk,
+            dv,
+            ctx.qk_scale,
+            k_block_id,
+            lse,
+            delta_s,
+            LQ,
+            LK,
+            M_BLOCKS,
+            N_BLOCKS,
+            ctx.H,
+            D,
+            BLOCK_M,
+            BLOCK_N,
             BLOCK_SLICE_FACTOR=BLOCK_M // 64,
             num_warps=4 if q.shape[-1] == 64 else 8,
-            num_stages=4 if q.shape[-1] == 64 else 5
+            num_stages=4 if q.shape[-1] == 64 else 5,
         )
 
         return dq, dk, dv, None, None, None, None, None, None
