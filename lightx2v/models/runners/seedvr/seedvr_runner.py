@@ -17,6 +17,7 @@ from torch import Tensor
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
+from lightx2v.models.networks.seedvr.dit_v2.color_fix import wavelet_reconstruction
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -181,10 +182,9 @@ class SeedVRRunner(DefaultRunner):
 
         # color fix
         input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
-        # sample = wavelet_reconstruction(
-        #     sample.to("cpu"), input[: sample.size(0)].to("cpu")
-        # )
-        sample = sample.to("cpu")
+        sample = wavelet_reconstruction(
+            sample.to("cpu"), input[: sample.size(0)].to("cpu")
+        )
         sample = rearrange(sample[:, None], "t c h w -> c t h w") if sample.ndim == 3 else rearrange(sample, "t c h w -> c t h w")
         sample = sample[None, :]
 
