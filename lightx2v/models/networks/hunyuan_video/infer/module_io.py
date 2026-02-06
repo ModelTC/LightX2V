@@ -8,6 +8,7 @@ class HunyuanVideo15InferModuleOutput:
     img: torch.Tensor
     txt: torch.Tensor
     vec: torch.Tensor
+    cos_sin: torch.Tensor
     grid_sizes: tuple
 
 

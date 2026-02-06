@@ -8,6 +8,7 @@ def main():
 
     parser.add_argument("--model_path", type=str, required=True, help="Path to model")
     parser.add_argument("--model_cls", type=str, required=True, help="Model class name")
+    parser.add_argument("--lora_dir", type=str, default=None, help="Directory containing LoRA files (.safetensors)")
 
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Server host")
     parser.add_argument("--port", type=int, default=8000, help="Server port")

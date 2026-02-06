@@ -172,7 +172,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
         img_q = weights.img_branch.img_attn_q_norm.apply(img_q)
         img_k = weights.img_branch.img_attn_k_norm.apply(img_k)
-        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
+        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=infer_module_out.cos_sin)
         return (
             img_q,
             img_k,

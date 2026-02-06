@@ -127,15 +127,15 @@ class WanModel(BaseTransformerModel):
         x = pre_infer_out.x
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
-
-        multiple = world_size * self.padding_multiple
+        f, _, _ = pre_infer_out.grid_sizes.tuple
+        multiple = world_size * f
         padding_size = (multiple - (x.shape[0] % multiple)) % multiple
         if padding_size > 0:
             x = F.pad(x, (0, 0, 0, padding_size))
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
 
-        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v"]:
+        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
 
             padding_size = (world_size - (embed.shape[0] % world_size)) % world_size

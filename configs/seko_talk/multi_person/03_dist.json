@@ -12,7 +12,7 @@
     "sample_shift": 5,
     "enable_cfg": false,
     "cpu_offload": false,
-    "use_31_block": false,
+    "use_31_block": true,
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"

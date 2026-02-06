@@ -357,7 +357,10 @@ class LightX2VPipeline:
         self.lora_dynamic_apply = lora_dynamic_apply
 
     def switch_lora(self, lora_path: str, strength: float = 1.0):
-        logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+        if lora_path == "":
+            logger.info("Removing LoRA weights")
+        else:
+            logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
         if not self.lora_dynamic_apply:
             logger.error("LoRA dynamic apply is not enabled. Please enable it first.")
             return
