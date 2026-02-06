@@ -63,24 +63,11 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         state = torch.load(self.model_path, map_location="cpu")
         if isinstance(state, dict) and "state_dict" in state:
             state = state["state_dict"]
-        load_result = self.dit.load_state_dict(state, strict=False)
-        if load_result.unexpected_keys:
-            print(f"[SeedVRNaDiTModel] Ignored unexpected keys: {load_result.unexpected_keys}")
-        if load_result.missing_keys:
-            print(f"[SeedVRNaDiTModel] Missing keys: {load_result.missing_keys}")
+        self.dit.load_state_dict(state, strict=True, assign=True)
 
         self.dit = meta_non_persistent_buffer_init_fn(self.dit)
 
-        # Match model dtype to config (default bfloat16 in LightX2V).
-        dtype_name = str(self.config.get("dtype", "bfloat16")).lower()
-        if dtype_name in ("bf16", "bfloat16"):
-            model_dtype = torch.bfloat16
-        elif dtype_name in ("fp16", "float16", "half"):
-            model_dtype = torch.float16
-        else:
-            model_dtype = torch.float32
-        model_dtype = torch.bfloat16
-        self.dit.to(self.device, dtype=model_dtype)
+        self.dit.to(self.device, dtype=torch.bfloat16)
         self.dit.eval()
 
     def _init_infer_class(self):
@@ -114,7 +101,7 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         texts_neg = inputs["text_encoder_output"]["texts_neg"]
         
 
-        cfg_scale = 7.5
+        cfg_scale = 1.0
         cfg_rescale = 0.0
         cfg_partial = 1.0
 

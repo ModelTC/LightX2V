@@ -331,27 +331,19 @@ class SeedVRRunner(DefaultRunner):
         sp_size = 1
         img = self._cut_videos(img, sp_size)
         cond_latents = [img]
-        cond_latent = self.vae_encoder.vae_encode(cond_latents)[0]
+        cond_latents = self.vae_encoder.vae_encode(cond_latents)
         text_encoder_output = self.run_text_encoder(self.input_info)
 
-        aug_noise = torch.randn_like(cond_latent)
-        noise = torch.randn_like(cond_latent)
-        cond_latent = self._add_noise(cond_latent, aug_noise)
-
-        # Build conditions in channel-last format per sample (T,H,W,C)
-        if noise.dim() == 5:
-            noise_chlast = noise
-            cond_latent_chlast = cond_latent
-            conditions = [
-                self.get_condition(noise_chlast[i], task="sr", latent_blur=cond_latent_chlast[i])
-                for i in range(noise_chlast.shape[0])
-            ]
-        elif noise.dim() == 4:
-            noise_chlast = noise
-            cond_latent_chlast = cond_latent
-            conditions = [self.get_condition(noise_chlast, task="sr", latent_blur=cond_latent_chlast)]
-        else:
-            raise ValueError(f"Unexpected noise shape for SR conditions: {noise.shape}")
+        noises = [torch.randn_like(latent) for latent in cond_latents]
+        aug_noises = [torch.randn_like(latent) for latent in cond_latents]
+        conditions = [
+            self.get_condition(
+                noise,
+                task="sr",
+                latent_blur=self._add_noise(latent_blur, aug_noise),
+            )
+            for noise, aug_noise, latent_blur in zip(noises, aug_noises, cond_latents)
+        ]
 
         # # Get latent shape
         # B, C, T, H, W = cond_latent.shape
@@ -361,13 +353,14 @@ class SeedVRRunner(DefaultRunner):
         torch.cuda.empty_cache()
         gc.collect()
 
-        latent_shape = [cond_latent.shape[0], cond_latent.shape[-1], cond_latent.shape[1], cond_latent.shape[2], cond_latent.shape[3]]
+        first_latent = cond_latents[0]
+        latent_shape = [1, first_latent.shape[-1], first_latent.shape[0], first_latent.shape[1], first_latent.shape[2]]
 
         return {
-            "x": cond_latent,
+            "x": cond_latents[0],
             "conditions": conditions,
-            "noises": [noise] if noise.dim() == 4 else [noise[i] for i in range(noise.shape[0])],
-            "vae_encoder_out": cond_latent,
+            "noises": noises,
+            "vae_encoder_out": cond_latents[0],
             "image_encoder_output": None,
             "text_encoder_output": text_encoder_output,
             "latent_shape": latent_shape,
