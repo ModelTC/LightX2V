@@ -11,6 +11,7 @@ import gc
 
 import numpy as np
 import torch
+import os
 from einops import rearrange
 from torch import Tensor
 
@@ -23,16 +24,18 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-@RUNNER_REGISTER("seedvr2.3b")
+@RUNNER_REGISTER("seedvr2")
 class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
 
     def __init__(self, config):
         super().__init__(config)
 
-        self.vae_path = "/data/nvme1/models/ByteDance-Seed/SeedVR2-3B/ema_vae.pth"
-        self.pos_emb_path = "/data/nvme1/models/ByteDance-Seed/SeedVR2-3B/pos_emb.pt"
-        self.neg_emb_path = "/data/nvme1/models/ByteDance-Seed/SeedVR2-3B/neg_emb.pt"
+        model_path_base = config.get("model_path", "ByteDance-Seed/SeedVR2-3B")
+        self.model_path = os.path.join(model_path_base, "seedvr2_ema_3b.pth")
+        self.vae_path = os.path.join(model_path_base, "ema_vae.pth")
+        self.pos_emb_path = os.path.join(model_path_base, "pos_emb.pt")
+        self.neg_emb_path = os.path.join(model_path_base, "neg_emb.pt")
 
     def _build_video_transform(self):
         from torchvision.transforms import Compose, Lambda, Normalize
@@ -121,9 +124,8 @@ class SeedVRRunner(DefaultRunner):
         """Load the SeedVR transformer model."""
         from lightx2v.models.networks.seedvr import SeedVRNaDiTModel
 
-        model_path = "/data/nvme1/models/ByteDance-Seed/SeedVR2-3B/seedvr2_ema_3b.pth"
         model = SeedVRNaDiTModel(
-            model_path=model_path,
+            model_path=self.model_path,
             config=self.config,
             device=self.init_device,
         )
