@@ -8,10 +8,10 @@ SeedVR is a video super-resolution model that uses:
 """
 
 import gc
+import os
 
 import numpy as np
 import torch
-import os
 from einops import rearrange
 from torch import Tensor
 
