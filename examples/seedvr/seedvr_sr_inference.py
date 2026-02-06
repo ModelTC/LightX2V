@@ -48,5 +48,3 @@ pipe.generate(
     # Or use image_path for single-frame SR:
     # image_path=input_image_path,
 )
-
-
