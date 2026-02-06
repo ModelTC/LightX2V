@@ -7,7 +7,7 @@ from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.seedvr.dit_v2.nadit import NaDiT
 from lightx2v.models.networks.seedvr.dit_v2 import na as na_utils
 from lightx2v.models.networks.seedvr.dit_v2.diffusion.utils import classifier_free_guidance_dispatcher
-from rotary_embedding_torch import RotaryEmbedding
+from lightx2v.models.networks.seedvr.dit_v2.rotary_embedding_torch import RotaryEmbedding
 from torch import nn
 
 
