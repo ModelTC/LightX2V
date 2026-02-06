@@ -48,10 +48,10 @@ def main():
 	seed_all(seed)
 
 	# Add seed into config so services can use it if needed
-	config.seed = seed
-	config.prompt = prompt
-	config.negative_prompt = negative_prompt
-	config.save_path = save_result_path
+	config["seed"] = seed
+	config["prompt"] = prompt
+	config["negative_prompt"] = negative_prompt
+	config["save_path"] = save_result_path
 
 	# 2. Define service threads
 	import threading

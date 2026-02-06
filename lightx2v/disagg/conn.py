@@ -7,6 +7,7 @@ import threading
 from functools import cache
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
+from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
@@ -48,12 +49,13 @@ def group_concurrent_contiguous(
     return src_groups, dst_groups
 
 
+@dataclass
 class DataArgs:
     engine_rank: int
     data_ptrs: list[int]
     data_lens: list[int]
     data_item_lens: list[int]
-    ib_device: str
+    ib_device: Optional[str] = None
 
 
 class DataPoll:
@@ -295,18 +297,17 @@ class DataReceiver:
         socket.connect(endpoint)
         return socket
 
-    def init(self, data_indices: npt.NDArray[np.int64]):
-        self.data_mgr.enqueue_request(self.bootstrap_room, data_indices)
+    def init(self):
         packed_data_ptrs = b"".join(
             struct.pack("Q", ptr) for ptr in self.data_mgr.data_args.data_ptrs
         )
+        self.data_mgr.enqueue_request(self.bootstrap_room, packed_data_ptrs)
         self._connect("tcp://" + self.encode_server_url).send_multipart(
             [
                 self.transformer_ip.encode("ascii"),
                 self.session_id.encode("ascii"),
                 str(self.bootstrap_room).encode("ascii"),
                 packed_data_ptrs,
-                data_indices.tobytes(),
             ]
         )
 
