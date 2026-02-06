@@ -7,29 +7,17 @@ from typing import Any
 import torch
 from loguru import logger
 
-from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
+from lightx2v.utils.input_info import fill_input_info_from_defaults, init_empty_input_info
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import auto_calc_config, get_default_config, print_config, set_parallel_config
+from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 @dataclass
 class ClipConfig:
     name: str
-    config_json: str | dict[str, Any]
-
-
-@dataclass
-class ShotConfig:
-    seed: int
-    image_path: str
-    audio_path: str
-    prompt: str
-    negative_prompt: str
-    save_result_path: str
-    clip_configs: list[ClipConfig]
-    target_shape: list[int]
+    config_json: dict[str, Any]
 
 
 def get_config_json(config_json):
@@ -58,13 +46,11 @@ def load_clip_configs(main_json_path: str):
     clip_configs = []
     for item in clip_configs_raw:
         if "config" in item:
-            config_json = item["config"]
+            config = item["config"]
         else:
             config_json = str(Path(lightx2v_path) / item["path"])
-
-        default_config = get_default_config()
-        default_config.update(get_config_json(config_json))
-        config = auto_calc_config(default_config)
+            config_json = {"config_json": config_json}
+            config = set_config(Namespace(**config_json))
 
         if "parallel" in cfg:  # Add parallel config to clip json
             config["parallel"] = cfg["parallel"]
@@ -75,34 +61,21 @@ def load_clip_configs(main_json_path: str):
 
 
 class ShotPipeline:
-    def __init__(self, shot_cfg: ShotConfig):
-        self.shot_cfg = shot_cfg
+    def __init__(self, clip_configs: list[ClipConfig]):
+        # self.clip_configs = clip_configs
         self.clip_generators = {}
         self.clip_inputs = {}
-        self.overlap_frame = None
-        self.overlap_latent = None
         self.progress_callback = None
 
-        for clip_config in shot_cfg.clip_configs:
+        for clip_config in clip_configs:
             name = clip_config.name
             self.clip_generators[name] = self.create_clip_generator(clip_config)
 
-            args = Namespace(
-                seed=self.shot_cfg.seed,
-                prompt=self.shot_cfg.prompt,
-                negative_prompt=self.shot_cfg.negative_prompt,
-                image_path=self.shot_cfg.image_path,
-                audio_path=self.shot_cfg.audio_path,
-                save_result_path=self.shot_cfg.save_result_path,
-                task=self.clip_generators[name].task,
-                return_result_tensor=True,
-                overlap_frame=self.overlap_frame,
-                overlap_latent=self.overlap_latent,
-                target_shape=self.shot_cfg.target_shape,
-            )
-            input_info = init_empty_input_info(self.clip_generators[name].task)
-            update_input_info_from_dict(input_info, vars(args))
-            self.clip_inputs[name] = input_info
+    def check_input_info(self, user_input_info, clip_config):
+        default_input_info = clip_config.get("default_input_info", None)
+        if default_input_info is not None:
+            fill_input_info_from_defaults(user_input_info, default_input_info)
+        return user_input_info.normalize_unset_to_none()
 
     def _input_data_to_dict(self, input_data):
         if isinstance(input_data, dict):
@@ -145,14 +118,35 @@ class ShotPipeline:
         self.progress_callback = callback
 
     def create_clip_generator(self, clip_config: ClipConfig):
+        print_config(clip_config.config_json)
         runner = self._init_runner(clip_config.config_json)
         logger.info(f"Clip {clip_config.name} initialized successfully!")
-        print_config(clip_config.config_json)
+
         return runner
 
     @torch.no_grad()
     def generate(self):
         pass
+
+    def set_inputs(self, args):
+        args = Namespace(
+            seed=self.shot_cfg.seed,
+            prompt=self.shot_cfg.prompt,
+            negative_prompt=self.shot_cfg.negative_prompt,
+            image_path=self.shot_cfg.image_path,
+            audio_path=self.shot_cfg.audio_path,
+            save_result_path=self.shot_cfg.save_result_path,
+            task=self.clip_generators[name].task,
+            return_result_tensor=True,
+            overlap_frame=self.overlap_frame,
+            overlap_latent=self.overlap_latent,
+            target_shape=self.shot_cfg.target_shape,
+        )
+        input_info = init_empty_input_info(self.clip_generators[name].task)
+        update_input_info_from_dict(input_info, vars(args))
+        self.clip_inputs[name] = input_info
+
+        return input_info
 
     def run_pipeline(self, input_info):
         self.update_input_info(input_info)

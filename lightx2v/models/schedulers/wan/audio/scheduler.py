@@ -72,8 +72,9 @@ class EulerScheduler(WanScheduler):
             if self.prev_latents is not None:
                 self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
 
-    def prepare(self, seed, latent_shape, image_encoder_output=None):
+    def prepare(self, seed, latent_shape, infer_steps, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
+        self.infer_steps = infer_steps
         timesteps = np.linspace(self.num_train_timesteps, 0, self.infer_steps + 1, dtype=np.float32)
 
         self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=AI_DEVICE)
