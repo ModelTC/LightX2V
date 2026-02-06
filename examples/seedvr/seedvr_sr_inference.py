@@ -13,7 +13,7 @@ ts = datetime.now().strftime("%y%m%d%H%M")
 
 # Initialize pipeline for SeedVR SR task
 pipe = LightX2VPipeline(
-    model_path="/data/nvme1/models/ByteDance-Seed/SeedVR2-3B",
+    model_path="/path/to/ByteDance-Seed/SeedVR2-3B",
     model_cls="seedvr2",
     task="sr",
 )
