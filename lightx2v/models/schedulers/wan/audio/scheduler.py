@@ -12,7 +12,27 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 class EulerScheduler(WanScheduler):
     def __init__(self, config):
-        super().__init__(config)
+        self.config = config
+        self.latents = None
+        self.step_index = 0
+        self.flag_df = False
+        self.transformer_infer = None
+        self.infer_condition = True  # cfg status
+        self.keep_latents_dtype_in_scheduler = False
+        self.target_video_length = self.config["target_video_length"]
+        self.sample_shift = self.config["sample_shift"]
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+        self.patch_size = (1, 2, 2)
+        self.shift = 1
+        self.num_train_timesteps = 1000
+        self.disable_corrector = []
+        self.solver_order = 2
+        self.noise_pred = None
+        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.head_size = self.config["dim"] // self.config["num_heads"]
 
         if self.config["parallel"]:
             self.sp_size = self.config["parallel"].get("seq_p_size", 1)

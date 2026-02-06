@@ -7,7 +7,7 @@ from typing import Any
 import torch
 from loguru import logger
 
-from lightx2v.utils.input_info import fill_input_info_from_defaults, init_empty_input_info
+from lightx2v.utils.input_info import fill_input_info_from_defaults
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
@@ -118,7 +118,7 @@ class ShotPipeline:
         self.progress_callback = callback
 
     def create_clip_generator(self, clip_config: ClipConfig):
-        logger.info(f"Clip {clip_config.name} initializing...")
+        logger.info(f"Clip {clip_config.name} initializing ... ")
         print_config(clip_config.config_json)
         runner = self._init_runner(clip_config.config_json)
         logger.info(f"Clip {clip_config.name} initialized successfully!")
@@ -128,26 +128,6 @@ class ShotPipeline:
     @torch.no_grad()
     def generate(self):
         pass
-
-    def set_inputs(self, args):
-        args = Namespace(
-            seed=self.shot_cfg.seed,
-            prompt=self.shot_cfg.prompt,
-            negative_prompt=self.shot_cfg.negative_prompt,
-            image_path=self.shot_cfg.image_path,
-            audio_path=self.shot_cfg.audio_path,
-            save_result_path=self.shot_cfg.save_result_path,
-            task=self.clip_generators[name].task,
-            return_result_tensor=True,
-            overlap_frame=self.overlap_frame,
-            overlap_latent=self.overlap_latent,
-            target_shape=self.shot_cfg.target_shape,
-        )
-        input_info = init_empty_input_info(self.clip_generators[name].task)
-        update_input_info_from_dict(input_info, vars(args))
-        self.clip_inputs[name] = input_info
-
-        return input_info
 
     def run_pipeline(self, input_info):
         self.update_input_info(input_info)
