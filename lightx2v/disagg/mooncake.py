@@ -32,7 +32,7 @@ class MooncakeTransferEngineConfig:
 
     @staticmethod
     def load_from_env() -> "MooncakeTransferEngineConfig":
-        config_file_path = os.getenv("MOONCAKE_CONFIG_PATH")
+        config_file_path = os.getenv("MOONCAKE_CONFIG_PATH", "/root/zht/LightX2V/configs/mooncake_config.json")
         if config_file_path is None:
             raise ValueError("The environment variable 'MOONCAKE_CONFIG_PATH' is not set.")
         return MooncakeTransferEngineConfig.from_file(config_file_path)

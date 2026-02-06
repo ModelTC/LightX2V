@@ -1,0 +1,6 @@
+{
+    "local_hostname": "localhost",
+    "metadata_server": "P2PHANDSHAKE",
+    "protocol": "rdma",
+    "device_name": ""
+}
