@@ -5,8 +5,9 @@ This example demonstrates how to use LightX2V with SeedVR model
 for video/image super-resolution (SR) task.
 """
 
-from lightx2v.pipeline import LightX2VPipeline
 from datetime import datetime
+
+from lightx2v.pipeline import LightX2VPipeline
 
 ts = datetime.now().strftime("%y%m%d%H%M")
 
