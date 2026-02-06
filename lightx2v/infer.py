@@ -72,11 +72,12 @@ def main():
             "z_image",
             "ltx2",
             "bagel",
+            "seedvr2",
         ],
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "t2av", "i2av"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "t2av", "i2av", "sr"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
@@ -153,6 +154,8 @@ def main():
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--aspect_ratio", type=str, default="")
+    parser.add_argument("--video_path", type=str, default=None, help="input video path(for sr/v2v task)")
+    parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
 
     args = parser.parse_args()
     validate_task_arguments(args)

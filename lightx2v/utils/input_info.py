@@ -39,17 +39,10 @@ class I2VInputInfo:
 
 @dataclass
 class SRInputInfo:
-    """Input info for video/image super-resolution (SR) task.
-
-    Supports both image and video inputs for super-resolution.
-    """
-
     seed: int = field(default_factory=int)
-    prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
-    negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)  # Single image input
     video_path: str = field(default_factory=str)  # Video input for SR
+    sr_ratio: float = field(default_factory=lambda: 2.0)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related

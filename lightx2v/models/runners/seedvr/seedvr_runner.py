@@ -44,12 +44,14 @@ class SeedVRRunner(DefaultRunner):
         from lightx2v.models.networks.seedvr.dit_v2.data.image.transforms.na_resize import NaResize
         from lightx2v.models.networks.seedvr.dit_v2.data.video.transforms.rearrange import Rearrange
 
-        res_h = self.config.get("target_height", 720)
-        res_w = self.config.get("target_width", 1280)
+        target_height = self.config.get("target_height", 720)
+        target_width = self.config.get("target_width", 1280)
+        resolution = min((self.ori_h * self.ori_w) ** 0.5 * self.input_info.sr_ratio, (target_height * target_width) ** 0.5)
+        
         return Compose(
             [
                 NaResize(
-                    resolution=(res_h * res_w) ** 0.5,
+                    resolution=resolution,
                     mode="area",
                     downsample_only=False,
                 ),
@@ -304,6 +306,9 @@ class SeedVRRunner(DefaultRunner):
             raise ValueError("SR task requires image_path or video_path")
 
         # Apply SeedVR-style video transforms
+        _, _, ori_h, ori_w = img.shape
+        self.ori_h = ori_h
+        self.ori_w = ori_w
         video_transform = self._build_video_transform()
         img = video_transform(img)
         self._input = img

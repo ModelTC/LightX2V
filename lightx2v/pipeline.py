@@ -411,6 +411,7 @@ class LightX2VPipeline:
         src_mask=None,
         return_result_tensor=False,
         target_shape=[],
+        sr_ratio=2.0,
     ):
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
@@ -418,6 +419,7 @@ class LightX2VPipeline:
         self.seed = seed
         self.image_path = image_path
         self.video_path = video_path  # For SR task
+        self.sr_ratio = sr_ratio
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
         self.src_ref_images = src_ref_images
