@@ -5,10 +5,10 @@ This example demonstrates how to use LightX2V with SeedVR model
 for video/image super-resolution (SR) task.
 """
 
+from lightx2v.pipeline import LightX2VPipeline
 from datetime import datetime
 
 ts = datetime.now().strftime("%y%m%d%H%M")
-from lightx2v.pipeline import LightX2VPipeline
 
 # Initialize pipeline for SeedVR SR task
 pipe = LightX2VPipeline(
@@ -25,16 +25,15 @@ pipe = LightX2VPipeline(
 
 # Create generator with specified parameters
 
-pipe.create_generator(config_json="/data/nvme0/chendingyu/LightX2V/configs/seedvr/seedvr2_3b.json")
+pipe.create_generator(config_json="/path/to/LightX2V/configs/seedvr/seedvr2_3b.json")
 
 seed = 42
 prompt = "A cinematic video of a sunset over the ocean with golden reflections"
 negative_prompt = ""
-save_result_path = f"/data/nvme0/chendingyu/SeedVR/output/output_sr_{ts}.mp4"
+save_result_path = f"output_sr_{ts}.mp4"
 
 # Input video or image path (required for SR task)
-input_video_path = "/data/nvme0/chendingyu/SeedVR/input/wan2.1_i2v_gpu1_260115074239_svg_sla.mp4"
-input_video_path = "/data/nvme0/chendingyu/SeedVR/input/wan2.2_moe_t2v_2601261239.mp4"
+input_video_path = "input.mp4"
 # Or use an image for single-frame SR
 # input_image_path = "/path/to/input_low_res.png"
 

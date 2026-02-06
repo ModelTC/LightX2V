@@ -40,12 +40,12 @@ class AdaSingle(nn.Module):
         self.dim = dim
         self.emb_dim = emb_dim
         self.layers = layers
-        for l in layers:
+        for la in layers:
             if "in" in modes:
-                self.register_parameter(f"{l}_shift", nn.Parameter(torch.randn(dim) / dim**0.5))
-                self.register_parameter(f"{l}_scale", nn.Parameter(torch.randn(dim) / dim**0.5 + 1))
+                self.register_parameter(f"{la}_shift", nn.Parameter(torch.randn(dim) / dim**0.5))
+                self.register_parameter(f"{la}_scale", nn.Parameter(torch.randn(dim) / dim**0.5 + 1))
             if "out" in modes:
-                self.register_parameter(f"{l}_gate", nn.Parameter(torch.randn(dim) / dim**0.5))
+                self.register_parameter(f"{la}_gate", nn.Parameter(torch.randn(dim) / dim**0.5))
 
     def forward(
         self,
@@ -65,7 +65,7 @@ class AdaSingle(nn.Module):
             emb = cache(
                 f"emb_repeat_{idx}_{branch_tag}",
                 lambda: slice_inputs(
-                    torch.cat([e.repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len)]),
+                    torch.cat([e.repeat(hl, *([1] * e.ndim)) for e, hl in zip(emb, hid_len)]),
                     dim=0,
                 ),
             )
