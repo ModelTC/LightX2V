@@ -47,7 +47,7 @@ class SeedVRRunner(DefaultRunner):
         target_height = self.config.get("target_height", 720)
         target_width = self.config.get("target_width", 1280)
         resolution = min((self.ori_h * self.ori_w) ** 0.5 * self.input_info.sr_ratio, (target_height * target_width) ** 0.5)
-        
+
         return Compose(
             [
                 NaResize(
