@@ -40,6 +40,8 @@ def main():
 		sample_shift=5.0,
 		fps=16,
 		enable_cfg=True,
+		data_bootstrap_addr="127.0.0.1",
+		data_bootstrap_room=0,
 	)
 
 	logger.info(f"Config initialized for task: {task}")
@@ -51,28 +53,36 @@ def main():
 	config.negative_prompt = negative_prompt
 	config.save_path = save_result_path
 
-	# 2. Initialize Services
-	logger.info("Initializing Encoder Service...")
-	encoder_service = EncoderService(config)
+	# 2. Define service threads
+	import threading
 
-	logger.info("Initializing Transformer Service...")
-	transformer_service = TransformerService(config)
+	def run_encoder():
+		logger.info("Initializing Encoder Service...")
+		encoder_service = EncoderService(config)
+		logger.info("Running Encoder Service...")
+		encoder_service.process()
+		encoder_service.release_memory()
 
-	# 3. Encoding (via EncoderService)
-	logger.info("Running Encoder Service...")
-	encoder_results = encoder_service.process()
+	def run_transformer():
+		logger.info("Initializing Transformer Service...")
+		transformer_service = TransformerService(config)
+		logger.info("Running Transformer Service...")
+		result_path = transformer_service.process()
+		logger.info(f"Video generation completed. Saved to: {result_path}")
+		transformer_service.release_memory()
 
-	inputs = {
-		"text_encoder_output": encoder_results["text_encoder_output"],
-		"image_encoder_output": encoder_results["image_encoder_output"],
-		"latent_shape": encoder_results["latent_shape"],
-	}
+	# 3. Start threads
+	encoder_thread = threading.Thread(target=run_encoder)
+	transformer_thread = threading.Thread(target=run_transformer)
 
-	# 4. Run Transformer Service
-	logger.info("Running Transformer Service...")
-	result_path = transformer_service.process(inputs=inputs)
+	logger.info("Starting services in separate threads...")
+	encoder_thread.start()
+	transformer_thread.start()
 
-	logger.info(f"Video generation completed. Saved to: {result_path}")
+	# 4. Wait for completion
+	encoder_thread.join()
+	transformer_thread.join()
+	logger.info("All services finished.")
 
 
 if __name__ == "__main__":

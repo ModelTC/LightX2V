@@ -1,8 +1,10 @@
+import math
 import torch
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from lightx2v.disagg.services.base import BaseService
+from lightx2v.disagg.conn import DataArgs, DataManager, DataSender, DisaggregationMode, DataPoll
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -19,6 +21,10 @@ class EncoderService(BaseService):
         self.text_encoder = None
         self.image_encoder = None
         self.vae_encoder = None
+        self.engine_rank = 0
+        self.data_mgr = None
+        self.data_sender = None
+        self._rdma_buffers: List[torch.Tensor] = []
         
         # Load models based on config
         self.load_models()
@@ -26,6 +32,23 @@ class EncoderService(BaseService):
         # Seed everything if seed is in config
         if "seed" in self.config:
             seed_all(self.config["seed"])
+
+        data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
+        data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
+        
+        if data_bootstrap_addr is not None and data_bootstrap_room is not None:
+            data_ptrs, data_lens, data_item_lens = self.alloc_bufs()
+            data_args = DataArgs(
+                engine_rank=self.engine_rank,
+                data_ptrs=data_ptrs,
+                data_lens=data_lens,
+                data_item_lens=data_item_lens,
+                ib_device=self.config.get("ib_device", ""),
+            )
+            self.data_mgr = DataManager(data_args, DisaggregationMode.ENCODE)
+            self.data_sender = DataSender(
+                self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room)
+            )
 
     def load_models(self):
         self.logger.info("Loading Encoder Models...")
@@ -104,6 +127,54 @@ class EncoderService(BaseService):
         vae_encoder_out = torch.concat([msk, vae_encoder_out]).to(GET_DTYPE())
         return vae_encoder_out
 
+    def alloc_bufs(self):
+        text_len = int(self.config.get("text_len", 512))
+        enable_cfg = bool(self.config.get("enable_cfg", False))
+        use_image_encoder = bool(self.config.get("use_image_encoder", True))
+        task = self.config.get("task", "i2v")
+
+        text_dim = int(self.config.get("text_encoder_dim", 4096))
+        clip_dim = int(self.config.get("clip_embed_dim", 1024))
+        z_dim = int(self.config.get("vae_z_dim", 16))
+
+        vae_stride = self.config.get("vae_stride", (4, 8, 8))
+        stride_t = int(vae_stride[0])
+        stride_h = int(vae_stride[1])
+        stride_w = int(vae_stride[2])
+
+        target_video_length = int(self.config.get("target_video_length", 81))
+        target_height = int(self.config.get("target_height", 480))
+        target_width = int(self.config.get("target_width", 832))
+
+        t_prime = 1 + (target_video_length - 1) // stride_t
+        h_prime = int(math.ceil(target_height / stride_h))
+        w_prime = int(math.ceil(target_width / stride_w))
+
+        self._rdma_buffers = []
+        data_ptrs: List[int] = []
+        data_lens: List[int] = []
+        data_item_lens: List[int] = []
+
+        def _alloc_buffer(shape, dtype):
+            buf = torch.empty(shape, dtype=dtype, device=torch.device(f"cuda:{self.engine_rank}"))
+            self._rdma_buffers.append(buf)
+            nbytes = buf.numel() * buf.element_size()
+            data_ptrs.append(buf.data_ptr())
+            data_lens.append(nbytes)
+            data_item_lens.append(nbytes)
+
+        _alloc_buffer((1, text_len, text_dim), GET_DTYPE())
+        if enable_cfg:
+            _alloc_buffer((1, text_len, text_dim), GET_DTYPE())
+
+        if task == "i2v":
+            if use_image_encoder:
+                _alloc_buffer((clip_dim,), GET_DTYPE())
+            _alloc_buffer((z_dim + 4, t_prime, h_prime, w_prime), GET_DTYPE())
+
+        _alloc_buffer((4,), torch.int64)
+        return data_ptrs, data_lens, data_item_lens
+
     def process(self) -> Dict[str, Any]:
         """
         Generates encoder outputs from prompt and image input.
@@ -171,10 +242,46 @@ class EncoderService(BaseService):
             }
         else:
             raise ValueError(f"Unsupported task: {task}")
-        
-        # Return both outputs and potentially latent_shape if needed downstream
-        return {
-            "text_encoder_output": text_encoder_output,
-            "image_encoder_output": image_encoder_output,
-            "latent_shape": latent_shape # Often needed by scheduler downstream
-        }
+
+        if self.data_mgr is not None and self.data_sender is not None:
+            buffer_index = 0
+            self._rdma_buffers[buffer_index].copy_(context)
+            buffer_index += 1
+            if self.config.get("enable_cfg", False):
+                self._rdma_buffers[buffer_index].copy_(context_null)
+                buffer_index += 1
+
+            if task == "i2v":
+                if self.config.get("use_image_encoder", True):
+                    if image_encoder_output.get("clip_encoder_out") is not None:
+                        self._rdma_buffers[buffer_index].copy_(image_encoder_output["clip_encoder_out"])
+                    else:
+                        self._rdma_buffers[buffer_index].zero_()
+                    buffer_index += 1
+
+                vae_buf = self._rdma_buffers[buffer_index]
+                vae_buf.zero_()
+                vae_flat = vae_buf.view(-1)
+                src_flat = image_encoder_output["vae_encoder_out"].reshape(-1)
+                vae_flat[: src_flat.numel()].copy_(src_flat)
+                buffer_index += 1
+
+            latent_tensor = torch.tensor(latent_shape, device=AI_DEVICE, dtype=torch.int64)
+            self._rdma_buffers[buffer_index].copy_(latent_tensor)
+
+            buffer_ptrs = [buf.data_ptr() for buf in self._rdma_buffers]
+            self.data_sender.send(buffer_ptrs)
+
+            import time
+            while True:
+                status = self.data_sender.poll()
+                if status == DataPoll.Success:
+                    break
+                time.sleep(0.01)
+
+    def release_memory(self):
+        """
+        Releases the RDMA buffers and clears GPU cache.
+        """
+        self._rdma_buffers = []
+        torch.cuda.empty_cache()

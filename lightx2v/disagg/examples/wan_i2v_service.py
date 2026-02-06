@@ -56,6 +56,8 @@ def main():
         text_encoder_offload=True,
         image_encoder_offload=False,
         vae_offload=False,
+        data_bootstrap_addr="127.0.0.1",
+        data_bootstrap_room=0,
     )
 
     config.image_path = image_path
@@ -69,30 +71,36 @@ def main():
     # 2. Add seed to config so services use it
     config.seed = seed
 
-    # 3. Initialize Services
-    logger.info("Initializing Encoder Service...")
-    encoder_service = EncoderService(config)
-    
-    logger.info("Initializing Transformer Service...")
-    transformer_service = TransformerService(config)
+    # 3. Define service threads
+    import threading
 
-    # 4. Run Process
-    
-    # 4.1 Encoder Step
-    logger.info("Running Encoder Service...")
-    encoder_results = encoder_service.process()
-    
-    inputs = {
-        "text_encoder_output": encoder_results["text_encoder_output"],
-        "image_encoder_output": encoder_results["image_encoder_output"],
-        "latent_shape": encoder_results["latent_shape"],
-    }
-    
-    # 4.2 Transformer Step
-    logger.info("Running Transformer Service...")
-    result_path = transformer_service.process(inputs=inputs)
-    
-    logger.info(f"Video generation completed. Saved to: {result_path}")
+    def run_encoder():
+        logger.info("Initializing Encoder Service...")
+        encoder_service = EncoderService(config)
+        logger.info("Running Encoder Service...")
+        encoder_service.process()
+        encoder_service.release_memory()
+
+    def run_transformer():
+        logger.info("Initializing Transformer Service...")
+        transformer_service = TransformerService(config)
+        logger.info("Running Transformer Service...")
+        result_path = transformer_service.process()
+        logger.info(f"Video generation completed. Saved to: {result_path}")
+        transformer_service.release_memory()
+
+    # 4. Start threads
+    encoder_thread = threading.Thread(target=run_encoder)
+    transformer_thread = threading.Thread(target=run_transformer)
+
+    logger.info("Starting services in separate threads...")
+    encoder_thread.start()
+    transformer_thread.start()
+
+    # 5. Wait for completion
+    encoder_thread.join()
+    transformer_thread.join()
+    logger.info("All services finished.")
 
 if __name__ == "__main__":
     main()

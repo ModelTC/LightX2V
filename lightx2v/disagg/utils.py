@@ -1,11 +1,12 @@
 import json
 import logging
+import math
 import os
 import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v.utils.envs import GET_DTYPE
@@ -377,4 +378,45 @@ def load_wan_transformer(config: Dict[str, Any]):
         logger.error(f"Unsupported model_cls: {config.get('model_cls')}")
         raise ValueError(f"Unsupported model_cls: {config.get('model_cls')}")
 
-    
+def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
+    text_len = int(config.get("text_len", 512))
+    enable_cfg = bool(config.get("enable_cfg", False))
+    use_image_encoder = bool(config.get("use_image_encoder", True))
+    task = config.get("task", "i2v")
+
+    text_dim = int(config.get("text_encoder_dim", 4096))
+    clip_dim = int(config.get("clip_embed_dim", 1024))
+    z_dim = int(config.get("vae_z_dim", 16))
+
+    vae_stride = config.get("vae_stride", (4, 8, 8))
+    stride_t = int(vae_stride[0])
+    stride_h = int(vae_stride[1])
+    stride_w = int(vae_stride[2])
+
+    target_video_length = int(config.get("target_video_length", 81))
+    target_height = int(config.get("target_height", 480))
+    target_width = int(config.get("target_width", 832))
+
+    t_prime = 1 + (target_video_length - 1) // stride_t
+    h_prime = int(math.ceil(target_height / stride_h))
+    w_prime = int(math.ceil(target_width / stride_w))
+
+    bytes_per_elem = torch.tensor([], dtype=torch.float32).element_size()
+    int_bytes_per_elem = torch.tensor([], dtype=torch.int64).element_size()
+
+    buffer_sizes = []
+    context_bytes = text_len * text_dim * bytes_per_elem
+    buffer_sizes.append(context_bytes)
+    if enable_cfg:
+        buffer_sizes.append(context_bytes)
+
+    if task == "i2v":
+        if use_image_encoder:
+            buffer_sizes.append(clip_dim * bytes_per_elem)
+        vae_bytes = (z_dim + 4) * t_prime * h_prime * w_prime * bytes_per_elem
+        buffer_sizes.append(vae_bytes)
+
+    latent_shape_bytes = 4 * int_bytes_per_elem
+    buffer_sizes.append(latent_shape_bytes)
+
+    return buffer_sizes
