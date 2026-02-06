@@ -1,7 +1,4 @@
-
-
 from .mmsr_block import NaMMSRTransformerBlock
-
 
 nadit_blocks = {
     "mmdit_sr": NaMMSRTransformerBlock,

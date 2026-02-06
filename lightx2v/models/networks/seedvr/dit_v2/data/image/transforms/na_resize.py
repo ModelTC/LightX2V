@@ -1,6 +1,5 @@
-
-
 from typing import Literal
+
 from torchvision.transforms import CenterCrop, Compose, InterpolationMode, Resize
 
 from .area_resize import AreaResize

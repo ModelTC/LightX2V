@@ -1,17 +1,15 @@
-
-
 """
 Advanced distributed functions for sequence parallel.
 """
 
-from typing import Optional, List
+from typing import List, Optional
+
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.fsdp import ShardingStrategy
 
 from .basic import get_global_rank, get_world_size
-
 
 _DATA_PARALLEL_GROUP = None
 _SEQUENCE_PARALLEL_GROUP = None
@@ -163,6 +161,7 @@ def init_model_shard_group(
     _MODEL_SHARD_INTRA_GROUP = gpu_mesh_2d.get_group("intra")
     _MODEL_SHARD_CPU_INTER_GROUP = cpu_mesh_2d.get_group("inter")
     _MODEL_SHARD_CPU_INTRA_GROUP = cpu_mesh_2d.get_group("intra")
+
 
 def get_sequence_parallel_global_ranks() -> List[int]:
     """

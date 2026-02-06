@@ -1,4 +1,5 @@
 from typing import Optional, Union
+
 import torch
 from diffusers.models.embeddings import get_timestep_embedding
 from torch import nn

@@ -1,7 +1,6 @@
-
-
 from abc import ABC, abstractmethod, abstractproperty
 from typing import Tuple, Union
+
 import torch
 
 from ..types import PredictionType
@@ -10,16 +9,13 @@ from ..utils import expand_dims
 
 class Schedule(ABC):
     @abstractproperty
-    def T(self) -> Union[int, float]:
-        ...
+    def T(self) -> Union[int, float]: ...
 
     @abstractmethod
-    def A(self, t: torch.Tensor) -> torch.Tensor:
-        ...
+    def A(self, t: torch.Tensor) -> torch.Tensor: ...
 
     @abstractmethod
-    def B(self, t: torch.Tensor) -> torch.Tensor:
-        ...
+    def B(self, t: torch.Tensor) -> torch.Tensor: ...
 
     def snr(self, t: torch.Tensor) -> torch.Tensor:
         return (self.A(t) ** 2) / (self.B(t) ** 2)
@@ -34,9 +30,7 @@ class Schedule(ABC):
         t = expand_dims(t, x_0.ndim)
         return self.A(t) * x_0 + self.B(t) * x_T
 
-    def convert_from_pred(
-        self, pred: torch.Tensor, pred_type: PredictionType, x_t: torch.Tensor, t: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def convert_from_pred(self, pred: torch.Tensor, pred_type: PredictionType, x_t: torch.Tensor, t: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         t = expand_dims(t, x_t.ndim)
         A_t = self.A(t)
         B_t = self.B(t)
@@ -58,9 +52,7 @@ class Schedule(ABC):
 
         return pred_x_0, pred_x_T
 
-    def convert_to_pred(
-        self, x_0: torch.Tensor, x_T: torch.Tensor, t: torch.Tensor, pred_type: PredictionType
-    ) -> torch.FloatTensor:
+    def convert_to_pred(self, x_0: torch.Tensor, x_T: torch.Tensor, t: torch.Tensor, pred_type: PredictionType) -> torch.FloatTensor:
         t = expand_dims(t, x_0.ndim)
         A_t = self.A(t)
         B_t = self.B(t)

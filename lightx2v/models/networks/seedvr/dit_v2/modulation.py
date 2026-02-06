@@ -1,4 +1,5 @@
 from typing import Callable, List, Optional
+
 import torch
 from einops import rearrange
 from torch import nn
@@ -42,9 +43,7 @@ class AdaSingle(nn.Module):
         for l in layers:
             if "in" in modes:
                 self.register_parameter(f"{l}_shift", nn.Parameter(torch.randn(dim) / dim**0.5))
-                self.register_parameter(
-                    f"{l}_scale", nn.Parameter(torch.randn(dim) / dim**0.5 + 1)
-                )
+                self.register_parameter(f"{l}_scale", nn.Parameter(torch.randn(dim) / dim**0.5 + 1))
             if "out" in modes:
                 self.register_parameter(f"{l}_gate", nn.Parameter(torch.randn(dim) / dim**0.5))
 

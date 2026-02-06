@@ -1,15 +1,13 @@
-
-
 from typing import Tuple, Union
+
 import torch
 from einops import rearrange
 from torch import nn
 from torch.nn.modules.utils import _triple
 
+from .. import na
 from ..cache import Cache
 from ..ops import gather_outputs, slice_inputs
-
-from .. import na
 
 
 class PatchIn(nn.Module):
@@ -101,9 +99,7 @@ class NaPatchOut(PatchOut):
         t, h, w = self.patch_size
         vid = self.proj(vid)
         # gather vid before patching out when enabling sequence parallelism
-        vid = gather_outputs(
-            vid, gather_dim=0, padding_dim=0, unpad_shape=vid_shape, cache=cache.namespace("vid")
-        )
+        vid = gather_outputs(vid, gather_dim=0, padding_dim=0, unpad_shape=vid_shape, cache=cache.namespace("vid"))
         if not (t == h == w == 1):
             vid = na.unflatten(vid, vid_shape)
             for i in range(len(vid)):

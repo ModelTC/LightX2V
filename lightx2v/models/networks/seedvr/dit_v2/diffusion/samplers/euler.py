@@ -1,10 +1,8 @@
-
-
 from typing import Callable
+
 import torch
 
 from ..utils import expand_dims
-from ..types import PredictionType
 from .base import Sampler, SamplerModelArgs
 
 

@@ -1,8 +1,7 @@
-
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable
+
 import torch
 from tqdm import tqdm
 
@@ -41,8 +40,7 @@ class Sampler(ABC):
         self,
         x: torch.Tensor,
         f: Callable[[SamplerModelArgs], torch.Tensor],
-    ) -> torch.Tensor:
-        ...
+    ) -> torch.Tensor: ...
 
     def get_next_timestep(
         self,

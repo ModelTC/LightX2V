@@ -1,5 +1,3 @@
-
-
 """
 Runner for SeedVR video super-resolution model.
 
@@ -9,19 +7,19 @@ SeedVR is a video super-resolution model that uses:
 - Pre-computed text embeddings
 """
 
-from fileinput import filename
 import gc
-import cv2
+
 import numpy as np
 import torch
-from torch import Tensor
 from einops import rearrange
+from torch import Tensor
+
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
+from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
+from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.utils.envs import *
-from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
 
 
 @RUNNER_REGISTER("seedvr2.3b")
@@ -37,6 +35,7 @@ class SeedVRRunner(DefaultRunner):
 
     def _build_video_transform(self):
         from torchvision.transforms import Compose, Lambda, Normalize
+
         from lightx2v.models.networks.seedvr.dit_v2.data.image.transforms.divisible_crop import DivisibleCrop
         from lightx2v.models.networks.seedvr.dit_v2.data.image.transforms.na_resize import NaResize
         from lightx2v.models.networks.seedvr.dit_v2.data.video.transforms.rearrange import Rearrange
@@ -68,9 +67,7 @@ class SeedVRRunner(DefaultRunner):
             return videos
         if (t - 1) % (4 * sp_size) == 0:
             return videos
-        padding = [videos[:, -1].unsqueeze(1)] * (
-            4 * sp_size - ((t - 1) % (4 * sp_size))
-        )
+        padding = [videos[:, -1].unsqueeze(1)] * (4 * sp_size - ((t - 1) % (4 * sp_size)))
         padding = torch.cat(padding, dim=1)
         videos = torch.cat([videos, padding], dim=1)
         return videos
@@ -178,32 +175,17 @@ class SeedVRRunner(DefaultRunner):
 
     def run_vae_decoder(self, latents):
         samples = self.vae_decoder.vae_decode(latents)
-        sample = [
-            (
-                rearrange(video[:, None], "c t h w -> t c h w")
-                if video.ndim == 3
-                else rearrange(video, "c t h w -> t c h w")
-            )
-            for video in samples
-        ][0]
+        sample = [(rearrange(video[:, None], "c t h w -> t c h w") if video.ndim == 3 else rearrange(video, "c t h w -> t c h w")) for video in samples][0]
         if self._ori_length < sample.shape[0]:
-            sample = sample[:self._ori_length]
+            sample = sample[: self._ori_length]
 
         # color fix
-        input = (
-            rearrange(self._input[:, None], "c t h w -> t c h w")
-            if self._input.ndim == 3
-            else rearrange(self._input, "c t h w -> t c h w")
-        )
+        input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
         # sample = wavelet_reconstruction(
         #     sample.to("cpu"), input[: sample.size(0)].to("cpu")
         # )
         sample = sample.to("cpu")
-        sample = (
-            rearrange(sample[:, None], "t c h w -> c t h w")
-            if sample.ndim == 3
-            else rearrange(sample, "t c h w -> c t h w")
-        )
+        sample = rearrange(sample[:, None], "t c h w -> c t h w") if sample.ndim == 3 else rearrange(sample, "t c h w -> c t h w")
         sample = sample[None, :]
 
         return sample

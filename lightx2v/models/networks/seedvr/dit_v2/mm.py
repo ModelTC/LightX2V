@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Tuple
+
 import torch
 from torch import nn
 
@@ -36,11 +37,7 @@ class MMModule(nn.Module):
             self.all = module(*get_args("vid", args), **get_kwargs("vid", kwargs))
         else:
             self.vid = module(*get_args("vid", args), **get_kwargs("vid", kwargs))
-            self.txt = (
-                module(*get_args("txt", args), **get_kwargs("txt", kwargs))
-                if not vid_only
-                else None
-            )
+            self.txt = module(*get_args("txt", args), **get_kwargs("txt", kwargs)) if not vid_only else None
 
     def forward(
         self,

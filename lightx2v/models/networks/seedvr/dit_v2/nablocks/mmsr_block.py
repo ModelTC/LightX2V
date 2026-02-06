@@ -1,19 +1,16 @@
-
-
 from typing import Tuple
+
 import torch
 import torch.nn as nn
 
 # from ..cache import Cache
 from ..cache import Cache
-
-from .attention.mmattn import NaSwinAttention
-from ..mm import MMArg
+from ..mlp import get_mlp
+from ..mm import MMArg, MMModule
 from ..modulation import ada_layer_type
 from ..normalization import norm_layer_type
-from ..mm import MMArg, MMModule
-from ..mlp import get_mlp
-    
+from .attention.mmattn import NaSwinAttention
+
 
 class NaMMSRTransformerBlock(nn.Module):
     def __init__(
@@ -39,7 +36,13 @@ class NaMMSRTransformerBlock(nn.Module):
     ):
         super().__init__()
         dim = MMArg(vid_dim, txt_dim)
-        self.attn_norm = MMModule(norm, dim=dim, eps=norm_eps, elementwise_affine=False, shared_weights=shared_weights,)
+        self.attn_norm = MMModule(
+            norm,
+            dim=dim,
+            eps=norm_eps,
+            elementwise_affine=False,
+            shared_weights=shared_weights,
+        )
 
         self.attn = NaSwinAttention(
             vid_dim=vid_dim,
@@ -57,13 +60,7 @@ class NaMMSRTransformerBlock(nn.Module):
         )
 
         self.mlp_norm = MMModule(norm, dim=dim, eps=norm_eps, elementwise_affine=False, shared_weights=shared_weights, vid_only=is_last_layer)
-        self.mlp = MMModule(
-            get_mlp(mlp_type),
-            dim=dim,
-            expand_ratio=expand_ratio,
-            shared_weights=shared_weights,
-            vid_only=is_last_layer
-        )
+        self.mlp = MMModule(get_mlp(mlp_type), dim=dim, expand_ratio=expand_ratio, shared_weights=shared_weights, vid_only=is_last_layer)
         self.ada = MMModule(ada, dim=dim, emb_dim=emb_dim, layers=["attn", "mlp"], shared_weights=shared_weights, vid_only=is_last_layer)
         self.is_last_layer = is_last_layer
 

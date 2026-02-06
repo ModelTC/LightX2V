@@ -1,14 +1,11 @@
-
-
 import torch
-import torch.distributed as dist
+from torch import nn
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.models.networks.seedvr.dit_v2.nadit import NaDiT
 from lightx2v.models.networks.seedvr.dit_v2 import na as na_utils
 from lightx2v.models.networks.seedvr.dit_v2.diffusion.utils import classifier_free_guidance_dispatcher
+from lightx2v.models.networks.seedvr.dit_v2.nadit import NaDiT
 from lightx2v.models.networks.seedvr.dit_v2.rotary_embedding_torch import RotaryEmbedding
-from torch import nn
 
 
 class SeedVRNaDiTModel(BaseTransformerModel):
@@ -39,7 +36,7 @@ class SeedVRNaDiTModel(BaseTransformerModel):
             txt_in_dim=5120,
             txt_in_norm="fusedln",
             txt_dim=2560,
-            emb_dim=6*2560,
+            emb_dim=6 * 2560,
             heads=20,
             head_dim=128,
             expand_ratio=4,
@@ -94,12 +91,10 @@ class SeedVRNaDiTModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-
         noises = inputs.get("noises", None)
         conditions = inputs.get("conditions", None)
         texts_pos = inputs["text_encoder_output"]["texts_pos"]
         texts_neg = inputs["text_encoder_output"]["texts_neg"]
-        
 
         cfg_scale = 1.0
         cfg_rescale = 0.0

@@ -1,9 +1,9 @@
 from contextlib import nullcontext
-from typing import Literal, Optional, Tuple, Union, List
+from typing import List, Literal, Optional, Tuple, Union
+
 import diffusers
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from diffusers.models.attention_processor import Attention, SpatialNorm
 from diffusers.models.autoencoders.vae import DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.downsampling import Downsample2D
@@ -15,20 +15,24 @@ from diffusers.models.upsampling import Upsample2D
 from diffusers.utils import is_torch_version
 from diffusers.utils.accelerate_utils import apply_forward_hook
 from einops import rearrange
+from torch import Tensor
 
-from .common.distributed.advanced import (
-    get_sequence_parallel_world_size,
-)
-from .common.logger import get_logger
-from .common.utils import (
-    safe_pad_operation,
-    safe_interpolate_operation,
-)
+from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 from .causal_inflation_lib import (
     InflatedCausalConv3d,
     causal_norm_wrapper,
     init_causal_conv3d,
     remove_head,
+)
+from .common.distributed.advanced import (
+    get_sequence_parallel_world_size,
+)
+from .common.logger import get_logger
+from .common.utils import (
+    safe_interpolate_operation,
+    safe_pad_operation,
 )
 from .context_parallel_lib import (
     causal_conv_gather_outputs,
@@ -44,11 +48,6 @@ from .types import (
     _memory_device_t,
     _receptive_field_t,
 )
-from torch import Tensor
-
-from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.utils.envs import *
-
 
 logger = get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -89,14 +88,8 @@ class Upsample3D(Upsample2D):
         # [Override] MAGViT v2 implementation
         if not self.interpolate:
             upscale_ratio = (self.spatial_ratio**2) * self.temporal_ratio
-            self.upscale_conv = nn.Conv3d(
-                self.channels, self.channels * upscale_ratio, kernel_size=1, padding=0
-            )
-            identity = (
-                torch.eye(self.channels)
-                .repeat(upscale_ratio, 1)
-                .reshape_as(self.upscale_conv.weight)
-            )
+            self.upscale_conv = nn.Conv3d(self.channels, self.channels * upscale_ratio, kernel_size=1, padding=0)
+            identity = torch.eye(self.channels).repeat(upscale_ratio, 1).reshape_as(self.upscale_conv.weight)
             self.upscale_conv.weight.data.copy_(identity)
             nn.init.zeros_(self.upscale_conv.bias)
 
@@ -123,9 +116,7 @@ class Upsample3D(Upsample2D):
 
         if self.slicing:
             split_size = hidden_states.size(2) // 2
-            hidden_states = list(
-                hidden_states.split([split_size, hidden_states.size(2) - split_size], dim=2)
-            )
+            hidden_states = list(hidden_states.split([split_size, hidden_states.size(2) - split_size], dim=2))
         else:
             hidden_states = [hidden_states]
 
@@ -216,7 +207,6 @@ class Downsample3D(Downsample2D):
         memory_state: MemoryState = MemoryState.DISABLED,
         **kwargs,
     ) -> torch.FloatTensor:
-
         assert hidden_states.shape[1] == self.channels
 
         if hasattr(self, "norm") and self.norm is not None:
@@ -291,9 +281,7 @@ class ResnetBlock3D(ResnetBlock2D):
                 inflation_mode=inflation_mode,
             )
 
-    def forward(
-        self, input_tensor, temb, memory_state: MemoryState = MemoryState.DISABLED, **kwargs
-    ):
+    def forward(self, input_tensor, temb, memory_state: MemoryState = MemoryState.DISABLED, **kwargs):
         hidden_states = input_tensor
 
         hidden_states = causal_norm_wrapper(self.norm1, hidden_states)
@@ -582,10 +570,7 @@ class UNetMidBlock3D(nn.Module):
         attentions = []
 
         if attention_head_dim is None:
-            logger.warn(
-                f"It is not recommend to pass `attention_head_dim=None`. "
-                f"Defaulting `attention_head_dim` to `in_channels`: {in_channels}."
-            )
+            logger.warn(f"It is not recommend to pass `attention_head_dim=None`. Defaulting `attention_head_dim` to `in_channels`: {in_channels}.")
             attention_head_dim = in_channels
 
         for _ in range(num_layers):
@@ -597,12 +582,8 @@ class UNetMidBlock3D(nn.Module):
                         dim_head=attention_head_dim,
                         rescale_output_factor=output_scale_factor,
                         eps=resnet_eps,
-                        norm_num_groups=(
-                            resnet_groups if resnet_time_scale_shift == "default" else None
-                        ),
-                        spatial_norm_dim=(
-                            temb_channels if resnet_time_scale_shift == "spatial" else None
-                        ),
+                        norm_num_groups=(resnet_groups if resnet_time_scale_shift == "default" else None),
+                        spatial_norm_dim=(temb_channels if resnet_time_scale_shift == "spatial" else None),
                         residual_connection=True,
                         bias=True,
                         upcast_softmax=True,
@@ -639,9 +620,7 @@ class UNetMidBlock3D(nn.Module):
             if attn is not None:
                 hidden_states = rearrange(hidden_states, "b c f h w -> (b f) c h w")
                 hidden_states = attn(hidden_states, temb=temb)
-                hidden_states = rearrange(
-                    hidden_states, "(b f) c h w -> b c f h w", f=video_length
-                )
+                hidden_states = rearrange(hidden_states, "(b f) c h w -> b c f h w", f=video_length)
             hidden_states = resnet(hidden_states, temb, memory_state=memory_state)
 
         return hidden_states
@@ -749,11 +728,7 @@ class Encoder3D(nn.Module):
                 return module
 
             self.conv_extra_cond.append(
-                zero_module(
-                    nn.Conv3d(extra_cond_dim, output_channel, kernel_size=1, stride=1, padding=0)
-                )
-                if self.extra_cond_dim is not None and self.extra_cond_dim > 0
-                else None
+                zero_module(nn.Conv3d(extra_cond_dim, output_channel, kernel_size=1, stride=1, padding=0)) if self.extra_cond_dim is not None and self.extra_cond_dim > 0 else None
             )
 
         # mid
@@ -772,15 +747,11 @@ class Encoder3D(nn.Module):
         )
 
         # out
-        self.conv_norm_out = nn.GroupNorm(
-            num_channels=block_out_channels[-1], num_groups=norm_num_groups, eps=1e-6
-        )
+        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[-1], num_groups=norm_num_groups, eps=1e-6)
         self.conv_act = nn.SiLU()
 
         conv_out_channels = 2 * out_channels if double_z else out_channels
-        self.conv_out = init_causal_conv3d(
-            block_out_channels[-1], conv_out_channels, 3, padding=1, inflation_mode=inflation_mode
-        )
+        self.conv_out = init_causal_conv3d(block_out_channels[-1], conv_out_channels, 3, padding=1, inflation_mode=inflation_mode)
 
         self.gradient_checkpointing = gradient_checkpoint
 
@@ -803,9 +774,7 @@ class Encoder3D(nn.Module):
             # down
             # [Override] add extra block and extra cond
             for down_block, extra_block in zip(self.down_blocks, self.conv_extra_cond):
-                sample = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(down_block), sample, memory_state, use_reentrant=False
-                )
+                sample = torch.utils.checkpoint.checkpoint(create_custom_forward(down_block), sample, memory_state, use_reentrant=False)
                 if extra_block is not None:
                     sample = sample + safe_interpolate_operation(extra_block(extra_cond), size=sample.shape[2:])
 
@@ -948,13 +917,9 @@ class Decoder3D(nn.Module):
         if norm_type == "spatial":
             self.conv_norm_out = SpatialNorm(block_out_channels[0], temb_channels)
         else:
-            self.conv_norm_out = nn.GroupNorm(
-                num_channels=block_out_channels[0], num_groups=norm_num_groups, eps=1e-6
-            )
+            self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups, eps=1e-6)
         self.conv_act = nn.SiLU()
-        self.conv_out = init_causal_conv3d(
-            block_out_channels[0], out_channels, 3, padding=1, inflation_mode=inflation_mode
-        )
+        self.conv_out = init_causal_conv3d(block_out_channels[0], out_channels, 3, padding=1, inflation_mode=inflation_mode)
 
         self.gradient_checkpointing = gradient_checkpoint
 
@@ -998,9 +963,7 @@ class Decoder3D(nn.Module):
 
                 # up
                 for up_block in self.up_blocks:
-                    sample = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(up_block), sample, latent_embeds, memory_state
-                    )
+                    sample = torch.utils.checkpoint.checkpoint(create_custom_forward(up_block), sample, latent_embeds, memory_state)
         else:
             # middle
             sample = self.mid_block(sample, latent_embeds, memory_state=memory_state)
@@ -1035,9 +998,7 @@ class AutoencoderKL(diffusers.AutoencoderKL):
         # Newer version of diffusers changed the model keys,
         # causing incompatibility with old checkpoints.
         # They provided a method for conversion. We call conversion before loading state_dict.
-        convert_deprecated_attention_blocks = getattr(
-            self, "_convert_deprecated_attention_blocks", None
-        )
+        convert_deprecated_attention_blocks = getattr(self, "_convert_deprecated_attention_blocks", None)
         if callable(convert_deprecated_attention_blocks):
             convert_deprecated_attention_blocks(state_dict)
         return super().load_state_dict(state_dict, strict)
@@ -1082,12 +1043,8 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             in_channels=in_channels,
             out_channels=out_channels,
             # [Override] make sure it can be normally initialized
-            down_block_types=tuple(
-                [down_block_type.replace("3D", "2D") for down_block_type in down_block_types]
-            ),
-            up_block_types=tuple(
-                [up_block_type.replace("3D", "2D") for up_block_type in up_block_types]
-            ),
+            down_block_types=tuple([down_block_type.replace("3D", "2D") for down_block_type in down_block_types]),
+            up_block_types=tuple([up_block_type.replace("3D", "2D") for up_block_type in up_block_types]),
             block_out_channels=block_out_channels,
             layers_per_block=layers_per_block,
             act_fn=act_fn,
@@ -1172,9 +1129,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         return AutoencoderKLOutput(latent_dist=posterior)
 
     @apply_forward_hook
-    def decode(
-        self, z: torch.Tensor, return_dict: bool = True
-    ) -> Union[DecoderOutput, torch.Tensor]:
+    def decode(self, z: torch.Tensor, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
         decoded = self.slicing_decode(z)
 
         if not return_dict:
@@ -1182,9 +1137,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
         return DecoderOutput(sample=decoded)
 
-    def _encode(
-        self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
-    ) -> torch.Tensor:
+    def _encode(self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED) -> torch.Tensor:
         _x = x.to(self.device)
         _x = causal_conv_slice_inputs(_x, self.slicing_sample_min_size, memory_state=memory_state)
         h = self.encoder(_x, memory_state=memory_state)
@@ -1195,9 +1148,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         output = causal_conv_gather_outputs(output)
         return output.to(x.device)
 
-    def _decode(
-        self, z: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
-    ) -> torch.Tensor:
+    def _decode(self, z: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED) -> torch.Tensor:
         _z = z.to(self.device)
         _z = causal_conv_slice_inputs(_z, self.slicing_latent_min_size, memory_state=memory_state)
         if self.post_quant_conv is not None:
@@ -1217,9 +1168,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 )
             ]
             for x_idx in range(1, len(x_slices)):
-                encoded_slices.append(
-                    self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE)
-                )
+                encoded_slices.append(self._encode(x_slices[x_idx], memory_state=MemoryState.ACTIVE))
             return torch.cat(encoded_slices, dim=2)
         else:
             return self._encode(x)
@@ -1235,9 +1184,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 )
             ]
             for z_idx in range(1, len(z_slices)):
-                decoded_slices.append(
-                    self._decode(z_slices[z_idx], memory_state=MemoryState.ACTIVE)
-                )
+                decoded_slices.append(self._decode(z_slices[z_idx], memory_state=MemoryState.ACTIVE))
             return torch.cat(decoded_slices, dim=2)
         else:
             return self._decode(z)
@@ -1248,9 +1195,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
     def tiled_decode(self, z: torch.Tensor, **kwargs) -> torch.Tensor:
         raise NotImplementedError
 
-    def forward(
-        self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs
-    ):
+    def forward(self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs):
         # x: [b c t h w]
         if mode == "encode":
             h = self.encode(x)
@@ -1268,9 +1213,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         # causing incompatibility with old checkpoints.
         # They provided a method for conversion.
         # We call conversion before loading state_dict.
-        convert_deprecated_attention_blocks = getattr(
-            self, "_convert_deprecated_attention_blocks", None
-        )
+        convert_deprecated_attention_blocks = getattr(self, "_convert_deprecated_attention_blocks", None)
         if callable(convert_deprecated_attention_blocks):
             convert_deprecated_attention_blocks(state_dict)
         return super().load_state_dict(state_dict, strict)
@@ -1324,9 +1267,7 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         split_size: Optional[int],
         memory_device: _memory_device_t,
     ):
-        assert (
-            split_size is None or memory_device is not None
-        ), "if split_size is set, memory_device must not be None."
+        assert split_size is None or memory_device is not None, "if split_size is set, memory_device must not be None."
         if split_size is not None:
             self.enable_slicing()
             self.slicing_sample_min_size = split_size
@@ -1342,7 +1283,6 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         for m in self.modules():
             if isinstance(m, InflatedCausalConv3d):
                 m.set_memory_limit(conv_max_mem if conv_max_mem is not None else float("inf"))
-
 
     @torch.no_grad()
     def vae_encode(self, samples: List[Tensor]) -> List[Tensor]:
@@ -1374,7 +1314,6 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
             latents = [latent.squeeze(0) for latent in latents]
 
         return latents
-
 
     @torch.no_grad()
     def vae_decode(self, latents: List[Tensor]) -> List[Tensor]:

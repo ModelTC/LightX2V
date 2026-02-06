@@ -6,6 +6,7 @@ for video/image super-resolution (SR) task.
 """
 
 from datetime import datetime
+
 ts = datetime.now().strftime("%y%m%d%H%M")
 from lightx2v.pipeline import LightX2VPipeline
 
@@ -33,7 +34,7 @@ save_result_path = f"/data/nvme0/chendingyu/SeedVR/output/output_sr_{ts}.mp4"
 
 # Input video or image path (required for SR task)
 input_video_path = "/data/nvme0/chendingyu/SeedVR/input/wan2.1_i2v_gpu1_260115074239_svg_sla.mp4"
-input_video_path="/data/nvme0/chendingyu/SeedVR/input/wan2.2_moe_t2v_2601261239.mp4"
+input_video_path = "/data/nvme0/chendingyu/SeedVR/input/wan2.2_moe_t2v_2601261239.mp4"
 # Or use an image for single-frame SR
 # input_image_path = "/path/to/input_low_res.png"
 
@@ -48,12 +49,4 @@ pipe.generate(
     # image_path=input_image_path,
 )
 
-pipe.generate(
-    seed=seed,
-    prompt=prompt,
-    negative_prompt=negative_prompt,
-    save_result_path=save_result_path,
-    video_path=input_video_path,  # Use video_path for video SR
-    # Or use image_path for single-frame SR:
-    # image_path=input_image_path,
-)
+

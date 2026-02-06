@@ -1,21 +1,23 @@
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union, Callable
+from typing import Callable, List, Optional, Tuple, Union
+
 import torch
 from torch import nn
 
-from .cache import Cache
-from .ops import slice_inputs
-
 from . import na
+from .cache import Cache
 from .embedding import TimeEmbedding
 from .modulation import get_ada_layer
 from .nablocks import get_nablock
 from .normalization import get_norm_layer
+from .ops import slice_inputs
 from .patch import get_na_patch_layers
+
 
 # Fake func, no checkpointing is required for inference
 def gradient_checkpointing(module: Union[Callable, nn.Module], *args, enabled: bool, **kwargs):
     return module(*args, **kwargs)
+
 
 @dataclass
 class NaDiTOutput:
@@ -85,9 +87,7 @@ class NaDiT(nn.Module):
                 if txt_proj_type == "linear":
                     txt_proj_layer = nn.Linear(in_dim, txt_dim)
                 else:
-                    txt_proj_layer = nn.Sequential(
-                        nn.Linear(in_dim, in_dim), nn.GELU("tanh"), nn.Linear(in_dim, txt_dim)
-                    )
+                    txt_proj_layer = nn.Sequential(nn.Linear(in_dim, in_dim), nn.GELU("tanh"), nn.Linear(in_dim, txt_dim))
                 torch.nn.init.constant_(txt_norm_layer.weight, txt_in_norm_scale_factor)
                 self.txt_in.append(
                     nn.Sequential(
@@ -96,11 +96,7 @@ class NaDiT(nn.Module):
                     )
                 )
         else:
-            self.txt_in = (
-                nn.Linear(txt_in_dim, txt_dim)
-                if txt_in_dim and txt_in_dim != txt_dim
-                else nn.Identity()
-            )
+            self.txt_in = nn.Linear(txt_in_dim, txt_dim) if txt_in_dim and txt_in_dim != txt_dim else nn.Identity()
         self.emb_in = TimeEmbedding(
             sinusoidal_dim=256,
             hidden_dim=max(vid_dim, txt_dim),
@@ -131,9 +127,7 @@ class NaDiT(nn.Module):
                     ada=ada,
                     qk_bias=qk_bias,
                     qk_norm=qk_norm,
-                    shared_weights=not (
-                        (i < mm_layers) if isinstance(mm_layers, int) else mm_layers[i]
-                    ),
+                    shared_weights=not ((i < mm_layers) if isinstance(mm_layers, int) else mm_layers[i]),
                     mlp_type=mlp_type,
                     window=window[i],
                     window_method=window_method[i],
@@ -185,9 +179,7 @@ class NaDiT(nn.Module):
         # slice vid after patching in when using sequence parallelism
         if isinstance(txt, list):
             assert isinstance(self.txt_in, nn.ModuleList)
-            txt = [
-                na.unflatten(fc(i), s) for fc, i, s in zip(self.txt_in, txt, txt_shape)
-            ]  # B L D
+            txt = [na.unflatten(fc(i), s) for fc, i, s in zip(self.txt_in, txt, txt_shape)]  # B L D
             txt, txt_shape = na.flatten([torch.cat(t, dim=0) for t in zip(*txt)])
             txt = slice_inputs(txt, dim=0)
         else:

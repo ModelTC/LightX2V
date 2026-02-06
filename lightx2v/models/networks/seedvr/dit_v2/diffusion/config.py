@@ -1,5 +1,3 @@
-
-
 import torch
 
 from .samplers.base import Sampler

@@ -1,9 +1,8 @@
 import torch
 import torch.nn.functional as F
-
 from flash_attn import flash_attn_varlen_func
-
 from torch import nn
+
 
 class TorchAttention(nn.Module):
     def tflops(self, args, kwargs, output) -> float:

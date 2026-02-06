@@ -1,7 +1,6 @@
+from abc import ABC
+from typing import Union
 
-
-from abc import ABC, abstractmethod
-from typing import Sequence, Union
 import torch
 
 from ..types import SamplingDirection

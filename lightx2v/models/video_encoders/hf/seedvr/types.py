@@ -1,7 +1,6 @@
-
-
 from enum import Enum
 from typing import Dict, Literal, NamedTuple, Optional
+
 import torch
 
 _receptive_field_t = Literal["half", "full"]
@@ -9,6 +8,7 @@ _inflation_mode_t = Literal["none", "tail", "replicate"]
 _memory_device_t = Optional[Literal["cpu", "same"]]
 _gradient_checkpointing_t = Optional[Literal["half", "full"]]
 _selective_checkpointing_t = Optional[Literal["coarse", "fine"]]
+
 
 class DiagonalGaussianDistribution:
     def __init__(self, mean: torch.Tensor, logvar: torch.Tensor):
@@ -28,6 +28,7 @@ class DiagonalGaussianDistribution:
             self.mean**2 + self.var - 1.0 - self.logvar,
             dim=list(range(1, self.mean.ndim)),
         )
+
 
 class MemoryState(Enum):
     """

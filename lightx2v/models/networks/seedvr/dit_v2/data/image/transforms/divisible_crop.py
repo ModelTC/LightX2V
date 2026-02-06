@@ -1,6 +1,5 @@
-
-
 from typing import Union
+
 import torch
 from PIL import Image
 from torchvision.transforms import functional as TVF

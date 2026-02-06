@@ -1,6 +1,5 @@
-
-
 from typing import Callable, Optional
+
 from diffusers.models.normalization import RMSNorm
 from torch import nn
 
@@ -9,7 +8,6 @@ norm_layer_type = Callable[[int, float, bool], nn.Module]
 
 
 def get_norm_layer(norm_type: Optional[str]) -> norm_layer_type:
-
     def _norm_layer(dim: int, eps: float, elementwise_affine: bool):
         if norm_type is None:
             return nn.Identity()

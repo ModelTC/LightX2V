@@ -1,5 +1,3 @@
-
-
 """
 Scheduler for SeedVR video super-resolution model.
 
@@ -9,12 +7,12 @@ SeedVR uses a standard diffusion scheduler with:
 - CFG support
 """
 
-from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.models.networks.seedvr.dit_v2.diffusion.config import (
     create_sampler_from_config,
     create_sampling_timesteps_from_config,
     create_schedule_from_config,
 )
+from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -31,12 +29,10 @@ class SeedVRScheduler(BaseScheduler):
 
         schedule_cfg = {"type": "lerp", "T": self.num_train_timesteps}
         sampling_cfg = {"type": "uniform_trailing", "steps": 1}
-        sampler_cfg = {'type': 'euler', 'prediction_type': 'v_lerp'}
+        sampler_cfg = {"type": "euler", "prediction_type": "v_lerp"}
 
         self.schedule = create_schedule_from_config(schedule_cfg, device=AI_DEVICE)
-        self.sampling_timesteps = create_sampling_timesteps_from_config(
-            sampling_cfg, schedule=self.schedule, device=AI_DEVICE
-        )
+        self.sampling_timesteps = create_sampling_timesteps_from_config(sampling_cfg, schedule=self.schedule, device=AI_DEVICE)
         self.sampler = create_sampler_from_config(sampler_cfg, schedule=self.schedule, timesteps=self.sampling_timesteps)
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):

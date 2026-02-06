@@ -1,6 +1,5 @@
-
-
 from typing import Union
+
 import torch
 
 from .base import Schedule

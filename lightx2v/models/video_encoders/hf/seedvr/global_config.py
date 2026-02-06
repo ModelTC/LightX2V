@@ -1,5 +1,3 @@
-
-
 from typing import Optional
 
 _NORM_LIMIT = float("inf")

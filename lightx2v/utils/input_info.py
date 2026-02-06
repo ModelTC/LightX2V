@@ -36,12 +36,14 @@ class I2VInputInfo:
     # WorldPlay-specific: pose/action conditioning (optional)
     pose: str = field(default_factory=lambda: None)
 
+
 @dataclass
 class SRInputInfo:
     """Input info for video/image super-resolution (SR) task.
 
     Supports both image and video inputs for super-resolution.
     """
+
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_enhanced: str = field(default_factory=str)
@@ -56,6 +58,7 @@ class SRInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+
 
 @dataclass
 class Flf2vInputInfo:

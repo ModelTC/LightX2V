@@ -1,8 +1,7 @@
-
-
 import math
 from contextlib import contextmanager
 from typing import List, Optional, Union
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -12,14 +11,12 @@ from torch import Tensor, nn
 from torch.nn import Conv3d
 
 from .common.distributed.advanced import (
-    get_next_sequence_parallel_rank,
-    get_prev_sequence_parallel_rank,
     get_sequence_parallel_group,
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
 )
-from .common.utils import safe_pad_operation
 from .common.logger import get_logger
+from .common.utils import safe_pad_operation
 from .context_parallel_lib import (
     cache_send_recv,
     get_cache_size,
@@ -86,10 +83,7 @@ class InflatedCausalConv3d(Conv3d):
             shape[split_dim - 1] += prev_cache.size(split_dim - 1)
         shape[-3:] += torch.tensor(padding).view(3, 2).sum(-1).flip(0)
         memory_occupy = shape.prod() * x.element_size() / 1024**3  # GiB
-        logger.debug(
-            f"x:{(shape, x.dtype)} {memory_occupy:.3f}GiB "
-            f"prev_cache:{prev_cache.shape if prev_cache is not None else None}"
-        )
+        logger.debug(f"x:{(shape, x.dtype)} {memory_occupy:.3f}GiB prev_cache:{prev_cache.shape if prev_cache is not None else None}")
         if memory_occupy < self.memory_limit or split_dim == x.ndim:
             if prev_cache is not None:
                 x = torch.cat([prev_cache, x], dim=split_dim - 1)
@@ -97,9 +91,7 @@ class InflatedCausalConv3d(Conv3d):
             with ignore_padding(self):
                 return super().forward(x)
 
-        logger.debug(
-            f"Exceed memory limit {memory_occupy} > {self.memory_limit}, split dim {split_dim}"
-        )
+        logger.debug(f"Exceed memory limit {memory_occupy} > {self.memory_limit}, split dim {split_dim}")
 
         # Split input (& prev_cache).
         num_splits = math.ceil(memory_occupy / self.memory_limit)
@@ -139,9 +131,7 @@ class InflatedCausalConv3d(Conv3d):
             )
             if next_catch_size != 0:
                 assert next_catch_size <= x[idx].size(split_dim)
-                next_cache = (
-                    x[idx].transpose(0, split_dim)[-next_catch_size:].transpose(0, split_dim)
-                )
+                next_cache = x[idx].transpose(0, split_dim)[-next_catch_size:].transpose(0, split_dim)
 
             # Recursive.
             x[idx] = self.memory_limit_conv(
@@ -165,11 +155,7 @@ class InflatedCausalConv3d(Conv3d):
         assert memory_state != MemoryState.UNSET
         if memory_state != MemoryState.ACTIVE:
             self.memory = None
-        if (
-            math.isinf(self.memory_limit)
-            and torch.is_tensor(input)
-            and get_sequence_parallel_group() is None
-        ):
+        if math.isinf(self.memory_limit) and torch.is_tensor(input) and get_sequence_parallel_group() is None:
             return self.basic_forward(input, memory_state)
         return self.slicing_forward(input, memory_state)
 
@@ -179,16 +165,8 @@ class InflatedCausalConv3d(Conv3d):
             input = extend_head(input, memory=self.memory, times=-1)
         else:
             input = extend_head(input, times=self.temporal_padding * 2)
-        memory = (
-            input[:, :, mem_size:].detach()
-            if (mem_size != 0 and memory_state != MemoryState.DISABLED)
-            else None
-        )
-        if (
-            memory_state != MemoryState.DISABLED
-            and not self.training
-            and (self.memory_device is not None)
-        ):
+        memory = input[:, :, mem_size:].detach() if (mem_size != 0 and memory_state != MemoryState.DISABLED) else None
+        if memory_state != MemoryState.DISABLED and not self.training and (self.memory_device is not None):
             self.memory = memory
             if self.memory_device == "cpu" and self.memory is not None:
                 self.memory = self.memory.to("cpu")
@@ -205,9 +183,7 @@ class InflatedCausalConv3d(Conv3d):
             squeeze_out = True
 
         cache_size = self.kernel_size[0] - self.stride[0]
-        cache = cache_send_recv(
-            input, cache_size=cache_size, memory=self.memory, times=self.temporal_padding * 2
-        )
+        cache = cache_send_recv(input, cache_size=cache_size, memory=self.memory, times=self.temporal_padding * 2)
 
         # For slice=4 and sp=2, and 17 frames in total
         #                  sp0                  sp1
@@ -241,9 +217,7 @@ class InflatedCausalConv3d(Conv3d):
                 if sp_rank == 0:
                     shape = list(input[0].size())
                     shape[2] = cache_size
-                    self.memory = torch.empty(
-                        *shape, device=input[0].device, dtype=input[0].dtype
-                    ).contiguous()
+                    self.memory = torch.empty(*shape, device=input[0].device, dtype=input[0].dtype).contiguous()
                     dist.recv(self.memory, recv_src, group=sp_group)
             if self.memory_device == "cpu" and self.memory is not None:
                 self.memory = self.memory.to("cpu")
@@ -284,9 +258,7 @@ class InflatedCausalConv3d(Conv3d):
             raise NotImplementedError
         return (2 * math.prod(self.kernel_size) * self.in_channels * (output_numel / 1e6)) / 1e6
 
-    def _load_from_state_dict(
-        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
-    ):
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         if self.inflation_mode != "none":
             state_dict = modify_state_dict(
                 self,

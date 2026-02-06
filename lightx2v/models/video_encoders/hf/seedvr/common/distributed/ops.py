@@ -1,11 +1,10 @@
-
-
 """
 Distributed ops for supporting sequence parallel.
 """
 
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import torch
 import torch.distributed as dist
 from torch import Tensor
@@ -16,7 +15,6 @@ from .advanced import (
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
 )
-
 from .basic import get_device
 
 _SEQ_DATA_BUF = defaultdict(lambda: [None, None, None])
@@ -46,9 +44,7 @@ def single_all_to_all(
 
     inp_shape = list(local_input.shape)
     inp_shape[scatter_dim] = inp_shape[scatter_dim] // seq_world_size
-    input_t = local_input.reshape(
-        [seq_world_size, inp_shape[scatter_dim]] + inp_shape[scatter_dim + 1 :]
-    ).contiguous()
+    input_t = local_input.reshape([seq_world_size, inp_shape[scatter_dim]] + inp_shape[scatter_dim + 1 :]).contiguous()
     output = torch.empty_like(input_t)
     comm = dist.all_to_all_single(output, input_t, group=group, async_op=async_op)
     if async_op:
@@ -69,9 +65,7 @@ def _all_to_all(
     group: dist.ProcessGroup,
 ):
     seq_world_size = dist.get_world_size(group)
-    input_list = [
-        t.contiguous() for t in torch.tensor_split(local_input, seq_world_size, scatter_dim)
-    ]
+    input_list = [t.contiguous() for t in torch.tensor_split(local_input, seq_world_size, scatter_dim)]
     output_list = [torch.empty_like(input_list[0]) for _ in range(seq_world_size)]
     dist.all_to_all(output_list, input_list, group=group)
     return torch.cat(output_list, dim=gather_dim).contiguous()
@@ -92,9 +86,7 @@ class SeqAllToAll(torch.autograd.Function):
         ctx.gather_dim = gather_dim
         ctx.async_op = async_op
         if async_op:
-            output, comm, prev_scatter_dim = single_all_to_all(
-                local_input, scatter_dim, gather_dim, group, async_op=async_op
-            )
+            output, comm, prev_scatter_dim = single_all_to_all(local_input, scatter_dim, gather_dim, group, async_op=async_op)
             ctx.prev_scatter_dim = prev_scatter_dim
             return output, comm
 
@@ -208,9 +200,7 @@ def gather_seq_scatter_heads_qkv(
 
     # remove padding
     if qkv_shape is not None:
-        unpad_dim_size = cache(
-            "unpad_dim_size", lambda: torch.sum(torch.prod(qkv_shape, dim=-1)).item()
-        )
+        unpad_dim_size = cache("unpad_dim_size", lambda: torch.sum(torch.prod(qkv_shape, dim=-1)).item())
         if unpad_dim_size % world != 0:
             padding_size = qkv_tensor.size(seq_dim) - unpad_dim_size
             qkv_tensor = _unpad_tensor(qkv_tensor, seq_dim, padding_size)
@@ -313,9 +303,7 @@ def gather_outputs(
         return x
     x = Gather.apply(group, x, gather_dim, scale_grad)
     if padding_dim is not None:
-        unpad_dim_size = cache(
-            "unpad_dim_size", lambda: torch.sum(torch.prod(unpad_shape, dim=1)).item()
-        )
+        unpad_dim_size = cache("unpad_dim_size", lambda: torch.sum(torch.prod(unpad_shape, dim=1)).item())
         x = remove_seqeunce_parallel_padding(x, padding_dim, unpad_dim_size)
     return x
 
@@ -435,11 +423,7 @@ class SPDistForward:
                 dtypes = _SEQ_DATA_META_DTYPES[self.name]
                 buf_id = local_step % 2
                 if local_step == 0:
-                    sync_data = (
-                        local_result
-                        if is_src
-                        else _construct_broadcast_buffer(shapes, dtypes, device)
-                    )
+                    sync_data = local_result if is_src else _construct_broadcast_buffer(shapes, dtypes, device)
                     _broadcast_data(sync_data, shapes, dtypes, src_rank, group, False)
                     _SEQ_DATA_BUF[self.name][buf_id] = sync_data
 
@@ -453,14 +437,8 @@ class SPDistForward:
                     shapes = _SEQ_DATA_META_SHAPES[self.name][local_step + 1]
                     src_rank = dist.get_global_rank(group, local_step + 1)
                     is_src = sp_rank == local_step + 1
-                    next_sync_data = (
-                        _SEQ_DATA_BUF[self.name][-1]
-                        if is_src
-                        else _construct_broadcast_buffer(shapes, dtypes, device)
-                    )
-                    _SEQ_DATA_ASYNC_COMMS[self.name] = _broadcast_data(
-                        next_sync_data, shapes, dtypes, src_rank, group, True
-                    )
+                    next_sync_data = _SEQ_DATA_BUF[self.name][-1] if is_src else _construct_broadcast_buffer(shapes, dtypes, device)
+                    _SEQ_DATA_ASYNC_COMMS[self.name] = _broadcast_data(next_sync_data, shapes, dtypes, src_rank, group, True)
                     _SEQ_DATA_BUF[self.name][next_buf_id] = next_sync_data
                 yield _SEQ_DATA_BUF[self.name][buf_id]
 

@@ -1,8 +1,7 @@
-
-
 import math
 import random
 from typing import Union
+
 import torch
 from PIL import Image
 from torchvision.transforms import functional as TVF
@@ -21,7 +20,6 @@ class AreaResize:
         self.interpolation = interpolation
 
     def __call__(self, image: Union[torch.Tensor, Image.Image]):
-
         if isinstance(image, torch.Tensor):
             height, width = image.shape[-2:]
         elif isinstance(image, Image.Image):
@@ -89,6 +87,7 @@ class AreaRandomCrop:
         i, j, h, w = self.get_params((height, width), (resized_height, resized_width))
         image = TVF.crop(image, i, j, h, w)
         return image
+
 
 class ScaleResize:
     def __init__(
