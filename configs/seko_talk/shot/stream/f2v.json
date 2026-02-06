@@ -1,11 +1,9 @@
 {
     "model_cls": "seko_talk",
     "task": "s2v",
-    "model_path":"Wan2.1-i2V1202-Audio-14B-720P/",
-    "infer_steps": 4,
+    "model_path":"/data/temp/Wan2.1-i2V1202-Audio-14B-720P/",
     "target_fps": 16,
     "audio_sr": 16000,
-    "resize_mode": "adaptive",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -28,8 +26,18 @@
     "audio_adapter_cpu_offload": false,
     "lora_configs": [
         {
-        "path": "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "path": "/data/temp/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
-    ]
+    ],
+    "default_input_info":
+    {
+        "infer_steps": 4,
+        "resize_mode": "adaptive",
+        "prompt": "The video features a male speaking to the camera with arms spread out, a slightly furrowed brow, and a focused gaze.",
+        "negative_prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+        "image_path": "assets/inputs/audio/seko_input.png",
+        "audio_path": "assets/inputs/audio/seko_input.mp3",
+        "save_result_path": "save_results/output_seko_talk_shot_stream.mp4"
+    }
 }

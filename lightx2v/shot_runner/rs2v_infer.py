@@ -29,7 +29,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
     @torch.no_grad()
     def generate(self, args):
         rs2v = self.clip_generators["rs2v_clip"]
-        # 获取clip模型配置信息
+        # 获取此clip模型的配置信息
         target_video_length = rs2v.config.get("target_video_length", 81)
         target_fps = rs2v.config.get("target_fps", 16)
         audio_sr = rs2v.config.get("audio_sr", 16000)
