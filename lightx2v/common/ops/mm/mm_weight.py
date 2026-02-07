@@ -1669,7 +1669,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
     Quant MM:
         Weight: int8 perchannel sym
         Act: int8 perchannel dynamic sym
-        Kernel: quant-mm using Sgl-kernel, act dynamic quant using sglang and fallbacke to whathever quant backend available with this priority: vllm > toarchao > triton
+        Kernel: quant-mm using Sgl-kernel, act dynamic quant using sglang and fallback to whatever quant backend available with this priority: vllm > torchao > triton
     """
 
     def __init__(
