@@ -1697,9 +1697,14 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         )
         self.load_func = self.load_int8_perchannel_sym
         # Priority sglang > vllm > toarchao > triton
-        self.act_quant_func = sglang_int8_act_quant or (
-            self.act_quant_int8_perchannel_sym_vllm if vllm_ops else self.act_quant_int8_perchannel_sym_torchao if torchao_int8_quant else int8_quantize_triton
-        )
+        if sglang_int8_act_quant:
+            self.act_quant_func = sglang_int8_act_quant
+        elif vllm_ops:
+            self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        elif torchao_int8_quant:
+            self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
+        else:
+            self.act_quant_func = int8_quantize_triton
         self.weight_need_transpose = True
         self.scale_force_fp32 = True
 
