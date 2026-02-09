@@ -1,4 +1,3 @@
-import torch
 from einops import rearrange
 
 from lightx2v.models.networks.seedvr.dit_v2 import na

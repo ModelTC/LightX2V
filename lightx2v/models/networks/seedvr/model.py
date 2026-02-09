@@ -1,4 +1,5 @@
 import os
+
 import torch
 
 from lightx2v.models.networks.base_model import BaseTransformerModel

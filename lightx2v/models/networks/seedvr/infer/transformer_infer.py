@@ -306,22 +306,16 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         # MLP
         if self.mlp_type == "swiglu":
             vid_mlp = self._get_branch(block_weight, "mlp_proj_out", "vid").apply(
-                F.silu(self._get_branch(block_weight, "mlp_proj_in_gate", "vid").apply(vid_mlp))
-                * self._get_branch(block_weight, "mlp_proj_in", "vid").apply(vid_mlp)
+                F.silu(self._get_branch(block_weight, "mlp_proj_in_gate", "vid").apply(vid_mlp)) * self._get_branch(block_weight, "mlp_proj_in", "vid").apply(vid_mlp)
             )
             if not block_weight.vid_only:
                 txt_mlp = self._get_branch(block_weight, "mlp_proj_out", "txt").apply(
-                    F.silu(self._get_branch(block_weight, "mlp_proj_in_gate", "txt").apply(txt_mlp))
-                    * self._get_branch(block_weight, "mlp_proj_in", "txt").apply(txt_mlp)
+                    F.silu(self._get_branch(block_weight, "mlp_proj_in_gate", "txt").apply(txt_mlp)) * self._get_branch(block_weight, "mlp_proj_in", "txt").apply(txt_mlp)
                 )
         else:
-            vid_mlp = self._get_branch(block_weight, "mlp_proj_out", "vid").apply(
-                F.gelu(self._get_branch(block_weight, "mlp_proj_in", "vid").apply(vid_mlp), approximate="tanh")
-            )
+            vid_mlp = self._get_branch(block_weight, "mlp_proj_out", "vid").apply(F.gelu(self._get_branch(block_weight, "mlp_proj_in", "vid").apply(vid_mlp), approximate="tanh"))
             if not block_weight.vid_only:
-                txt_mlp = self._get_branch(block_weight, "mlp_proj_out", "txt").apply(
-                    F.gelu(self._get_branch(block_weight, "mlp_proj_in", "txt").apply(txt_mlp), approximate="tanh")
-                )
+                txt_mlp = self._get_branch(block_weight, "mlp_proj_out", "txt").apply(F.gelu(self._get_branch(block_weight, "mlp_proj_in", "txt").apply(txt_mlp), approximate="tanh"))
 
         # Ada (mlp out)
         vid_mlp = apply_adaln_single(

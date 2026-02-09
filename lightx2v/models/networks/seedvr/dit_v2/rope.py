@@ -5,9 +5,8 @@ import torch
 from einops import rearrange
 from torch import nn
 
-from .rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
-
 from .cache import Cache
+from .rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
 
 
 class RotaryEmbeddingBase(nn.Module):

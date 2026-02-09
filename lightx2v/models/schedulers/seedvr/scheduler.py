@@ -7,12 +7,12 @@ SeedVR uses a standard diffusion scheduler with:
 - CFG support
 """
 
+from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.models.schedulers.seedvr.diffusion.config import (
     create_sampler_from_config,
     create_sampling_timesteps_from_config,
     create_schedule_from_config,
 )
-from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 

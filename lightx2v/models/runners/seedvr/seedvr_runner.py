@@ -15,10 +15,10 @@ import torch
 from einops import rearrange
 from torch import Tensor
 
-from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
+from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
