@@ -1,8 +1,3 @@
-"""
-Minimal distributed ops stubs for NaDiT migration.
-Sequence parallel is not supported here; functions act as identity helpers.
-"""
-
 import torch.nn.functional as F
 
 

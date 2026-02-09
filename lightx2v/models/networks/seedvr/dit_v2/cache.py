@@ -2,7 +2,6 @@ from typing import Callable
 
 
 class Cache:
-    """Caching reusable args for faster inference (minimal copy from SeedVR)."""
 
     def __init__(self, disable=False, prefix="", cache=None):
         self.cache = cache if cache is not None else {}
