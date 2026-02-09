@@ -1,3 +1,3 @@
-from .nadit_model import SeedVRNaDiTModel
+from .model import SeedVRNaDiTModel
 
 __all__ = ["SeedVRNaDiTModel"]
