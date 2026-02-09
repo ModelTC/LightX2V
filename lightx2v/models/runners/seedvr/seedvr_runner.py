@@ -15,7 +15,7 @@ import torch
 from einops import rearrange
 from torch import Tensor
 
-from lightx2v.models.networks.seedvr.dit_v2.color_fix import wavelet_reconstruction
+from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
@@ -40,9 +40,9 @@ class SeedVRRunner(DefaultRunner):
     def _build_video_transform(self):
         from torchvision.transforms import Compose, Lambda, Normalize
 
-        from lightx2v.models.networks.seedvr.dit_v2.data.image.transforms.divisible_crop import DivisibleCrop
-        from lightx2v.models.networks.seedvr.dit_v2.data.image.transforms.na_resize import NaResize
-        from lightx2v.models.networks.seedvr.dit_v2.data.video.transforms.rearrange import Rearrange
+        from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.divisible_crop import DivisibleCrop
+        from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.na_resize import NaResize
+        from lightx2v.models.video_encoders.hf.seedvr.data.video.transforms.rearrange import Rearrange
 
         target_height = self.config.get("target_height", 720)
         target_width = self.config.get("target_width", 1280)

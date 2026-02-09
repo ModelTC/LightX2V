@@ -5,7 +5,7 @@ import torch
 from einops import rearrange
 from torch import nn
 
-from lightx2v.models.networks.seedvr.dit_v2.rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
+from .rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
 
 from .cache import Cache
 
