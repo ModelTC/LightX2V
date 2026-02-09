@@ -1,7 +1,12 @@
 import torch
 import torch.nn.functional as F
-from flash_attn import flash_attn_varlen_func
 from torch import nn
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    print("flash_attn_varlen_func not found, please install flash_attn first")
+    flash_attn_varlen_func = None
 
 
 class TorchAttention(nn.Module):
