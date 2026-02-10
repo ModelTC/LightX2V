@@ -48,6 +48,8 @@ def auto_calc_config(config):
             config_json = json.load(f)
         config.update(config_json)
 
+    assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
+
     if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
@@ -89,7 +91,6 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-
             if config["model_cls"] == "z_image":
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
                 z_image_patch_size = model_config.pop("all_patch_size", [2])
