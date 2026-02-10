@@ -6,6 +6,8 @@ class BaseScheduler:
         self.config = config
         self.latents = None
         self.step_index = 0
+        self.infer_steps = config["infer_steps"]
+        self.caching_records = [True] * config["infer_steps"]
         self.flag_df = False
         self.transformer_infer = None
         self.infer_condition = True  # cfg status
