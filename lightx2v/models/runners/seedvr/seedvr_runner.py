@@ -31,6 +31,7 @@ class SeedVRRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
         self.run_input_encoder = self._run_input_encoder_local_sr
+        self.text_encoder_output = None
 
         model_path_base = config.get("model_path", "ByteDance-Seed/SeedVR2-3B")
         self.model_path = os.path.join(model_path_base, "seedvr2_ema_3b.pth")
@@ -199,6 +200,8 @@ class SeedVRRunner(DefaultRunner):
         SeedVR uses pre-computed text embeddings.
         Load them from disk and return as context.
         """
+        if self.text_encoder_output is not None:
+            return self.text_encoder_output
         # Load positive embeddings
         if self.pos_emb_path:
             try:
@@ -226,6 +229,7 @@ class SeedVRRunner(DefaultRunner):
             "texts_pos": [pos_emb],
             "texts_neg": [neg_emb],
         }
+        self.text_encoder_output = text_encoder_output
 
         return text_encoder_output
 
