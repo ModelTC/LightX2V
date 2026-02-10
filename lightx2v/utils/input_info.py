@@ -326,7 +326,6 @@ class SekoTalkInputs:
     audio_num: int | Any = UNSET
     video_duration: float | Any = UNSET
     with_mask: bool | Any = UNSET
-    return_result_tensor: bool | Any = UNSET
     save_result_path: str | Any = UNSET
     return_result_tensor: bool | Any = UNSET
     stream_config: dict | Any = UNSET
