@@ -30,6 +30,7 @@ class SeedVRRunner(DefaultRunner):
 
     def __init__(self, config):
         super().__init__(config)
+        self.run_input_encoder = self._run_input_encoder_local_sr
 
         model_path_base = config.get("model_path", "ByteDance-Seed/SeedVR2-3B")
         self.model_path = os.path.join(model_path_base, "seedvr2_ema_3b.pth")
@@ -352,32 +353,3 @@ class SeedVRRunner(DefaultRunner):
             "text_encoder_output": text_encoder_output,
             "latent_shape": latent_shape,
         }
-
-    def __call__(self, *args, **kwargs):
-        """Main inference entry point.
-
-        This handles the SR task specifically.
-        """
-        # Set up SR task input encoder
-        self.run_input_encoder = self._run_input_encoder_local_sr
-
-        # Call parent __call__
-        return super().__call__(*args, **kwargs)
-
-    def __del__(self):
-        """Cleanup resources."""
-        if hasattr(self, "model"):
-            del self.model
-        if hasattr(self, "text_encoders"):
-            del self.text_encoders
-        if hasattr(self, "image_encoder"):
-            del self.image_encoder
-        if hasattr(self, "vae_encoder"):
-            del self.vae_encoder
-        if hasattr(self, "vae_decoder"):
-            del self.vae_decoder
-
-        if hasattr(AI_DEVICE, "__class__"):
-            torch_device_module = getattr(torch, AI_DEVICE)
-            torch_device_module.empty_cache()
-        gc.collect()
