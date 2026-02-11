@@ -20,6 +20,8 @@
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
 
+> 🎉 **NEW: GenRL is here!** Check out our new **[GenRL Framework](https://github.com/ModelTC/GenRL)** for training visual generation models with reinforcement learning! High-performance RL-trained checkpoints now available on **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)**.
+
 > 👋 **Join our WeChat group! LightX2V Rotbot WeChat ID: random42seed**
 
 ## 🧾 Community Code Contribution Guidelines
@@ -39,6 +41,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 
 ## :fire: Latest News
+
+- **February 11, 2026:** 🎉 We are excited to announce **[GenRL](https://github.com/ModelTC/GenRL)** - a scalable reinforcement learning framework for visual generation! GenRL enables training diffusion/flow models with multi-reward optimization (HPSv3, VideoAlign, etc.) using GRPO algorithm. We've released high-performance LoRA checkpoints trained with multi-node multi-GPU setup, demonstrating significant improvements in aesthetic quality, motion coherence, and text-video alignment. Check out our [model collection](https://huggingface.co/collections/lightx2v/genrl) on HuggingFace! Give us a ⭐ if you find it useful!
 
 - **January 20, 2026:** 🚀 We support the [LTX-2](https://huggingface.co/Lightricks/LTX-2) audio-video generation model, featuring CFG parallelism, block-level offload, and FP8 per-tensor quantization. Usage examples can be found in [examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2) and [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2).
 

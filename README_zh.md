@@ -20,6 +20,8 @@
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
+> 🎉 **新品发布：GenRL 来了！** 查看我们全新的 **[GenRL 框架](https://github.com/ModelTC/GenRL)**，使用强化学习训练视觉生成模型！高性能 RL 训练的 checkpoint 现已在 **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)** 开放下载。
+
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 
 ## 🧾 社区代码贡献指南
@@ -39,6 +41,8 @@ pre-commit run --all-files
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 
 ## :fire: 最新动态
+
+- **2026年2月11日:** 🎉 我们很高兴宣布推出 **[GenRL](https://github.com/ModelTC/GenRL)** —— 一个用于视觉生成的可扩展强化学习训练框架！GenRL 支持使用 GRPO 算法对 diffusion/flow 模型进行多奖励优化训练（HPSv3、VideoAlign等）。我们已经发布了在多机多卡上训练的高性能 LoRA checkpoints，在美学质量、运动连贯性和文本-视频对齐等方面都有显著提升。欢迎查看我们在 HuggingFace 上的[模型合集](https://huggingface.co/collections/lightx2v/genrl)！觉得有用的话欢迎给个 ⭐！
 
 - **2026年1月20日:** 🚀 我们支持了[LTX-2](https://huggingface.co/Lightricks/LTX-2)音频-视频生成模型，包含CFG并行、block级别offload、FP8 per-tensor量化等先进特性。使用示例可参考[examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2)和[scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2)。
 
