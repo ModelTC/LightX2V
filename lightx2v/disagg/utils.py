@@ -419,4 +419,7 @@ def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     latent_shape_bytes = 4 * int_bytes_per_elem
     buffer_sizes.append(latent_shape_bytes)
 
+    # Metadata buffer for integrity checks (hashes + shapes)
+    buffer_sizes.append(4096)
+
     return buffer_sizes

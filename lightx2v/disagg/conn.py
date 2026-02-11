@@ -4,6 +4,7 @@ import asyncio
 import logging
 import struct
 import threading
+import torch
 from functools import cache
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
@@ -51,7 +52,8 @@ def group_concurrent_contiguous(
 
 @dataclass
 class DataArgs:
-    engine_rank: int
+    sender_engine_rank: int
+    receiver_engine_rank: int
     data_ptrs: list[int]
     data_lens: list[int]
     data_item_lens: list[int]
@@ -101,10 +103,6 @@ class DataManager:
         ):
             self.engine.register(data_ptr, data_len)
 
-    def update_data_args(self, data_args: DataArgs):
-        self.data_args = data_args
-        self.register_buffer_to_engine()
-
     @cache
     def _connect(self, endpoint: str):
         socket = zmq.Context().socket(zmq.PUSH)
@@ -141,7 +139,7 @@ class DataManager:
             "tcp://"
             + remote
             + ":"
-            + str(DATARECEIVER_POLLING_PORT + self.data_args.engine_rank)
+            + str(DATARECEIVER_POLLING_PORT + self.data_args.receiver_engine_rank)
         ).send_multipart(
             [
                 str(room).encode("ascii"),
@@ -150,7 +148,8 @@ class DataManager:
         )
 
     def start_encode_thread(self):
-        sender_rank_port = DATASENDER_POLLING_PORT + self.data_args.engine_rank
+        sender_rank_port = DATASENDER_POLLING_PORT + self.data_args.sender_engine_rank
+        logger.info("Encoder sender_rank_port=%s", sender_rank_port)
         self.server_socket.bind("tcp://*:" + str(sender_rank_port))
 
         def encode_thread():
@@ -168,6 +167,13 @@ class DataManager:
                 bootstrap_room = int(bootstrap_room.decode("ascii"))
                 transformer_ptrs = list(
                     struct.unpack(f"{len(transformer_ptrs)//8}Q", transformer_ptrs)
+                )
+                logger.info(
+                    "Encoder received ZMQ: endpoint=%s session_id=%s room=%s transformer_ptrs=%s",
+                    endpoint,
+                    mooncake_session_id,
+                    bootstrap_room,
+                    transformer_ptrs,
                 )
                 self.waiting_pool[bootstrap_room] = (
                     endpoint,
@@ -212,7 +218,7 @@ class DataManager:
         threading.Thread(target=transfer_thread).start()
 
     def start_transformer_thread(self):
-        receiver_rank_port = DATARECEIVER_POLLING_PORT + self.data_args.engine_rank
+        receiver_rank_port = DATARECEIVER_POLLING_PORT + self.data_args.receiver_engine_rank
         self.server_socket.bind("tcp://*:" + str(receiver_rank_port))
 
         def transformer_thread():
@@ -285,8 +291,9 @@ class DataReceiver:
         self.encode_server_url = (
             bootstrap_addr.split(":")[0]
             + ":"
-            + str(DATASENDER_POLLING_PORT + self.data_mgr.data_args.engine_rank)
+            + str(DATASENDER_POLLING_PORT + self.data_mgr.data_args.sender_engine_rank)
         )
+        logger.info("DataReceiver encode_server_url=%s", self.encode_server_url)
         self.transformer_ip = self.data_mgr.get_localhost()
         self.session_id = self.data_mgr.get_session_id()
         self.data_mgr.set_status(bootstrap_room, DataPoll.WaitingForInput)

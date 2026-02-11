@@ -59,22 +59,30 @@ class MooncakeTransferEngine:
             logger.error(f"Failed to load Mooncake config: {e}")
             raise
 
-        session_suffix = "_" + str(uuid.uuid4())
-        self.session_id = self.config.local_hostname + session_suffix
+        # session_suffix = "_" + str(uuid.uuid4())
         self.initialize(
-            self.session_id,
+            self.config.local_hostname,
             self.config.metadata_server,
             self.config.protocol,
             self.config.device_name,
         )
+        # session_suffix = ":" + self.engine.get_rpc_port()
+        # self.session_id = self.config.local_hostname + session_suffix
+        self.session_id = f"{self.config.local_hostname}:{self.engine.get_rpc_port()}"
 
     def register(self, ptr, length):
         if self.engine:
-            self.engine.register_memory(ptr, length)
+            ret = self.engine.register_memory(ptr, length)
+            if ret != 0:
+                logger.error("Mooncake memory registration failed.")
+                raise RuntimeError("Mooncake memory registration failed.")
 
     def deregister(self, ptr):
         if self.engine:
-            self.engine.unregister_memory(ptr)
+            ret = self.engine.unregister_memory(ptr)
+            if ret != 0:
+                logger.error("Mooncake memory deregistration failed.")
+                raise RuntimeError("Mooncake memory deregistration failed.")
 
     def initialize(
         self,

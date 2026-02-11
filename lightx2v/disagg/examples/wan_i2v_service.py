@@ -60,16 +60,16 @@ def main():
         data_bootstrap_room=0,
     )
 
-    config.image_path = image_path
-    config.prompt = prompt
-    config.negative_prompt = negative_prompt
-    config.save_path = save_result_path
+    config["image_path"] = image_path
+    config["prompt"] = prompt
+    config["negative_prompt"] = negative_prompt
+    config["save_path"] = save_result_path
 
     logger.info(f"Config initialized for task: {task}")
     seed_all(seed)
 
     # 2. Add seed to config so services use it
-    config.seed = seed
+    config["seed"] = seed
 
     # 3. Define service threads
     import threading
@@ -79,6 +79,7 @@ def main():
         encoder_service = EncoderService(config)
         logger.info("Running Encoder Service...")
         encoder_service.process()
+        logger.info("Encoder Service completed.")
         encoder_service.release_memory()
 
     def run_transformer():
