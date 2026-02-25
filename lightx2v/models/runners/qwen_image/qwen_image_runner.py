@@ -129,7 +129,7 @@ class QwenImageRunner(DefaultRunner):
 
         if vae_type == "tensorrt":
             try:
-                from lightx2v.models.video_encoders.hf.qwen_image.vae_trt import TensorRTVAE
+                from lightx2v.models.video_encoders.trt.qwen_image.vae_trt import TensorRTVAE
 
                 logger.info("Loading TensorRT-accelerated VAE")
                 vae = TensorRTVAE(self.config)
@@ -360,7 +360,7 @@ class QwenImageRunner(DefaultRunner):
     def set_img_shapes(self):
         width, height = self.input_info.auto_width, self.input_info.auto_height
         if self.config["task"] == "t2i":
-            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * 1
+            image_shapes = [[(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)]]
         elif self.config["task"] == "i2i":
             if self.is_layered:
                 image_shapes = [
@@ -404,7 +404,7 @@ class QwenImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor:
+        if not input_info.return_result_tensor and input_info.save_result_path:
             image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
             image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
             if isinstance(images[0], list) and len(images[0]) > 1:
