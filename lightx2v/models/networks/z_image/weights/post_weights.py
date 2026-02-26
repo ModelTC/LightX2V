@@ -18,7 +18,7 @@ class ZImagePostWeights(WeightModule):
                 "all_final_layer.2-1.adaLN_modulation.1.bias",
             ),
         )
-        self.add_module("norm_out", LN_WEIGHT_REGISTER["Default"](eps=1e-6))
+        self.add_module("norm_out", LN_WEIGHT_REGISTER["torch"](eps=1e-6))
 
         self.add_module(
             "proj_out_linear",

@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
-from lightx2v.models.networks.ltx2.lora_adapter import LTX2LoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.model import LTX2Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.ltx2.scheduler import LTX2Scheduler
@@ -14,7 +14,6 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.ltx2_media_io import load_image_conditioning
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -49,8 +48,8 @@ class LTX2Runner(DefaultRunner):
             model = LTX2Model(**ltx2_model_kwargs)
         else:
             model = LTX2Model(**ltx2_model_kwargs)
-            lora_wrapper = LTX2LoraWrapper(model)
-            lora_wrapper.apply_lora(lora_configs)
+            lora_adapter = LoraAdapter(model, model_prefix="model.diffusion_model.")
+            lora_adapter.apply_lora(lora_configs)
         return model
 
     def load_upsampler(self):
@@ -493,7 +492,6 @@ class LTX2Runner(DefaultRunner):
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 
-    @peak_memory_decorator
     def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
         """
         Run denoising loop for a segment.

@@ -140,7 +140,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         pass
 
 
-@RMS_WEIGHT_REGISTER("Default")
+@RMS_WEIGHT_REGISTER("torch")
 class RMSWeight(RMSWeightTemplate):
     def __init__(
         self,
@@ -306,18 +306,22 @@ class RMSWeightFP32(RMSWeight):
             lora_path,
         )
 
-    def apply(self, input_tensor):
+    def apply(self, input_tensor, moe_gen=False):
         input_dtype = input_tensor.dtype
-        variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
-
-        if self.weight.dtype in [torch.float16, torch.bfloat16]:
-            hidden_states = hidden_states.to(self.weight.dtype)
-        if self.weight is not None:
-            hidden_states = hidden_states * (self._get_actual_weight())
-        hidden_states = hidden_states.to(input_dtype)
-
-        return hidden_states
+        if moe_gen:
+            hidden_states = input_tensor.to(torch.float32)
+            variance = hidden_states.pow(2).mean(-1, keepdim=True)
+            hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+            return self.weight * hidden_states.to(input_dtype)
+        else:
+            variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+            hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
+            if self.weight.dtype in [torch.float16, torch.bfloat16]:
+                hidden_states = hidden_states.to(self.weight.dtype)
+            if self.weight is not None:
+                hidden_states = hidden_states * self.weight
+            hidden_states = hidden_states.to(input_dtype)
+            return hidden_states
 
 
 @RMS_WEIGHT_REGISTER("self_forcing")

@@ -207,7 +207,7 @@ class QwenImageImgAttention(WeightModule):
         self.config = config
         self.heads = config["num_attention_heads"]
         self.rms_norm_type = config.get("rms_norm_type", "one-pass")
-        self.ln_type = config.get("ln_type", "Triton")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
 
@@ -224,7 +224,7 @@ class QwenImageImgAttention(WeightModule):
         )
         self.add_module(
             "img_norm1",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 eps=1e-6,
@@ -328,7 +328,7 @@ class QwenImageTxtAttention(WeightModule):
         self.config = config
         self.heads = config["num_attention_heads"]
         self.rms_norm_type = config.get("rms_norm_type", "one-pass")
-        self.ln_type = config.get("ln_type", "Triton")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
 
@@ -345,7 +345,7 @@ class QwenImageTxtAttention(WeightModule):
         )
         self.add_module(
             "txt_norm1",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 eps=1e-6,
@@ -507,13 +507,13 @@ class QwenImageFFN(WeightModule):
         self.mm_type = mm_type
         self.task = task
         self.config = config
-        self.ln_type = config.get("ln_type", "Triton")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
 
         self.add_module(
             "img_norm2",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 eps=1e-6,
@@ -549,7 +549,7 @@ class QwenImageFFN(WeightModule):
 
         self.add_module(
             "txt_norm2",
-            LN_WEIGHT_REGISTER[self.ln_type](
+            LN_WEIGHT_REGISTER[self.layer_norm_type](
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 eps=1e-6,

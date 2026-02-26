@@ -92,9 +92,12 @@ class LightLLMKernelTextEncoder:
         # Select attention implementation
         # NOTE: torch.compile is incompatible with flash_attention_2
         if self.use_flash_attention_kernel:
-            attn_impl = "flash_attention_2"
+            if self.use_flash_attention_kernel == "flash_attention_3":
+                attn_impl = "flash_attention_3"
+            else:
+                attn_impl = "flash_attention_2"
         else:
-            attn_impl = "eager"  # Compatible with torch.compile
+            attn_impl = "sdpa"  # Compatible with torch.compile and much faster than eager
 
         logger.info(f"  Loading model from {text_encoder_path}...")
         logger.info(f"  Attention implementation: {attn_impl}")
@@ -121,16 +124,16 @@ class LightLLMKernelTextEncoder:
         if self.use_flash_attention_kernel:
             logger.info("  ✓ Flash Attention 2 (loaded with model)")
 
-            if self.use_rmsnorm_kernel:
-                try:
-                    from sgl_kernel.elementwise import rmsnorm
+        if self.use_rmsnorm_kernel:
+            try:
+                from sgl_kernel.elementwise import rmsnorm
 
-                    self._rmsnorm_kernel = rmsnorm
-                    self._replace_rmsnorm_with_kernel()
-                    logger.info("  ✓ RMSNorm kernel integrated (from sgl_kernel)")
-                except ImportError as e:
-                    logger.warning(f"  ✗ Failed to import sgl_kernel: {e}. RMSNorm optimization disabled.")
-                    self.use_rmsnorm_kernel = False
+                self._rmsnorm_kernel = rmsnorm
+                self._replace_rmsnorm_with_kernel()
+                logger.info("  ✓ RMSNorm kernel integrated (from sgl_kernel)")
+            except ImportError as e:
+                logger.warning(f"  ✗ Failed to import sgl_kernel: {e}. RMSNorm optimization disabled.")
+                self.use_rmsnorm_kernel = False
 
     def _replace_rmsnorm_with_kernel(self):
         """Replace RMSNorm layers with fused kernel"""

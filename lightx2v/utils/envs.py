@@ -47,3 +47,18 @@ def GET_SENSITIVE_DTYPE():
 def GET_RECORDER_MODE():
     RECORDER_MODE = int(os.getenv("RECORDER_MODE", "0"))
     return RECORDER_MODE
+
+
+@lru_cache(maxsize=None)
+def GET_USE_CHANNELS_LAST_3D():
+    """
+    Check if channels_last_3d memory format optimization is enabled.
+
+    When enabled (USE_CHANNELS_LAST_3D=1), Conv3d weights are converted to
+    channels_last_3d format, eliminating NCHW<->NHWC format conversion overhead
+    in cuDNN (~9% faster).
+
+    Returns:
+        bool: True if optimization is enabled, False otherwise (default).
+    """
+    return os.getenv("USE_CHANNELS_LAST_3D", "0") == "1"

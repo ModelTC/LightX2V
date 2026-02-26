@@ -1,6 +1,5 @@
 # torchrun --nproc_per_node=8 run_lightx2v_wan22_t2v_8gpu_with_warmup.py
 
-import os
 import sys
 from datetime import datetime
 
@@ -8,7 +7,6 @@ lightx2v_path = "/path/to/LightX2V"
 model_path = "/path/to/Wan-AI/Wan2.2-T2V-A14B"
 
 sys.path.append(lightx2v_path)
-os.environ["PROFILING_DEBUG_LEVEL"] = "2"
 
 from lightx2v import LightX2VPipeline  # noqa: E402
 

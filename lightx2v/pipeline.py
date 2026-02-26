@@ -21,6 +21,9 @@ from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
+from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -353,7 +356,10 @@ class LightX2VPipeline:
         self.lora_dynamic_apply = lora_dynamic_apply
 
     def switch_lora(self, lora_path: str, strength: float = 1.0):
-        logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+        if lora_path == "":
+            logger.info("Removing LoRA weights")
+        else:
+            logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
         if not self.lora_dynamic_apply:
             logger.error("LoRA dynamic apply is not enabled. Please enable it first.")
             return

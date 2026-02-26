@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 
 from lightx2v.models.video_encoders.hf.tae import TAEHV
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 
 
 class DotDict(dict):
@@ -60,7 +59,6 @@ class WanVAE_tiny(nn.Module):
 
             self.z_dim = 16
 
-    @peak_memory_decorator
     @torch.no_grad()
     def decode(self, latents):
         latents = latents.unsqueeze(0)
@@ -194,7 +192,6 @@ class Wan2_2_VAE_tiny(nn.Module):
 
             self.z_dim = 48
 
-    @peak_memory_decorator
     @torch.no_grad()
     def decode(self, latents):
         latents = latents.unsqueeze(0)

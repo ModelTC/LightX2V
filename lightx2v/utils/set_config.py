@@ -8,6 +8,7 @@ from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
+from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -34,18 +35,29 @@ def get_default_config():
     return default_config
 
 
-def set_config(args):
+def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
+    return config
 
+
+def auto_calc_config(config):
     if config.get("config_json", None) is not None:
         logger.info(f"Loading some config from {config['config_json']}")
         with open(config["config_json"], "r") as f:
             config_json = json.load(f)
         config.update(config_json)
 
+    assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
+
     if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]
+        if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
+            with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+    elif config["model_cls"] in ["worldplay_distill", "worldplay_ar", "worldplay_bi"]:  # Special config for WorldPlay models
+        config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
@@ -79,7 +91,6 @@ def set_config(args):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-
             if config["model_cls"] == "z_image":
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
                 z_image_patch_size = model_config.pop("all_patch_size", [2])
@@ -104,17 +115,10 @@ def set_config(args):
                     model_config = json.load(f)
                 config.update(model_config)
 
-    if config["task"] in ["i2v", "s2v"]:
+    if config["task"] in ["i2v", "s2v", "rs2v"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
-
-    if config["task"] not in ["t2i", "i2i"] and config["model_cls"] not in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "ltx2"]:
-        config["attnmap_frame_num"] = ((config["target_video_length"] - 1) // config["vae_stride"][0] + 1) // config["patch_size"][0]
-        if config["model_cls"] in ["seko_talk", "wan2.2_animate"]:
-            if not config.get("f2v_process", False):
-                config["attnmap_frame_num"] += 1
-            config["padding_multiple"] = config["attnmap_frame_num"]
 
     # Load diffusers vae config
     if os.path.exists(os.path.join(config["model_path"], "vae", "config.json")):
@@ -125,6 +129,12 @@ def set_config(args):
             elif "block_out_channels" in vae_config:
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
 
+    return config
+
+
+def set_config(args):
+    config = set_args2config(args)
+    config = auto_calc_config(config)
     return config
 
 
@@ -160,9 +170,5 @@ def set_parallel_config(config):
 
 def print_config(config):
     config_to_print = config.copy()
-    config_to_print.pop("device_mesh", None)
-    if config["parallel"]:
-        if dist.get_rank() == 0:
-            logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4)}")
-    else:
-        logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4)}")
+    if is_main_process():
+        logger.info(f"config:\n{json.dumps(config_to_print, ensure_ascii=False, indent=4, default=str)}")

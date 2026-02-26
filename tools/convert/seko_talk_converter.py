@@ -2,13 +2,14 @@
 Model Merge and Multi-Precision Conversion Script
 
 This script supports four conversion modes:
-1. 'both' (default): Convert both R2V model and audio adapter
-2. 'r2v': Only convert R2V model (R2V + distill via LoRA)
+1. 'both' (default): Convert both R2V model and audio adapter (R2V + distill via LoRA)
+2. 'r2v': Only convert R2V model (single model → FP32 → BF16/FP8, no distill merge)
 3. 'audio': Only convert audio adapter
 4. 'merged': Only merge R2V + distill (no precision conversion)
 
 Pipeline:
-- R2V model: R2V + distill via LoRA → merged.safetensors (FP32) → BF16/FP8
+- R2V (both/merged): R2V + distill via LoRA → merged.safetensors (FP32) → BF16/FP8
+- R2V (r2v only): R2V model → merged.safetensors (FP32) → BF16/FP8
 - Audio adapter: (optional: + LoRA) → audio_adapter.pt → BF16 → FP8
 
 Usage Examples:
@@ -19,11 +20,10 @@ Usage Examples:
         --audio_adapter /path/to/audio_adapter.pt \
         --output_dir /data/output
 
-    # Only convert R2V model
+    # Only convert R2V model (no distill merge)
     python tools/convert/seko_talk_converter.py \
         --mode r2v \
         --r2v_model /path/to/model.pt \
-        --distill_model /path/to/model_ema.pt \
         --output_dir /data/output
 
     # Only convert audio adapter
@@ -64,6 +64,7 @@ Output files (depending on mode):
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -277,9 +278,12 @@ def step5_convert_audio_adapter_to_fp8(output_dir: Path):
 
 def validate_args(args):
     """验证参数并返回路径对象"""
-    if args.mode in ["both", "r2v", "merged"]:
+    if args.mode in ["both", "merged"]:
         if not args.r2v_model or not args.distill_model:
-            raise ValueError("--r2v_model and --distill_model are required for 'both', 'r2v', and 'merged' modes")
+            raise ValueError("--r2v_model and --distill_model are required for 'both' and 'merged' modes")
+    if args.mode == "r2v":
+        if not args.r2v_model:
+            raise ValueError("--r2v_model is required for 'r2v' mode")
 
     if args.mode in ["both", "audio"]:
         if not args.audio_adapter:
@@ -337,8 +341,8 @@ def main():
         default="both",
         help="Conversion mode: 'both' (default), 'r2v' (only R2V model), 'audio' (only audio adapter), or 'merged' (only merge R2V+distill)",
     )
-    parser.add_argument("--r2v_model", type=str, help="Path to R2V model (.pt) [required for 'both' and 'r2v' modes]")
-    parser.add_argument("--distill_model", type=str, help="Path to distillation model (.pt) [required for 'both' and 'r2v' modes]")
+    parser.add_argument("--r2v_model", type=str, help="Path to R2V model (.pt) [required for 'both', 'r2v', 'merged' modes]")
+    parser.add_argument("--distill_model", type=str, help="Path to distillation model (.pt) [required for 'both' and 'merged' modes]")
     parser.add_argument("--audio_adapter", type=str, help="Path to audio adapter (.pt) [required for 'both' and 'audio' modes]")
     parser.add_argument("--audio_lora", type=str, help="Path to audio LoRA (.pt/.safetensors) [optional, for merging with audio adapter]")
     parser.add_argument("--audio_lora_alpha", type=float, default=8.0, help="Alpha for audio LoRA merge (default: 8.0)")
@@ -368,7 +372,6 @@ def main():
                     paths["r2v"] = backward_convert_model(paths["r2v"], output_dir, "model")
                 if paths["distill"]:
                     paths["distill"] = backward_convert_model(paths["distill"], output_dir, "model_ema")
-
             if args.mode in ["both", "audio"] and paths["audio"]:
                 logger.info("\n>>> BACKWARD CONVERSION: Audio Adapter")
                 paths["audio"] = backward_convert_model(paths["audio"], output_dir, "audio_adapter")
@@ -376,7 +379,15 @@ def main():
         # Process R2V model
         if args.mode in ["both", "r2v", "merged"]:
             logger.info("\n>>> Processing R2V MODEL")
-            merged_path = step1_merge_via_lora(paths["r2v"], paths["distill"], output_dir, args.lora_alpha, temp_dir)
+            if args.mode == "r2v":
+                merged_path = output_dir / "merged.safetensors"
+                if paths["r2v"].suffix in [".pt", ".pth"]:
+                    checkpoint_to_safetensors(paths["r2v"], merged_path, "STEP 1: Convert R2V model to safetensors (FP32)")
+                else:
+                    shutil.copy(paths["r2v"], merged_path)
+                    logger.info(f"  ✓ Copied R2V model to: {merged_path}")
+            else:
+                merged_path = step1_merge_via_lora(paths["r2v"], paths["distill"], output_dir, args.lora_alpha, temp_dir)
 
             if args.mode != "merged":
                 step2_convert_merged_to_bf16(merged_path, output_dir)

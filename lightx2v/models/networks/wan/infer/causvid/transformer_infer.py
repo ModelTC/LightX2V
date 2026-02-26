@@ -47,6 +47,8 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         self.crossattn_cache = crossattn_cache
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
+        self.get_scheduler_values()
+        self.reset_infer_states()
         return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end)
 
     def _infer_with_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
@@ -139,7 +141,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
     def infer_cross_attn(self, weights, x, context, block_idx):
         norm3_out = weights.norm3.apply(x)
 
-        if self.task in ["i2v", "s2v"]:
+        if self.task in ["i2v", "s2v", "rs2v"]:
             context_img = context[:257]
             context = context[257:]
 
@@ -167,7 +169,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
             max_seqlen_kv=k.size(0),
         )
 
-        if self.task in ["i2v", "s2v"]:
+        if self.task in ["i2v", "s2v", "rs2v"]:
             k_img = weights.cross_attn_norm_k_img.apply(weights.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = weights.cross_attn_v_img.apply(context_img).view(-1, n, d)
 

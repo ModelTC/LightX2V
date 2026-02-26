@@ -41,9 +41,15 @@ except ImportError:
     scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm = None, None
 
 try:
-    from vllm import _custom_ops as ops
+    from vllm import _custom_ops as vllm_ops
 except ImportError:
-    ops = None
+    vllm_ops = None
+
+
+try:
+    from sglang.srt.layers.quantization.int8_kernel import per_token_quant_int8 as sglang_int8_act_quant
+except ImportError:
+    sglang_int8_act_quant = None
 
 try:
     import sgl_kernel
@@ -205,6 +211,18 @@ class MMWeightTemplate(metaclass=ABCMeta):
                     self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
                 logger.debug(f"Update LoRA to {self.weight_name}")
 
+    def remove_lora(self):
+        if hasattr(self, "lora_down"):
+            del self.lora_down
+        if hasattr(self, "lora_up"):
+            del self.lora_up
+        if hasattr(self, "lora_alpha"):
+            del self.lora_alpha
+        if hasattr(self, "lora_scale"):
+            del self.lora_scale
+        self.has_lora_branch = False
+        logger.debug(f"Remove LoRA from {self.weight_name}")
+
     def state_dict(self, destination=None):
         return state_dict(self, self.base_attrs, self.lora_attrs, destination)
 
@@ -242,7 +260,7 @@ class MMWeight(MMWeightTemplate):
     def __init__(
         self,
         weight_name,
-        bias_name,
+        bias_name=None,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -515,6 +533,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     # =========================
     def act_quant_int8_perchannel_sym_torchao(self, x):
         input_tensor_quant, input_tensor_scale = torchao_int8_quant(x)
+        if self.scale_force_fp32:
+            input_tensor_scale = input_tensor_scale.to(torch.float32)
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_torchao(self, x):
@@ -525,7 +545,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return quantized, scale.float()
 
     def act_quant_fp8_perchannel_sym_vllm(self, x):
-        input_tensor_quant, input_tensor_scale = ops.scaled_fp8_quant(x, None, scale_ub=None, use_per_token_if_dynamic=True)
+        input_tensor_quant, input_tensor_scale = vllm_ops.scaled_fp8_quant(x, None, scale_ub=None, use_per_token_if_dynamic=True)
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_sgl(self, x):
@@ -536,7 +556,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_int8_perchannel_sym_vllm(self, x):
-        input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
+        input_tensor_quant, input_tensor_scale, _ = vllm_ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_nvfp4(self, x):
@@ -1324,7 +1344,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
         self.scale_force_fp32 = True
-        if ops is not None:
+        if vllm_ops is not None:
             self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         else:
             self.act_quant_func = fp8_quantize_triton
@@ -1382,7 +1402,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
         self.scale_force_fp32 = True
-        if ops is not None:
+        if vllm_ops is not None:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
         else:
             self.act_quant_func = int8_quantize_triton
@@ -1649,7 +1669,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
     Quant MM:
         Weight: int8 perchannel sym
         Act: int8 perchannel dynamic sym
-        Kernel: quant-mm using Sgl-kernel, act dynamic quant using vllm
+        Kernel: quant-mm using Sgl-kernel, act dynamic quant using sglang and fallback to whatever quant backend available with this priority: vllm > torchao > triton
     """
 
     def __init__(
@@ -1676,7 +1696,15 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             lora_path,
         )
         self.load_func = self.load_int8_perchannel_sym
-        self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        # Priority sglang > vllm > toarchao > triton
+        if sglang_int8_act_quant:
+            self.act_quant_func = sglang_int8_act_quant
+        elif vllm_ops:
+            self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        elif torchao_int8_quant:
+            self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
+        else:
+            self.act_quant_func = int8_quantize_triton
         self.weight_need_transpose = True
         self.scale_force_fp32 = True
 

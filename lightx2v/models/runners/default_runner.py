@@ -14,7 +14,6 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -86,7 +85,7 @@ class DefaultRunner(BaseRunner):
             self.run_input_encoder = self._run_input_encoder_local_vace
         elif self.config["task"] == "animate":
             self.run_input_encoder = self._run_input_encoder_local_animate
-        elif self.config["task"] == "s2v":
+        elif self.config["task"] in ["s2v", "rs2v"]:
             self.run_input_encoder = self._run_input_encoder_local_s2v
         elif self.config["task"] == "t2av":
             self.run_input_encoder = self._run_input_encoder_local_t2av
@@ -171,7 +170,6 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    @peak_memory_decorator
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
 
@@ -349,7 +347,7 @@ class DefaultRunner(BaseRunner):
             self.model.set_scheduler(self.scheduler)
 
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v"]:
+        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
         if hasattr(self, "sr_version") and self.sr_version is not None:
@@ -480,10 +478,13 @@ class DefaultRunner(BaseRunner):
     def switch_lora(self, lora_path: str, strength: float = 1.0):
         """
         Switch LoRA weights dynamically by calling weight modules' update_lora method.
+        If an empty lora_path is provided, it removes LoRA weights by calling weight
+        modules' remove_lora method.
 
         This method allows switching LoRA weights at runtime without reloading the model.
         It calls the model's _update_lora method, which updates LoRA weights in pre_weight,
-        transformer_weights, and post_weight modules.
+        transformer_weights, and post_weight modules. Or removes LoRA weights if lora_path
+        is empty.
 
         Args:
             lora_path: Path to the LoRA safetensors file
@@ -501,9 +502,19 @@ class DefaultRunner(BaseRunner):
             return False
 
         try:
-            logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
-            self.model._update_lora(lora_path, strength)
-            logger.info("LoRA switched successfully")
+            if lora_path == "":
+                if hasattr(self.model, "_remove_lora"):
+                    logger.info("Removing LoRA weights")
+                    self.model._remove_lora()
+                    logger.info("LoRA removed successfully")
+                    return True
+                else:
+                    logger.error("Model does not support LoRA removal.")
+                    return False
+            else:
+                logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
+                self.model._update_lora(lora_path, strength)
+                logger.info("LoRA switched successfully")
             return True
         except Exception as e:
             logger.error(f"Failed to switch LoRA: {e}")

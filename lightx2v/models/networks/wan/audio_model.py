@@ -22,8 +22,6 @@ class WanAudioModel(WanModel):
     transformer_weight_class = WanAudioTransformerWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
-        self.config = config
-        self._load_adapter_ckpt()
         super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
 
     def _load_adapter_ckpt(self):
@@ -47,11 +45,12 @@ class WanAudioModel(WanModel):
 
         adapter_offload = self.config.get("cpu_offload", False)
         load_from_rank0 = self.config.get("load_from_rank0", False)
-        self.adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
+        adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
         if not adapter_offload:
             if not dist.is_initialized() or not load_from_rank0:
-                for key in self.adapter_weights_dict:
-                    self.adapter_weights_dict[key] = self.adapter_weights_dict[key].to(torch.device(AI_DEVICE))
+                for key in adapter_weights_dict:
+                    adapter_weights_dict[key] = adapter_weights_dict[key].to(torch.device(AI_DEVICE))
+        return adapter_weights_dict
 
     def _init_infer_class(self):
         super()._init_infer_class()
@@ -153,7 +152,7 @@ class WanAudioModel(WanModel):
         if person_mask_latens is not None:
             pre_infer_out.adapter_args["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
 
-        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v"]:
+        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
             padding_size = (world_size - (embed.shape[0] % world_size)) % world_size
             if padding_size > 0:

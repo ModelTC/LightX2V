@@ -12,9 +12,27 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 class EulerScheduler(WanScheduler):
     def __init__(self, config):
-        super().__init__(config)
-        d = config["dim"] // config["num_heads"]
-        self.rope_t_dim = d // 2 - 2 * (d // 6)
+        self.config = config
+        self.latents = None
+        self.step_index = 0
+        self.flag_df = False
+        self.transformer_infer = None
+        self.infer_condition = True  # cfg status
+        self.keep_latents_dtype_in_scheduler = False
+        self.target_video_length = self.config["target_video_length"]
+        self.sample_shift = self.config["sample_shift"]
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+        self.patch_size = (1, 2, 2)
+        self.shift = 1
+        self.num_train_timesteps = 1000
+        self.disable_corrector = []
+        self.solver_order = 2
+        self.noise_pred = None
+        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.head_size = self.config["dim"] // self.config["num_heads"]
 
         if self.config["parallel"]:
             self.sp_size = self.config["parallel"].get("seq_p_size", 1)
@@ -74,8 +92,9 @@ class EulerScheduler(WanScheduler):
             if self.prev_latents is not None:
                 self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
 
-    def prepare(self, seed, latent_shape, image_encoder_output=None):
+    def prepare(self, seed, latent_shape, infer_steps, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
+        self.infer_steps = infer_steps
         timesteps = np.linspace(self.num_train_timesteps, 0, self.infer_steps + 1, dtype=np.float32)
 
         self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=AI_DEVICE)
@@ -85,14 +104,6 @@ class EulerScheduler(WanScheduler):
         self.sigmas = self.sample_shift * self.sigmas / (1 + (self.sample_shift - 1) * self.sigmas)
 
         self.timesteps = self.sigmas * self.num_train_timesteps
-
-        self.freqs[latent_shape[1] // self.patch_size[0] :, : self.rope_t_dim] = 0
-
-        if self.config.get("f2v_process", False):
-            f = latent_shape[1] // self.patch_size[0]
-        else:
-            f = latent_shape[1] // self.patch_size[0] + 1
-        self.cos_sin = self.prepare_cos_sin((f, latent_shape[2] // self.patch_size[1], latent_shape[3] // self.patch_size[2]))
 
     def step_post(self):
         model_output = self.noise_pred.to(torch.float32)

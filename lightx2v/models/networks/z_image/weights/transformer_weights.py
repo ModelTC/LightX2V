@@ -138,7 +138,7 @@ class ZImageTransformerBlock(WeightModule):
         self.task = task
         self.config = config
         self.has_modulation = has_modulation
-        self.ln_type = config.get("ln_type", "Triton")
+        self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
         self.lazy_load = lazy_load
@@ -220,6 +220,7 @@ class ZImageAdaLNModulation(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
 
@@ -318,6 +319,7 @@ class ZImageAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
         self.add_module(
@@ -329,6 +331,7 @@ class ZImageAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
         self.add_module(
@@ -340,6 +343,7 @@ class ZImageAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
 
@@ -355,6 +359,7 @@ class ZImageAttention(WeightModule):
                         create_cpu_buffer,
                         self.lazy_load,
                         self.lazy_load_file,
+                        lora_prefix=block_prefix,
                     ),
                 ]
             ),
@@ -417,6 +422,7 @@ class ZImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
         self.add_module(
@@ -428,6 +434,7 @@ class ZImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
         self.add_module(
@@ -439,6 +446,7 @@ class ZImageFFN(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
             ),
         )
 
