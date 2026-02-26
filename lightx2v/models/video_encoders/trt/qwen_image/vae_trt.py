@@ -6,9 +6,8 @@ Supports both single static engine and multi-aspect-ratio engine selection.
 """
 
 import os
-import math
+
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.utils.envs import GET_DTYPE
@@ -37,9 +36,9 @@ PROFILE_CONFIGS = [
     ("1_1_1024", 1024, 1024, 1),
     ("16_9_480p", 480, 848, 2),
     ("16_9_720p", 720, 1280, 3),
-    ("16_9_1080p", 1088, 1920, 4), # Fixed to 1088 for 112-alignment
+    ("16_9_1080p", 1088, 1920, 4),  # Fixed to 1088 for 112-alignment
     ("9_16_720p", 1280, 720, 5),
-    ("9_16_1080p", 1920, 1088, 6), # Fixed to 1088 
+    ("9_16_1080p", 1920, 1088, 6),  # Fixed to 1088
     ("4_3_768p", 768, 1024, 7),
     ("3_2_1080p", 1088, 1620, 8),
 ]
@@ -52,6 +51,7 @@ STATIC_RESOLUTIONS = {
     (1140, 1472): "4_3",
     (1024, 768): "3_4",
 }
+
 
 class TensorRTVAE:
     """TensorRT-accelerated VAE for Qwen Image model."""
@@ -76,7 +76,7 @@ class TensorRTVAE:
         # Unified engine path. Must be a directory.
         self.trt_engine_path = trt_config.get("trt_engine_path", "")
         self.multi_profile_mode = trt_config.get("multi_profile", False)
-        
+
         # TRT runtime
         self.trt_logger = trt.Logger(trt.Logger.WARNING)
         self.stream = torch.cuda.Stream()
@@ -86,7 +86,7 @@ class TensorRTVAE:
         self._encoder_io_names = {}
         self._decoder_context = None
         self._decoder_io_names = {}
-        
+
         # Static mode cache
         self._static_encoder_cache = {}
         self._static_decoder_cache = {}
@@ -103,19 +103,19 @@ class TensorRTVAE:
     def _load_engines(self):
         """Load TensorRT engines (Eager Loading)."""
         if not self.trt_engine_path:
-             logger.warning("TensorRT VAE requires trt_engine_path configuration. Fallback to PyTorch.")
-             return
-             
+            logger.warning("TensorRT VAE requires trt_engine_path configuration. Fallback to PyTorch.")
+            return
+
         if not os.path.exists(self.trt_engine_path) or not os.path.isdir(self.trt_engine_path):
-             logger.warning(f"trt_engine_path is not a valid directory: {self.trt_engine_path}. Fallback to PyTorch.")
-             return
+            logger.warning(f"trt_engine_path is not a valid directory: {self.trt_engine_path}. Fallback to PyTorch.")
+            return
 
         # Directory Mode (Auto-Discovery)
         if self.multi_profile_mode:
             # I2I Multi-Profile Mode: Look for standard names in directory
             enc_path = os.path.join(self.trt_engine_path, "vae_encoder_multi_profile.trt")
             dec_path = os.path.join(self.trt_engine_path, "vae_decoder_multi_profile.trt")
-            
+
             logger.info(f"Loading Multi-Profile TRT VAE from dir: {self.trt_engine_path}")
             if os.path.exists(enc_path):
                 engine = self._load_engine_file(enc_path)
@@ -124,7 +124,7 @@ class TensorRTVAE:
                 self._encoder_engine = engine
             else:
                 logger.warning(f"Could not find encoder engine at {enc_path}, will fallback to PyTorch when needed.")
-                
+
             if os.path.exists(dec_path):
                 engine = self._load_engine_file(dec_path)
                 self._decoder_context = engine.create_execution_context()
@@ -135,14 +135,14 @@ class TensorRTVAE:
         else:
             # T2I Static Directory Mode
             logger.info(f"Loading Directory-Based Static TRT VAE (Eager Load). Root: {self.trt_engine_path}")
-            
+
             # Eagerly load all supported resolutions
             loaded_count = 0
             for _, folder_name in STATIC_RESOLUTIONS.items():
                 if os.path.exists(os.path.join(self.trt_engine_path, folder_name)):
                     self._load_static_engine_from_folder(self.trt_engine_path, folder_name)
                     loaded_count += 1
-            
+
             if loaded_count == 0:
                 logger.warning(f"No valid static engines found in {self.trt_engine_path} matching known resolutions, will fallback to PyTorch when needed.")
 
@@ -153,23 +153,16 @@ class TensorRTVAE:
         if os.path.exists(enc_path):
             logger.info(f"Loading static encoder: {folder}")
             engine = self._load_engine_file(enc_path)
-            self._static_encoder_cache[folder] = (
-                engine.create_execution_context(),
-                self._get_io_names(engine)
-            )
+            self._static_encoder_cache[folder] = (engine.create_execution_context(), self._get_io_names(engine))
         else:
-             logger.warning(f"Static encoder not found for {folder}: {enc_path}")
+            logger.warning(f"Static encoder not found for {folder}: {enc_path}")
 
-        # Decoder 
+        # Decoder
         dec_path = os.path.join(root_dir, folder, "vae_decoder.trt")
         if os.path.exists(dec_path):
             logger.info(f"Loading static decoder: {folder}")
             engine = self._load_engine_file(dec_path)
-            self._static_decoder_cache[folder] = (
-                engine.create_execution_context(),
-                self._get_io_names(engine)
-            )
-
+            self._static_decoder_cache[folder] = (engine.create_execution_context(), self._get_io_names(engine))
 
     def _load_engine_file(self, path):
         """Load a TensorRT engine from file."""
@@ -189,7 +182,6 @@ class TensorRTVAE:
                 io_names["outputs"].append(name)
         return io_names
 
-
     def _get_static_engine(self, height, width, is_decoder=False):
         """Get pre-loaded static engine for specific resolution."""
         res_key = (height, width)
@@ -198,11 +190,11 @@ class TensorRTVAE:
 
         folder_name = STATIC_RESOLUTIONS[res_key]
         cache = self._static_decoder_cache if is_decoder else self._static_encoder_cache
-        
+
         if folder_name not in cache:
             # Lazy load
             self._load_static_engine_from_folder(self.trt_engine_path, folder_name)
-            
+
         return cache.get(folder_name, (None, None))
 
     def _run_trt_inference(self, context, io_names, input_tensor):
@@ -223,13 +215,13 @@ class TensorRTVAE:
     def _find_best_profile(self, h, w):
         """Find the profile with closest opt_shape to input."""
         best_idx = 0
-        best_diff = float('inf')
-        
+        best_diff = float("inf")
+
         for i, (name, opt_h, opt_w, global_idx) in enumerate(PROFILE_CONFIGS):
             diff = abs(h - opt_h) + abs(w - opt_w)
             if diff < best_diff:
                 best_diff = diff
-                best_idx = i # Relative index within the engine
+                best_idx = i  # Relative index within the engine
         return best_idx
 
     @staticmethod
@@ -269,53 +261,53 @@ class TensorRTVAE:
         """Encode using multi-profile engine."""
         if self._encoder_context is None:
             return None
-            
+
         b, c, t, h, w = image.shape
         # Select profile
         profile_idx = self._find_best_profile(h, w)
         self._encoder_context.set_optimization_profile_async(profile_idx, self.stream.cuda_stream)
-        
+
         # Set input shape
         input_name = self._encoder_io_names["inputs"][0]
         self._encoder_context.set_input_shape(input_name, tuple(image.shape))
-        
+
         # Run
         input_fp16 = image.to(torch.float16).contiguous()
         latent_dist = self._run_trt_inference(self._encoder_context, self._encoder_io_names, input_fp16)
-        
+
         # Extract mean (first 16 channels)
-        latent = latent_dist[:, :self.latent_channels, :, :, :]
+        latent = latent_dist[:, : self.latent_channels, :, :, :]
         return latent.to(self.dtype)
 
     def _encode_static(self, image):
         """Encode using static engine."""
         b, c, t, h, w = image.shape
         s_ctx, s_io = self._get_static_engine(h, w, is_decoder=False)
-        
+
         if s_ctx is None:
-             return None
-             
+            return None
+
         input_fp16 = image.to(torch.float16).contiguous()
         latent_dist = self._run_trt_inference(s_ctx, s_io, input_fp16)
-        latent = latent_dist[:, :self.latent_channels, :, :, :]
+        latent = latent_dist[:, : self.latent_channels, :, :, :]
         return latent.to(self.dtype)
 
     def _decode_multi_profile(self, latents, target_h, target_w):
         """Decode using multi-profile engine."""
         if self._decoder_context is None:
             return None
-            
+
         # latents: [B, C, F, H, W]
         profile_idx = self._find_best_profile(target_h, target_w)
         self._decoder_context.set_optimization_profile_async(profile_idx, self.stream.cuda_stream)
-        
+
         input_name = self._decoder_io_names["inputs"][0]
         self._decoder_context.set_input_shape(input_name, tuple(latents.shape))
-        
+
         input_fp16 = latents.to(torch.float16).contiguous()
         images = self._run_trt_inference(self._decoder_context, self._decoder_io_names, input_fp16)
         return images
-    
+
     @torch.no_grad()
     def encode_vae_image(self, image):
         """Encode image to latent space using TensorRT."""
@@ -336,7 +328,7 @@ class TensorRTVAE:
                     self._pytorch_vae.eval()
                 image_input = image.to(self.dtype)
                 latent_dist = self._pytorch_vae.quant_conv(self._pytorch_vae.encoder(image_input))
-                image_latents = latent_dist[:, :self.latent_channels, :, :, :]
+                image_latents = latent_dist[:, : self.latent_channels, :, :, :]
 
             latents_mean = torch.tensor(self.vae_latents_mean).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
             latents_std = torch.tensor(self.vae_latents_std).view(1, self.latent_channels, 1, 1, 1).to(image_latents.device, image_latents.dtype)
@@ -366,7 +358,6 @@ class TensorRTVAE:
         latents_mean = torch.tensor(self.vae_latents_mean).view(1, self.latent_channels, 1, 1, 1).to(latents.device, latents.dtype)
         latents_std = 1.0 / torch.tensor(self.vae_latents_std).view(1, self.latent_channels, 1, 1, 1).to(latents.device, latents.dtype)
         latents = latents / latents_std + latents_mean
-        
 
         images = None
         if self.multi_profile_mode:
@@ -376,10 +367,10 @@ class TensorRTVAE:
             if s_ctx is not None:
                 input_fp16 = latents.to(torch.float16).contiguous()
                 images = self._run_trt_inference(s_ctx, s_io, input_fp16)
-        
+
         if images is not None:
             images = images[:, :, 0]
-        
+
         if images is None:
             # Fallback to PyTorch
             if self._pytorch_vae is None:
@@ -393,4 +384,3 @@ class TensorRTVAE:
         images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
 
         return images
-

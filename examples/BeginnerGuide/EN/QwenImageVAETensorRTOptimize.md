@@ -168,7 +168,7 @@ class EncoderWrapper(nn.Module):
         super().__init__()
         self.encoder = encoder
         self.quant_conv = quant_conv
-        
+
     def forward(self, x):
         return self.quant_conv(self.encoder(x))
 ```

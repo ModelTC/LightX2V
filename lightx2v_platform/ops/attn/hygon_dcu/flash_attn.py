@@ -1,5 +1,6 @@
-import torch
 import os
+
+import torch
 from loguru import logger
 
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
@@ -7,6 +8,7 @@ from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
 try:
     from flash_attn import sparse_attn_with_sla
+
     SAPRDE_LINEAR_ATTN = True
 except ModuleNotFoundError:
     SAPRDE_LINEAR_ATTN = False
@@ -14,7 +16,8 @@ except ModuleNotFoundError:
 # Try to import Flash Attention (ROCm version 2.6.1)
 try:
     from flash_attn import flash_attn_varlen_func
-    #import phb
+
+    # import phb
     FLASH_ATTN_AVAILABLE = True
     logger.info(f"Flash Attention (ROCm) is available")
 except ImportError:
@@ -111,13 +114,13 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         if softmax_scale is None:
             softmax_scale = 1.0 / math.sqrt(q.shape[-1])
         # Use Flash Attention 2.6.1 (ROCm version) with varlen interface
-        if SAPRDE_LINEAR_ATTN and int(os.getenv('USE_SLA', 0)) and q.shape[1] == k.shape[1]:
+        if SAPRDE_LINEAR_ATTN and int(os.getenv("USE_SLA", 0)) and q.shape[1] == k.shape[1]:
             topk_value = float(os.getenv("SPARSE_ATTN_TOPK", "0.5"))
-            
+
             q = q_flat.unsqueeze(0)
             k = k_flat.unsqueeze(0)
             v = v_flat.unsqueeze(0)
-            
+
             output = sparse_attn_with_sla(
                 q,
                 k,
@@ -162,7 +165,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         """
         # Reshape from flattened format to batched format
         bs = cu_seqlens_q.shape[0] - 1
-        #print("k.numel():", k.numel())
+        # print("k.numel():", k.numel())
         # Reshape q, k, v to [B, L, Nq, C]
         q = q.reshape(bs, max_seqlen_q, q.shape[-2], q.shape[-1])
         k = k.reshape(bs, max_seqlen_q, k.shape[-2], k.shape[-1])
