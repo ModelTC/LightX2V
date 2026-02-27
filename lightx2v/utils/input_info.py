@@ -1,7 +1,16 @@
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from typing import Any
 
 import torch
+
+
+class _UnsetType:
+    def __repr__(self):
+        return "UNSET"
+
+
+UNSET = _UnsetType()
 
 
 @dataclass
@@ -321,6 +330,73 @@ def init_empty_input_info(task):
         return WorldPlayT2VInputInfo()
     else:
         raise ValueError(f"Unsupported task: {task}")
+
+
+@dataclass
+class SekoTalkInputs:
+    infer_steps: int | Any = UNSET
+    seed: int | Any = UNSET
+    prompt: str | Any = UNSET
+    prompt_enhanced: str | Any = UNSET
+    negative_prompt: str | Any = UNSET
+    image_path: str | Any = UNSET
+    audio_path: str | Any = UNSET
+    audio_num: int | Any = UNSET
+    video_duration: float | Any = UNSET
+    with_mask: bool | Any = UNSET
+    save_result_path: str | Any = UNSET
+    return_result_tensor: bool | Any = UNSET
+    stream_config: dict | Any = UNSET
+
+    resize_mode: str | Any = UNSET
+    target_shape: list | Any = UNSET
+
+    # prev info
+    overlap_frame: torch.Tensor | Any = UNSET
+    overlap_latent: torch.Tensor | Any = UNSET
+    # input preprocess audio
+    audio_clip: torch.Tensor | Any = UNSET
+
+    # input reference state
+    ref_state: int | Any = UNSET
+    # flags for first and last clip
+    is_first: bool | Any = UNSET
+    is_last: bool | Any = UNSET
+
+    @classmethod
+    def from_args(cls, args, **overrides):
+        """
+        Build InputInfo from argparse.Namespace (or any object with __dict__)
+        Priority:
+            args < overrides
+        """
+        field_names = {f.name for f in fields(cls)}
+        data = {k: v for k, v in vars(args).items() if k in field_names}
+        data.update(overrides)
+        return cls(**data)
+
+    def normalize_unset_to_none(self):
+        """
+        Replace all UNSET fields with None.
+        Call this right before running / inference.
+        """
+        for f in fields(self):
+            if getattr(self, f.name) is UNSET:
+                setattr(self, f.name, None)
+        return self
+
+
+def init_input_info_from_args(task, args, **overrides):
+    if task in ["s2v", "rs2v"]:
+        return SekoTalkInputs.from_args(args, **overrides)
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+
+def fill_input_info_from_defaults(input_info, defaults):
+    for key in input_info.__dataclass_fields__:
+        if key in defaults and getattr(input_info, key) is UNSET:
+            setattr(input_info, key, defaults[key])
 
 
 def update_input_info_from_dict(input_info, data):
