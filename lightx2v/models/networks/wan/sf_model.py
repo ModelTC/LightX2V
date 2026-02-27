@@ -11,8 +11,6 @@ from lightx2v.models.networks.wan.model import WanModel
 class WanSFModel(WanModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
-        if config["model_cls"] not in ["wan2.1_sf_mtxg2"]:
-            self.to_cuda()
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         sf_confg = self.config["sf_config"]
