@@ -120,51 +120,28 @@ class WeightModule:
                 if module is not None and hasattr(module, "to_cpu"):
                     module.to_cpu()
 
-    # def to_cuda(self, non_blocking=False):
-    #     for name, param in self._parameters.items():
-    #         if param is not None:
-    #             if hasattr(param, "cuda"):
-    #                 self._parameters[name] = param.cuda()
-    #             elif hasattr(param, "to_cuda"):
-    #                 self._parameters[name].to_cuda()
-    #             setattr(self, name, self._parameters[name])
-    #     for module in self._modules.values():
-    #         if isinstance(module, WeightModuleList):
-    #             for i in range(len(module)):
-    #                 for m in module[i]._modules.values():
-    #                     if m is not None and hasattr(m, "to_cuda"):
-    #                         m.to_cuda()
-    #                 for m in module[i]._parameters.values():
-    #                     if m is not None and hasattr(m, "to_cuda"):
-    #                         m.to_cuda()
-    #         else:
-    #             if module is not None and hasattr(module, "to_cuda"):
-    #                 module.to_cuda()
     def to_cuda(self, non_blocking=False):
-      """Move parameters to GPU device (supports cuda/intel xpu)"""
-      target_device = AI_DEVICE
-
-      for name, param in self._parameters.items():
-          if param is not None:
-              if hasattr(param, "to"):
-                  self._parameters[name] = param.to(target_device, non_blocking=non_blocking)
-              elif hasattr(param, "to_cuda"):
-                  self._parameters[name].to_cuda()
-              setattr(self, name, self._parameters[name])
-
-      for module in self._modules.values():
-          if isinstance(module, WeightModuleList):
-              for i in range(len(module)):
-                  for m in module[i]._modules.values():
-                      if m is not None and hasattr(m, "to_cuda"):
-                          m.to_cuda()
-                  for m in module[i]._parameters.values():
-                      if m is not None and hasattr(m, "to_cuda"):
-                          m.to_cuda()
-          else:
-              if module is not None and hasattr(module, "to_cuda"):
-                  module.to_cuda()
-
+        """Move parameters to GPU device (supports cuda/intel xpu)"""
+        target_device = AI_DEVICE
+        for name, param in self._parameters.items():
+            if param is not None:
+                if hasattr(param, "cuda"):
+                    self._parameters[name] = param.to(target_device, non_blocking=non_blocking)
+                elif hasattr(param, "to_cuda"):
+                    self._parameters[name].to_cuda()
+                setattr(self, name, self._parameters[name])
+        for module in self._modules.values():
+            if isinstance(module, WeightModuleList):
+                for i in range(len(module)):
+                    for m in module[i]._modules.values():
+                        if m is not None and hasattr(m, "to_cuda"):
+                            m.to_cuda()
+                    for m in module[i]._parameters.values():
+                        if m is not None and hasattr(m, "to_cuda"):
+                            m.to_cuda()
+            else:
+                if module is not None and hasattr(module, "to_cuda"):
+                    module.to_cuda()
 
     def to_cpu_async(self, non_blocking=True):
         for name, param in self._parameters.items():
@@ -189,10 +166,11 @@ class WeightModule:
                     module.to_cpu(non_blocking=True)
 
     def to_cuda_async(self, non_blocking=True):
+        target_device = AI_DEVICE
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cuda"):
-                    self._parameters[name] = param.cuda(non_blocking=True)
+                    self._parameters[name] = param.to(target_device, non_blocking=non_blocking)
                 elif hasattr(param, "to_cuda"):
                     self._parameters[name].to_cuda(non_blocking=True)
                 setattr(self, name, self._parameters[name])

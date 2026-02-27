@@ -42,12 +42,7 @@ class IntelXpuDevice:
     @staticmethod
     def is_available() -> bool:
         """Check if Intel XPU is available."""
-        try:
-            import torch
-
-            return IS_INTEL_XPU
-        except (ImportError, AttributeError):
-            return False
+        return IS_INTEL_XPU
 
     @staticmethod
     def get_device() -> str:
