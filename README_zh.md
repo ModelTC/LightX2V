@@ -42,6 +42,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年2月27日：** 🚀 我们现已支持自回归视频生成模型（[Self Forcing](https://github.com/guandeh17/Self-Forcing)）的 **NVFP4 量化**！你可以在这里获取量化后的模型：**[Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**。
+
 - **2026年2月11日:** 🎉 我们很高兴宣布推出 **[GenRL](https://github.com/ModelTC/GenRL)** —— 一个用于视觉生成的可扩展强化学习训练框架！GenRL 支持使用 GRPO 算法对 diffusion/flow 模型进行多奖励优化训练（HPSv3、VideoAlign等）。我们已经发布了在多机多卡上训练的高性能 LoRA checkpoints，在美学质量、运动连贯性和文本-视频对齐等方面都有显著提升。欢迎查看我们在 HuggingFace 上的[模型合集](https://huggingface.co/collections/lightx2v/genrl)！觉得有用的话欢迎给个 ⭐！
 
 - **2026年1月20日:** 🚀 我们支持了[LTX-2](https://huggingface.co/Lightricks/LTX-2)音频-视频生成模型，包含CFG并行、block级别offload、FP8 per-tensor量化等先进特性。使用示例可参考[examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2)和[scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2)。
