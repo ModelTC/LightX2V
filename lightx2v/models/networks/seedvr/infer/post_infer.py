@@ -1,7 +1,7 @@
 from einops import rearrange
 
-from lightx2v.models.networks.seedvr.dit_v2 import na
-from lightx2v.models.networks.seedvr.dit_v2.ops import gather_outputs
+from lightx2v.models.networks.seedvr.utils import na
+from lightx2v.models.networks.seedvr.utils.ops import gather_outputs
 
 from .utils import apply_adaln_single
 

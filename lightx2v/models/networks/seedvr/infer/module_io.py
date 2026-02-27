@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import torch
 
-from lightx2v.models.networks.seedvr.dit_v2.cache import Cache
+from lightx2v.models.networks.seedvr.utils.cache import Cache
 
 
 @dataclass

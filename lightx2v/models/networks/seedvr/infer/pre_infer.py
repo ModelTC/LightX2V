@@ -3,9 +3,9 @@ import torch.nn.functional as F
 from diffusers.models.embeddings import get_timestep_embedding
 from einops import rearrange
 
-from lightx2v.models.networks.seedvr.dit_v2 import na
-from lightx2v.models.networks.seedvr.dit_v2.cache import Cache
-from lightx2v.models.networks.seedvr.dit_v2.ops import slice_inputs
+from lightx2v.models.networks.seedvr.utils import na
+from lightx2v.models.networks.seedvr.utils.cache import Cache
+from lightx2v.models.networks.seedvr.utils.ops import slice_inputs
 
 from .module_io import SeedVRPreInferOutput
 

@@ -1,7 +1,7 @@
 import torch
 from einops import rearrange
 
-from lightx2v.models.networks.seedvr.dit_v2.ops import slice_inputs
+from lightx2v.models.networks.seedvr.utils.ops import slice_inputs
 
 
 def rms_norm_no_weight(x: torch.Tensor, eps: float) -> torch.Tensor:

@@ -3,8 +3,8 @@ import os
 import torch
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.models.networks.seedvr.dit_v2 import na as na_utils
-from lightx2v.models.networks.seedvr.dit_v2.diffusion.utils import classifier_free_guidance_dispatcher
+from lightx2v.models.networks.seedvr.utils import na as na_utils
+from lightx2v.models.networks.seedvr.utils.diffusion.utils import classifier_free_guidance_dispatcher
 from lightx2v.models.networks.seedvr.infer.post_infer import SeedVRPostInfer
 from lightx2v.models.networks.seedvr.infer.pre_infer import SeedVRPreInfer
 from lightx2v.models.networks.seedvr.infer.transformer_infer import SeedVRTransformerInfer
