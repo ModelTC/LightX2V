@@ -1,3 +1,4 @@
+from lightx2v_platform.base.global_var import AI_DEVICE
 class WeightModule:
     def __init__(self):
         self._modules = {}
@@ -120,10 +121,12 @@ class WeightModule:
                     module.to_cpu()
 
     def to_cuda(self, non_blocking=False):
+        """Move parameters to GPU device (supports cuda/intel xpu)"""
+        target_device = AI_DEVICE
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cuda"):
-                    self._parameters[name] = param.cuda()
+                    self._parameters[name] = param.to(target_device, non_blocking=non_blocking)
                 elif hasattr(param, "to_cuda"):
                     self._parameters[name].to_cuda()
                 setattr(self, name, self._parameters[name])
@@ -163,10 +166,11 @@ class WeightModule:
                     module.to_cpu(non_blocking=True)
 
     def to_cuda_async(self, non_blocking=True):
+        target_device = AI_DEVICE
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cuda"):
-                    self._parameters[name] = param.cuda(non_blocking=True)
+                    self._parameters[name] = param.to(target_device, non_blocking=non_blocking)
                 elif hasattr(param, "to_cuda"):
                     self._parameters[name].to_cuda(non_blocking=True)
                 setattr(self, name, self._parameters[name])

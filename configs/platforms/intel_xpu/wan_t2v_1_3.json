@@ -1,0 +1,22 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "torch_sdpa",
+    "cross_attn_1_type": "torch_sdpa",
+    "cross_attn_2_type": "torch_sdpa",
+    "sample_guide_scale": 6,
+    "sample_shift": 8,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": true,
+    "vae_offload_cache": true,
+    "use_tiling_vae": true,
+    "modulate_type": "torch",
+    "rope_type": "torch",
+    "layer_norm_type": "torch",
+    "rms_norm_type": "torch"
+}
