@@ -80,46 +80,6 @@ class SeedVRRunner(DefaultRunner):
         videos = torch.cat([videos, padding], dim=1)
         return videos
 
-    def _timestep_transform(self, timesteps: torch.Tensor, latents_shapes: torch.Tensor):
-        transform = self.config.get("diffusion", {}).get("timesteps", {}).get("transform", True)
-        if not transform:
-            return timesteps
-
-        vt = 4
-        vs = 8
-        frames = (latents_shapes[:, 0] - 1) * vt + 1
-        heights = latents_shapes[:, 1] * vs
-        widths = latents_shapes[:, 2] * vs
-
-        def get_lin_function(x1, y1, x2, y2):
-            m = (y2 - y1) / (x2 - x1)
-            b = y1 - m * x1
-            return lambda x: m * x + b
-
-        img_shift_fn = get_lin_function(x1=256 * 256, y1=1.0, x2=1024 * 1024, y2=3.2)
-        vid_shift_fn = get_lin_function(x1=256 * 256 * 37, y1=1.0, x2=1280 * 720 * 145, y2=5.0)
-        shift = torch.where(
-            frames > 1,
-            vid_shift_fn(heights * widths * frames),
-            img_shift_fn(heights * widths),
-        )
-
-        schedule_T = 1000.0
-        if hasattr(self, "scheduler") and getattr(self.scheduler, "schedule", None) is not None:
-            schedule_T = float(self.scheduler.schedule.T)
-        timesteps = timesteps / schedule_T
-        timesteps = shift * timesteps / (1 + (shift - 1) * timesteps)
-        timesteps = timesteps * schedule_T
-        return timesteps
-
-    def _add_noise(self, x: torch.Tensor, aug_noise: torch.Tensor, cond_noise_scale: float = 0.0):
-        t = torch.tensor([1000.0 * cond_noise_scale], device=x.device, dtype=x.dtype)
-        shape = torch.tensor(x.shape[1:], device=x.device)[None]
-        t = self._timestep_transform(t, shape)
-        if hasattr(self, "scheduler") and getattr(self.scheduler, "schedule", None) is not None:
-            return self.scheduler.schedule.forward(x, aug_noise, t)
-        return (1 - (t / 1000.0)) * x + (t / 1000.0) * aug_noise
-
     def init_scheduler(self):
         """Initialize the scheduler for SeedVR."""
         self.scheduler = SeedVRScheduler(self.config)
@@ -332,7 +292,7 @@ class SeedVRRunner(DefaultRunner):
             self.get_condition(
                 noise,
                 task="sr",
-                latent_blur=self._add_noise(latent_blur, aug_noise),
+                latent_blur=self.scheduler._add_noise(latent_blur, aug_noise),
             )
             for noise, aug_noise, latent_blur in zip(noises, aug_noises, cond_latents)
         ]

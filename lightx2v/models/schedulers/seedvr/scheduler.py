@@ -7,6 +7,8 @@ SeedVR uses a standard diffusion scheduler with:
 - CFG support
 """
 
+import torch
+
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.models.schedulers.seedvr.diffusion.config import (
     create_sampler_from_config,
@@ -49,3 +51,41 @@ class SeedVRScheduler(BaseScheduler):
     def step_post(self):
         """Process after a single step."""
         pass
+
+    def _timestep_transform(self, timesteps: torch.Tensor, latents_shapes: torch.Tensor):
+        transform = self.config.get("diffusion", {}).get("timesteps", {}).get("transform", True)
+        if not transform:
+            return timesteps
+
+        vt = 4
+        vs = 8
+        frames = (latents_shapes[:, 0] - 1) * vt + 1
+        heights = latents_shapes[:, 1] * vs
+        widths = latents_shapes[:, 2] * vs
+
+        def get_lin_function(x1, y1, x2, y2):
+            m = (y2 - y1) / (x2 - x1)
+            b = y1 - m * x1
+            return lambda x: m * x + b
+
+        img_shift_fn = get_lin_function(x1=256 * 256, y1=1.0, x2=1024 * 1024, y2=3.2)
+        vid_shift_fn = get_lin_function(x1=256 * 256 * 37, y1=1.0, x2=1280 * 720 * 145, y2=5.0)
+        shift = torch.where(
+            frames > 1,
+            vid_shift_fn(heights * widths * frames),
+            img_shift_fn(heights * widths),
+        )
+
+        schedule_T = float(self.schedule.T) if self.schedule is not None else self.num_train_timesteps
+        timesteps = timesteps / schedule_T
+        timesteps = shift * timesteps / (1 + (shift - 1) * timesteps)
+        timesteps = timesteps * schedule_T
+        return timesteps
+
+    def _add_noise(self, x: torch.Tensor, aug_noise: torch.Tensor, cond_noise_scale: float = 0.0):
+        t = torch.tensor([self.num_train_timesteps * cond_noise_scale], device=x.device, dtype=x.dtype)
+        shape = torch.tensor(x.shape[1:], device=x.device)[None]
+        t = self._timestep_transform(t, shape)
+        if self.schedule is not None:
+            return self.schedule.forward(x, aug_noise, t)
+        return (1 - (t / self.num_train_timesteps)) * x + (t / self.num_train_timesteps) * aug_noise
