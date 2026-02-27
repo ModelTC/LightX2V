@@ -1,5 +1,3 @@
-import os
-
 import torch
 
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
@@ -11,16 +9,26 @@ from lightx2v.models.networks.wan.model import WanModel
 class WanSFModel(WanModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
+        if config["model_cls"] not in ["wan2.1_sf_mtxg2"] and not config.get("dit_quantized", False):
+            self.to_cuda()
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
-        sf_confg = self.config["sf_config"]
-        file_path = os.path.join(self.config["sf_model_path"], f"checkpoints/self_forcing_{sf_confg['sf_type']}.pt")
-        _weight_dict = torch.load(file_path)["generator_ema"]
+        file_path = self.config["sf_model_path"]
+        _weight_dict = torch.load(file_path)
+        _weight_dict = _weight_dict.get("generator_ema", _weight_dict)
         weight_dict = {}
         for k, v in _weight_dict.items():
             name = k[6:]
             weight = v.to(torch.bfloat16)
             weight_dict.update({name: weight})
+        del _weight_dict
+        return weight_dict
+
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        _weight_dict = super()._load_quant_ckpt(unified_dtype, sensitive_layer)
+        weight_dict = {}
+        for k, v in _weight_dict.items():
+            weight_dict.update({k[6:]: v})
         del _weight_dict
         return weight_dict
 
