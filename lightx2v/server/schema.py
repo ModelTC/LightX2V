@@ -40,6 +40,7 @@ class BaseTaskRequest(BaseModel):
 class VideoTaskRequest(BaseTaskRequest):
     num_fragments: int = Field(1, description="Number of fragments")
     target_video_length: int = Field(81, description="Target video length")
+    video_path: str = Field("", description="Input video path (for SR/V2V-like tasks)")
     audio_path: str = Field("", description="Input audio path (Wan-Audio)")
     video_duration: int = Field(5, description="Video duration (Wan-Audio)")
     talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")

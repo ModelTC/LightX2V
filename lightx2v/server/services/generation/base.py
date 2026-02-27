@@ -94,7 +94,6 @@ class BaseGenerationService(ABC):
         if not actual_save_path.suffix:
             actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
         task_data["save_result_path"] = str(actual_save_path)
-        task_data["video_path"] = actual_save_path.name
 
     async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[Any]:
         try:
