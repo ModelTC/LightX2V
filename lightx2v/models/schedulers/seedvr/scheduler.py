@@ -10,7 +10,7 @@ SeedVR uses a standard diffusion scheduler with:
 import torch
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
-from lightx2v.models.schedulers.seedvr.diffusion.config import (
+from lightx2v.models.schedulers.seedvr.utils import (
     create_sampler_from_config,
     create_sampling_timesteps_from_config,
     create_schedule_from_config,
