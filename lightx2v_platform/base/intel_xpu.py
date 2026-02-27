@@ -8,7 +8,6 @@ This module handles Intel-specific configurations including:
 """
 
 import torch
-import torch.distributed as dist
 from loguru import logger
 
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -58,5 +57,7 @@ class IntelXpuDevice:
     #     """
     #     dist.init_process_group(backend="ccl")
     #     torch.xpu.set_device(dist.get_rank())
+
+
 # Register alias "xpu" for backward compatibility
 PLATFORM_DEVICE_REGISTER._dict["xpu"] = IntelXpuDevice
