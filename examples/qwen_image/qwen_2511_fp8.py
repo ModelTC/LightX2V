@@ -8,7 +8,7 @@ from lightx2v import LightX2VPipeline
 # Initialize pipeline for Qwen-image-edit I2I task
 # For Qwen-Image-Edit-2509, use model_cls="qwen-image-edit-2509"
 pipe = LightX2VPipeline(
-    model_path=r"D:\valencia\models\Qwen-Image-Edit-2511",
+    model_path="/path/to/Qwen-Image-Edit-2511",
     model_cls="qwen-image-edit-2511",
     task="i2i",
 )
@@ -26,12 +26,12 @@ pipe = LightX2VPipeline(
 #     text_encoder_offload=True,
 #     vae_offload=False,
 # )
-breakpoint()
+
 # Load fp8 distilled weights (and int4 Qwen2_5 vl model (optional))
 pipe.enable_quantize(
     dit_quantized=True,
-    dit_quantized_ckpt=r"D:\valencia\models\qwen_image_edit_2511_fp8_e4m3fn_scaled.safetensors",
-    quant_scheme="fp8-intel-xpu",
+    dit_quantized_ckpt="lightx2v/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_4steps_v1.0.safetensors",
+    quant_scheme="fp8-sgl",
     # text_encoder_quantized=True,
     # text_encoder_quantized_ckpt="lightx2v/Encoders/GPTQModel/Qwen25-VL-4bit-GPTQ",
     # text_encoder_quant_scheme="int4"
@@ -39,7 +39,7 @@ pipe.enable_quantize(
 
 # Create generator manually with specified parameters
 pipe.create_generator(
-    attn_mode="torch_sdpa",
+    attn_mode="flash_attn3",
     resize_mode="adaptive",
     infer_steps=8,
     guidance_scale=1,
@@ -49,8 +49,8 @@ pipe.create_generator(
 seed = 42
 prompt = "Replace the polka-dot shirt with a light blue shirt."
 negative_prompt = ""
-image_path = "448.png"  # or "/path/to/img_0.jpg,/path/to/img_1.jpg"
-save_result_path = "./output.png"
+image_path = "/path/to/img.png"  # or "/path/to/img_0.jpg,/path/to/img_1.jpg"
+save_result_path = "/path/to/save_results/output.png"
 
 # Generate video
 pipe.generate(
