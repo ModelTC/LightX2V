@@ -4,13 +4,12 @@ from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import WanSFPreInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import WanSFTransformerInfer
 from lightx2v.models.networks.wan.model import WanModel
+from lightx2v.utils.envs import GET_DTYPE
 
 
 class WanSFModel(WanModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
-        if config["model_cls"] not in ["wan2.1_sf_mtxg2"] and not config.get("dit_quantized", False):
-            self.to_cuda()
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         file_path = self.config["sf_model_path"]
@@ -19,7 +18,7 @@ class WanSFModel(WanModel):
         weight_dict = {}
         for k, v in _weight_dict.items():
             name = k[6:]
-            weight = v.to(torch.bfloat16)
+            weight = v.to(GET_DTYPE()).to(self.device)
             weight_dict.update({name: weight})
         del _weight_dict
         return weight_dict
