@@ -42,6 +42,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **February 27, 2026:** 🚀 We now support NVFP4 quantization for autoregressive video generation models ([Self Forcing](https://github.com/guandeh17/Self-Forcing))! You can find the quantized model here: **[Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**.
+
 - **February 11, 2026:** 🎉 We are excited to announce **[GenRL](https://github.com/ModelTC/GenRL)** - a scalable reinforcement learning framework for visual generation! GenRL enables training diffusion/flow models with multi-reward optimization (HPSv3, VideoAlign, etc.) using GRPO algorithm. We've released high-performance LoRA checkpoints trained with multi-node multi-GPU setup, demonstrating significant improvements in aesthetic quality, motion coherence, and text-video alignment. Check out our [model collection](https://huggingface.co/collections/lightx2v/genrl) on HuggingFace! Give us a ⭐ if you find it useful!
 
 - **January 20, 2026:** 🚀 We support the [LTX-2](https://huggingface.co/Lightricks/LTX-2) audio-video generation model, featuring CFG parallelism, block-level offload, and FP8 per-tensor quantization. Usage examples can be found in [examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2) and [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2).

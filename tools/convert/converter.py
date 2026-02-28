@@ -477,6 +477,8 @@ def convert_weights(args):
             weights = torch.load(file_path, map_location=args.device, weights_only=True)
             if args.model_type == "hunyuan_dit":
                 weights = weights["module"]
+            elif args.model_type == "self_forcing":
+                weights = weights["generator_ema"]
         elif file_path.endswith(".safetensors"):
             # Use lazy loading for safetensors to reduce memory usage
             with safe_open(file_path, framework="pt", device=args.device) as f:
@@ -747,7 +749,7 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit"],
+        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit", "self_forcing"],
         default="wan_dit",
         help="Model type",
     )
@@ -833,6 +835,11 @@ def main():
                 "key_idx": 2,
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
                 "ignore_key": ["ca", "audio"],
+            },
+            "self_forcing": {
+                "key_idx": 3,
+                "target_keys": ["self_attn", "cross_attn", "ffn"],
+                "ignore_key": None,
             },
             "wan_animate_dit": {"key_idx": 2, "target_keys": ["self_attn", "cross_attn", "ffn"], "adapter_keys": ["linear1_kv", "linear1_q", "linear2"], "ignore_key": None},
             "hunyuan_dit": {

@@ -560,6 +560,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_nvfp4(self, x):
+        # input_global_scale= x.abs().max()
         input_tensor_quant, input_tensor_scale = scaled_nvfp4_quant(x, self.input_global_scale)
         return input_tensor_quant, input_tensor_scale
 

@@ -6,7 +6,6 @@ from loguru import logger
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class Conv3dWeightTemplate(metaclass=ABCMeta):
@@ -35,8 +34,23 @@ class Conv3dWeightTemplate(metaclass=ABCMeta):
             "weight_diff": "weight_diff_name",
             "bias_diff": "bias_diff_name",
         }
-        self.weight_diff = torch.tensor(0.0, dtype=GET_DTYPE(), device=AI_DEVICE)
-        self.bias_diff = torch.tensor(0.0, dtype=GET_DTYPE(), device=AI_DEVICE)
+
+    def _get_actual_weight(self):
+        if not hasattr(self, "weight_diff"):
+            return self.weight
+        return self.weight + self.weight_diff
+
+    def _get_actual_bias(self, bias=None):
+        if bias is not None:
+            if not hasattr(self, "bias_diff"):
+                return bias
+            return bias + self.bias_diff
+        else:
+            if not hasattr(self, "bias") or self.bias is None:
+                return None
+            if not hasattr(self, "bias_diff"):
+                return self.bias
+            return self.bias + self.bias_diff
 
     def register_diff(self, weight_dict):
         if self.weight_diff_name in weight_dict:
@@ -74,8 +88,8 @@ class Conv3dWeight(Conv3dWeightTemplate):
     def apply(self, input_tensor):
         output_tensor = torch.nn.functional.conv3d(
             input_tensor,
-            weight=self.weight + self.weight_diff,
-            bias=self.bias + self.bias_diff,
+            weight=self._get_actual_weight(),
+            bias=self._get_actual_bias(),
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
