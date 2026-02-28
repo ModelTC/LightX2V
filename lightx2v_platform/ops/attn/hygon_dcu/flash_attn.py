@@ -17,7 +17,6 @@ except ModuleNotFoundError:
 try:
     from flash_attn import flash_attn_varlen_func
 
-    # import phb
     FLASH_ATTN_AVAILABLE = True
     logger.info(f"Flash Attention (ROCm) is available")
 except ImportError:
@@ -165,7 +164,6 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         """
         # Reshape from flattened format to batched format
         bs = cu_seqlens_q.shape[0] - 1
-        # print("k.numel():", k.numel())
         # Reshape q, k, v to [B, L, Nq, C]
         q = q.reshape(bs, max_seqlen_q, q.shape[-2], q.shape[-1])
         k = k.reshape(bs, max_seqlen_q, k.shape[-2], k.shape[-1])

@@ -101,7 +101,7 @@ class TensorRTVAE:
         self._load_engines()
 
     def _load_engines(self):
-        """Load TensorRT engines (Eager Loading)."""
+        """Load TensorRT engines."""
         if not self.trt_engine_path:
             logger.warning("TensorRT VAE requires trt_engine_path configuration. Fallback to PyTorch.")
             return
@@ -133,17 +133,12 @@ class TensorRTVAE:
             else:
                 logger.warning(f"Could not find decoder engine at {dec_path}, will fallback to PyTorch when needed.")
         else:
-            # T2I Static Directory Mode
-            logger.info(f"Loading Directory-Based Static TRT VAE (Eager Load). Root: {self.trt_engine_path}")
-
-            # Eagerly load all supported resolutions
-            loaded_count = 0
-            for _, folder_name in STATIC_RESOLUTIONS.items():
-                if os.path.exists(os.path.join(self.trt_engine_path, folder_name)):
-                    self._load_static_engine_from_folder(self.trt_engine_path, folder_name)
-                    loaded_count += 1
-
-            if loaded_count == 0:
+            # T2I Static Directory Mode (Lazy Load)
+            # Only validate directory at init, engines are loaded on-demand per resolution
+            available = [f for _, f in STATIC_RESOLUTIONS.items() if os.path.exists(os.path.join(self.trt_engine_path, f))]
+            logger.info(f"Static TRT VAE directory configured (Lazy Load). Root: {self.trt_engine_path}")
+            logger.info(f"Available static resolutions: {available}")
+            if not available:
                 logger.warning(f"No valid static engines found in {self.trt_engine_path} matching known resolutions, will fallback to PyTorch when needed.")
 
     def _load_static_engine_from_folder(self, root_dir, folder):
@@ -182,8 +177,17 @@ class TensorRTVAE:
                 io_names["outputs"].append(name)
         return io_names
 
+    def _unload_static_engines(self):
+        """Release all cached static engines to free GPU memory."""
+        if self._static_encoder_cache or self._static_decoder_cache:
+            folders = set(list(self._static_encoder_cache.keys()) + list(self._static_decoder_cache.keys()))
+            logger.info(f"Unloading static engines for: {folders}")
+            self._static_encoder_cache.clear()
+            self._static_decoder_cache.clear()
+            torch.cuda.empty_cache()
+
     def _get_static_engine(self, height, width, is_decoder=False):
-        """Get pre-loaded static engine for specific resolution."""
+        """Get static engine for specific resolution (Lazy Load with auto-release)."""
         res_key = (height, width)
         if res_key not in STATIC_RESOLUTIONS:
             return None, None
@@ -192,7 +196,8 @@ class TensorRTVAE:
         cache = self._static_decoder_cache if is_decoder else self._static_encoder_cache
 
         if folder_name not in cache:
-            # Lazy load
+            # Resolution changed, release old engines first to save GPU memory
+            self._unload_static_engines()
             self._load_static_engine_from_folder(self.trt_engine_path, folder_name)
 
         return cache.get(folder_name, (None, None))
