@@ -14,6 +14,7 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import Hunyua
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
+from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
@@ -404,6 +405,7 @@ class LightX2VPipeline:
         negative_prompt,
         save_result_path,
         image_path=None,
+        video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
         last_frame_path=None,
         audio_path=None,
@@ -412,12 +414,15 @@ class LightX2VPipeline:
         src_mask=None,
         return_result_tensor=False,
         target_shape=[],
+        sr_ratio=2.0,
     ):
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
         # image_strength can be a scalar (float/int) or a list matching the number of images
         self.seed = seed
         self.image_path = image_path
+        self.video_path = video_path  # For SR task
+        self.sr_ratio = sr_ratio
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
         self.src_ref_images = src_ref_images
