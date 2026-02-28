@@ -25,6 +25,8 @@ from lightx2v.utils.ggml_tensor import load_gguf_sd_ckpt
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class BaseTransformerModel(CompiledMethodsMixin, ABC):
     """Base class for all transformer models.
@@ -83,6 +85,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             bool: True if the model is quantized
         """
         assert self.config.get("dit_quant_scheme", "Default") in [
+            "fp8-intel-xpu",
             "fp8-pertensor",
             "fp8-triton",
             "int8-triton",

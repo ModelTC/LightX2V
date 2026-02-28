@@ -40,6 +40,8 @@ from lightx2v.utils.registry_factory import (  # noqa E402
 )
 from lightx2v.utils.utils import load_weights  # noqa E402
 from lightx2v_platform.base.global_var import AI_DEVICE  # noqa E402
+from lightx2v_platform.ops.mm.intel_xpu.q_linear import IntelXpuQuantLinearFp8  # noqa E402
+
 
 __all__ = [
     "T5Model",
@@ -226,6 +228,8 @@ class T5Attention(nn.Module):
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
                 linear_cls = NpuQuantLinearInt8
+            elif quant_scheme == "fp8-intel-xpu":
+                linear_cls = IntelXpuQuantLinearFp8
             else:
                 NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
@@ -309,6 +313,8 @@ class T5FeedForward(nn.Module):
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
                 linear_cls = NpuQuantLinearInt8
+            elif quant_scheme == "fp8-intel-xpu":
+                linear_cls = IntelXpuQuantLinearFp8
             else:
                 NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:

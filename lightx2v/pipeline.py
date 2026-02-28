@@ -278,7 +278,7 @@ class LightX2VPipeline:
         self.high_noise_quantized_ckpt = high_noise_quantized_ckpt
 
         if self.model_cls.startswith("wan"):
-            self.t5_quant_scheme = quant_scheme
+            self.t5_quant_scheme = text_encoder_quant_scheme  
             self.t5_quantized = text_encoder_quantized
             self.t5_quantized_ckpt = text_encoder_quantized_ckpt
             self.clip_quant_scheme = quant_scheme

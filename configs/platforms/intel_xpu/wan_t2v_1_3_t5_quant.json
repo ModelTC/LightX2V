@@ -19,5 +19,5 @@
     "rms_norm_type": "torch",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-intel-xpu",
-    "t5_quantized_ckpt": "D:\\models\\Wan2.1-T2V-1.3B\\models_t5_umt5-xxl-enc-fp8.pth"
+    "t5_quantized_ckpt": "D:\\valencia\\models\\Wan2.1-T2V-1.3B\\models_t5_umt5-xxl-enc-fp8.pth"
 }
