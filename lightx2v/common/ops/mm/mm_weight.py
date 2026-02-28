@@ -2281,3 +2281,117 @@ class MMWeightTP(MMWeightTemplate):
                 output = output + self._row_split_bias
 
         return output
+
+@MM_WEIGHT_REGISTER("fp8-intel-xpu")
+class MMWeightFp8IntelXpu(MMWeightQuantTemplate):
+    """
+    Name: W-fp8-channel-sym-A-fp16-Intel-XPU
+
+    Intel XPU optimized FP8 kernel:
+        Weight Storage: fp8 (torch.float8_e4m3fn) - saves 50% memory
+        Computation: fp16 using PyTorch native ops
+        - Dynamically dequantize FP8 → FP16 during forward
+        - Use torch.nn.functional.linear (compatible with Intel XPU)
+
+    Benefits:
+        - Memory efficient: FP8 storage (8-bit)
+        - Compatible: FP16 compute using PyTorch native ops
+        - Intel XPU friendly: No CUDA-specific kernels
+
+    Usage in config:
+        {
+            "dit_quant_scheme": "fp8-intel-xpu",
+            "weight_auto_quant": true,
+            "dit_quantized": true
+        }
+    """
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix=None,
+        lora_path=""
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path
+        )
+
+        self.load_func = self.load_fp8_perchannel_sym
+        self.weight_need_transpose = False  # We'll handle transpose in apply
+        self.infer_dtype = torch.float16  # Force FP16 for computation
+
+    def apply(self, input_tensor):
+        # """
+        # Forward pass with FP8 → FP16 dequantization
+
+        # Steps:
+        # 1. Dequantize weight: fp8 → fp16 (weight * scale)
+        # 2. Compute: torch.nn.functional.linear(input_fp16, weight_fp16, bias)
+        # """
+        # # Ensure input is FP16
+        # # print(input_tensor.dtype)
+        # # breakpoint()
+        # if input_tensor.dtype != torch.float16:
+        #     input_tensor = input_tensor.to(torch.bfloat16)
+
+        # Dequantize weight: FP8 → FP16
+        weight_fp16 = self.weight.to(torch.bfloat16, non_blocking=True)
+        weight_scale_fp16 = self.weight_scale.to(torch.bfloat16, non_blocking=True)
+        # Handle different scale shapes for per-channel quantization
+        # Per-channel quantization: scale per output channel
+        # weight can be either [in_features, out_features] or [out_features, in_features]
+        
+        # if weight_scale_fp16.dim() == 1:
+        #     # scale is [out_features]
+        #     # Need to determine which dimension is out_features
+        #     if weight_fp16.shape[1] == weight_scale_fp16.shape[0]:
+        #         # weight is [in_features, out_features]
+        #         # Broadcast scale along dimension 1
+        #         weight_fp16 = weight_fp16 * weight_scale_fp16.unsqueeze(0)
+        #     elif weight_fp16.shape[0] == weight_scale_fp16.shape[0]:
+        #         # weight is [out_features, in_features]
+        #         # Broadcast scale along dimension 0
+        #         weight_fp16 = weight_fp16 * weight_scale_fp16.unsqueeze(1)
+        #     else:
+        #         # Fallback: assume scale matches last dimension
+        #         weight_fp16 = weight_fp16 * weight_scale_fp16.unsqueeze(0)
+        # else:
+        #     # scale is [out_features, 1] or [1, out_features]
+        #     # Just broadcast directly
+        weight_fp16 = weight_fp16 * weight_scale_fp16
+
+        # Ensure weight is [out_features, in_features] for F.linear
+        # F.linear expects weight shape [out_features, in_features]
+        if weight_fp16.shape[1] != input_tensor.shape[-1]:
+            # Need to transpose
+            weight_fp16 = weight_fp16.t()
+
+        # Handle bias (check if attribute exists first)
+        bias_fp16 = None
+        if hasattr(self, 'bias') and self.bias is not None:
+            bias_fp16 = self.bias.to(torch.bfloat16, non_blocking=True)
+        
+        output = torch.nn.functional.linear(
+            input_tensor,
+            weight_fp16,
+            bias_fp16
+        )
+
+        return output.to(torch.bfloat16,non_blocking=True)
+    
+
+
