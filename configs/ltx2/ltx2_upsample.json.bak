@@ -21,4 +21,4 @@
     "use_upsampler": true,
     "upsampler_original_ckpt": "/data/yongyang/Jin/Lightricks/LTX-2/ltx-2-spatial-upscaler-x2-1.0.safetensors",
     "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0]
-}    
+}

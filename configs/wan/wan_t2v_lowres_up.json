@@ -1,0 +1,23 @@
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 6,
+    "sample_shift": 8,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "changing_resolution": true,
+    "resolution_rate": [
+        0.75,
+        0.9
+    ],
+    "changing_resolution_steps": [
+        30,
+        40
+    ]
+}

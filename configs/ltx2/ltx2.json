@@ -14,5 +14,5 @@
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "use_tiling_vae": false,
-    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
+    "dit_original_ckpt": "/data/yongyang/Jin/Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
 }
