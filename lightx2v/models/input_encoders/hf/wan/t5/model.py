@@ -316,7 +316,7 @@ class T5FeedForward(nn.Module):
             elif quant_scheme == "fp8-intel-xpu":
                 linear_cls = IntelXpuQuantLinearFp8
             else:
-                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
         # layers
