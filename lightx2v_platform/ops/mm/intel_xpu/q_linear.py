@@ -175,7 +175,7 @@ class IntelXpuQuantLinearInt8(nn.Module):
             input_tensor = input_tensor.to(self.dtype)
 
         # Dequantize weight: INT8 → FP16
-        weight_fp16 = self.weight.to(self.dtype) * self.weight_scale
+        weight_fp16 = self.weight.to(self.dtype) * self.weight_scale.to(self.dtype)
 
         # Handle bias
         bias_fp16 = self.bias.to(self.dtype) if self.bias is not None else None
