@@ -43,9 +43,9 @@ def main():
     # Register memory with Mooncake
     if PROTOCOL == "rdma":
         ret_value = client_engine.register_memory(client_ptr, client_len)
-    if ret_value != 0:
-        print("Mooncake memory registration failed.")
-        raise RuntimeError("Mooncake memory registration failed.")
+        if ret_value != 0:
+            print("Mooncake memory registration failed.")
+            raise RuntimeError("Mooncake memory registration failed.")
 
     print(f"Client initialized with session ID: {session_id}")
 
