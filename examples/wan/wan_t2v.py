@@ -7,7 +7,7 @@ from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Wan2.1 T2V task
 pipe = LightX2VPipeline(
-    model_path="/path/to/Wan2.1-T2V-14B",
+    model_path="D:/AI_Models/Wan-AI/Wan2.1-T2V-1.3B",  # 指向这个目录
     model_cls="wan2.1",
     task="t2v",
 )
@@ -16,6 +16,12 @@ pipe = LightX2VPipeline(
 # pipe.create_generator(config_json="../configs/wan/wan_t2v.json")
 
 # Create generator with specified parameters
+#pipe.enable_offload(
+ #   cpu_offload=True,
+  #  offload_granularity="block",
+   # vae_offload=True,
+    #text_encoder_offload=True,
+#)
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=50,
