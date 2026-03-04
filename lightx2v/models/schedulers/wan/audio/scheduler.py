@@ -19,6 +19,7 @@ class EulerScheduler(WanScheduler):
         self.transformer_infer = None
         self.infer_condition = True  # cfg status
         self.keep_latents_dtype_in_scheduler = False
+        self.infer_steps = self.config["infer_steps"]
         self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
         if self.config["seq_parallel"]:
