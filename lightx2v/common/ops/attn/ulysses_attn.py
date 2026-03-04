@@ -10,8 +10,8 @@ from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq
 
 try:
-    from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
     from sageattn3_sparse import dequant_fp4 as dequant_fp4_sage3
+    from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
 except ImportError:
     logger.info("sageattn3_sparse not found, to use quant_fp4 and dequant_fp4, please install sageattention sparse first")
     spas_sageattn3_blackwell = None

@@ -112,5 +112,9 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        x = sageattn3_sparse_blackwell(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False, is_sparse=True, per_block_mean = False, topk=0.2).transpose(1, 2).reshape(bs * max_seqlen_q, -1)
+        x = (
+            sageattn3_sparse_blackwell(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False, is_sparse=True, per_block_mean=False, topk=0.2)
+            .transpose(1, 2)
+            .reshape(bs * max_seqlen_q, -1)
+        )
         return x
