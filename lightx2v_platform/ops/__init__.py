@@ -21,3 +21,6 @@ elif PLATFORM == "enflame_gcu":
     from .attn.enflame_gcu import *
     from .norm.enflame_gcu import *
     from .rope.enflame_gcu import *
+elif PLATFORM == "intel_xpu":
+    from .attn.intel_xpu import *
+    from .mm.intel_xpu import *

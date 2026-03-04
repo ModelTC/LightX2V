@@ -99,6 +99,11 @@ try:
 except ImportError:
     marlin_cuda_quant = None
 
+try:
+    import sycl_kernels
+except ImportError:
+    sycl_kernels = None
+
 import torch.distributed as dist
 
 
@@ -2281,4 +2286,83 @@ class MMWeightTP(MMWeightTemplate):
             if self._row_split_bias is not None:
                 output = output + self._row_split_bias
 
+        return output
+
+@MM_WEIGHT_REGISTER("fp8-intel-xpu")
+class MMWeightFp8IntelXpu(MMWeightQuantTemplate):
+    """
+    Name: W-fp8-channel-sym-A-fp16-Intel-XPU
+
+    Intel XPU optimized FP8 kernel:
+        Weight Storage: fp8 (torch.float8_e4m3fn) - saves 50% memory
+        Computation: fp16 using PyTorch native ops
+        - Dynamically dequantize FP8 → FP16 during forward
+        - Use torch.nn.functional.linear (compatible with Intel XPU)
+
+    Benefits:
+        - Memory efficient: FP8 storage (8-bit)
+        - Compatible: FP16 compute using PyTorch native ops
+        - Intel XPU friendly: No CUDA-specific kernels
+
+    Usage in config:
+        {
+            "dit_quant_scheme": "fp8-intel-xpu",
+            "weight_auto_quant": true,
+            "dit_quantized": true
+        }
+    """
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix=None,
+        lora_path=""
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path
+        )
+
+        self.load_func = self.load_fp8_perchannel_sym
+        self.weight_need_transpose = False  # We'll handle transpose in apply
+
+
+    def apply(self, input_tensor):
+        # # """
+        # Forward pass with FP8 → FP16 dequantization
+
+        # Steps:
+        # 1. Dequantize weight: fp8 → fp16 (weight * scale)
+        # 2. Compute: torch.nn.functional.linear(input_fp16, weight_fp16, bias)
+        # """
+        # # Ensure input is FP16
+        # # print(input_tensor.dtype)
+       
+        if sycl_kernels is not None:
+            return sycl_kernels.onednn_w8a16_fp8(input_tensor, self.weight, self.weight_scale.to(torch.float))
+
+        infer_dtype = self.infer_dtype
+        squeeze_output = False
+        if input_tensor.dim() == 3 and input_tensor.shape[0] == 1:
+            input_tensor = input_tensor.squeeze(0)
+            squeeze_output = True
+        input_tensor = input_tensor.to(infer_dtype)
+        weight_fp16 = self.weight.to(infer_dtype) * self.weight_scale.to(infer_dtype)
+        bias_fp16 = self.bias.to(infer_dtype) if hasattr(self, "bias") and self.bias is not None else None
+        output = torch.nn.functional.linear(input_tensor, weight_fp16, bias_fp16)
+        if squeeze_output:
+            output = output.unsqueeze(0)
         return output
