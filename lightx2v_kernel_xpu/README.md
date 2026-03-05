@@ -185,7 +185,7 @@ lightx2v_kernel_xpu\
 │   │   ├── flash.attn.b.mha128.fp16.opt.h   # FP16 Flash Attention kernel
 │   │   └── flash.attn.b.mha128.bf16io.h     # BF16 I/O Flash Attention kernel
 │   ├── esimd_kernel_api.h      # DLL export macro
-│   └── build.bat               # icpx compile command 
+│   └── build.bat               # icpx compile command
 ├── csrc\                       # PyTorch C++ extension source (compiled by icx via CMake)
 │   ├── entry.cpp               # pybind11 module registration
 │   ├── sdp.cpp                 # sdp() Python wrapper — dtype dispatch + normAlpha cache

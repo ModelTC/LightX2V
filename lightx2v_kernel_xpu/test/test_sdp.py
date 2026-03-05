@@ -109,9 +109,7 @@ def run_test(label, q_len, kv_len, num_heads=12, warmup=10, iters=50):
 
     flops = 4.0 * q_len * kv_len * num_heads * HD
     tflops_bf16 = flops / (elapsed_bf16 / 1000) / 1e12
-    print(
-        f"\n  sdp(bf16) perf:  {elapsed_bf16:.2f} ms/iter  |  {tflops_bf16:.1f} TFLOPS"
-    )
+    print(f"\n  sdp(bf16) perf:  {elapsed_bf16:.2f} ms/iter  |  {tflops_bf16:.1f} TFLOPS")
 
     # ── fp16 perf ────────────────────────────────────────────────────────────
     bufs16 = [

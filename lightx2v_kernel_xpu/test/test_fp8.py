@@ -93,10 +93,7 @@ def test_correctness(dtype: torch.dtype = torch.float16):
         err = rel_rms(out, ref)
         passed = err < 0.05  # FP8 quantisation typically introduces 2-3% rel RMS
         all_pass &= passed
-        print(
-            f"  [{label}]  M={M} N={N:5d} K={K:5d}  "
-            f"rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}"
-        )
+        print(f"  [{label}]  M={M} N={N:5d} K={K:5d}  rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}")
 
     print()
     print("All PASS" if all_pass else "*** Some tests FAILED ***")
@@ -129,10 +126,7 @@ def test_bias(dtype: torch.dtype = torch.float16):
 
     err = rel_rms(out, ref)
     passed = err < 0.05  # FP8 quantisation typically introduces 2-3% rel RMS
-    print(
-        f"  [attn + bias]  M={M} N={N} K={K}  "
-        f"rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}"
-    )
+    print(f"  [attn + bias]  M={M} N={N} K={K}  rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}")
     print()
     return passed
 
@@ -173,10 +167,7 @@ def bench(
     elapsed_onednn = time.perf_counter() - t0
     ms_on = elapsed_onednn / iters * 1e3
     tflops_on = 2 * M * N * K / (elapsed_onednn / iters) / 1e12
-    print(
-        f"  onednn_{dname.lower()}_fp8  [{label}]  "
-        f"{ms_on:.3f} ms/iter  {tflops_on:.2f} TFLOPS"
-    )
+    print(f"  onednn_{dname.lower()}_fp8  [{label}]  {ms_on:.3f} ms/iter  {tflops_on:.2f} TFLOPS")
 
     # ── native: dequant (fp8 → dtype) + dtype gemm ───────────────────────────
     # scales_xpu [N,1] * qweight [N,K] → [N,K] correct per-row broadcast
@@ -189,18 +180,12 @@ def bench(
     elapsed_native = time.perf_counter() - t0
     ms_na = elapsed_native / iters * 1e3
     tflops_na = 2 * M * N * K / (elapsed_native / iters) / 1e12
-    print(
-        f"  native_{dname.lower()}       [{label}]  "
-        f"{ms_na:.3f} ms/iter  {tflops_na:.2f} TFLOPS"
-    )
+    print(f"  native_{dname.lower()}       [{label}]  {ms_na:.3f} ms/iter  {tflops_na:.2f} TFLOPS")
 
     # ── compare outputs & speedup ─────────────────────────────────────────────
     err = rel_rms(output_onednn, output_native)
     speedup = elapsed_native / elapsed_onednn
-    print(
-        f"  rel_rms(onednn vs native)={err:.4f}  "
-        f"speedup={speedup:.2f}x  ({'onednn faster' if speedup > 1 else 'native faster'})"
-    )
+    print(f"  rel_rms(onednn vs native)={err:.4f}  speedup={speedup:.2f}x  ({'onednn faster' if speedup > 1 else 'native faster'})")
     print()
 
 
@@ -208,10 +193,7 @@ def run_bench():
     for dtype in [torch.float16, torch.bfloat16]:
         dname = dtype_name(dtype)
         print("=" * 70)
-        print(
-            f"Performance benchmark  {dname} x FP8  "
-            f"({'jit:gemm' if dtype == torch.float16 else 'ocl:ref — slow on PTL'})"
-        )
+        print(f"Performance benchmark  {dname} x FP8  ({'jit:gemm' if dtype == torch.float16 else 'ocl:ref — slow on PTL'})")
         print("=" * 70)
         for M, N, K, label in SHAPES:
             bench(M, N, K, label, dtype=dtype)
