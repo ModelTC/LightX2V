@@ -25,6 +25,12 @@ except ImportError:
     logger.info("sageattn3 not found, please install sageattention first")
     sageattn3_blackwell = None
 
+try:
+    from sageattn3_sparse import sageattn3_sparse_blackwell
+except ImportError:
+    logger.info("sageattn3_sparse not found, please install sageattention sparse first")
+    sageattn3_sparse_blackwell = None
+
 
 @ATTN_WEIGHT_REGISTER("sage_attn2")
 class SageAttn2Weight(AttnWeightTemplate):
@@ -81,4 +87,34 @@ class SageAttn3Weight(AttnWeightTemplate):
             bs = q.shape[0]
 
         x = sageattn3_blackwell(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2).reshape(bs * max_seqlen_q, -1)
+        return x
+
+
+@ATTN_WEIGHT_REGISTER("spas_sage_attn3")
+class SparseSageAttn3Weight(AttnWeightTemplate):
+    def __init__(self):
+        self.config = {}
+
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        if len(q.shape) == 3:
+            bs = 1
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        elif len(q.shape) == 4:
+            bs = q.shape[0]
+        x = (
+            sageattn3_sparse_blackwell(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False, is_sparse=True, per_block_mean=False, topk=0.2)
+            .transpose(1, 2)
+            .reshape(bs * max_seqlen_q, -1)
+        )
         return x

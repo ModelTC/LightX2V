@@ -9,6 +9,13 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq
 
+try:
+    from sageattn3_sparse import dequant_fp4 as dequant_fp4_sage3
+    from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
+except ImportError:
+    logger.info("sageattn3_sparse not found, to use quant_fp4 and dequant_fp4, please install sageattention sparse first")
+    spas_sageattn3_blackwell = None
+
 
 @ATTN_WEIGHT_REGISTER("ulysses")
 class UlyssesAttnWeight(AttnWeightTemplate):
@@ -26,6 +33,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
+        use_fp4_comm=False,
         use_tensor_fusion=False,
         enable_head_parallel=False,
         img_first=True,
@@ -45,6 +53,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
+        assert not (use_fp8_comm and use_fp4_comm), "use_fp8_comm and use_fp4_comm can't be enabled at the same time."
+
         use_qkv_fusion = use_tensor_fusion
 
         if len(q.shape) == 4:
@@ -110,6 +120,29 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             if use_qkv_fusion:
                 img_qkv = img_qkv.permute(3, 2, 1, 0, 4).contiguous()  # (shard_heads, world_size, img_qkv_len, 3, hidden_dims)
                 output_qkv = torch.empty_like(img_qkv)
+                if use_fp8_comm or use_fp4_comm:
+                    if use_fp8_comm:
+                        img_qkv_quant, img_qkv_scale = quant_fp8_vllm(img_qkv.reshape(-1, hidden_dims))
+                        img_qkv_quant = img_qkv_quant.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims)
+                        img_qkv_scale = img_qkv_scale.reshape(shard_heads, world_size, img_qkv_len, 3, 1)
+                    else:
+                        img_qkv_quant, img_qkv_scale = quant_fp4_sage3(img_qkv.reshape(1, shard_heads * world_size, -1, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
+                        img_qkv_quant = img_qkv_quant.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims // 2)
+                        img_qkv_scale = img_qkv_scale.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims // 16)
+                    output_qkv_quant = torch.empty_like(img_qkv_quant)
+                    output_qkv_scale = torch.empty_like(img_qkv_scale)
+                    comm_quant_works = []
+                    comm_scale_works = []
+                    for h in range(shard_heads):
+                        work_quant = dist.all_to_all_single(output_qkv_quant[h], img_qkv_quant[h], group=seq_p_group, async_op=True)
+                        work_scale = dist.all_to_all_single(output_qkv_scale[h], img_qkv_scale[h], group=seq_p_group, async_op=True)
+                        comm_quant_works.append(work_quant)
+                        comm_scale_works.append(work_scale)
+                else:
+                    comm_works = []
+                    for h in range(shard_heads):
+                        work = dist.all_to_all_single(output_qkv[h], img_qkv[h], group=seq_p_group, async_op=True)
+                        comm_works.append(work)
             else:
                 img_q = img_q.permute(2, 1, 0, 3).contiguous()  # (shard_heads, world_size, img_qkv_len, hidden_dims)
                 img_k = img_k.permute(2, 1, 0, 3).contiguous()
@@ -118,58 +151,48 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 output_k = torch.empty_like(img_k)
                 output_v = torch.empty_like(img_v)
 
-            # 通信图像的查询、键和值
-            if use_fp8_comm:
-                if use_qkv_fusion:
-                    img_qkv_fp8, img_qkv_scale = quant_fp8_vllm(img_qkv.reshape(-1, hidden_dims))
-                    img_qkv_fp8 = img_qkv_fp8.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims)
-                    img_qkv_scale = img_qkv_scale.reshape(shard_heads, world_size, img_qkv_len, 3, 1)
-                    output_qkv_fp8 = torch.empty_like(img_qkv_fp8)
-                    output_qkv_scale = torch.empty_like(img_qkv_scale)
-                    comm_fp8_works = []
-                    comm_scale_works = []
-                    for h in range(shard_heads):
-                        work_fp8 = dist.all_to_all_single(output_qkv_fp8[h], img_qkv_fp8[h], group=seq_p_group, async_op=True)
-                        work_scale = dist.all_to_all_single(output_qkv_scale[h], img_qkv_scale[h], group=seq_p_group, async_op=True)
-                        comm_fp8_works.append(work_fp8)
-                        comm_scale_works.append(work_scale)
-                else:
-                    img_q_fp8, img_q_scale = quant_fp8_vllm(img_q.reshape(-1, hidden_dims))
-                    img_k_fp8, img_k_scale = quant_fp8_vllm(img_k.reshape(-1, hidden_dims))
-                    img_v_fp8, img_v_scale = quant_fp8_vllm(img_v.reshape(-1, hidden_dims))
-                    img_q_fp8 = img_q_fp8.reshape(shard_heads, world_size, img_qkv_len, hidden_dims)
-                    img_k_fp8 = img_k_fp8.reshape(shard_heads, world_size, img_qkv_len, hidden_dims)
-                    img_v_fp8 = img_v_fp8.reshape(shard_heads, world_size, img_qkv_len, hidden_dims)
-                    img_q_scale = img_q_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
-                    img_k_scale = img_k_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
-                    img_v_scale = img_v_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
-                    output_q_fp8 = torch.empty_like(img_q_fp8)
-                    output_k_fp8 = torch.empty_like(img_k_fp8)
-                    output_v_fp8 = torch.empty_like(img_v_fp8)
+                if use_fp8_comm or use_fp4_comm:
+                    if use_fp8_comm:
+                        img_q_quant, img_q_scale = quant_fp8_vllm(img_q.reshape(-1, hidden_dims))
+                        img_k_quant, img_k_scale = quant_fp8_vllm(img_k.reshape(-1, hidden_dims))
+                        img_v_quant, img_v_scale = quant_fp8_vllm(img_v.reshape(-1, hidden_dims))
+                        img_q_quant = img_q_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims)
+                        img_k_quant = img_k_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims)
+                        img_v_quant = img_v_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims)
+                        img_q_scale = img_q_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
+                        img_k_scale = img_k_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
+                        img_v_scale = img_v_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
+                    else:
+                        img_q_quant, img_q_scale = quant_fp4_sage3(img_q.reshape(1, shard_heads * world_size, img_qkv_len, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
+                        img_k_quant, img_k_scale = quant_fp4_sage3(img_k.reshape(1, shard_heads * world_size, img_qkv_len, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
+                        img_v_quant, img_v_scale = quant_fp4_sage3(img_v.reshape(1, shard_heads * world_size, img_qkv_len, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
+                        img_q_quant = img_q_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 2)
+                        img_k_quant = img_k_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 2)
+                        img_v_quant = img_v_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 2)
+                        img_q_scale = img_q_scale.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 16)
+                        img_k_scale = img_k_scale.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 16)
+                        img_v_scale = img_v_scale.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 16)
+                    output_q_quant = torch.empty_like(img_q_quant)
+                    output_k_quant = torch.empty_like(img_k_quant)
+                    output_v_quant = torch.empty_like(img_v_quant)
                     output_q_scale = torch.empty_like(img_q_scale)
                     output_k_scale = torch.empty_like(img_k_scale)
                     output_v_scale = torch.empty_like(img_v_scale)
-                    comm_fp8_works = []
+                    comm_quant_works = []
                     comm_scale_works = []
                     for h in range(shard_heads):
-                        work_q_fp8 = dist.all_to_all_single(output_q_fp8[h], img_q_fp8[h], group=seq_p_group, async_op=True)
-                        work_k_fp8 = dist.all_to_all_single(output_k_fp8[h], img_k_fp8[h], group=seq_p_group, async_op=True)
-                        work_v_fp8 = dist.all_to_all_single(output_v_fp8[h], img_v_fp8[h], group=seq_p_group, async_op=True)
+                        work_q_quant = dist.all_to_all_single(output_q_quant[h], img_q_quant[h], group=seq_p_group, async_op=True)
+                        work_k_quant = dist.all_to_all_single(output_k_quant[h], img_k_quant[h], group=seq_p_group, async_op=True)
+                        work_v_quant = dist.all_to_all_single(output_v_quant[h], img_v_quant[h], group=seq_p_group, async_op=True)
                         work_q_scale = dist.all_to_all_single(output_q_scale[h], img_q_scale[h], group=seq_p_group, async_op=True)
                         work_k_scale = dist.all_to_all_single(output_k_scale[h], img_k_scale[h], group=seq_p_group, async_op=True)
                         work_v_scale = dist.all_to_all_single(output_v_scale[h], img_v_scale[h], group=seq_p_group, async_op=True)
-                        comm_fp8_works.append(work_q_fp8)
-                        comm_fp8_works.append(work_k_fp8)
-                        comm_fp8_works.append(work_v_fp8)
+                        comm_quant_works.append(work_q_quant)
+                        comm_quant_works.append(work_k_quant)
+                        comm_quant_works.append(work_v_quant)
                         comm_scale_works.append(work_q_scale)
                         comm_scale_works.append(work_k_scale)
                         comm_scale_works.append(work_v_scale)
-            else:
-                if use_qkv_fusion:
-                    comm_works = []
-                    for h in range(shard_heads):
-                        work = dist.all_to_all_single(output_qkv[h], img_qkv[h], group=seq_p_group, async_op=True)
-                        comm_works.append(work)
                 else:
                     comm_works = []
                     for h in range(shard_heads):
@@ -184,21 +207,29 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             single_head = 1
             head_attns = []
             for h in range(shard_heads):
-                if use_fp8_comm:
+                if use_fp8_comm or use_fp4_comm:
                     if use_qkv_fusion:
-                        comm_fp8_works[h].wait()
+                        comm_quant_works[h].wait()
                         comm_scale_works[h].wait()
-                        output_qkv[h] = dequant_fp8_vllm(output_qkv_fp8[h], output_qkv_scale[h], original_dtype)
+                        if use_fp8_comm:
+                            output_qkv[h] = dequant_fp8_vllm(output_qkv_quant[h], output_qkv_scale[h], original_dtype)
+                        else:
+                            output_qkv[h] = dequant_fp4_sage3(output_qkv_quant[h], output_qkv_scale[h])
                     else:
-                        comm_fp8_works[3 * h].wait()
-                        comm_fp8_works[3 * h + 1].wait()
-                        comm_fp8_works[3 * h + 2].wait()
+                        comm_quant_works[3 * h].wait()
+                        comm_quant_works[3 * h + 1].wait()
+                        comm_quant_works[3 * h + 2].wait()
                         comm_scale_works[3 * h].wait()
                         comm_scale_works[3 * h + 1].wait()
                         comm_scale_works[3 * h + 2].wait()
-                        output_q[h] = dequant_fp8_vllm(output_q_fp8[h], output_q_scale[h], original_dtype)
-                        output_k[h] = dequant_fp8_vllm(output_k_fp8[h], output_k_scale[h], original_dtype)
-                        output_v[h] = dequant_fp8_vllm(output_v_fp8[h], output_v_scale[h], original_dtype)
+                        if use_fp8_comm:
+                            output_q[h] = dequant_fp8_vllm(output_q_quant[h], output_q_scale[h], original_dtype)
+                            output_k[h] = dequant_fp8_vllm(output_k_quant[h], output_k_scale[h], original_dtype)
+                            output_v[h] = dequant_fp8_vllm(output_v_quant[h], output_v_scale[h], original_dtype)
+                        else:
+                            output_q[h] = dequant_fp4_sage3(output_q_quant[h].unsqueeze(0), output_q_scale[h].unsqueeze(0))
+                            output_k[h] = dequant_fp4_sage3(output_k_quant[h].unsqueeze(0), output_k_scale[h].unsqueeze(0))
+                            output_v[h] = dequant_fp4_sage3(output_v_quant[h].unsqueeze(0), output_v_scale[h].unsqueeze(0))
                 else:
                     if use_qkv_fusion:
                         comm_works[h].wait()
@@ -248,45 +279,65 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 img_v = img_v.permute(1, 0, 2, 3).contiguous()  # (world_size, img_v_len, shard_heads, hidden_dims)
 
             # 通信图像的查询、键和值
-            if use_fp8_comm:
-                if use_qkv_fusion:
-                    img_qkv_fp8, img_qkv_scale = quant_fp8_vllm(img_qkv.reshape(-1, hidden_dims))
-                    img_qkv_fp8 = img_qkv_fp8.reshape(world_size, img_qkv_len, shard_heads, 3, hidden_dims)
-                    img_qkv_scale = img_qkv_scale.reshape(world_size, img_qkv_len, shard_heads, 3, 1)
-                    output_qkv_fp8 = torch.empty_like(img_qkv_fp8)
+            if use_qkv_fusion:
+                if use_fp8_comm or use_fp4_comm:
+                    if use_fp8_comm:
+                        img_qkv_quant, img_qkv_scale = quant_fp8_vllm(img_qkv.reshape(-1, hidden_dims))
+                        img_qkv_quant = img_qkv_quant.reshape(world_size, img_qkv_len, shard_heads, 3, hidden_dims)
+                        img_qkv_scale = img_qkv_scale.reshape(world_size, img_qkv_len, shard_heads, 3, 1)
+                    else:
+                        img_qkv_quant, img_qkv_scale = quant_fp4_sage3(img_qkv.reshape(world_size, -1, shard_heads, hidden_dims))
+                    output_qkv_quant = torch.empty_like(img_qkv_quant)
                     output_qkv_scale = torch.empty_like(img_qkv_scale)
-                    dist.all_to_all_single(output_qkv_fp8, img_qkv_fp8, group=seq_p_group)
+                    dist.all_to_all_single(output_qkv_quant, img_qkv_quant, group=seq_p_group)
                     dist.all_to_all_single(output_qkv_scale, img_qkv_scale, group=seq_p_group)
-                    output_qkv = dequant_fp8_vllm(output_qkv_fp8, output_qkv_scale, original_dtype)
+                    if use_fp8_comm:
+                        output_qkv = dequant_fp8_vllm(output_qkv_quant, output_qkv_scale, original_dtype)
+                    else:
+                        output_qkv = dequant_fp4_sage3(output_qkv_quant, output_qkv_scale)
                 else:
-                    img_q_fp8, img_q_scale = quant_fp8_vllm(img_q.reshape(-1, hidden_dims))
-                    img_k_fp8, img_k_scale = quant_fp8_vllm(img_k.reshape(-1, hidden_dims))
-                    img_v_fp8, img_v_scale = quant_fp8_vllm(img_v.reshape(-1, hidden_dims))
-                    img_q_fp8 = img_q_fp8.reshape(world_size, img_qkv_len, shard_heads, hidden_dims)
-                    img_k_fp8 = img_k_fp8.reshape(world_size, img_qkv_len, shard_heads, hidden_dims)
-                    img_v_fp8 = img_v_fp8.reshape(world_size, img_qkv_len, shard_heads, hidden_dims)
-                    img_q_scale = img_q_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
-                    img_k_scale = img_k_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
-                    img_v_scale = img_v_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
-                    output_q_fp8 = torch.empty_like(img_q_fp8)
-                    output_k_fp8 = torch.empty_like(img_k_fp8)
-                    output_v_fp8 = torch.empty_like(img_v_fp8)
+                    output_qkv = torch.empty_like(img_qkv)
+                    dist.all_to_all_single(output_qkv, img_qkv, group=seq_p_group)
+                qkv = output_qkv.reshape(global_img_seqlen, 3, shard_heads, hidden_dims).transpose(0, 1)
+                shard_img_q = qkv[0]  # (global_img_seqlen, shard_head, hidden_dims)
+                shard_img_k = qkv[1]
+                shard_img_v = qkv[2]
+            else:
+                if use_fp8_comm or use_fp4_comm:
+                    if use_fp8_comm:
+                        img_q_quant, img_q_scale = quant_fp8_vllm(img_q.reshape(-1, hidden_dims))
+                        img_k_quant, img_k_scale = quant_fp8_vllm(img_k.reshape(-1, hidden_dims))
+                        img_v_quant, img_v_scale = quant_fp8_vllm(img_v.reshape(-1, hidden_dims))
+                        img_q_quant = img_q_quant.reshape(world_size, img_qkv_len, shard_heads, hidden_dims)
+                        img_k_quant = img_k_quant.reshape(world_size, img_qkv_len, shard_heads, hidden_dims)
+                        img_v_quant = img_v_quant.reshape(world_size, img_qkv_len, shard_heads, hidden_dims)
+                        img_q_scale = img_q_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
+                        img_k_scale = img_k_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
+                        img_v_scale = img_v_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
+                    else:
+                        img_q_quant, img_q_scale = quant_fp4_sage3(img_q)
+                        img_k_quant, img_k_scale = quant_fp4_sage3(img_k)
+                        img_v_quant, img_v_scale = quant_fp4_sage3(img_v)
+                    output_q_quant = torch.empty_like(img_q_quant)
+                    output_k_quant = torch.empty_like(img_k_quant)
+                    output_v_quant = torch.empty_like(img_v_quant)
                     output_q_scale = torch.empty_like(img_q_scale)
                     output_k_scale = torch.empty_like(img_k_scale)
                     output_v_scale = torch.empty_like(img_v_scale)
-                    dist.all_to_all_single(output_q_fp8, img_q_fp8, group=seq_p_group)
-                    dist.all_to_all_single(output_k_fp8, img_k_fp8, group=seq_p_group)
-                    dist.all_to_all_single(output_v_fp8, img_v_fp8, group=seq_p_group)
+                    dist.all_to_all_single(output_q_quant, img_q_quant, group=seq_p_group)
+                    dist.all_to_all_single(output_k_quant, img_k_quant, group=seq_p_group)
+                    dist.all_to_all_single(output_v_quant, img_v_quant, group=seq_p_group)
                     dist.all_to_all_single(output_q_scale, img_q_scale, group=seq_p_group)
                     dist.all_to_all_single(output_k_scale, img_k_scale, group=seq_p_group)
                     dist.all_to_all_single(output_v_scale, img_v_scale, group=seq_p_group)
-                    output_q = dequant_fp8_vllm(output_q_fp8, output_q_scale, original_dtype)
-                    output_k = dequant_fp8_vllm(output_k_fp8, output_k_scale, original_dtype)
-                    output_v = dequant_fp8_vllm(output_v_fp8, output_v_scale, original_dtype)
-            else:
-                if use_qkv_fusion:
-                    output_qkv = torch.empty_like(img_qkv)
-                    dist.all_to_all_single(output_qkv, img_qkv, group=seq_p_group)
+                    if use_fp8_comm:
+                        output_q = dequant_fp8_vllm(output_q_quant, output_q_scale, original_dtype)
+                        output_k = dequant_fp8_vllm(output_k_quant, output_k_scale, original_dtype)
+                        output_v = dequant_fp8_vllm(output_v_quant, output_v_scale, original_dtype)
+                    else:
+                        output_q = dequant_fp4_sage3(output_q_quant, output_q_scale)
+                        output_k = dequant_fp4_sage3(output_k_quant, output_k_scale)
+                        output_v = dequant_fp4_sage3(output_v_quant, output_v_scale)
                 else:
                     output_q = torch.empty_like(img_q)
                     output_k = torch.empty_like(img_k)
@@ -294,14 +345,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                     dist.all_to_all_single(output_q, img_q, group=seq_p_group)
                     dist.all_to_all_single(output_k, img_k, group=seq_p_group)
                     dist.all_to_all_single(output_v, img_v, group=seq_p_group)
-
-            # 完成Attention计算
-            if use_qkv_fusion:
-                qkv = output_qkv.reshape(global_img_seqlen, 3, shard_heads, hidden_dims).transpose(0, 1)
-                shard_img_q = qkv[0]  # (global_img_seqlen, shard_head, hidden_dims)
-                shard_img_k = qkv[1]
-                shard_img_v = qkv[2]
-            else:
                 shard_img_q = output_q.reshape(global_img_seqlen, shard_heads, hidden_dims)
                 shard_img_k = output_k.reshape(global_img_seqlen, shard_heads, hidden_dims)
                 shard_img_v = output_v.reshape(global_img_seqlen, shard_heads, hidden_dims)
@@ -354,10 +397,10 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         if use_fp8_comm:
             original_dtype = img_attn.dtype
             original_shape = img_attn.shape
-            img_attn_fp8, attn_scale = quant_fp8_vllm(img_attn.reshape(-1, original_shape[-1]))
-            img_attn_fp8 = all2all_head2seq(img_attn_fp8.reshape(original_shape), group=seq_p_group)
+            img_attn_quant, attn_scale = quant_fp8_vllm(img_attn.reshape(-1, original_shape[-1]))
+            img_attn_quant = all2all_head2seq(img_attn_quant.reshape(original_shape), group=seq_p_group)
             attn_scale = all2all_head2seq(attn_scale.reshape(original_shape[0], original_shape[1], 1), group=seq_p_group)
-            img_attn = dequant_fp8_vllm(img_attn_fp8, attn_scale, original_dtype)
+            img_attn = dequant_fp8_vllm(img_attn_quant, attn_scale, original_dtype)
         else:
             img_attn = all2all_head2seq(img_attn, group=seq_p_group)
 
@@ -465,6 +508,7 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
+        use_fp4_comm=False,
         enable_head_parallel=False,
         img_first=True,
         **kwargs,
@@ -484,6 +528,7 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
             torch.Tensor: 计算得到的注意力结果
         """
         assert not enable_head_parallel, "Ulysses-4090 can't support head parallel mode."
+        assert not (use_fp8_comm and use_fp4_comm), "use_fp8_comm and use_fp4_comm can't be enabled at the same time."
 
         if len(self.rounds) == 0:
             self.generate_round_robin_pairs(seq_p_group)
@@ -537,30 +582,30 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         qkv_dtype = img_qkv.dtype
 
         if use_fp8_comm:
-            qkv_fp8_byte_tensors = []
-            qkv_fp8_bytes = 0
-            qkv_fp8_dtype = None
+            qkv_quant_byte_tensors = []
+            qkv_quant_bytes = 0
+            qkv_quant_dtype = None
             qkv_scale_dtype = None
             for i in range(world_size):
-                qkv_fp8, qkv_scale = quant_fp8_vllm(qkv_shards[i].reshape(-1, hidden_dims))
+                qkv_quant, qkv_scale = quant_fp8_vllm(qkv_shards[i].reshape(-1, hidden_dims))
                 if i == 0:
-                    qkv_fp8_bytes = qkv_fp8.numel() * qkv_fp8.element_size()
-                    qkv_fp8_dtype = qkv_fp8.dtype
+                    qkv_quant_bytes = qkv_quant.numel() * qkv_quant.element_size()
+                    qkv_quant_dtype = qkv_quant.dtype
                     qkv_scale_dtype = qkv_scale.dtype
-                qkv_fp8_byte_tensors.append(torch.cat([qkv_fp8.contiguous().reshape(-1).view(torch.uint8), qkv_scale.contiguous().reshape(-1).view(torch.uint8)], dim=0))
+                qkv_quant_byte_tensors.append(torch.cat([qkv_quant.contiguous().reshape(-1).view(torch.uint8), qkv_scale.contiguous().reshape(-1).view(torch.uint8)], dim=0))
 
-            gathered_qkv_fp8_byte_tensors = self.load_balanced_all_to_all(qkv_fp8_byte_tensors, seq_p_group)
+            gathered_qkv_quant_byte_tensors = self.load_balanced_all_to_all(qkv_quant_byte_tensors, seq_p_group)
 
             gathered_q_shards = []
             gathered_k_shards = []
             gathered_v_shards = []
             for i in range(world_size):
-                qkv_fp8_byte_tensor = gathered_qkv_fp8_byte_tensors[i]
-                qkv_fp8 = qkv_fp8_byte_tensor[:qkv_fp8_bytes].view(qkv_fp8_dtype).reshape(3, -1, hidden_dims)
-                qkv_scale = qkv_fp8_byte_tensor[qkv_fp8_bytes:].view(qkv_scale_dtype).reshape(3, -1, 1)
-                q_shards_new = dequant_fp8_vllm(qkv_fp8[0], qkv_scale[0], qkv_dtype).reshape(-1, shard_heads, hidden_dims)
-                k_shards_new = dequant_fp8_vllm(qkv_fp8[1], qkv_scale[1], qkv_dtype).reshape(-1, shard_heads, hidden_dims)
-                v_shards_new = dequant_fp8_vllm(qkv_fp8[2], qkv_scale[2], qkv_dtype).reshape(-1, shard_heads, hidden_dims)
+                qkv_quant_byte_tensor = gathered_qkv_quant_byte_tensors[i]
+                qkv_quant = qkv_quant_byte_tensor[:qkv_quant_bytes].view(qkv_quant_dtype).reshape(3, -1, hidden_dims)
+                qkv_scale = qkv_quant_byte_tensor[qkv_quant_bytes:].view(qkv_scale_dtype).reshape(3, -1, 1)
+                q_shards_new = dequant_fp8_vllm(qkv_quant[0], qkv_scale[0], qkv_dtype).reshape(-1, shard_heads, hidden_dims)
+                k_shards_new = dequant_fp8_vllm(qkv_quant[1], qkv_scale[1], qkv_dtype).reshape(-1, shard_heads, hidden_dims)
+                v_shards_new = dequant_fp8_vllm(qkv_quant[2], qkv_scale[2], qkv_dtype).reshape(-1, shard_heads, hidden_dims)
                 gathered_q_shards.append(q_shards_new)
                 gathered_k_shards.append(k_shards_new)
                 gathered_v_shards.append(v_shards_new)
@@ -648,26 +693,26 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         attn_shards = [img_attn[i * shard_seqlen : (i + 1) * shard_seqlen, :, :].contiguous() for i in range(world_size)]
 
         if use_fp8_comm:
-            attn_fp8_byte_tensors = []
-            attn_fp8_bytes = 0
-            attn_fp8_dtype = None
+            attn_quant_byte_tensors = []
+            attn_quant_bytes = 0
+            attn_quant_dtype = None
             attn_scale_dtype = None
             for i in range(world_size):
-                attn_fp8, attn_scale = quant_fp8_vllm(attn_shards[i].reshape(-1, hidden_dims))
+                attn_quant, attn_scale = quant_fp8_vllm(attn_shards[i].reshape(-1, hidden_dims))
                 if i == 0:
-                    attn_fp8_bytes = attn_fp8.numel() * attn_fp8.element_size()
-                    attn_fp8_dtype = attn_fp8.dtype
+                    attn_quant_bytes = attn_quant.numel() * attn_quant.element_size()
+                    attn_quant_dtype = attn_quant.dtype
                     attn_scale_dtype = attn_scale.dtype
-                attn_fp8_byte_tensors.append(torch.cat([attn_fp8.contiguous().reshape(-1).view(torch.uint8), attn_scale.contiguous().reshape(-1).view(torch.uint8)], dim=0))
+                attn_quant_byte_tensors.append(torch.cat([attn_quant.contiguous().reshape(-1).view(torch.uint8), attn_scale.contiguous().reshape(-1).view(torch.uint8)], dim=0))
 
-            gathered_attn_fp8_byte_tensors = self.load_balanced_all_to_all(attn_fp8_byte_tensors, seq_p_group)
+            gathered_attn_quant_byte_tensors = self.load_balanced_all_to_all(attn_quant_byte_tensors, seq_p_group)
 
             gathered_attn_shards = []
             for i in range(world_size):
-                attn_fp8_byte_tensor = gathered_attn_fp8_byte_tensors[i]
-                attn_fp8 = attn_fp8_byte_tensor[:attn_fp8_bytes].view(attn_fp8_dtype).reshape(-1, hidden_dims)
-                attn_scale = attn_fp8_byte_tensor[attn_fp8_bytes:].view(attn_scale_dtype).reshape(-1, 1)
-                attn_shards_new = dequant_fp8_vllm(attn_fp8, attn_scale, attn_dtype).reshape(-1, shard_heads, hidden_dims)
+                attn_quant_byte_tensor = gathered_attn_quant_byte_tensors[i]
+                attn_quant = attn_quant_byte_tensor[:attn_quant_bytes].view(attn_quant_dtype).reshape(-1, hidden_dims)
+                attn_scale = attn_quant_byte_tensor[attn_quant_bytes:].view(attn_scale_dtype).reshape(-1, 1)
+                attn_shards_new = dequant_fp8_vllm(attn_quant, attn_scale, attn_dtype).reshape(-1, shard_heads, hidden_dims)
                 gathered_attn_shards.append(attn_shards_new)
 
         else:

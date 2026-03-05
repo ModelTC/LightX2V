@@ -54,6 +54,7 @@ class RingAttnWeight(AttnWeightTemplate):
         attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
+        use_fp4_comm=False,
         use_tensor_fusion=False,
         enable_head_parallel=False,
         **kwargs,
@@ -73,6 +74,8 @@ class RingAttnWeight(AttnWeightTemplate):
             torch.Tensor: 计算得到的注意力结果
         """
         assert not enable_head_parallel, "RingAttn can't support head parallel mode."
+        assert not use_fp4_comm, "RingAttn don't support use_fp4_comm now."
+        assert not (use_fp8_comm and use_fp4_comm), "use_fp8_comm and use_fp4_comm can't be enabled at the same time."
 
         use_kv_fusion = use_tensor_fusion
         # 获取当前进程的排名和全局进程数

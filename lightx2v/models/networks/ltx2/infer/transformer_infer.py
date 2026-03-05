@@ -43,9 +43,11 @@ class LTX2TransformerInfer:
         if config.get("seq_parallel", False):
             self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = config.get("parallel", {}).get("seq_p_fp8_comm", False)
+            self.seq_p_fp4_comm = config.get("parallel", {}).get("seq_p_fp4_comm", False)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
+            self.seq_p_fp4_comm = False
 
         # Initialize tensor parallel group
         if config.get("tensor_parallel", False):
@@ -196,6 +198,7 @@ class LTX2TransformerInfer:
                 attention_type=self.config["attn_type"],
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
+                use_fp4_comm=self.seq_p_fp4_comm,
                 use_tensor_fusion=False,
                 enable_head_parallel=False,
             )

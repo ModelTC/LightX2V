@@ -19,6 +19,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         else:
             self.seq_p_group = None
         self.seq_p_fp8_comm = False
+        self.seq_p_fp4_comm = False
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
             self.apply_rope_func = apply_wan_rope_with_flashinfer
         else:
@@ -76,6 +77,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 attention_module=attn_phase.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
+                use_fp4_comm=self.seq_p_fp4_comm,
                 img_first=False,
             )
         else:
