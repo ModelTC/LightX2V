@@ -6,7 +6,6 @@ These are nn.Module-based quantized linear layers optimized for Intel XPU.
 
 import torch
 import torch.nn as nn
-from loguru import logger
 
 try:
     import sycl_kernels
@@ -25,7 +24,7 @@ class IntelXpuQuantLinearFp8(nn.Module):
 
     Usage:
         Used in T5 text encoder when config has:
-        { 
+        {
             "t5_cpu_offload": false,
             "t5_quantized": true,
             "t5_quant_scheme": "fp8-intel-xpu"
@@ -39,16 +38,10 @@ class IntelXpuQuantLinearFp8(nn.Module):
         self.dtype = dtype
 
         # Register FP8 weight buffer
-        self.register_buffer(
-            "weight",
-            torch.empty((out_features, in_features), dtype=torch.float8_e4m3fn)
-        )
+        self.register_buffer("weight", torch.empty((out_features, in_features), dtype=torch.float8_e4m3fn))
 
         # Register FP32 scale buffer (per-channel)
-        self.register_buffer(
-            "weight_scale",
-            torch.empty((out_features, 1), dtype=torch.float32)
-        )
+        self.register_buffer("weight_scale", torch.empty((out_features, 1), dtype=torch.float32))
 
         # Register bias buffer
         if bias:
@@ -66,7 +59,7 @@ class IntelXpuQuantLinearFp8(nn.Module):
         Returns:
             Output tensor, shape [batch, seq_len, out_features] or [1, batch, out_features]
         """
-       
+
         # Handle T5-style input: [1, batch, features] → [batch, features]
         squeeze_output = False
         if input_tensor.dim() == 3 and input_tensor.shape[0] == 1:
@@ -112,13 +105,7 @@ class IntelXpuQuantLinearFp8(nn.Module):
         return self
 
     def __repr__(self):
-        return (
-            f"IntelXpuQuantLinearFp8("
-            f"in_features={self.in_features}, "
-            f"out_features={self.out_features}, "
-            f"bias={self.bias is not None}, "
-            f"dtype={self.dtype})"
-        )
+        return f"IntelXpuQuantLinearFp8(in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, dtype={self.dtype})"
 
 
 class IntelXpuQuantLinearInt8(nn.Module):
@@ -145,16 +132,10 @@ class IntelXpuQuantLinearInt8(nn.Module):
         self.dtype = dtype
 
         # Register INT8 weight buffer
-        self.register_buffer(
-            "weight",
-            torch.empty((out_features, in_features), dtype=torch.int8)
-        )
+        self.register_buffer("weight", torch.empty((out_features, in_features), dtype=torch.int8))
 
         # Register FP32 scale buffer (per-channel)
-        self.register_buffer(
-            "weight_scale",
-            torch.empty((out_features, 1), dtype=torch.float32)
-        )
+        self.register_buffer("weight_scale", torch.empty((out_features, 1), dtype=torch.float32))
 
         # Register bias buffer
         if bias:
@@ -207,10 +188,4 @@ class IntelXpuQuantLinearInt8(nn.Module):
         return self
 
     def __repr__(self):
-        return (
-            f"IntelXpuQuantLinearInt8("
-            f"in_features={self.in_features}, "
-            f"out_features={self.out_features}, "
-            f"bias={self.bias is not None}, "
-            f"dtype={self.dtype})"
-        )
+        return f"IntelXpuQuantLinearInt8(in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, dtype={self.dtype})"

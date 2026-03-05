@@ -10,11 +10,11 @@ Our kernel API: sycl_kernels.sdp(Q, K, V)
   dtype: fp16 -> sdp_fp16 kernel, bf16 -> sdp_bf16io kernel (auto-dispatched)
 """
 
-import sys
-import time
 import math
-import torch
+import time
+
 import sycl_kernels
+import torch
 
 DEVICE = "xpu"
 HD = 128
@@ -51,9 +51,9 @@ def check(name, out_f32, ref_f32, thresh=0.15):
 # One test case
 # ──────────────────────────────────────────────────────────────────────────────
 def run_test(label, q_len, kv_len, num_heads=12, warmup=10, iters=50):
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {label}: Q=[{q_len},{num_heads},{HD}] K/V=[{kv_len},{num_heads},{HD}]")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     scale = 1.0 / math.sqrt(HD)
     torch.manual_seed(42)
@@ -86,11 +86,14 @@ def run_test(label, q_len, kv_len, num_heads=12, warmup=10, iters=50):
     check("sdp(fp16)", out_fp16.squeeze(0).float().cpu(), ref_fp16, thresh=0.05)
 
     # ── bf16 perf ────────────────────────────────────────────────────────────
-    bufs = [(
-        Q_bf16.unsqueeze(0).to(DEVICE),
-        K_bf16.unsqueeze(0).to(DEVICE),
-        V_bf16.unsqueeze(0).to(DEVICE),
-    ) for _ in range(2)]
+    bufs = [
+        (
+            Q_bf16.unsqueeze(0).to(DEVICE),
+            K_bf16.unsqueeze(0).to(DEVICE),
+            V_bf16.unsqueeze(0).to(DEVICE),
+        )
+        for _ in range(2)
+    ]
 
     for _ in range(warmup):
         for q, k, v in bufs:
@@ -109,11 +112,14 @@ def run_test(label, q_len, kv_len, num_heads=12, warmup=10, iters=50):
     print(f"\n  sdp(bf16) perf:  {elapsed_bf16:.2f} ms/iter  |  {tflops_bf16:.1f} TFLOPS")
 
     # ── fp16 perf ────────────────────────────────────────────────────────────
-    bufs16 = [(
-        Q_fp16.unsqueeze(0).to(DEVICE),
-        K_fp16.unsqueeze(0).to(DEVICE),
-        V_fp16.unsqueeze(0).to(DEVICE),
-    ) for _ in range(2)]
+    bufs16 = [
+        (
+            Q_fp16.unsqueeze(0).to(DEVICE),
+            K_fp16.unsqueeze(0).to(DEVICE),
+            V_fp16.unsqueeze(0).to(DEVICE),
+        )
+        for _ in range(2)
+    ]
 
     for _ in range(warmup):
         for q, k, v in bufs16:

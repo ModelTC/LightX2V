@@ -2,8 +2,8 @@
 Intel XPU matrix multiplication using torch.xpu.
 """
 
-import re
 import os
+import re
 from abc import ABCMeta, abstractmethod
 
 import torch
@@ -11,7 +11,7 @@ from loguru import logger
 from safetensors import safe_open
 
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops.mm.template import MMWeightTemplate, MMWeightQuantTemplate
+from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate, MMWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
 
 # Detect Intel XPU platform

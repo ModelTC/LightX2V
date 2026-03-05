@@ -20,8 +20,9 @@ Usage:
 
 import sys
 import time
-import torch
+
 import sycl_kernels
+import torch
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,20 +39,17 @@ def quant_fp8_per_n(weight: torch.Tensor):
       scales  : [N, 1]  torch.float32  (2D for direct broadcast over [N, K])
     """
     assert weight.dim() == 2
-    w_f32    = weight.float()
-    max_vals = w_f32.abs().max(dim=1).values                        # [N]
-    scales   = (max_vals / FP8_MAX).clamp(min=1e-12).unsqueeze(1)  # [N, 1]
-    qweight  = (w_f32 / scales).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
+    w_f32 = weight.float()
+    max_vals = w_f32.abs().max(dim=1).values  # [N]
+    scales = (max_vals / FP8_MAX).clamp(min=1e-12).unsqueeze(1)  # [N, 1]
+    qweight = (w_f32 / scales).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
     return qweight, scales  # scales: [N, 1] FP32
 
 
 def rel_rms(a: torch.Tensor, b: torch.Tensor) -> float:
     a_f = a.float().cpu()
     b_f = b.float().cpu()
-    return (
-        (a_f - b_f).pow(2).mean().sqrt()
-        / (b_f.pow(2).mean().sqrt() + 1e-8)
-    ).item()
+    return ((a_f - b_f).pow(2).mean().sqrt() / (b_f.pow(2).mean().sqrt() + 1e-8)).item()
 
 
 def dtype_name(dtype: torch.dtype) -> str:
@@ -61,13 +59,14 @@ def dtype_name(dtype: torch.dtype) -> str:
 # ── test shapes ───────────────────────────────────────────────────────────────
 
 SHAPES = [
-    (512,  4096,  4096,  "attn  to_q/k/v/out"),
-    (512,  10240, 4096,  "FFN   up-proj      "),
-    (512,  4096,  10240, "FFN   down-proj    "),
+    (512, 4096, 4096, "attn  to_q/k/v/out"),
+    (512, 10240, 4096, "FFN   up-proj      "),
+    (512, 4096, 10240, "FFN   down-proj    "),
 ]
 
 
 # ── correctness ───────────────────────────────────────────────────────────────
+
 
 def test_correctness(dtype: torch.dtype = torch.float16):
     dname = dtype_name(dtype)
@@ -77,13 +76,13 @@ def test_correctness(dtype: torch.dtype = torch.float16):
     all_pass = True
 
     for M, N, K, label in SHAPES:
-        weight      = torch.randn([N, K], dtype=dtype)
+        weight = torch.randn([N, K], dtype=dtype)
         qweight, scales = quant_fp8_per_n(weight)  # scales: [N, 1] FP32
 
-        x           = torch.randn([M, K], dtype=dtype, device="xpu")
-        weight_xpu  = weight.to("xpu")
+        x = torch.randn([M, K], dtype=dtype, device="xpu")
+        weight_xpu = weight.to("xpu")
         qweight_xpu = qweight.to("xpu")
-        scales_xpu  = scales.to("xpu")              # [N, 1] FP32
+        scales_xpu = scales.to("xpu")  # [N, 1] FP32
 
         # Reference: same-dtype exact matmul
         ref = torch.nn.functional.linear(x, weight_xpu)
@@ -91,11 +90,10 @@ def test_correctness(dtype: torch.dtype = torch.float16):
         # OneDNN FP8 kernel  (FP16 → jit:gemm:any;  BF16 → ocl:ref:any on PTL)
         out = sycl_kernels.onednn_w8a16_fp8(x, qweight_xpu, scales_xpu)
 
-        err    = rel_rms(out, ref)
+        err = rel_rms(out, ref)
         passed = err < 0.05  # FP8 quantisation typically introduces 2-3% rel RMS
         all_pass &= passed
-        print(f"  [{label}]  M={M} N={N:5d} K={K:5d}  "
-              f"rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}")
+        print(f"  [{label}]  M={M} N={N:5d} K={K:5d}  rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}")
 
     print()
     print("All PASS" if all_pass else "*** Some tests FAILED ***")
@@ -105,6 +103,7 @@ def test_correctness(dtype: torch.dtype = torch.float16):
 
 # ── bias correctness ──────────────────────────────────────────────────────────
 
+
 def test_bias(dtype: torch.dtype = torch.float16):
     dname = dtype_name(dtype)
     print("=" * 70)
@@ -112,46 +111,44 @@ def test_bias(dtype: torch.dtype = torch.float16):
     print("=" * 70)
     M, N, K = 512, 4096, 4096
 
-    weight      = torch.randn([N, K], dtype=dtype)
+    weight = torch.randn([N, K], dtype=dtype)
     qweight, scales = quant_fp8_per_n(weight)
-    bias        = torch.randn([N], dtype=dtype)
+    bias = torch.randn([N], dtype=dtype)
 
-    x           = torch.randn([M, K], dtype=dtype, device="xpu")
-    weight_xpu  = weight.to("xpu")
+    x = torch.randn([M, K], dtype=dtype, device="xpu")
+    weight_xpu = weight.to("xpu")
     qweight_xpu = qweight.to("xpu")
-    scales_xpu  = scales.to("xpu")
-    bias_xpu    = bias.to("xpu")
+    scales_xpu = scales.to("xpu")
+    bias_xpu = bias.to("xpu")
 
     ref = torch.nn.functional.linear(x, weight_xpu, bias_xpu)
     out = sycl_kernels.onednn_w8a16_fp8(x, qweight_xpu, scales_xpu, bias_xpu)
 
-    err    = rel_rms(out, ref)
+    err = rel_rms(out, ref)
     passed = err < 0.05  # FP8 quantisation typically introduces 2-3% rel RMS
-    print(f"  [attn + bias]  M={M} N={N} K={K}  "
-          f"rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}")
+    print(f"  [attn + bias]  M={M} N={N} K={K}  rel_rms={err:.4f}  {'PASS' if passed else 'FAIL'}")
     print()
     return passed
 
 
 # ── benchmark ─────────────────────────────────────────────────────────────────
 
-def bench(M: int, N: int, K: int, label: str,
-          dtype: torch.dtype = torch.float16, iters: int = 10):
+
+def bench(M: int, N: int, K: int, label: str, dtype: torch.dtype = torch.float16, iters: int = 10):
     dname = dtype_name(dtype)
 
-    weight      = torch.randn([N, K], dtype=dtype)
+    weight = torch.randn([N, K], dtype=dtype)
     qweight, scales = quant_fp8_per_n(weight)
 
-    x           = torch.randn([M, K], dtype=dtype, device="xpu")
-    qweight_xpu = qweight.to("xpu")   # [N, K]  float8_e4m3fn
-    scales_xpu  = scales.to("xpu")    # [N, 1]  FP32
+    x = torch.randn([M, K], dtype=dtype, device="xpu")
+    qweight_xpu = qweight.to("xpu")  # [N, K]  float8_e4m3fn
+    scales_xpu = scales.to("xpu")  # [N, 1]  FP32
 
     # warmup both paths
     for _ in range(10):
         sycl_kernels.onednn_w8a16_fp8(x, qweight_xpu, scales_xpu)
     for _ in range(10):
-        torch.nn.functional.linear(
-            x, qweight_xpu.to(dtype) * scales_xpu.to(dtype))
+        torch.nn.functional.linear(x, qweight_xpu.to(dtype) * scales_xpu.to(dtype))
     torch.xpu.synchronize()
 
     # ── onednn fp8 ────────────────────────────────────────────────────────────
@@ -161,30 +158,27 @@ def bench(M: int, N: int, K: int, label: str,
         output_onednn = sycl_kernels.onednn_w8a16_fp8(x, qweight_xpu, scales_xpu)
     torch.xpu.synchronize()
     elapsed_onednn = time.perf_counter() - t0
-    ms_on     = elapsed_onednn / iters * 1e3
+    ms_on = elapsed_onednn / iters * 1e3
     tflops_on = 2 * M * N * K / (elapsed_onednn / iters) / 1e12
-    print(f"  onednn_{dname.lower()}_fp8  [{label}]  "
-          f"{ms_on:.3f} ms/iter  {tflops_on:.2f} TFLOPS")
+    print(f"  onednn_{dname.lower()}_fp8  [{label}]  {ms_on:.3f} ms/iter  {tflops_on:.2f} TFLOPS")
 
     # ── native: dequant (fp8 → dtype) + dtype gemm ───────────────────────────
     # scales_xpu [N,1] * qweight [N,K] → [N,K] correct per-row broadcast
     torch.xpu.synchronize()
     t0 = time.perf_counter()
     for _ in range(iters):
-        w_dq          = qweight_xpu.to(dtype) * scales_xpu.to(dtype)  # [N,K]
+        w_dq = qweight_xpu.to(dtype) * scales_xpu.to(dtype)  # [N,K]
         output_native = torch.nn.functional.linear(x, w_dq)
     torch.xpu.synchronize()
     elapsed_native = time.perf_counter() - t0
-    ms_na     = elapsed_native / iters * 1e3
+    ms_na = elapsed_native / iters * 1e3
     tflops_na = 2 * M * N * K / (elapsed_native / iters) / 1e12
-    print(f"  native_{dname.lower()}       [{label}]  "
-          f"{ms_na:.3f} ms/iter  {tflops_na:.2f} TFLOPS")
+    print(f"  native_{dname.lower()}       [{label}]  {ms_na:.3f} ms/iter  {tflops_na:.2f} TFLOPS")
 
     # ── compare outputs & speedup ─────────────────────────────────────────────
-    err     = rel_rms(output_onednn, output_native)
+    err = rel_rms(output_onednn, output_native)
     speedup = elapsed_native / elapsed_onednn
-    print(f"  rel_rms(onednn vs native)={err:.4f}  "
-          f"speedup={speedup:.2f}x  ({'onednn faster' if speedup > 1 else 'native faster'})")
+    print(f"  rel_rms(onednn vs native)={err:.4f}  speedup={speedup:.2f}x  ({'onednn faster' if speedup > 1 else 'native faster'})")
     print()
 
 
@@ -192,8 +186,7 @@ def run_bench():
     for dtype in [torch.float16, torch.bfloat16]:
         dname = dtype_name(dtype)
         print("=" * 70)
-        print(f"Performance benchmark  {dname} x FP8  "
-              f"({'jit:gemm' if dtype == torch.float16 else 'ocl:ref — slow on PTL'})")
+        print(f"Performance benchmark  {dname} x FP8  ({'jit:gemm' if dtype == torch.float16 else 'ocl:ref — slow on PTL'})")
         print("=" * 70)
         for M, N, K, label in SHAPES:
             bench(M, N, K, label, dtype=dtype)
@@ -204,7 +197,7 @@ def run_bench():
 if __name__ == "__main__":
     no_bench = "--no-bench" in sys.argv
 
-    ok  = test_correctness(torch.float16)
+    ok = test_correctness(torch.float16)
     ok &= test_correctness(torch.bfloat16)
     ok &= test_bias(torch.float16)
     ok &= test_bias(torch.bfloat16)

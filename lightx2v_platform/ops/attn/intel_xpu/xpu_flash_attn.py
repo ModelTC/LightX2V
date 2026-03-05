@@ -15,12 +15,12 @@ import warnings
 import torch
 import torch.nn.functional as F
 
-from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-
+from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 
 try:
     import sycl_kernels as _sycl_mod
+
     _sdp_fn = _sycl_mod.sdp
 except ImportError:
     warnings.warn(
@@ -55,8 +55,6 @@ def _sdp(q4d, k4d, v4d):
     v_t = v4d.permute(0, 2, 1, 3).contiguous()
     out = F.scaled_dot_product_attention(q_t, k_t, v_t)
     return out.permute(0, 2, 1, 3)  # → [1, L_q, H, D]
-
-
 
 
 @ATTN_WEIGHT_REGISTER("intel_xpu_flash_attn")
@@ -95,7 +93,6 @@ class IntelXpuFlashAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
-
         # ── normalise 4-D input [B, S, H, D] → [B*S, H, D] ──────────────────
         if q.ndim == 4:
             bs = q.shape[0]
