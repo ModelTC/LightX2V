@@ -35,12 +35,15 @@ pre-commit run --all-files
 
 除了LightX2V团队的贡献，我们也收到一些社区开发者的贡献，包括但不限于：
 
+- [zhtshr](https://github.com/zhtshr)
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 
 ## :fire: 最新动态
+
+- **2026年3月5日：** 🚀 我们现已支持基于[Mooncake](https://github.com/kvcache-ai/Mooncake)的分离部署，更多关于分离部署的改进和文档正在进行中。感谢Mooncake团队的帮助！
 
 - **2026年2月27日：** 🚀 我们现已支持自回归视频生成模型（[Self Forcing](https://github.com/guandeh17/Self-Forcing)）的 **FP8 和 NVFP4 量化**！你可以在这里获取量化后的模型：**[Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8)， [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**。
 
@@ -309,6 +312,7 @@ pipe.generate(
 - [radial-attention](https://github.com/mit-han-lab/radial-attention)
 - [xDiT](https://github.com/xdit-project/xDiT)
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
+- [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
 ## 🌟 Star 历史
 
