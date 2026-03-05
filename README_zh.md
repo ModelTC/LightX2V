@@ -40,8 +40,11 @@ pre-commit run --all-files
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
+- [ziyanxzy](https://github.com/ziyanxzy)
 
 ## :fire: 最新动态
+
+- **2026年3月5日：** 🚀 支持 Intel AIPC PTL 的部署，感谢Intel团队。
 
 - **2026年3月5日：** 🚀 我们现已支持基于[Mooncake](https://github.com/kvcache-ai/Mooncake)的分离部署，更多关于分离部署的改进和文档正在进行中。感谢Mooncake团队的帮助！
 

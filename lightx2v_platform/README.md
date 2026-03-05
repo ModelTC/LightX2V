@@ -12,6 +12,7 @@ Currently supported backends include:
 - AMD ROCm
 - MThreads MUSA
 - Enflame S60 (GCU)
+- Intel AIPC PTL
 
 For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 
