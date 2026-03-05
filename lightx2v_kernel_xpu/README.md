@@ -50,10 +50,10 @@ Open **cmd.exe** (not PowerShell), activate the conda env, then run:
 ```cmd
 conda activate lightx2v_kernel
 cd D:\path\to\lightx2v_kernel_xpu
-call build_la.bat
+call build.bat
 ```
 
-`build_la.bat` auto-detects Visual Studio (via vswhere), oneAPI, cmake, and the active Python — no hard-coded paths. It runs five steps:
+`build.bat` auto-detects Visual Studio (via vswhere), oneAPI, cmake, and the active Python — no hard-coded paths. It runs five steps:
 
 | Step | Action | Output |
 |------|--------|--------|
