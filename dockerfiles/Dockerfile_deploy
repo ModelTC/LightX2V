@@ -1,6 +1,11 @@
 FROM node:alpine3.21 AS frontend_builder
 COPY lightx2v /opt/lightx2v
 
+RUN cd /opt/lightx2v/deploy/server/canvas_frontend \
+    && export VITE_BASE_URL="/canvas/" \
+    && npm install \
+    && npm run build
+
 RUN cd /opt/lightx2v/deploy/server/frontend \
     && npm install \
     && npm run build
@@ -21,6 +26,9 @@ RUN export COMMIT=0e78a118995e66bb27d78518c4bd9a3e95b4e266 \
     && git fetch --depth 1 origin $COMMIT \
     && git checkout $COMMIT \
     && python setup.py install
+
+RUN pip uninstall pyannote.audio -y \
+    && pip install pyannote.audio==4.0.4 pydub
 
 COPY tools tools
 COPY assets assets
