@@ -14,7 +14,8 @@ try:
     from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
 except ImportError:
     logger.info("sageattn3_sparse not found, to use quant_fp4 and dequant_fp4, please install sageattention sparse first")
-    spas_sageattn3_blackwell = None
+    quant_fp4_sage3 = None
+    dequant_fp4_sage3 = None
 
 
 @ATTN_WEIGHT_REGISTER("ulysses")
@@ -126,7 +127,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                         img_qkv_quant = img_qkv_quant.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims)
                         img_qkv_scale = img_qkv_scale.reshape(shard_heads, world_size, img_qkv_len, 3, 1)
                     else:
-                        img_qkv_quant, img_qkv_scale = quant_fp4_sage3(img_qkv.reshape(1, shard_heads * world_size, -1, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
+                        img_qkv_quant, img_qkv_scale = quant_fp4_sage3(img_qkv.reshape(1, 1, -1, hidden_dims))
                         img_qkv_quant = img_qkv_quant.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims // 2)
                         img_qkv_scale = img_qkv_scale.reshape(shard_heads, world_size, img_qkv_len, 3, hidden_dims // 16)
                     output_qkv_quant = torch.empty_like(img_qkv_quant)
@@ -163,9 +164,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                         img_k_scale = img_k_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
                         img_v_scale = img_v_scale.reshape(shard_heads, world_size, img_qkv_len, 1)
                     else:
-                        img_q_quant, img_q_scale = quant_fp4_sage3(img_q.reshape(1, shard_heads * world_size, img_qkv_len, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
-                        img_k_quant, img_k_scale = quant_fp4_sage3(img_k.reshape(1, shard_heads * world_size, img_qkv_len, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
-                        img_v_quant, img_v_scale = quant_fp4_sage3(img_v.reshape(1, shard_heads * world_size, img_qkv_len, hidden_dims), in_tensor_layout="HND", out_tensor_layout="HND")
+                        img_q_quant, img_q_scale = quant_fp4_sage3(img_q.reshape(1, 1, -1, hidden_dims))
+                        img_k_quant, img_k_scale = quant_fp4_sage3(img_k.reshape(1, 1, -1, hidden_dims))
+                        img_v_quant, img_v_scale = quant_fp4_sage3(img_v.reshape(1, 1, -1, hidden_dims))
                         img_q_quant = img_q_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 2)
                         img_k_quant = img_k_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 2)
                         img_v_quant = img_v_quant.reshape(shard_heads, world_size, img_qkv_len, hidden_dims // 2)
@@ -207,15 +208,25 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             single_head = 1
             head_attns = []
             for h in range(shard_heads):
-                if use_fp8_comm or use_fp4_comm:
-                    if use_qkv_fusion:
+                if use_qkv_fusion:
+                    if use_fp8_comm or use_fp4_comm:
                         comm_quant_works[h].wait()
                         comm_scale_works[h].wait()
                         if use_fp8_comm:
                             output_qkv[h] = dequant_fp8_vllm(output_qkv_quant[h], output_qkv_scale[h], original_dtype)
                         else:
-                            output_qkv[h] = dequant_fp4_sage3(output_qkv_quant[h], output_qkv_scale[h])
+                            output_qkv[h] = dequant_fp4_sage3(output_qkv_quant[h].reshape(1, 1, -1, hidden_dims // 2), output_qkv_scale[h].reshape(1, 1, -1, hidden_dims // 16)).reshape(
+                                world_size, img_qkv_len, 3, hidden_dims
+                            )
                     else:
+                        comm_works[h].wait()
+
+                    qkv = output_qkv[h].reshape(global_img_seqlen, 3, single_head, hidden_dims).transpose(0, 1)
+                    shard_img_q = qkv[0]  # (global_img_seqlen, single_head, hidden_dims)
+                    shard_img_k = qkv[1]
+                    shard_img_v = qkv[2]
+                else:
+                    if use_fp8_comm or use_fp4_comm:
                         comm_quant_works[3 * h].wait()
                         comm_quant_works[3 * h + 1].wait()
                         comm_quant_works[3 * h + 2].wait()
@@ -227,23 +238,20 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                             output_k[h] = dequant_fp8_vllm(output_k_quant[h], output_k_scale[h], original_dtype)
                             output_v[h] = dequant_fp8_vllm(output_v_quant[h], output_v_scale[h], original_dtype)
                         else:
-                            output_q[h] = dequant_fp4_sage3(output_q_quant[h].unsqueeze(0), output_q_scale[h].unsqueeze(0))
-                            output_k[h] = dequant_fp4_sage3(output_k_quant[h].unsqueeze(0), output_k_scale[h].unsqueeze(0))
-                            output_v[h] = dequant_fp4_sage3(output_v_quant[h].unsqueeze(0), output_v_scale[h].unsqueeze(0))
-                else:
-                    if use_qkv_fusion:
-                        comm_works[h].wait()
+                            output_q[h] = dequant_fp4_sage3(output_q_quant[h].reshape(1, 1, -1, hidden_dims // 2), output_q_scale[h].reshape(1, 1, -1, hidden_dims // 16)).reshape(
+                                world_size, img_qkv_len, hidden_dims
+                            )
+                            output_k[h] = dequant_fp4_sage3(output_k_quant[h].reshape(1, 1, -1, hidden_dims // 2), output_k_scale[h].reshape(1, 1, -1, hidden_dims // 16)).reshape(
+                                world_size, img_qkv_len, hidden_dims
+                            )
+                            output_v[h] = dequant_fp4_sage3(output_v_quant[h].reshape(1, 1, -1, hidden_dims // 2), output_v_scale[h].reshape(1, 1, -1, hidden_dims // 16)).reshape(
+                                world_size, img_qkv_len, hidden_dims
+                            )
                     else:
                         comm_works[3 * h].wait()
                         comm_works[3 * h + 1].wait()
                         comm_works[3 * h + 2].wait()
 
-                if use_qkv_fusion:
-                    qkv = output_qkv[h].reshape(global_img_seqlen, 3, single_head, hidden_dims).transpose(0, 1)
-                    shard_img_q = qkv[0]  # (global_img_seqlen, single_head, hidden_dims)
-                    shard_img_k = qkv[1]
-                    shard_img_v = qkv[2]
-                else:
                     shard_img_q = output_q[h].reshape(global_img_seqlen, single_head, hidden_dims)
                     shard_img_k = output_k[h].reshape(global_img_seqlen, single_head, hidden_dims)
                     shard_img_v = output_v[h].reshape(global_img_seqlen, single_head, hidden_dims)
@@ -286,7 +294,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                         img_qkv_quant = img_qkv_quant.reshape(world_size, img_qkv_len, shard_heads, 3, hidden_dims)
                         img_qkv_scale = img_qkv_scale.reshape(world_size, img_qkv_len, shard_heads, 3, 1)
                     else:
-                        img_qkv_quant, img_qkv_scale = quant_fp4_sage3(img_qkv.reshape(world_size, -1, shard_heads, hidden_dims))
+                        img_qkv_quant, img_qkv_scale = quant_fp4_sage3(img_qkv.reshape(1, 1, -1, hidden_dims))
+                        img_qkv_quant = img_qkv_quant.reshape(world_size, img_qkv_len, shard_heads, 3, hidden_dims // 2)
+                        img_qkv_scale = img_qkv_scale.reshape(world_size, img_qkv_len, shard_heads, 3, hidden_dims // 16)
                     output_qkv_quant = torch.empty_like(img_qkv_quant)
                     output_qkv_scale = torch.empty_like(img_qkv_scale)
                     dist.all_to_all_single(output_qkv_quant, img_qkv_quant, group=seq_p_group)
@@ -294,10 +304,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                     if use_fp8_comm:
                         output_qkv = dequant_fp8_vllm(output_qkv_quant, output_qkv_scale, original_dtype)
                     else:
-                        output_qkv = dequant_fp4_sage3(output_qkv_quant, output_qkv_scale)
+                        output_qkv = dequant_fp4_sage3(output_qkv_quant.reshape(1, 1, -1, hidden_dims // 2), output_qkv_scale.reshape(1, 1, -1, hidden_dims // 16))
                 else:
                     output_qkv = torch.empty_like(img_qkv)
                     dist.all_to_all_single(output_qkv, img_qkv, group=seq_p_group)
+
                 qkv = output_qkv.reshape(global_img_seqlen, 3, shard_heads, hidden_dims).transpose(0, 1)
                 shard_img_q = qkv[0]  # (global_img_seqlen, shard_head, hidden_dims)
                 shard_img_k = qkv[1]
@@ -315,9 +326,15 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                         img_k_scale = img_k_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
                         img_v_scale = img_v_scale.reshape(world_size, img_qkv_len, shard_heads, 1)
                     else:
-                        img_q_quant, img_q_scale = quant_fp4_sage3(img_q)
-                        img_k_quant, img_k_scale = quant_fp4_sage3(img_k)
-                        img_v_quant, img_v_scale = quant_fp4_sage3(img_v)
+                        img_q_quant, img_q_scale = quant_fp4_sage3(img_q.reshape(1, 1, -1, hidden_dims))
+                        img_k_quant, img_k_scale = quant_fp4_sage3(img_k.reshape(1, 1, -1, hidden_dims))
+                        img_v_quant, img_v_scale = quant_fp4_sage3(img_v.reshape(1, 1, -1, hidden_dims))
+                        img_q_quant = img_q_quant.reshape(world_size, img_qkv_len, shard_heads, hidden_dims // 2)
+                        img_k_quant = img_k_quant.reshape(world_size, img_qkv_len, shard_heads, hidden_dims // 2)
+                        img_v_quant = img_v_quant.reshape(world_size, img_qkv_len, shard_heads, hidden_dims // 2)
+                        img_q_scale = img_q_scale.reshape(world_size, img_qkv_len, shard_heads, hidden_dims // 16)
+                        img_k_scale = img_k_scale.reshape(world_size, img_qkv_len, shard_heads, hidden_dims // 16)
+                        img_v_scale = img_v_scale.reshape(world_size, img_qkv_len, shard_heads, hidden_dims // 16)
                     output_q_quant = torch.empty_like(img_q_quant)
                     output_k_quant = torch.empty_like(img_k_quant)
                     output_v_quant = torch.empty_like(img_v_quant)
@@ -335,9 +352,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                         output_k = dequant_fp8_vllm(output_k_quant, output_k_scale, original_dtype)
                         output_v = dequant_fp8_vllm(output_v_quant, output_v_scale, original_dtype)
                     else:
-                        output_q = dequant_fp4_sage3(output_q_quant, output_q_scale)
-                        output_k = dequant_fp4_sage3(output_k_quant, output_k_scale)
-                        output_v = dequant_fp4_sage3(output_v_quant, output_v_scale)
+                        output_q = dequant_fp4_sage3(output_q_quant.reshape(1, 1, -1, hidden_dims // 2), output_q_scale.reshape(1, 1, -1, hidden_dims // 16))
+                        output_k = dequant_fp4_sage3(output_k_quant.reshape(1, 1, -1, hidden_dims // 2), output_k_scale.reshape(1, 1, -1, hidden_dims // 16))
+                        output_v = dequant_fp4_sage3(output_v_quant.reshape(1, 1, -1, hidden_dims // 2), output_v_scale.reshape(1, 1, -1, hidden_dims // 16))
                 else:
                     output_q = torch.empty_like(img_q)
                     output_k = torch.empty_like(img_k)
