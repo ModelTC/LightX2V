@@ -63,7 +63,7 @@ call build.bat
 | 4 | Run smoke test | `test\test_sdp.py` |
 | 5 | Build wheel (`pip wheel --no-build-isolation`) | `dist\sycl_kernels-0.0.1-cp311-win_amd64.whl` |
 
-Logs: `build_la_log.txt` (full output), `build_la_err.txt` (compiler warnings).
+Logs: `build_test.log` (full output), `build_test.err` (compiler warnings).
 
 > **Note on wheel build**: Step 5 uses `pip wheel --no-build-isolation` rather than
 > `python -m build --no-isolation`. The latter fails when `cmake` is only a system binary
@@ -185,7 +185,7 @@ lightx2v_kernel_xpu\
 │   │   ├── flash.attn.b.mha128.fp16.opt.h   # FP16 Flash Attention kernel
 │   │   └── flash.attn.b.mha128.bf16io.h     # BF16 I/O Flash Attention kernel
 │   ├── esimd_kernel_api.h      # DLL export macro
-│   └── build.bat               # icpx compile command (called by build_la.bat)
+│   └── build.bat               # icpx compile command 
 ├── csrc\                       # PyTorch C++ extension source (compiled by icx via CMake)
 │   ├── entry.cpp               # pybind11 module registration
 │   ├── sdp.cpp                 # sdp() Python wrapper — dtype dispatch + normAlpha cache
@@ -202,5 +202,5 @@ lightx2v_kernel_xpu\
 │   └── test_linear.py         # W4A16 correctness + perf
 ├── CMakeLists.txt              # CMake build for .pyd
 ├── pyproject.toml              # scikit-build-core wheel config
-└── build_la.bat                # Full build script: DLL + pyd + test + wheel
+├── build.bat                # Original full build script
 ```
