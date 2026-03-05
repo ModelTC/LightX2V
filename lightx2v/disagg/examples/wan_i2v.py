@@ -2,18 +2,16 @@ import logging
 
 import numpy as np
 import torch
-import torchvision.transforms.functional as TF
 from loguru import logger
-from PIL import Image
 
 from lightx2v.disagg.utils import (
     load_wan_image_encoder,
     load_wan_text_encoder,
+    load_wan_transformer,
     load_wan_vae_decoder,
     load_wan_vae_encoder,
-    load_wan_transformer,
-    set_config,
     read_image_input,
+    set_config,
 )
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.utils.envs import GET_DTYPE
@@ -38,18 +36,8 @@ def compute_latent_shape_from_image(config, image_tensor):
     aspect_ratio = h / w
     max_area = config["target_height"] * config["target_width"]
 
-    latent_h = round(
-        np.sqrt(max_area * aspect_ratio)
-        // config["vae_stride"][1]
-        // config["patch_size"][1]
-        * config["patch_size"][1]
-    )
-    latent_w = round(
-        np.sqrt(max_area / aspect_ratio)
-        // config["vae_stride"][2]
-        // config["patch_size"][2]
-        * config["patch_size"][2]
-    )
+    latent_h = round(np.sqrt(max_area * aspect_ratio) // config["vae_stride"][1] // config["patch_size"][1] * config["patch_size"][1])
+    latent_w = round(np.sqrt(max_area / aspect_ratio) // config["vae_stride"][2] // config["patch_size"][2] * config["patch_size"][2])
     latent_shape = get_latent_shape_with_lat_hw(config, latent_h, latent_w)
     return latent_shape, latent_h, latent_w
 

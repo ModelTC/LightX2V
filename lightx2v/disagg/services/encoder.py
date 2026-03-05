@@ -1,21 +1,23 @@
-import torch
 import hashlib
 import json
-import numpy as np
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
+import numpy as np
+import torch
+
+from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode
 from lightx2v.disagg.services.base import BaseService
-from lightx2v.disagg.conn import DataArgs, DataManager, DataSender, DisaggregationMode, DataPoll
+from lightx2v.disagg.utils import (
+    estimate_encoder_buffer_sizes,
+    load_wan_image_encoder,
+    load_wan_text_encoder,
+    load_wan_vae_encoder,
+    read_image_input,
+)
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.disagg.utils import (
-    load_wan_text_encoder,
-    load_wan_image_encoder,
-    load_wan_vae_encoder,
-    read_image_input,
-    estimate_encoder_buffer_sizes,
-)
+
 
 class EncoderService(BaseService):
     def __init__(self, config):
@@ -28,17 +30,17 @@ class EncoderService(BaseService):
         self.data_mgr = None
         self.data_sender = None
         self._rdma_buffers: List[torch.Tensor] = []
-        
+
         # Load models based on config
         self.load_models()
-        
+
         # Seed everything if seed is in config
         if "seed" in self.config:
             seed_all(self.config["seed"])
 
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
-        
+
         if data_bootstrap_addr is not None and data_bootstrap_room is not None:
             data_ptrs, data_lens = self.alloc_bufs()
             data_args = DataArgs(
@@ -50,21 +52,19 @@ class EncoderService(BaseService):
                 ib_device=None,
             )
             self.data_mgr = DataManager(data_args, DisaggregationMode.ENCODE)
-            self.data_sender = DataSender(
-                self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room)
-            )
+            self.data_sender = DataSender(self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room))
 
     def load_models(self):
         self.logger.info("Loading Encoder Models...")
-        
+
         # T5 Text Encoder
         text_encoders = load_wan_text_encoder(self.config)
         self.text_encoder = text_encoders[0] if text_encoders else None
-        
+
         # CLIP Image Encoder (Optional per usage in wan_i2v.py)
         if self.config.get("use_image_encoder", False):
-           self.image_encoder = load_wan_image_encoder(self.config)
-        
+            self.image_encoder = load_wan_image_encoder(self.config)
+
         # VAE Encoder (Required for I2V)
         # Note: wan_i2v.py logic: if vae_encoder is None: raise RuntimeError
         # But we only load if needed or always? Let's check the config flags.
@@ -72,7 +72,7 @@ class EncoderService(BaseService):
         # For simplicity of this service, we load it if the task implies it or just try to load.
         # But `load_wan_vae_encoder` will look at the config.
         self.vae_encoder = load_wan_vae_encoder(self.config)
-        
+
         self.logger.info("Encoder Models loaded successfully.")
 
     def _get_latent_shape_with_lat_hw(self, latent_h, latent_w):
@@ -88,18 +88,8 @@ class EncoderService(BaseService):
         aspect_ratio = h / w
         max_area = self.config["target_height"] * self.config["target_width"]
 
-        latent_h = round(
-            np.sqrt(max_area * aspect_ratio)
-            // self.config["vae_stride"][1]
-            // self.config["patch_size"][1]
-            * self.config["patch_size"][1]
-        )
-        latent_w = round(
-            np.sqrt(max_area / aspect_ratio)
-            // self.config["vae_stride"][2]
-            // self.config["patch_size"][2]
-            * self.config["patch_size"][2]
-        )
+        latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
+        latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
         latent_shape = self._get_latent_shape_with_lat_hw(latent_h, latent_w)
         return latent_shape, latent_h, latent_w
 
@@ -157,7 +147,7 @@ class EncoderService(BaseService):
         Generates encoder outputs from prompt and image input.
         """
         self.logger.info("Starting processing in EncoderService...")
-        
+
         prompt = self.config.get("prompt")
         negative_prompt = self.config.get("negative_prompt")
         if prompt is None:
@@ -165,7 +155,7 @@ class EncoderService(BaseService):
 
         # 1. Text Encoding
         text_len = self.config.get("text_len", 512)
-        
+
         context = self.text_encoder.infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])
 
@@ -181,7 +171,7 @@ class EncoderService(BaseService):
             "context": context,
             "context_null": context_null,
         }
-        
+
         task = self.config.get("task")
         clip_encoder_out = None
 
@@ -223,6 +213,7 @@ class EncoderService(BaseService):
         self.logger.info("Encode processing completed. Preparing to send data...")
 
         if self.data_mgr is not None and self.data_sender is not None:
+
             def _buffer_view(buf: torch.Tensor, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
                 view = torch.empty(0, dtype=dtype, device=buf.device)
                 view.set_(buf.untyped_storage(), 0, shape)
@@ -256,23 +247,17 @@ class EncoderService(BaseService):
             w_prime = int(np.ceil(target_width / stride_w))
 
             buffer_index = 0
-            context_buf = _buffer_view(
-                self._rdma_buffers[buffer_index], GET_DTYPE(), (1, text_len, text_dim)
-            )
+            context_buf = _buffer_view(self._rdma_buffers[buffer_index], GET_DTYPE(), (1, text_len, text_dim))
             context_buf.copy_(context)
             buffer_index += 1
             if self.config.get("enable_cfg", False):
-                context_null_buf = _buffer_view(
-                    self._rdma_buffers[buffer_index], GET_DTYPE(), (1, text_len, text_dim)
-                )
+                context_null_buf = _buffer_view(self._rdma_buffers[buffer_index], GET_DTYPE(), (1, text_len, text_dim))
                 context_null_buf.copy_(context_null)
                 buffer_index += 1
 
             if task == "i2v":
                 if self.config.get("use_image_encoder", True):
-                    clip_buf = _buffer_view(
-                        self._rdma_buffers[buffer_index], GET_DTYPE(), (clip_dim,)
-                    )
+                    clip_buf = _buffer_view(self._rdma_buffers[buffer_index], GET_DTYPE(), (clip_dim,))
                     if image_encoder_output.get("clip_encoder_out") is not None:
                         clip_buf.copy_(image_encoder_output["clip_encoder_out"])
                     else:
@@ -291,9 +276,7 @@ class EncoderService(BaseService):
                 buffer_index += 1
 
             latent_tensor = torch.tensor(latent_shape, device=AI_DEVICE, dtype=torch.int64)
-            latent_buf = _buffer_view(
-                self._rdma_buffers[buffer_index], torch.int64, (4,)
-            )
+            latent_buf = _buffer_view(self._rdma_buffers[buffer_index], torch.int64, (4,))
             latent_buf.copy_(latent_tensor)
             buffer_index += 1
 
@@ -322,6 +305,7 @@ class EncoderService(BaseService):
             self.data_sender.send(buffer_ptrs)
 
             import time
+
             while True:
                 status = self.data_sender.poll()
                 if status == DataPoll.Success:

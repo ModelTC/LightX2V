@@ -1,15 +1,15 @@
 import logging
-import os
-import torch
+
 from loguru import logger
 
-from lightx2v.disagg.utils import set_config
 from lightx2v.disagg.services.encoder import EncoderService
 from lightx2v.disagg.services.transformer import TransformerService
+from lightx2v.disagg.utils import set_config
 from lightx2v.utils.utils import seed_all
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
+
 
 def main():
     # 1. Configuration
@@ -102,6 +102,7 @@ def main():
     encoder_thread.join()
     transformer_thread.join()
     logger.info("All services finished.")
+
 
 if __name__ == "__main__":
     main()

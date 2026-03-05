@@ -1,32 +1,29 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import struct
 import threading
-import torch
+from dataclasses import dataclass
+from enum import Enum
 from functools import cache
 from typing import Dict, List, Optional, Tuple
-from enum import Enum
-from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
 import zmq
-from aiohttp import web
 
 from lightx2v.disagg.mooncake import MooncakeTransferEngine
 
 logger = logging.getLogger(__name__)
+
 
 class DisaggregationMode(Enum):
     NULL = "null"
     ENCODE = "encode"
     TRANSFORMER = "transformer"
 
-def group_concurrent_contiguous(
-    src_indices: npt.NDArray[np.int64], dst_indices: npt.NDArray[np.int64]
-) -> Tuple[List[npt.NDArray[np.int64]], List[npt.NDArray[np.int64]]]:
+
+def group_concurrent_contiguous(src_indices: npt.NDArray[np.int64], dst_indices: npt.NDArray[np.int64]) -> Tuple[List[npt.NDArray[np.int64]], List[npt.NDArray[np.int64]]]:
     src_groups = []
     dst_groups = []
     current_src = [src_indices[0]]
@@ -69,9 +66,7 @@ class DataPoll:
 
 
 RequestPoolType = Dict[int, List[int]]
-WaitingPoolType = Dict[
-    int, Tuple[str, list[int]]
-]
+WaitingPoolType = Dict[int, Tuple[str, list[int]]]
 DATASENDER_POLLING_PORT = 17788
 DATARECEIVER_POLLING_PORT = 27788
 
@@ -93,14 +88,10 @@ class DataManager:
         elif self.disaggregation_mode == DisaggregationMode.TRANSFORMER:
             self.start_transformer_thread()
         else:
-            raise ValueError(
-                f"Unsupported DisaggregationMode: {self.disaggregation_mode}"
-            )
+            raise ValueError(f"Unsupported DisaggregationMode: {self.disaggregation_mode}")
 
     def register_buffer_to_engine(self):
-        for data_ptr, data_len in zip(
-            self.data_args.data_ptrs, self.data_args.data_lens
-        ):
+        for data_ptr, data_len in zip(self.data_args.data_ptrs, self.data_args.data_lens):
             self.engine.register(data_ptr, data_len)
 
     @cache
@@ -135,12 +126,7 @@ class DataManager:
     def sync_status_to_transformer_endpoint(self, remote: str, room: int):
         if ":" in remote:
             remote = remote.split(":")[0]
-        self._connect(
-            "tcp://"
-            + remote
-            + ":"
-            + str(DATARECEIVER_POLLING_PORT + self.data_args.receiver_engine_rank)
-        ).send_multipart(
+        self._connect("tcp://" + remote + ":" + str(DATARECEIVER_POLLING_PORT + self.data_args.receiver_engine_rank)).send_multipart(
             [
                 str(room).encode("ascii"),
                 str(self.request_status[room]).encode("ascii"),
@@ -165,9 +151,7 @@ class DataManager:
                 endpoint = endpoint.decode("ascii")
                 mooncake_session_id = mooncake_session_id.decode("ascii")
                 bootstrap_room = int(bootstrap_room.decode("ascii"))
-                transformer_ptrs = list(
-                    struct.unpack(f"{len(transformer_ptrs)//8}Q", transformer_ptrs)
-                )
+                transformer_ptrs = list(struct.unpack(f"{len(transformer_ptrs) // 8}Q", transformer_ptrs))
                 logger.info(
                     "Encoder received ZMQ: endpoint=%s session_id=%s room=%s transformer_ptrs=%s",
                     endpoint,
@@ -241,10 +225,7 @@ class DataManager:
             self.transfer_event.set()
 
     def check_status(self, bootstrap_room: int):
-        if (
-            self.disaggregation_mode == DisaggregationMode.TRANSFORMER
-            and self.request_status[bootstrap_room] == DataPoll.Success
-        ):
+        if self.disaggregation_mode == DisaggregationMode.TRANSFORMER and self.request_status[bootstrap_room] == DataPoll.Success:
             if bootstrap_room in self.request_pool:
                 self.request_pool.pop(bootstrap_room)
 
@@ -261,7 +242,6 @@ class DataManager:
 
 
 class DataSender:
-
     def __init__(self, mgr: DataManager, bootstrap_addr: str, bootstrap_room: int):
         self.data_mgr = mgr
         self.bootstrap_room = bootstrap_room
@@ -281,18 +261,11 @@ class DataSender:
 
 
 class DataReceiver:
-
-    def __init__(
-        self, mgr: DataManager, bootstrap_addr: str, bootstrap_room: Optional[int] = None
-    ):
+    def __init__(self, mgr: DataManager, bootstrap_addr: str, bootstrap_room: Optional[int] = None):
         self.bootstrap_room = bootstrap_room
         self.bootstrap_addr = bootstrap_addr
         self.data_mgr = mgr
-        self.encode_server_url = (
-            bootstrap_addr.split(":")[0]
-            + ":"
-            + str(DATASENDER_POLLING_PORT + self.data_mgr.data_args.sender_engine_rank)
-        )
+        self.encode_server_url = bootstrap_addr.split(":")[0] + ":" + str(DATASENDER_POLLING_PORT + self.data_mgr.data_args.sender_engine_rank)
         logger.info("DataReceiver encode_server_url=%s", self.encode_server_url)
         self.transformer_ip = self.data_mgr.get_localhost()
         self.session_id = self.data_mgr.get_session_id()
@@ -305,9 +278,7 @@ class DataReceiver:
         return socket
 
     def init(self):
-        packed_data_ptrs = b"".join(
-            struct.pack("Q", ptr) for ptr in self.data_mgr.data_args.data_ptrs
-        )
+        packed_data_ptrs = b"".join(struct.pack("Q", ptr) for ptr in self.data_mgr.data_args.data_ptrs)
         self.data_mgr.enqueue_request(self.bootstrap_room, packed_data_ptrs)
         self._connect("tcp://" + self.encode_server_url).send_multipart(
             [
@@ -323,4 +294,3 @@ class DataReceiver:
 
     def failure_exception(self):
         raise Exception("Fake DataReceiver Exception")
-

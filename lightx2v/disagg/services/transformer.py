@@ -1,23 +1,24 @@
-import torch
-import torch.nn.functional as F
 import hashlib
 import json
-import logging
-import numpy as np
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataReceiver, DisaggregationMode
+from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.services.base import BaseService
-from lightx2v.disagg.conn import DataArgs, DataManager, DataReceiver, DisaggregationMode, DataPoll
 from lightx2v.disagg.utils import (
     estimate_encoder_buffer_sizes,
     load_wan_transformer,
     load_wan_vae_decoder,
 )
-from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
-from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.utils import seed_all, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 class TransformerService(BaseService):
     def __init__(self, config):
@@ -32,14 +33,14 @@ class TransformerService(BaseService):
         self.data_receiver = None
 
         self.load_models()
-        
+
         # Set global seed if present in config, though specific process calls might reuse it
         if "seed" in self.config:
             seed_all(self.config["seed"])
 
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
-        
+
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
 
@@ -60,21 +61,19 @@ class TransformerService(BaseService):
             ib_device=None,
         )
         self.data_mgr = DataManager(data_args, DisaggregationMode.TRANSFORMER)
-        self.data_receiver = DataReceiver(
-            self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room)
-        )
+        self.data_receiver = DataReceiver(self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room))
         self.data_receiver.init()
 
     def load_models(self):
         self.logger.info("Loading Transformer Models...")
-        
+
         self.transformer = load_wan_transformer(self.config)
         self.vae_decoder = load_wan_vae_decoder(self.config)
-        
+
         # Initialize scheduler
         self.scheduler = WanScheduler(self.config)
         self.transformer.set_scheduler(self.scheduler)
-        
+
         self.logger.info("Transformer Models loaded successfully.")
 
     def alloc_memory(self, request: AllocationRequest) -> MemoryHandle:
@@ -98,14 +97,14 @@ class TransformerService(BaseService):
         for nbytes in buffer_sizes:
             if nbytes <= 0:
                 continue
-            buf = torch.empty((nbytes,), dtype=torch.uint8, #device=torch.device(f"cuda:{self.receiver_engine_rank}")
-                              )
+            buf = torch.empty(
+                (nbytes,),
+                dtype=torch.uint8,  # device=torch.device(f"cuda:{self.receiver_engine_rank}")
+            )
             ptr = buf.data_ptr()
             self._rdma_buffers.append(buf)
             session_id = self.data_mgr.get_session_id() if self.data_mgr is not None else ""
-            buffers.append(
-                RemoteBuffer(addr=ptr, session_id=session_id, nbytes=nbytes)
-            )
+            buffers.append(RemoteBuffer(addr=ptr, session_id=session_id, nbytes=nbytes))
 
         if buffers:
             self.logger.info(
@@ -151,9 +150,10 @@ class TransformerService(BaseService):
                 data_tensor = data_tensor.to(torch.float32)
             data = data_tensor.contiguous().cpu().numpy().tobytes()
             return hashlib.sha256(data).hexdigest()
-        
+
         # Poll for data from EncoderService
         import time
+
         if self.data_receiver is not None:
             while True:
                 status = self.data_receiver.poll()
@@ -239,7 +239,7 @@ class TransformerService(BaseService):
                 vae_encoder_out_padded = _buffer_view(vae_buf, GET_DTYPE(), vae_shape)
 
         latent_shape = _buffer_view(latent_buf, torch.int64, (4,)).tolist()
-        
+
         vae_encoder_out = None
         if vae_encoder_out_padded is not None:
             valid_t = latent_shape[1]
@@ -285,7 +285,7 @@ class TransformerService(BaseService):
                 latent_tensor = torch.tensor(latent_shape, device=AI_DEVICE, dtype=torch.int64)
                 if _sha256_tensor(latent_tensor) != meta.get("latent_hash"):
                     raise ValueError("latent_shape hash mismatch between encoder and transformer")
-        
+
         inputs = {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output,
@@ -298,14 +298,14 @@ class TransformerService(BaseService):
             raise ValueError("seed is required in config.")
         if save_path is None:
             raise ValueError("save_path is required in config.")
-        
+
         if latent_shape is None:
             raise ValueError("latent_shape is required in inputs.")
-        
+
         # Scheduler Preparation
         self.logger.info(f"Preparing scheduler with seed {seed}...")
         self.scheduler.prepare(seed=seed, latent_shape=latent_shape, image_encoder_output=image_encoder_output)
-        
+
         # Denoising Loop
         self.logger.info("Starting denoising loop...")
         infer_steps = self.scheduler.infer_steps
@@ -316,25 +316,25 @@ class TransformerService(BaseService):
             self.scheduler.step_pre(step_index=step_index)
             self.transformer.infer(inputs)
             self.scheduler.step_post()
-            
+
         latents = self.scheduler.latents
-        
+
         # VAE Decoding
         self.logger.info("Decoding latents...")
         if self.vae_decoder is None:
-             raise RuntimeError("VAE decoder is not loaded.")
-             
+            raise RuntimeError("VAE decoder is not loaded.")
+
         gen_video = self.vae_decoder.decode(latents.to(GET_DTYPE()))
-        
+
         # Post-processing
         self.logger.info("Post-processing video...")
         gen_video_final = wan_vae_to_comfy(gen_video)
-        
+
         # Saving
         self.logger.info(f"Saving video to {save_path}...")
         save_to_video(gen_video_final, save_path, fps=self.config.get("fps", 16), method="ffmpeg")
         self.logger.info("Done!")
-        
+
         return save_path
 
     def release_memory(self):
@@ -346,5 +346,5 @@ class TransformerService(BaseService):
                 if self.data_mgr is not None:
                     self.data_mgr.engine.deregister(buf.data_ptr())
             self._rdma_buffers = []
-        
+
         torch.cuda.empty_cache()

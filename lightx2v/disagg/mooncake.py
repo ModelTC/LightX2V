@@ -1,16 +1,10 @@
 import json
 import logging
 import os
-import uuid
-import socket
-import struct
-import pickle
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-import torch
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class MooncakeTransferEngineConfig:
@@ -32,7 +26,7 @@ class MooncakeTransferEngineConfig:
 
     @staticmethod
     def load_from_env() -> "MooncakeTransferEngineConfig":
-        config_file_path = os.getenv("MOONCAKE_CONFIG_PATH", "/root/zht/LightX2V/configs/mooncake_config.json")
+        config_file_path = os.getenv("MOONCAKE_CONFIG_PATH", "/data/nvme1/yongyang/FL/LightX2V/configs/mooncake_config.json")
         if config_file_path is None:
             raise ValueError("The environment variable 'MOONCAKE_CONFIG_PATH' is not set.")
         return MooncakeTransferEngineConfig.from_file(config_file_path)
@@ -43,15 +37,14 @@ class MooncakeTransferEngine:
         self.engine = None
         try:
             from mooncake.engine import TransferEngine
+
             self.engine = TransferEngine()
         except ImportError as e:
             logger.warning(
-                "Please install mooncake by following the instructions at "
-                "https://github.com/kvcache-ai/Mooncake/blob/main/doc/en/build.md "
-                "to run with MooncakeTransferEngine."
+                "Please install mooncake by following the instructions at https://github.com/kvcache-ai/Mooncake/blob/main/docs/source/getting_started/build.md to run with MooncakeTransferEngine."
             )
             # We allow continuing without engine for non-transfer operations or testing structure
-        
+
         try:
             self.config = MooncakeTransferEngineConfig.load_from_env()
             logger.info("Mooncake Configuration loaded successfully.")
@@ -95,14 +88,10 @@ class MooncakeTransferEngine:
         if self.engine:
             self.engine.initialize(local_hostname, metadata_server, protocol, device_name)
 
-    def transfer_sync(
-        self, session_id: str, buffer: int, peer_buffer_address: int, length: int
-    ) -> int:
+    def transfer_sync(self, session_id: str, buffer: int, peer_buffer_address: int, length: int) -> int:
         """Synchronously transfer data to the specified address."""
         if self.engine:
-            ret = self.engine.transfer_sync_write(
-                session_id, buffer, peer_buffer_address, length
-            )
+            ret = self.engine.transfer_sync_write(session_id, buffer, peer_buffer_address, length)
             if ret < 0:
                 logger.error("Transfer Return Error")
                 raise Exception("Transfer Return Error")

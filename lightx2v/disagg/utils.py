@@ -2,66 +2,69 @@ import json
 import logging
 import math
 import os
+from typing import Any, Dict, List
+
 import torch
-import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
-from typing import Dict, Any, List, Optional
-
-from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.utils import find_torch_model_path
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
-from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
-from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny, Wan2_2_VAE_tiny
-from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
-from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
-from lightx2v.utils.set_config import get_default_config, set_config as set_config_base
+from lightx2v.models.networks.wan.model import WanModel
+from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
+from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
+from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.set_config import set_config as set_config_base
+from lightx2v.utils.utils import find_torch_model_path
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 logger = logging.getLogger(__name__)
 
+
 class ConfigObj:
     """Helper class to convert dictionary to object with attributes"""
+
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
 
 def read_image_input(image_path):
     img_ori = Image.open(image_path).convert("RGB")
     img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
     return img, img_ori
 
+
 def set_config(
-        model_path,
-        task,
-        model_cls,
-        config_path=None,
-        attn_mode="flash_attn2",
-        rope_type="torch",
-        infer_steps=50,
-        target_video_length=81,
-        target_height=480,
-        target_width=832,
-        sample_guide_scale=5.0,
-        sample_shift=5.0,
-        fps=16,
-        aspect_ratio="16:9",
-        boundary=0.900,
-        boundary_step_index=2,
-        denoising_step_list=None,
-        audio_fps=24000,
-        double_precision_rope=True,
-        norm_modulate_backend="torch",
-        distilled_sigma_values=None,
-        cpu_offload=False,
-        offload_granularity="block",
-        text_encoder_offload=False,
-        image_encoder_offload=False,
-        vae_offload=False,
-        **kwargs
-    ):
+    model_path,
+    task,
+    model_cls,
+    config_path=None,
+    attn_mode="flash_attn2",
+    rope_type="torch",
+    infer_steps=50,
+    target_video_length=81,
+    target_height=480,
+    target_width=832,
+    sample_guide_scale=5.0,
+    sample_shift=5.0,
+    fps=16,
+    aspect_ratio="16:9",
+    boundary=0.900,
+    boundary_step_index=2,
+    denoising_step_list=None,
+    audio_fps=24000,
+    double_precision_rope=True,
+    norm_modulate_backend="torch",
+    distilled_sigma_values=None,
+    cpu_offload=False,
+    offload_granularity="block",
+    text_encoder_offload=False,
+    image_encoder_offload=False,
+    vae_offload=False,
+    **kwargs,
+):
     """
     Load configuration for Wan model.
     """
@@ -76,15 +79,15 @@ def set_config(
         "config_json": config_path,
         "cpu_offload": cpu_offload,
         "offload_granularity": offload_granularity,
-        "t5_cpu_offload": text_encoder_offload, # Map to internal keys
-        "clip_cpu_offload": image_encoder_offload, # Map to internal keys
-        "vae_cpu_offload": vae_offload, # Map to internal keys
+        "t5_cpu_offload": text_encoder_offload,  # Map to internal keys
+        "clip_cpu_offload": image_encoder_offload,  # Map to internal keys
+        "vae_cpu_offload": vae_offload,  # Map to internal keys
     }
 
     # Simulate logic from LightX2VPipeline.create_generator
     # which calls set_infer_config / set_infer_config_json
     # Here we directly populate args_dict with the required inference config
-    
+
     if config_path is not None:
         with open(config_path, "r") as f:
             config_json_content = json.load(f)
@@ -92,8 +95,8 @@ def set_config(
     else:
         # Replicating set_infer_config logic
         if model_cls == "ltx2":
-             args_dict["distilled_sigma_values"] = distilled_sigma_values
-             args_dict["infer_steps"] = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
+            args_dict["distilled_sigma_values"] = distilled_sigma_values
+            args_dict["infer_steps"] = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
         else:
             args_dict["infer_steps"] = infer_steps
 
@@ -102,12 +105,12 @@ def set_config(
         args_dict["target_video_length"] = target_video_length
         args_dict["sample_guide_scale"] = sample_guide_scale
         args_dict["sample_shift"] = sample_shift
-        
+
         if sample_guide_scale == 1 or (model_cls == "z_image" and sample_guide_scale == 0):
             args_dict["enable_cfg"] = False
         else:
             args_dict["enable_cfg"] = True
-            
+
         args_dict["rope_type"] = rope_type
         args_dict["fps"] = fps
         args_dict["aspect_ratio"] = aspect_ratio
@@ -116,7 +119,7 @@ def set_config(
         args_dict["denoising_step_list"] = denoising_step_list
         args_dict["audio_fps"] = audio_fps
         args_dict["double_precision_rope"] = double_precision_rope
-        
+
         if model_cls.startswith("wan"):
             # Set all attention types to the provided attn_mode
             args_dict["self_attn_1_type"] = attn_mode
@@ -124,18 +127,19 @@ def set_config(
             args_dict["cross_attn_2_type"] = attn_mode
         elif model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             args_dict["attn_type"] = attn_mode
-            
+
         args_dict["norm_modulate_backend"] = norm_modulate_backend
 
     args_dict.update(kwargs)
-    
+
     # Convert to object for set_config compatibility
     args = ConfigObj(**args_dict)
-    
+
     # Use existing set_config from utils
     config = set_config_base(args)
-    
+
     return config
+
 
 def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, model_type="high_noise_model"):
     lora_dynamic_apply = config.get("lora_dynamic_apply", False)
@@ -163,6 +167,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
             lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
         lora_wrapper.apply_lora(lora_configs, model_type=model_type)
     return model
+
 
 def load_wan_text_encoder(config: Dict[str, Any]):
     # offload config
@@ -205,6 +210,7 @@ def load_wan_text_encoder(config: Dict[str, Any]):
     text_encoders = [text_encoder]
     return text_encoders
 
+
 def load_wan_image_encoder(config: Dict[str, Any]):
     image_encoder = None
     if config["task"] in ["i2v", "flf2v", "animate", "s2v"] and config.get("use_image_encoder", True):
@@ -243,12 +249,14 @@ def load_wan_image_encoder(config: Dict[str, Any]):
 
     return image_encoder
 
+
 def get_vae_parallel(config: Dict[str, Any]):
     if isinstance(config.get("parallel", False), bool):
         return config.get("parallel", False)
     if isinstance(config.get("parallel", False), dict):
         return config.get("parallel", {}).get("vae_parallel", True)
     return False
+
 
 def load_wan_vae_encoder(config: Dict[str, Any]):
     vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
@@ -279,11 +287,11 @@ def load_wan_vae_encoder(config: Dict[str, Any]):
     else:
         return vae_cls(**vae_config)
 
+
 def load_wan_vae_decoder(config: Dict[str, Any]):
-    
     vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
     tiny_vae_name = "taew2_1.pth"
-    
+
     if config.get("model_cls", "") == "wan2.2":
         vae_cls = Wan2_2_VAE
         tiny_vae_cls = Wan2_2_VAE_tiny
@@ -316,6 +324,7 @@ def load_wan_vae_decoder(config: Dict[str, Any]):
     else:
         vae_decoder = vae_cls(**vae_config)
     return vae_decoder
+
 
 def load_wan_transformer(config: Dict[str, Any]):
     if config["cpu_offload"]:
@@ -377,6 +386,7 @@ def load_wan_transformer(config: Dict[str, Any]):
     else:
         logger.error(f"Unsupported model_cls: {config.get('model_cls')}")
         raise ValueError(f"Unsupported model_cls: {config.get('model_cls')}")
+
 
 def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     text_len = int(config.get("text_len", 512))
