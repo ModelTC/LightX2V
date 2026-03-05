@@ -40,8 +40,11 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
+- [ziyanxzy](https://github.com/ziyanxzy)
 
 ## :fire: Latest News
+
+- **March 5, 2026:** 🚀 We now support deployment on Intel AIPC PTL. Thanks to the Intel team.
 
 - **March 5, 2026:** 🚀 We now support disaggregated deployment based on [Mooncake](https://github.com/kvcache-ai/Mooncake). More improvements and documentation for disaggregated deployment are in progress. Thanks to the Mooncake team for their help!
 
