@@ -121,6 +121,31 @@ class QwenImageRunner(DefaultRunner):
         pass
 
     def load_vae(self):
+        """Load VAE based on vae_type configuration.
+
+        Supported types:
+        - "tensorrt": TensorRT-accelerated VAE (requires pre-built engines)
+        - "baseline" (default): HuggingFace baseline implementation
+        """
+        vae_type = self.config.get("vae_type", "baseline")
+        trt_vae_config = self.config.get("trt_vae_config", {})
+
+        if vae_type == "tensorrt":
+            try:
+                from lightx2v.models.video_encoders.trt.qwen_image.vae_trt import TensorRTVAE
+
+                logger.info("Loading TensorRT-accelerated VAE")
+                vae = TensorRTVAE(self.config)
+                return vae
+            except ImportError as e:
+                logger.warning(f"TensorRT not available, falling back to PyTorch VAE: {e}")
+            except FileNotFoundError as e:
+                logger.warning(f"TensorRT engine files not found, falling back to PyTorch VAE: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to load TensorRT VAE, falling back to PyTorch VAE: {e}")
+
+        # Baseline or fallback
+        logger.info("Loading PyTorch baseline VAE")
         vae = AutoencoderKLQwenImageVAE(self.config)
         return vae
 
@@ -338,7 +363,7 @@ class QwenImageRunner(DefaultRunner):
     def set_img_shapes(self):
         width, height = self.input_info.auto_width, self.input_info.auto_height
         if self.config["task"] == "t2i":
-            image_shapes = [(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)] * 1
+            image_shapes = [[(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)]]
         elif self.config["task"] == "i2i":
             if self.is_layered:
                 image_shapes = [

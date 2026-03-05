@@ -35,14 +35,20 @@ pre-commit run --all-files
 
 Besides the contributions from the LightX2V team, we have received contributions from some community developers, including but not limited to:
 
+- [zhtshr](https://github.com/zhtshr)
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
+- [ziyanxzy](https://github.com/ziyanxzy)
 
 ## :fire: Latest News
 
-- **February 27, 2026:** 🚀 We now support NVFP4 quantization for autoregressive video generation models ([Self Forcing](https://github.com/guandeh17/Self-Forcing))! You can find the quantized model here: **[Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**.
+- **March 5, 2026:** 🚀 We now support deployment on Intel AIPC PTL. Thanks to the Intel team.
+
+- **March 5, 2026:** 🚀 We now support disaggregated deployment based on [Mooncake](https://github.com/kvcache-ai/Mooncake). More improvements and documentation for disaggregated deployment are in progress. Thanks to the Mooncake team for their help!
+
+- **February 27, 2026:** 🚀 We now support FP8 and NVFP4 quantization for autoregressive video generation models ([Self Forcing](https://github.com/guandeh17/Self-Forcing))! You can find the quantized model here: **[Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8), [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**.
 
 - **February 11, 2026:** 🎉 We are excited to announce **[GenRL](https://github.com/ModelTC/GenRL)** - a scalable reinforcement learning framework for visual generation! GenRL enables training diffusion/flow models with multi-reward optimization (HPSv3, VideoAlign, etc.) using GRPO algorithm. We've released high-performance LoRA checkpoints trained with multi-node multi-GPU setup, demonstrating significant improvements in aesthetic quality, motion coherence, and text-video alignment. Check out our [model collection](https://huggingface.co/collections/lightx2v/genrl) on HuggingFace! Give us a ⭐ if you find it useful!
 
@@ -309,6 +315,7 @@ We sincerely thank all the model repositories and research communities that insp
 - [radial-attention](https://github.com/mit-han-lab/radial-attention)
 - [xDiT](https://github.com/xdit-project/xDiT)
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
+- [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
 ## 🌟 Star History
 

@@ -7,6 +7,7 @@ import Projects from '../components/Projects.vue'
 import Inspirations from '../components/Inspirations.vue'
 import Share from '../views/Share.vue'
 import PodcastGenerate from '../views/PodcastGenerate.vue'
+import Canvas from '../views/Canvas.vue'
 import { showAlert } from '../utils/other'
 import i18n from '../utils/i18n'
 
@@ -25,10 +26,24 @@ const routes = [
     path: '/share/:shareId', name: 'Share', component: Share, meta: { requiresAuth: false }
   },
   {
-    path: '/podcast_generate', name: 'PodcastGenerate', component: PodcastGenerate, meta: { requiresAuth: true }
+    path: '/podcast_generate', name: 'PodcastGenerate', component: PodcastGenerate, meta: { requiresAuth: import.meta.env.PROD }
   },
   {
-    path: '/podcast_generate/:session_id', name: 'PodcastSession', component: PodcastGenerate, meta: { requiresAuth: true }
+    path: '/podcast_generate/:session_id', name: 'PodcastSession', component: PodcastGenerate, meta: { requiresAuth: import.meta.env.PROD }
+  },
+  {
+    path: '/canvas',
+    name: 'Canvas',
+    component: Canvas,
+    // 开发环境不需要登录，生产环境需要登录
+    meta: { requiresAuth: import.meta.env.PROD }
+  },
+  {
+    path: '/canvas/:pathMatch(.*)*',
+    name: 'CanvasWithPath',
+    component: Canvas,
+    // 开发环境不需要登录，生产环境需要登录
+    meta: { requiresAuth: import.meta.env.PROD }
   },
   {
     path: '/home',
@@ -41,35 +56,35 @@ const routes = [
         path: '/generate',
         name: 'Generate',
         component: Generate,
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: import.meta.env.PROD },
         props: route => ({ query: route.query })
       },
       {
         path: '/projects',
         name: 'Projects',
         component: Projects,
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: import.meta.env.PROD },
         props: route => ({ query: route.query })
       },
       {
         path: '/inspirations',
         name: 'Inspirations',
         component: Inspirations,
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: import.meta.env.PROD },
         props: route => ({ query: route.query })
       },
       {
         path: '/task/:taskId',
         name: 'TaskDetail',
         component: Projects,
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: import.meta.env.PROD },
         props: route => ({ taskId: route.params.taskId, query: route.query })
       },
       {
         path: '/template/:templateId',
         name: 'TemplateDetail',
         component: Inspirations,
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: import.meta.env.PROD },
         props: route => ({ templateId: route.params.templateId, query: route.query })
       },
     ]

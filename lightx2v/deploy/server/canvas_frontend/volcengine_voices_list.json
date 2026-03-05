@@ -1,0 +1,161 @@
+{
+  "voices": [
+    {
+      "name": "Vivi 2.0",
+      "voice_type": "zh_female_vv_uranus_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "general",
+      "scene": "通用场景",
+      "language": [
+        "chinese",
+        "en_us"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "可爱女生",
+      "voice_type": "ICL_zh_female_keainvsheng_tob",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "大壹",
+      "voice_type": "zh_male_dayi_saturn_bigtts",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "魅力女友",
+      "voice_type": "ICL_zh_female_tiaopigongzhu_tob",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "黑猫侦探社咪仔",
+      "voice_type": "zh_female_mizai_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "爽朗少年",
+      "voice_type": "ICL_zh_male_shuanglangshaonian_tob",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "鸡汤女",
+      "voice_type": "zh_female_jitangnv_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "天才同桌",
+      "voice_type": "ICL_zh_male_tiancaitongzhuo_tob",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-1.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "魅力女友",
+      "voice_type": "zh_female_meilinvyou_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "流畅女声",
+      "voice_type": "zh_female_santongyongns_saturn_bigtts",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "儒雅逸辰",
+      "voice_type": "zh_male_ruyayichen_saturn_bigtts",
+      "gender": "male",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "video_dubbing",
+      "scene": "视频配音",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    },
+    {
+      "name": "知性灿灿",
+      "voice_type": "saturn_zh_female_cancan_tob",
+      "gender": "female",
+      "version": "2.0",
+      "resource_id": "seed-tts-2.0",
+      "voice_category": "roleplay",
+      "scene": "角色扮演",
+      "language": [
+        "chinese"
+      ],
+      "emotions": []
+    }
+  ]
+}

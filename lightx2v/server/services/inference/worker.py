@@ -117,7 +117,7 @@ class TorchrunInferenceWorker:
                 return {
                     "task_id": task_data["task_id"],
                     "status": "success",
-                    "save_result_path": task_data.get("video_path", task_data["save_result_path"]),
+                    "save_result_path": task_data["save_result_path"],
                     "message": "Inference completed",
                 }
         else:

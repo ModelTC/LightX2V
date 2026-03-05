@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 
 import router from './router'
+import { sharedStore } from './utils/sharedStore'
 import { init, handleLoginCallback, handleClickOutside, validateToken } from './utils/other'
 import { initLanguage } from './utils/i18n'
 import { startHintRotation, stopHintRotation } from './utils/other'
@@ -67,6 +68,9 @@ onMounted(async () => {
       // 验证token是否过期
       const isValidToken = await validateToken(savedToken)
       if (isValidToken) {
+        // 同步到 sharedStore，便于画布等子应用通过 props 拿到 token
+        sharedStore.setState('token', savedToken)
+        sharedStore.setState('user', JSON.parse(savedUser))
         currentUser.value = JSON.parse(savedUser)
         isLoggedIn.value = true
         await init();

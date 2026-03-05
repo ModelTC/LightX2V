@@ -194,6 +194,8 @@ async def preload_data(inp, inp_type, typ, val):
         elif typ == "stream":
             # no bytes data need to be saved by data_manager
             data = None
+        elif typ == "workflow_output":
+            data = val
         else:
             raise ValueError(f"cannot read {inp}[{inp_type}] which type is {typ}!")
 
@@ -218,7 +220,7 @@ async def preload_data(inp, inp_type, typ, val):
         return data
 
     except Exception as e:
-        raise ValueError(f"Failed to read {inp}, type={typ}, val={val[:100]}: {e}!")
+        raise ValueError(f"Failed to read {inp}, type={typ}, val={str(val)[:100]}: {e}!")
 
 
 async def load_inputs(params, raw_inputs, types):

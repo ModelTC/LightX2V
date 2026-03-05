@@ -5,6 +5,8 @@ import { showTaskDetailModal,
         closeTaskDetailModal,
         cancelTask,
         reuseTask,
+        getApplyToTargetsForTask,
+        applyTaskOutputToTask,
         handleDownloadFile,
         deleteTask,
         getTaskTypeName,
@@ -50,6 +52,9 @@ const currentAudioUrl = ref('')
 
 // 音频素材 URL（响应式，支持异步加载）
 const audioMaterials = ref([])
+
+// 应用到菜单状态
+const showApplyToMenu = ref(false)
 
 // 图片素材 URL 缓存（用于异步加载）
 const imageMaterialsCache = ref({})
@@ -399,6 +404,21 @@ const handleReuseTask = () => {
         setTimeout(() => {
             scrollToCreationArea()
         }, 300)
+    }
+}
+
+// 应用到目标任务
+const applyToTargets = computed(() => getApplyToTargetsForTask(modalTask.value))
+watch(showTaskDetailModal, (visible) => {
+    if (!visible) showApplyToMenu.value = false
+})
+const handleApplyTo = (target) => {
+    showApplyToMenu.value = false
+    const task = modalTask.value
+    if (task) {
+        const options = target.flf2vFrame ? { flf2vFrame: target.flf2vFrame } : {}
+        applyTaskOutputToTask(task, target.id, options)
+        closeTaskDetailModal()
     }
 }
 
@@ -1210,6 +1230,27 @@ watch(audioMaterials, (newMaterials) => {
                                                         <span>{{ t('reuseTask') }}</span>
                                                     </button>
 
+                                                    <!-- 应用到按钮 - 成功状态且有可应用目标（移动端布局）-->
+                                                    <div v-if="modalTask?.status === 'SUCCEED' && applyToTargets.length > 0" class="relative">
+                                                        <button
+                                                            type="button"
+                                                            @click="showApplyToMenu = !showApplyToMenu"
+                                                            class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-6 py-2.5 text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
+                                                            <i class="fas fa-arrow-right-to-bracket text-sm"></i>
+                                                            <span>{{ t('applyTo') }}</span>
+                                                        </button>
+                                                        <Transition name="apply-menu">
+                                                            <div v-if="showApplyToMenu"
+                                                                class="absolute bottom-full left-0 right-0 mb-2 py-2 min-w-[140px] rounded-xl bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_4px_16px_rgba(0,0,0,0.15)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)] border border-black/6 dark:border-white/8 z-30">
+                                                                <button v-for="(target, idx) in applyToTargets" :key="target.flf2vFrame ? `${target.id}-${target.flf2vFrame}` : target.id"
+                                                                    @click="handleApplyTo(target)"
+                                                                    class="w-full px-4 py-2.5 text-left text-sm text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/8 transition-colors">
+                                                                    {{ target.name }}
+                                                                </button>
+                                                            </div>
+                                                        </Transition>
+                                                    </div>
+
                                                     <button @click="showDetails = !showDetails"
                                                             class="w-full rounded-full bg-white dark:bg-[#3a3a3c] border border-black/8 dark:border-white/8 px-6 py-2.5 text-[15px] font-medium text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-white/80 dark:hover:bg-[#3a3a3c]/80 hover:border-black/12 dark:hover:border-white/12 hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_4px_12px_rgba(0,0,0,0.3)] active:scale-[0.98] transition-all duration-200 tracking-tight flex items-center justify-center gap-2">
                                                         <i :class="showDetails ? 'fas fa-chevron-up' : 'fas fa-info-circle'" class="text-sm"></i>
@@ -1435,4 +1476,14 @@ watch(audioMaterials, (newMaterials) => {
 
 <style scoped>
 /* Apple 风格极简样式 - 所有样式已通过 Tailwind CSS 的 dark: 前缀在 template 中定义 */
+
+/* Apply to 菜单动画 */
+.apply-menu-enter-active,
+.apply-menu-leave-active {
+    transition: opacity 0.15s ease;
+}
+.apply-menu-enter-from,
+.apply-menu-leave-to {
+    opacity: 0;
+}
 </style>

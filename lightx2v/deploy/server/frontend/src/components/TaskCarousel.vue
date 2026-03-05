@@ -28,6 +28,10 @@ import {
     openTaskDetailModal,
     playVideo,
     pauseVideo,
+    TASK_TYPE_IO_MAP,
+    getTargetTasksForOutput,
+    applyTaskOutputToTask,
+    nameMap,
 } from '../utils/other'
 
 const { t } = useI18n()
@@ -41,11 +45,12 @@ const props = defineProps({
     }
 })
 
-// 响应式数据å
+// 响应式数据
 const isVideoLoaded = ref(false)
 const isVideoError = ref(false)
 const videoElement = ref(null)
 const isMuted = ref(true)
+const showApplyToMenu = ref(false)
 
 // 计算属性
 const sortedTasks = computed(() => {
@@ -71,6 +76,25 @@ const currentTaskIndex = computed(() => {
 // 判断是否是图片输出任务（i2i 或 t2i）
 const isImageTask = computed(() => {
     return currentTask.value?.task_type === 'i2i' || currentTask.value?.task_type === 't2i'
+})
+
+// 当前任务可应用到的目标任务列表（输出类型匹配输入类型的任务）
+// flf2v 图片输入时拆分为首帧、尾帧两个选项
+const applyToTargets = computed(() => {
+    const task = currentTask.value
+    if (!task || task.status !== 'SUCCEED') return []
+    const outputType = TASK_TYPE_IO_MAP[task.task_type]?.output
+    const targetIds = getTargetTasksForOutput(outputType)
+    const baseName = nameMap.value['flf2v'] || getTaskTypeName('flf2v')
+    return targetIds.flatMap(id => {
+        if (id === 'flf2v' && outputType === 'image') {
+            return [
+                { id, flf2vFrame: 'first', name: `${baseName} - ${t('firstFrameImage')}` },
+                { id, flf2vFrame: 'last', name: `${baseName} - ${t('lastFrameImage')}` }
+            ]
+        }
+        return [{ id, flf2vFrame: null, name: nameMap.value[id] || getTaskTypeName(id) }]
+    })
 })
 
 // 保持向后兼容
@@ -214,6 +238,20 @@ const openDetail = (event) => {
     }
 }
 
+// 应用到目标任务
+const handleApplyTo = (target) => {
+    showApplyToMenu.value = false
+    if (currentTask.value) {
+        const options = target.flf2vFrame ? { flf2vFrame: target.flf2vFrame } : {}
+        applyTaskOutputToTask(currentTask.value, target.id, options)
+    }
+}
+
+// 点击外部关闭 Apply to 菜单
+const closeApplyToMenu = () => {
+    showApplyToMenu.value = false
+}
+
 
 // 处理取消任务
 const handleCancel = async () => {
@@ -270,9 +308,18 @@ const handleKeydown = (event) => {
     }
 }
 
+// 点击外部关闭 Apply to 菜单
+const applyToMenuRef = ref(null)
+const onDocumentClick = (e) => {
+    if (showApplyToMenu.value && applyToMenuRef.value && !applyToMenuRef.value.contains(e.target) && !e.target.closest('.apply-to-trigger')) {
+        showApplyToMenu.value = false
+    }
+}
+
 // 生命周期
 onMounted(() => {
     document.addEventListener('keydown', handleKeydown)
+    document.addEventListener('click', onDocumentClick)
     // 初始化时设置第一个任务为当前任务
     if (sortedTasks.value.length > 0 && !currentTask.value) {
         const firstTask = sortedTasks.value[0]
@@ -284,6 +331,7 @@ onMounted(() => {
 
 onUnmounted(() => {
     document.removeEventListener('keydown', handleKeydown)
+    document.removeEventListener('click', onDocumentClick)
 })
 </script>
 
@@ -487,6 +535,35 @@ onUnmounted(() => {
                     <i class="fas fa-share-alt"></i>
                 </button>
 
+                <!-- 已完成：应用到按钮 -->
+                <div v-if="isCompleted && applyToTargets.length > 0" class="relative">
+                    <button
+                        type="button"
+                        class="apply-to-trigger w-[40px] h-[40px] sm:w-[44px] sm:h-[44px] rounded-full flex items-center justify-center text-base transition-all duration-200 ease-out border-0 cursor-pointer bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-105 active:scale-95"
+                        @click.stop="showApplyToMenu = !showApplyToMenu"
+                        :title="t('applyTo')">
+                        <i class="fas fa-arrow-right-to-bracket"></i>
+                    </button>
+                    <!-- 应用到下拉菜单 -->
+                    <Transition name="apply-menu">
+                        <div
+                            v-if="showApplyToMenu"
+                            ref="applyToMenuRef"
+                            class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 py-2 min-w-[140px] rounded-xl bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_4px_16px_rgba(0,0,0,0.15)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)] border border-black/6 dark:border-white/8 z-30">
+                            <div class="px-3 py-1.5 text-xs text-[#86868b] dark:text-[#98989d] font-medium">
+                                {{ t('applyTo') }}
+                            </div>
+                            <button
+                                v-for="(target, idx) in applyToTargets"
+                                :key="target.flf2vFrame ? `${target.id}-${target.flf2vFrame}` : target.id"
+                                @click="handleApplyTo(target)"
+                                class="w-full px-4 py-2.5 text-left text-sm text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/8 transition-colors">
+                                {{ target.name }}
+                            </button>
+                        </div>
+                    </Transition>
+                </div>
+
                 <!-- 进行中：取消按钮 -->
                 <button
                     v-if="isRunning"
@@ -536,6 +613,16 @@ onUnmounted(() => {
 .animate-progress {
     animation: progress 1.5s ease-in-out infinite;
     }
+
+/* Apply to 菜单动画 */
+.apply-menu-enter-active,
+.apply-menu-leave-active {
+    transition: opacity 0.15s ease;
+}
+.apply-menu-enter-from,
+.apply-menu-leave-to {
+    opacity: 0;
+}
 
 /* 所有其他样式已通过 Tailwind CSS 的 dark: 前缀在 template 中定义 */
 </style>

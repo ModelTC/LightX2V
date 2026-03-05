@@ -42,6 +42,9 @@ class S3DataManager(BaseDataManager):
         self.podcast_temp_session_dir = os.path.join(self.base_path, "podcast_temp_session")
         self.podcast_output_dir = os.path.join(self.base_path, "podcast_output")
 
+        # workflow files base path
+        self.workflow_base_path = os.path.join(self.base_path, "workflows")
+
     async def init_presign_client(self):
         # init tos client for volces.com
         if "volces.com" in self.endpoint_url:

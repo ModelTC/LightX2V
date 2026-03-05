@@ -11,7 +11,7 @@
     "sample_shift": 8,
     "enable_cfg": true,
     "cpu_offload": false,
-    "t5_cpu_offload": true,
+    "t5_cpu_offload": false,
     "use_tiling_vae": true,
     "modulate_type": "torch",
     "rope_type": "torch",

@@ -1,6 +1,6 @@
 <script setup>
 import { useI18n } from 'vue-i18n'
-import { watch } from 'vue'
+import { watch, ref, onMounted, onUnmounted, nextTick } from 'vue'
 const { t, locale } = useI18n()
 import FloatingParticles from './FloatingParticles.vue'
 import TopBar from './TopBar.vue'
@@ -74,6 +74,9 @@ import {
             selectedTask,
             loadingTaskFiles,
             statusFilter,
+            taskTypeFilter,
+            toggleTaskTypeFilter,
+            nameMap,
             pagination,
             paginationInfo,
             currentTaskPage,
@@ -177,6 +180,8 @@ import {
             startPollingTask,
             stopPollingTask,
             reuseTask,
+            getApplyToTargetsForTask,
+            applyTaskOutputToTask,
             showTaskCreator,
             toggleSidebar,
             clearPrompt,
@@ -317,6 +322,10 @@ watch(() => route.query, (newQuery) => {
     if (newQuery.status) {
         statusFilter.value = newQuery.status
     }
+    if (newQuery.taskTypes) {
+        const types = String(newQuery.taskTypes).split(',').map(t => t.trim()).filter(Boolean)
+        taskTypeFilter.value = types
+    }
     if (newQuery.page) {
         const page = parseInt(newQuery.page)
         if (page > 0 && page !== currentTaskPage.value) {
@@ -325,14 +334,62 @@ watch(() => route.query, (newQuery) => {
     }
 }, { immediate: true })
 
+// 应用到菜单状态（使用 Teleport 渲染到 body 避免被卡片 overflow 裁剪）
+const applyToMenuTaskId = ref(null)
+const applyToMenuPosition = ref({ top: 0, left: 0 })
+const openApplyToMenu = (e, task) => {
+    if (applyToMenuTaskId.value === task.task_id) {
+        applyToMenuTaskId.value = null
+    } else {
+        const rect = e.currentTarget.getBoundingClientRect()
+        applyToMenuPosition.value = {
+            top: rect.top - 8,
+            left: rect.left + rect.width / 2
+        }
+        applyToMenuTaskId.value = task.task_id
+    }
+}
+const updateApplyToMenuPosition = () => {
+    const btn = document.querySelector('.projects-apply-to-trigger[data-open="true"]')
+    if (btn && applyToMenuTaskId.value) {
+        const rect = btn.getBoundingClientRect()
+        applyToMenuPosition.value = { top: rect.top - 8, left: rect.left + rect.width / 2 }
+    }
+}
+watch(applyToMenuTaskId, (id) => {
+    if (id) {
+        window.addEventListener('scroll', updateApplyToMenuPosition, true)
+        window.addEventListener('resize', updateApplyToMenuPosition)
+    } else {
+        window.removeEventListener('scroll', updateApplyToMenuPosition, true)
+        window.removeEventListener('resize', updateApplyToMenuPosition)
+    }
+})
+const handleApplyTo = (task, target) => {
+    applyToMenuTaskId.value = null
+    applyTaskOutputToTask(task, target.id, target.flf2vFrame ? { flf2vFrame: target.flf2vFrame } : {})
+}
+
+// 点击外部关闭 Apply to 菜单（dropdown 在 body 内，需排除）
+const onDocumentClick = (e) => {
+    if (applyToMenuTaskId.value && !e.target.closest('.projects-apply-to-menu') && !e.target.closest('.projects-apply-to-trigger') && !e.target.closest('.projects-apply-to-dropdown')) {
+        applyToMenuTaskId.value = null
+    }
+}
+onMounted(() => document.addEventListener('click', onDocumentClick))
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
+
 // 监听组件状态变化，同步到URL
-watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
+watch([taskSearchQuery, statusFilter, taskTypeFilter, currentTaskPage], () => {
     const query = {}
     if (taskSearchQuery.value) {
         query.search = taskSearchQuery.value
     }
     if (statusFilter.value && statusFilter.value !== 'ALL') {
         query.status = statusFilter.value
+    }
+    if (taskTypeFilter.value && taskTypeFilter.value.length > 0) {
+        query.taskTypes = taskTypeFilter.value.join(',')
     }
     if (currentTaskPage.value > 1) {
         query.page = currentTaskPage.value.toString()
@@ -362,7 +419,9 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                         </div>
 
                 <!-- 搜索和筛选区域 - Apple 风格 -->
-                <div class="flex flex-col md:flex-row gap-4 mb-8">
+                <div class="flex flex-col gap-4 mb-8">
+                    <!-- 第一行：搜索框 + 状态筛选 -->
+                    <div class="flex flex-col md:flex-row gap-4">
                     <!-- 搜索框 - Apple 风格 -->
                                         <div class="relative flex-1">
                         <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-[#86868b] dark:text-[#98989d] pointer-events-none z-10"></i>
@@ -409,6 +468,28 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                             <i class="fas fa-sync-alt text-sm"></i>
                                     </button>
                             </div>
+                    </div>
+
+                    <!-- 第二行：任务类型筛选 - 多选，Apple 风格 -->
+                    <div class="flex flex-wrap gap-1.5 items-center">
+                        <span class="text-xs text-[#86868b] dark:text-[#98989d] font-medium tracking-tight mr-1">{{ t('taskType') || '任务类型' }}:</span>
+                        <template v-for="(name, id) in nameMap" :key="id">
+                            <button
+                                @click="toggleTaskTypeFilter(id)"
+                                class="px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-200 tracking-tight"
+                                :class="taskTypeFilter.includes(id)
+                                    ? 'bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] text-white shadow-[0_2px_8px_rgba(var(--brand-primary-rgb),0.25)] dark:shadow-[0_2px_8px_rgba(var(--brand-primary-light-rgb),0.3)]'
+                                    : 'bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:bg-white dark:hover:bg-[#3a3a3c] hover:text-[#1d1d1f] dark:hover:text-[#f5f5f7]'">
+                                {{ name }}
+                            </button>
+                        </template>
+                        <button v-if="taskTypeFilter.length > 0"
+                            @click="taskTypeFilter = []"
+                            class="px-2 py-1 text-xs font-medium rounded-full bg-white/80 dark:bg-[#2c2c2e]/80 border border-black/8 dark:border-white/8 text-[#86868b] dark:text-[#98989d] hover:text-red-500 dark:hover:text-red-400 hover:border-red-500/30 dark:hover:border-red-400/30 transition-all duration-200"
+                            :title="t('clear')">
+                            <i class="fas fa-times text-[10px] mr-0.5"></i>{{ t('clear') }}
+                        </button>
+                    </div>
                         </div>
 
                 <!-- 分页组件 - Apple 风格 -->
@@ -546,6 +627,32 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                                         <i class="fas fa-copy text-sm"></i>
                                                     </button>
 
+                                    <!-- 应用到按钮 - 成功状态且有可应用目标 -->
+                                    <div v-if="task.status === 'SUCCEED' && getApplyToTargetsForTask(task).length > 0" class="relative projects-apply-to-menu">
+                                        <button
+                                            type="button"
+                                            class="projects-apply-to-trigger w-10 h-10 rounded-full bg-[color:var(--brand-primary)] dark:bg-[color:var(--brand-primary-light)] backdrop-blur-[20px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.4)] flex items-center justify-center text-[#1d1d1f] dark:text-[#f5f5f7] hover:scale-110 active:scale-100 transition-all duration-200"
+                                            @click.stop="openApplyToMenu($event, task)"
+                                            :title="t('applyTo')"
+                                            :data-open="applyToMenuTaskId === task.task_id">
+                                            <i class="fas fa-arrow-right-to-bracket text-sm"></i>
+                                        </button>
+                                        <Teleport to="body">
+                                            <Transition name="apply-menu">
+                                                <div v-if="applyToMenuTaskId === task.task_id"
+                                                    class="projects-apply-to-dropdown fixed py-2 min-w-[140px] rounded-xl bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-[20px] shadow-[0_4px_16px_rgba(0,0,0,0.15)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)] border border-black/6 dark:border-white/8 z-[9999]"
+                                                    :style="{ top: applyToMenuPosition.top + 'px', left: applyToMenuPosition.left + 'px', transform: 'translate(-50%, -100%)' }">
+                                                <div class="px-3 py-1.5 text-xs text-[#86868b] dark:text-[#98989d] font-medium">{{ t('applyTo') }}</div>
+                                                <button v-for="(target, idx) in getApplyToTargetsForTask(task)" :key="target.flf2vFrame ? `${target.id}-${target.flf2vFrame}` : target.id"
+                                                    @click.stop="handleApplyTo(task, target)"
+                                                    class="w-full px-4 py-2.5 text-left text-sm text-[#1d1d1f] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/8 transition-colors">
+                                                    {{ target.name }}
+                                                </button>
+                                                </div>
+                                            </Transition>
+                                        </Teleport>
+                                    </div>
+
                                     <!-- 取消按钮 - 进行中状态 -->
                                     <button v-if="['CREATED', 'PENDING', 'RUNNING'].includes(task.status)"
                                                                     @click.stop="cancelTask(task.task_id)"
@@ -613,3 +720,14 @@ watch([taskSearchQuery, statusFilter, currentTaskPage], () => {
                         </a>
                     </div>
 </template>
+
+<style scoped>
+.apply-menu-enter-active,
+.apply-menu-leave-active {
+    transition: opacity 0.15s ease;
+}
+.apply-menu-enter-from,
+.apply-menu-leave-to {
+    opacity: 0;
+}
+</style>

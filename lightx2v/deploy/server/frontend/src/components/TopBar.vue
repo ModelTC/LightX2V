@@ -41,6 +41,25 @@ onMounted(() => {
                                 <span class="text-[color:var(--brand-primary)] dark:text-[color:var(--brand-primary-light)]">X2V</span>
                             </span>
                         </button>
+                        <!-- 画布模式切换开关 -->
+                        <button @click="() => router.push('/canvas')"
+                                class="flex items-center gap-3 ml-4 cursor-pointer transition-opacity duration-200 hover:opacity-80"
+                                :title="locale === 'zh' ? '画布模式' : 'Canvas Mode'">
+                            <!-- 切换开关 -->
+                            <div class="relative w-12 h-6 bg-slate-600 dark:bg-slate-700 rounded-full transition-colors duration-200">
+                                <div class="absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow-md transition-transform duration-200 transform translate-x-0"></div>
+                                <!-- 开关内的图标 -->
+                                <div class="absolute top-1 left-1 w-4 h-4 flex items-center justify-center pointer-events-none">
+                                    <svg class="w-2.5 h-2.5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                                    </svg>
+                                </div>
+                            </div>
+                            <!-- 文字标签 -->
+                            <span class="text-sm font-medium text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight whitespace-nowrap">
+                                {{ locale === 'zh' ? '画布模式' : 'Canvas Mode' }}
+                            </span>
+                        </button>
                     </div>
 
                     <!-- 右侧用户信息和控制 -->

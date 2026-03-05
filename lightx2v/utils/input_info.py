@@ -47,6 +47,22 @@ class I2VInputInfo:
 
 
 @dataclass
+class SRInputInfo:
+    seed: int = field(default_factory=int)
+    image_path: str = field(default_factory=str)  # Single image input
+    video_path: str = field(default_factory=str)  # Video input for SR
+    sr_ratio: float = field(default_factory=lambda: 2.0)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+
+
+@dataclass
 class Flf2vInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
@@ -288,6 +304,8 @@ def init_empty_input_info(task):
         return T2VInputInfo()
     elif task == "i2v":
         return I2VInputInfo()
+    elif task == "sr":
+        return SRInputInfo()  # SR uses dedicated SRInputInfo
     elif task == "flf2v":
         return Flf2vInputInfo()
     elif task == "vace":

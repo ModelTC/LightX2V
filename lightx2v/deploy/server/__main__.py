@@ -7,15 +7,17 @@ import mimetypes
 import os
 import re
 import tempfile
+import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
 
 import aiofiles
+import aiohttp
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -27,9 +29,31 @@ from lightx2v.deploy.common.face_detector import FaceDetector
 from lightx2v.deploy.common.pipeline import Pipeline
 from lightx2v.deploy.common.podcasts import VolcEnginePodcastClient
 from lightx2v.deploy.common.sensetime_voice_clone import SenseTimeTTSClient
-from lightx2v.deploy.common.utils import check_params, data_name, fetch_resource, format_audio_data, format_image_data, load_inputs, media_to_audio
+from lightx2v.deploy.common.utils import (
+    check_params,
+    data_name,
+    fetch_resource,
+    format_audio_data,
+    format_image_data,
+    load_inputs,
+    media_to_audio,
+)
 from lightx2v.deploy.common.volcengine_asr import VolcEngineASRClient
 from lightx2v.deploy.common.volcengine_tts import VolcEngineTTSClient
+from lightx2v.deploy.common.workflow_utils import (
+    CANVAS_MEDIA_TYPES,
+    check_invalid_output_value,
+    clean_file_or_task_entry,
+    fmt_user_name,
+    fmt_workflow_file_path,
+    format_and_save_entry,
+    load_bytes_from_entry,
+    query_output_entries,
+    tidy_workflow_files_and_tasks,
+    to_persisted_message,
+    transfer_workflow_output,
+    update_workflow_node_output,
+)
 from lightx2v.deploy.data_manager import LocalDataManager, S3DataManager
 from lightx2v.deploy.queue_manager import LocalQueueManager, RabbitMQQueueManager
 from lightx2v.deploy.server.auth import AuthManager
@@ -110,6 +134,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# 确保 mimetypes 模块正确配置 JavaScript 和其他文件类型
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 app.add_middleware(
     CORSMiddleware,
@@ -344,6 +374,81 @@ async def api_v1_model_list(user=Depends(verify_user_access)):
         return error_response(str(e), 500)
 
 
+@app.post("/api/v1/llm/volc/responses")
+async def api_v1_llm_volc_responses(request: Request, user=Depends(verify_user_access)):
+    """Proxy for Volc Engine /responses (DeepSeek/Doubao). Requires user auth; API key is server-side."""
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
+    api_key = (os.environ.get("VOLCENGINE_LLM_API_KEY") or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="LLM API key not configured (set VOLCENGINE_LLM_API_KEY)")
+    stream = body.get("stream") is True
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    proxy = os.environ.get("HTTPS_PROXY") or None
+
+    session = aiohttp.ClientSession()
+    try:
+        resp = await session.post(
+            "https://ark.cn-beijing.volces.com/api/v3/responses",
+            json=body,
+            headers=headers,
+            proxy=proxy,
+        )
+        if resp.status >= 400:
+            text = await resp.text()
+            await resp.release()
+            await session.close()
+            try:
+                err = json.loads(text)
+                detail = err.get("error", {}).get("message") or err.get("error") or text
+            except Exception:
+                detail = text
+            raise HTTPException(status_code=resp.status, detail=detail)
+
+        if stream:
+            # 流式：不能在此处退出 async with，否则 resp 被关闭，生成器读不到数据。
+            # 由生成器在结束时 release resp 并 close session。
+            async def stream_chunks():
+                try:
+                    async for chunk in resp.content.iter_chunked(8192):
+                        if chunk:
+                            yield chunk
+                except aiohttp.ClientError as e:
+                    logger.warning("Volc LLM stream closed: %s", e)
+                except Exception as e:
+                    logger.warning("Volc LLM stream error: %s", e)
+                finally:
+                    await resp.release()
+                    await session.close()
+
+            return StreamingResponse(
+                stream_chunks(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        else:
+            data = await resp.json()
+            await resp.release()
+            await session.close()
+            return JSONResponse(content=data)
+    except HTTPException:
+        raise
+    except aiohttp.ClientError as e:
+        await session.close()
+        logger.exception("Volc LLM proxy request failed: %s", e)
+        raise HTTPException(status_code=502, detail="LLM upstream request failed")
+    except Exception as e:
+        await session.close()
+        logger.exception("Volc LLM proxy error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/v1/task/submit")
 async def api_v1_task_submit(request: Request, user=Depends(verify_user_access)):
     task_id = None
@@ -363,13 +468,15 @@ async def api_v1_task_submit(request: Request, user=Depends(verify_user_access))
         types = model_pipelines.get_types(keys)
         check_params(params, inputs, outputs, types)
 
+        await transfer_workflow_output(params, list(inputs), user["user_id"], task_manager, data_manager)
+
         # check if task can be published to queues
         queues = [v["queue"] for v in workers.values()]
         wait_time = await server_monitor.check_queue_busy(keys, queues)
         if wait_time is None:
             return error_response(f"Queue busy, please try again later", 500)
 
-        # process multimodal inputs data
+        # workflow_output 已在上面一次 transfer_workflow_output 中解析完毕，勿重复调用（否则会把已解析的 bytes 当引用解包导致 TypeError）
         inputs_data = await load_inputs(params, inputs, types)
 
         # init task (we need task_id before preprocessing to save processed files)
@@ -1677,14 +1784,584 @@ async def api_v1_audio_extract(request: AudioExtractRequest, user=Depends(verify
 # Static file mount (must be after all dynamic routes)
 # =========================
 # 添加assets目录的静态文件服务（用于前端静态资源）
+# 注意：/assets 的 mount 移到本文件后面、/assets/workflow/file 与 /assets/task/* 等动态路由之后注册，否则会先匹配 mount 导致 404
 assets_dir = os.path.join(os.path.dirname(__file__), "static", "assets")
-if os.path.exists(assets_dir):
-    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+canvas_assets_dir = os.path.join(static_dir, "canvas", "assets")
+
+# 添加 Canvas 子应用的 assets 目录的静态文件服务（/canvas/assets）
+if os.path.exists(canvas_assets_dir):
+    app.mount("/canvas/assets", StaticFiles(directory=canvas_assets_dir), name="canvas-assets")
+
+
+# Canvas 子应用路由处理（必须在 vue_fallback 之前）
+@app.get("/canvas/{full_path:path}")
+async def canvas_fallback(full_path: str):
+    canvas_dir = os.path.join(static_dir, "canvas")
+
+    # 处理 /canvas/index.html 或 /canvas/ 路径
+    if not full_path or full_path == "index.html":
+        canvas_index_path = os.path.join(canvas_dir, "index.html")
+        if os.path.exists(canvas_index_path):
+            return FileResponse(canvas_index_path, media_type="text/html")
+
+    # assets/ 及其他路径：先尝试按文件返回（mount 未生效时仍能正确返回 JS/CSS/manifest，避免 text/html 导致 MIME 错误）
+    canvas_file_path = os.path.join(canvas_dir, full_path)
+    if os.path.exists(canvas_file_path) and os.path.isfile(canvas_file_path):
+        ext = os.path.splitext(full_path)[1].lower()
+        media_type = CANVAS_MEDIA_TYPES.get(ext) or mimetypes.guess_type(canvas_file_path)[0] or "application/octet-stream"
+        return FileResponse(canvas_file_path, media_type=media_type)
+
+    # 静态资源未找到时不要返回 HTML，否则浏览器会报 "Expected JavaScript but got text/html"
+    if full_path.startswith("assets/") or full_path.endswith(".webmanifest"):
+        return Response(content="Not found", status_code=404, media_type="text/plain")
+
+    # 其他路径 fallback 到 canvas index.html（SPA 路由）
+    canvas_index_path = os.path.join(canvas_dir, "index.html")
+    if os.path.exists(canvas_index_path):
+        return FileResponse(canvas_index_path, media_type="text/html")
+    return Response(content="Canvas app not found", status_code=404, media_type="text/plain")
 
 
 # 所有未知路由 fallback 到 index.html (必须在所有API路由之后)
+# =========================
+# Workflow API Endpoints
+# =========================
+
+
+@app.post("/api/v1/workflow/create")
+async def api_v1_workflow_create(request: Request, user=Depends(verify_user_access)):
+    """Create a new workflow."""
+    try:
+        params = await request.json()
+        name = params.get("name", "Untitled Workflow")
+        description = params.get("description", "")
+        nodes = params.get("nodes", [])
+        connections = params.get("connections", [])
+        visibility = params.get("visibility", "private")
+        workflow_id = params.get("workflow_id")
+        tags = params.get("tags", [])
+        node_output_history = params.get("node_output_history") or {}
+        author_id = params.get("author_id") or user.get("user_id")
+        author_name = params.get("author_name") or user.get("username") or ""
+        if not isinstance(tags, list):
+            tags = []
+        else:
+            tags = [str(tag) for tag in tags if isinstance(tag, (str, int, float))]
+
+        for node in nodes:
+            if check_invalid_output_value(node):
+                logger.warning(f"invalid update output value {node['output_value']}")
+                del node["output_value"]
+        try:
+            workflow_id = await task_manager.create_workflow(
+                user_id=user["user_id"],
+                name=name,
+                description=description,
+                nodes=nodes,
+                connections=connections,
+                visibility=visibility,
+                workflow_id=workflow_id,  # Pass optional workflow_id
+                tags=tags,
+                node_output_history=node_output_history,
+                author_id=author_id,
+                author_name=author_name,
+            )
+
+            logger.info(f"Workflow {workflow_id} created by user {user['user_id']}")
+            return {"workflow_id": workflow_id, "message": "Workflow created successfully"}
+        except ValueError as ve:
+            if "already exists" in str(ve):
+                logger.warning(f"Workflow {workflow_id} already exists, returning 409")
+                return error_response(f"Workflow {workflow_id} already exists. Use POST /api/v1/workflow/{workflow_id}/update to update.", 409)
+            raise
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to create workflow", 500)
+
+
+@app.get("/api/v1/workflow/list")
+async def api_v1_workflow_list(
+    request: Request,
+    public: str = Query("false", description="true=public/community list, false=current user list"),
+    user=Depends(verify_user_access),
+):
+    try:
+        """List workflows with pagination and search. Query: public=true for public/community, public=false (default) for current user's."""
+        public = public.lower() in ("true", "1", "yes")
+        try:
+            page = int(request.query_params.get("page", 1))
+            page_size = int(request.query_params.get("page_size", 10))
+        except ValueError:
+            return error_response("Invalid 'page' or 'page_size' parameter. Must be an integer.", 400)
+        search = request.query_params.get("search", None)
+        if page < 1 or page_size < 1:
+            return error_response("page and page_size must be greater than 0", 400)
+
+        query_params = {}
+        if public:
+            query_params["visibility"] = "public"
+        else:
+            query_params["user_id"] = user["user_id"]
+        if search:
+            query_params["search"] = search
+
+        total_workflows = await task_manager.list_workflows(count=True, **query_params)
+        if total_workflows is None:
+            total_workflows = 0
+        total_pages = (total_workflows + page_size - 1) // page_size
+        page_info = {"page": page, "page_size": page_size, "total": total_workflows, "total_pages": total_pages}
+        if page > total_pages:
+            return {"workflows": [], "pagination": page_info}
+
+        query_params["offset"] = (page - 1) * page_size
+        query_params["limit"] = page_size
+        workflows = await task_manager.list_workflows(**query_params)
+
+        rets = []
+        for wf in workflows:
+            thumsup = await task_manager.get_workflow_thumsup(wf["workflow_id"], user["user_id"])
+            wf_user_id = wf.get("user_id", "")
+            stored_author_id = wf.get("author_id", "")
+            stored_author_name = await fmt_user_name(stored_author_id, task_manager)
+            item = {
+                "workflow_id": wf["workflow_id"],
+                "name": wf.get("name", ""),
+                "description": wf.get("description", ""),
+                "create_t": wf.get("create_t", 0),
+                "update_t": wf.get("update_t", 0),
+                "visibility": wf.get("visibility", "private"),
+                "thumsup_count": thumsup.get("count", 0),
+                "thumsup_liked": thumsup.get("liked", False),
+                "user_id": wf_user_id,
+                "author_name": stored_author_name,
+                "author_id": stored_author_id,
+                "tags": wf.get("tags", []),
+                "nodes": wf.get("nodes", []),
+                "connections": wf.get("connections", []),
+            }
+            rets.append(item)
+        return {"workflows": rets, "pagination": page_info}
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to list workflows", 500)
+
+
+@app.get("/api/v1/workflow/{workflow_id}")
+async def api_v1_workflow_get(request: Request, user=Depends(verify_user_access)):
+    """Get a workflow by ID."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not workflow:
+            return error_response(f"Workflow {workflow_id} not found", 404)
+        thumsup = await task_manager.get_workflow_thumsup(workflow_id, user["user_id"])
+        workflow["thumsup_count"] = thumsup.get("count", 0)
+        workflow["thumsup_liked"] = thumsup.get("liked", False)
+        workflow["author_name"] = await fmt_user_name(workflow["author_id"], task_manager)
+        return workflow
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to get workflow", 500)
+
+
+async def _update_workflow(workflow_id, params, user):
+    updates = {}
+
+    if "name" in params:
+        updates["name"] = params["name"]
+    if "description" in params:
+        updates["description"] = params["description"]
+    if "nodes" in params:
+        updates["nodes"] = params["nodes"]
+    if "connections" in params:
+        updates["connections"] = params["connections"]
+    if "extra_info" in params:
+        updates["extra_info"] = params["extra_info"]
+    if "global_inputs" in params:
+        updates["global_inputs"] = params["global_inputs"] if isinstance(params.get("global_inputs"), dict) else {}
+    if "tags" in params:
+        incoming_tags = params.get("tags") or []
+        if not isinstance(incoming_tags, list):
+            incoming_tags = []
+        else:
+            incoming_tags = [str(tag) for tag in incoming_tags if isinstance(tag, (str, int, float))]
+        updates["tags"] = incoming_tags
+    if "node_output_history" in params:
+        updates["node_output_history"] = params.get("node_output_history") or {}
+    if "files_tasks" in params:
+        ft = params.get("files_tasks")
+        updates["files_tasks"] = ft if isinstance(ft, dict) else {}
+    if "author_id" in params:
+        updates["author_id"] = params["author_id"]
+    if "author_name" in params:
+        updates["author_name"] = params["author_name"]
+    if "visibility" in params:
+        if params["visibility"] not in ["private", "public"]:
+            raise HTTPException(status_code=400, detail="visibility must be 'private' or 'public'")
+        updates["visibility"] = params["visibility"]
+
+    # Check if workflow exists first (user must own it to update)
+    existing_workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+    if not existing_workflow:
+        logger.warning(f"Workflow {workflow_id} not found for user {user['user_id']}")
+        raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+    success = await task_manager.update_workflow(workflow_id, updates, user["user_id"])
+    return success
+
+
+@app.post("/api/v1/workflow/{workflow_id}/update")
+async def api_v1_workflow_update(request: Request, user=Depends(verify_user_access)):
+    """Update a workflow: nodes, connections, visibility, node_output_history, etc."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        params = await request.json()
+
+        existing_workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not existing_workflow:
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+
+        # ignore update node_output_history from frontend
+        params.pop("node_output_history", None)
+        if "nodes" in params:
+            incoming_nodes = {n["id"]: n for n in params["nodes"]}
+            existing_nodes = {n["id"]: n for n in existing_workflow["nodes"]}
+            # ignore update output value of existing node
+            for node_id, node in incoming_nodes.items():
+                # image list may be updated by output_value, check if valid
+                if check_invalid_output_value(node):
+                    logger.warning(f"invalid update output value {node['output_value']}")
+                    del node["output_value"]
+                if "output_value" not in node and node_id in existing_nodes and "output_value" in existing_nodes[node_id]:
+                    node["output_value"] = existing_nodes[node_id]["output_value"]
+                    logger.warning(f"use existing output value {node_id}, {existing_nodes[node_id]['output_value']}")
+
+            # 删除不再存在的节点的 node_output_history 记录
+            history = existing_workflow.get("node_output_history") or {}
+            delete_history_ids = set(history.keys()) - set(incoming_nodes.keys())
+            if delete_history_ids:
+                history = {k: v for k, v in history.items() if k not in delete_history_ids}
+                params["node_output_history"] = history
+                logger.warning(f"Workflow {workflow_id}: delete node_output_history entries {delete_history_ids}")
+
+            # 如果有删除节点，不删files_tasks记录和真实文件记录，在output/save时会重新记录
+            deleted_node_ids = set(existing_nodes.keys()) - set(incoming_nodes.keys())
+            if deleted_node_ids:
+                logger.warning(f"Workflow {workflow_id}: delete nodes {deleted_node_ids}")
+
+        success = await _update_workflow(workflow_id, params, user)
+        if success:
+            logger.info(f"Workflow {workflow_id} updated with {params}")
+            return {"message": "Workflow updated successfully"}
+        else:
+            logger.error(f"Failed to update workflow {workflow_id} for user {user['user_id']}")
+            return error_response("Failed to update workflow", 400)
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to update workflow", 500)
+
+
+@app.post("/api/v1/workflow/{workflow_id}/thumsup")
+async def api_v1_workflow_thumsup(request: Request, user=Depends(verify_user_access)):
+    """Toggle workflow thumsup."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user_id=None)
+        if not workflow:
+            return error_response("Workflow not found", 404)
+        if workflow.get("visibility", "private") != "public" and workflow.get("user_id") != user["user_id"]:
+            return error_response("Workflow is private", 403)
+        result = await task_manager.toggle_workflow_thumsup(workflow_id, user["user_id"])
+        return {
+            "workflow_id": workflow_id,
+            "thumsup_count": result.get("count", 0),
+            "thumsup_liked": result.get("liked", False),
+        }
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to toggle workflow thumsup", 500)
+
+
+@app.post("/api/v1/workflow/{workflow_id}/copy")
+async def api_v1_workflow_copy(request: Request, user=Depends(verify_user_access)):
+    """Copy a workflow (for preset workflows). Creates a new workflow with the same content but new workflow_id and current user_id."""
+    try:
+        params = await request.json()
+        new_workflow_id = params.get("workflow_id")
+        workflow_id = request.path_params["workflow_id"]
+        original_workflow = await task_manager.query_workflow(workflow_id, user_id=None)
+        if not original_workflow:
+            logger.warning(f"Workflow {workflow_id} not found for copying")
+            return error_response(f"Workflow {workflow_id} not found", 404)
+
+        copied_workflow_id = await task_manager.create_workflow(
+            user_id=user["user_id"],
+            name=original_workflow.get("name", "Untitled Workflow") + " (Copy)",
+            description=original_workflow.get("description", ""),
+            nodes=original_workflow.get("nodes", []),
+            connections=original_workflow.get("connections", []),
+            visibility="private",  # copied workflow is always private
+            workflow_id=new_workflow_id,  # Use provided workflow_id or generate new one
+            tags=original_workflow["tags"],
+            node_output_history={},  # 复制时不需要 node_output_history
+            author_id=user["user_id"],
+            author_name=user.get("username", ""),
+            files_tasks=original_workflow.get("files_tasks", {}),
+        )
+
+        logger.info(f"Workflow {workflow_id} copied to {copied_workflow_id} by user {user['user_id']}")
+        return {"workflow_id": copied_workflow_id, "message": "Workflow copied successfully"}
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to copy workflow", 500)
+
+
+@app.delete("/api/v1/workflow/{workflow_id}")
+async def api_v1_workflow_delete(request: Request, user=Depends(verify_user_access)):
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not workflow:
+            return error_response("Workflow not found", 404)
+
+        # clean all related files and tasks
+        for entry in workflow.get("files_tasks", {}).values():
+            await clean_file_or_task_entry(user["user_id"], workflow_id, entry, data_manager, task_manager)
+
+        success = await task_manager.delete_workflow(workflow_id, user["user_id"])
+        if not success:
+            return error_response("Failed to delete workflow", 400)
+        logger.info(f"Workflow {workflow_id} deleted by user {user['user_id']}")
+        return {"message": "Workflow deleted successfully"}
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to delete workflow", 500)
+
+
+@app.get("/api/v1/workflow/{workflow_id}/node/{node_id}/output/history")
+async def api_v1_workflow_node_output_history(request: Request, user=Depends(verify_user_access)):
+    """Read history list for the node (all entries, any port)."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        node_id = request.path_params["node_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not workflow:
+            return error_response("Workflow not found", 404)
+
+        history_map = workflow.get("node_output_history", {})
+        return {"history": history_map.get(node_id, [])}
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to get node output history", 500)
+
+
+@app.get("/api/v1/workflow/{workflow_id}/node/{node_id}/output/{port_id}/url")
+async def api_v1_workflow_node_output_url(request: Request, user=Depends(verify_user_access)):
+    """Get the URL(s) for a node's output on a given port.
+    单项输出返回 {"url": "..."}；多项（如多图）返回 {"urls": ["...", ...]}。
+    """
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        node_id = request.path_params["node_id"]
+        port_id = request.path_params.get("port_id")
+        file_id = request.query_params.get("file_id", "")
+        task_id = request.query_params.get("task_id", "")
+        try:
+            entries = await query_output_entries(user["user_id"], workflow_id, node_id, port_id, file_id, task_id, task_manager)
+        except Exception:
+            traceback.print_exc()
+            return error_response(f"entry node={node_id}, port={port_id}, file_id={file_id}, task_id={task_id} not found nor access", 404)
+
+        urls = []
+        for entry in entries:
+            if entry["kind"] == "file":
+                storage_path = fmt_workflow_file_path(entry)
+            elif entry["kind"] == "task":
+                task = await task_manager.query_task(entry["task_id"], user_id=entry["user_id"])
+                assert task is not None, f"Task entry {entry} not found"
+                assert task["status"] == TaskStatus.SUCCEED, f"Task entry {entry} not succeed"
+                storage_path = task["outputs"][entry["output_name"]]
+            else:
+                raise ValueError(f"Unknown entry kind: {entry['kind']}")
+
+            assert storage_path, f"File entry {entry} path is not valid!"
+            url = await data_manager.presign_url(storage_path)
+            if url is None:
+                url = f"./assets/workflow/file?workflow_id={workflow_id}&node_id={node_id}&port_id={port_id}&file_id={file_id}&task_id={task_id}"
+            urls.append(url)
+        if len(urls) == 1:
+            return {"url": urls[0]}
+        return {"urls": urls}
+
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to get output url", 500)
+
+
+@app.get("/assets/workflow/file")
+async def api_v1_workflow_file(request: Request, user=Depends(verify_user_access_from_query)):
+    try:
+        workflow_id = request.query_params["workflow_id"]
+        node_id = request.query_params["node_id"]
+        port_id = request.query_params["port_id"]
+        file_id = request.query_params.get("file_id", "")
+        # only for task changed not cached
+        task_id = request.query_params.get("task_id", "")
+        try:
+            entries = await query_output_entries(user["user_id"], workflow_id, node_id, port_id, file_id, task_id, task_manager)
+            if len(entries) != 1:
+                raise ValueError(f"should be one entry, but got {len(entries)}, {entries}")
+            entry = entries[0]
+        except Exception:
+            traceback.print_exc()
+            return error_response(f"entry node={node_id}, port={port_id}, file_id={file_id}, task_id={task_id} not found nor access", 404)
+        data, filename, mime_type = await load_bytes_from_entry(entry, task_manager, data_manager)
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers["Cache-Control"] = "public, max-age=3600"
+        return Response(content=data, media_type=mime_type, headers=headers)
+
+    except Exception as e:
+        traceback.print_exc()
+        return error_response("Failed to load workflow file", 500)
+
+
+# /assets 静态 mount 必须在 /assets/workflow/file、/assets/task/result 等动态路由之后注册，否则请求会被 StaticFiles 先匹配并 404
+if os.path.exists(assets_dir):
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+elif os.path.exists(canvas_assets_dir):
+    app.mount("/assets", StaticFiles(directory=canvas_assets_dir), name="assets")
+
+
+@app.post("/api/v1/workflow/{workflow_id}/node/{node_id}/output/{port_id}/save")
+async def api_v1_workflow_node_output_port_save(request: Request, user=Depends(verify_user_access)):
+    """Save one port's output for a node. Appends to node history, updates node output_value and files_tasks, trims to MAX_NODE_HISTORY, and cleans orphan file/task refs."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        node_id = request.path_params["node_id"]
+        port_id = request.path_params["port_id"]
+        run_id = request.query_params.get("run_id", "")
+        user_id = user["user_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user_id)
+        if not workflow:
+            return error_response("Workflow not found", 404)
+
+        nodes = workflow["nodes"]
+        node_output_history = workflow["node_output_history"]
+        files_tasks = workflow["files_tasks"]
+
+        params = await request.json() or {}
+        run_id = params.get("run_id") or request.query_params.get("run_id")  # body 优先，兼容旧 query param
+        output_data = params.get("output_data")
+        logger.info(f"[output/save] node={node_id} port={port_id} run_id={run_id} output_data={str(output_data)[:150]}")
+
+        try:
+            # parse output_data, save it, return entry dict, workflow["files_tasks"] changed
+            new_entry = await format_and_save_entry(output_data, user_id, run_id, workflow_id, node_id, port_id, files_tasks, data_manager)
+        except ValueError:
+            traceback.print_exc()
+            return error_response("Failed to format and save entries", 400)
+
+        # set output_value, workflow["nodes"] and workflow["node_output_history"] changed
+        update_workflow_node_output(workflow, node_id, port_id, run_id, new_entry)
+
+        # tidy files and tasks, remove orphan items, workflow["files_tasks"] changed
+        await tidy_workflow_files_and_tasks(user_id, workflow_id, nodes, node_output_history, files_tasks, data_manager, task_manager)
+
+        logger.debug(f"changed files_tasks: {json.dumps(list(files_tasks.keys()), indent=4)}")
+
+        changed_payload = {
+            "nodes": nodes,
+            "node_output_history": node_output_history,
+            "files_tasks": files_tasks,
+        }
+        success = await task_manager.update_workflow(workflow_id, changed_payload, user_id)
+        if not success:
+            return error_response("Failed to update workflow in database", 400)
+        logger.info(f"Saved output for node {node_id} port {port_id} in workflow {workflow_id}, run_id={run_id}, entries = {new_entry}")
+
+        return {"message": "Node output saved successfully", **new_entry}
+        # 单项兼容原格式；多项返回 entries 数组
+        # return {"message": "Node output saved successfully", "entries": new_entry}
+
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to save node output", 500)
+
+
+@app.get("/api/v1/workflow/{workflow_id}/chat")
+async def api_v1_workflow_chat_get(request: Request, user=Depends(verify_user_access)):
+    """Get chat history for a workflow. Returns messages from separate store or workflow doc (fallback)."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not workflow:
+            return error_response("Workflow not found", 404)
+        data = await task_manager.get_workflow_chat_history(workflow_id, user["user_id"])
+        if not data:
+            data = {"workflow_id": workflow_id, "messages": [], "updated_at": time.time()}
+        data["updated_at"] = int(data["updated_at"] * 1000)
+        return data
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to get workflow chat history", 500)
+
+
+@app.post("/api/v1/workflow/{workflow_id}/chat")
+async def api_v1_workflow_chat_post(request: Request, user=Depends(verify_user_access)):
+    """Append messages to chat history."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not workflow:
+            return error_response("Workflow not found", 404)
+
+        params = await request.json()
+        to_append = params.get("messages", [])
+        if not isinstance(to_append, list):
+            to_append = []
+        persisted = [to_persisted_message(m) for m in to_append if isinstance(m, dict)]
+
+        existing = await task_manager.get_workflow_chat_history(workflow_id, user["user_id"])
+        if existing:
+            messages = existing["messages"] + persisted
+        else:
+            messages = persisted
+        updated_at = await task_manager.save_workflow_chat_history(workflow_id, messages, user["user_id"])
+        return {"workflow_id": workflow_id, "messages": messages, "updated_at": updated_at}
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to append messages to chat history", 500)
+
+
+@app.put("/api/v1/workflow/{workflow_id}/chat")
+async def api_v1_workflow_chat_put(request: Request, user=Depends(verify_user_access)):
+    """Replace full chat history."""
+    try:
+        workflow_id = request.path_params["workflow_id"]
+        workflow = await task_manager.query_workflow(workflow_id, user["user_id"])
+        if not workflow:
+            return error_response("Workflow not found", 404)
+        if not hasattr(task_manager, "save_workflow_chat_history"):
+            return error_response("Chat history storage not available", 501)
+
+        params = await request.json()
+        messages = params["messages"]
+        assert isinstance(messages, list), f"messages must be a list, got {messages}"
+        persisted = [to_persisted_message(m) for m in messages if isinstance(m, dict)]
+        updated_at = await task_manager.save_workflow_chat_history(workflow_id, persisted, user["user_id"])
+        return {"workflow_id": workflow_id, "messages": persisted, "updated_at": updated_at}
+    except Exception:
+        traceback.print_exc()
+        return error_response("Failed to put chat history", 500)
+
+
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 async def vue_fallback(full_path: str):
+    # 静态资源请求不要返回 index.html，否则浏览器会报 MIME 类型错误（text/html 被当作 CSS/JS 解析）
+    if full_path.startswith("assets/") or "/assets/" in full_path:
+        return Response(content="Asset not found. Build the canvas app and copy dist to static/canvas/.", status_code=404, media_type="text/plain")
+    static_extensions = (".js", ".css", ".json", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2", ".ttf", ".wasm")
+    if any(full_path.lower().endswith(ext) for ext in static_extensions):
+        return Response(content="Not found", status_code=404, media_type="text/plain")
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)

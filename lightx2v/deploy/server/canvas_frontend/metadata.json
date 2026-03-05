@@ -1,0 +1,8 @@
+{
+  "name": "OmniFlow AI Canvas",
+  "description": "A high-fidelity visual workflow editor for orchestrating multi-modal AI models (Text, Image, Audio, Video) with drag-and-drop node logic.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

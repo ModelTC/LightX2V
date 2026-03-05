@@ -97,6 +97,27 @@ class BaseTaskManager:
     async def list_voice_clones(self, user_id):
         raise NotImplementedError
 
+    async def insert_workflow(self, workflow_data):
+        raise NotImplementedError
+
+    async def query_workflow(self, workflow_id, user_id=None):
+        raise NotImplementedError
+
+    async def update_workflow(self, workflow_id, updates, user_id=None):
+        raise NotImplementedError
+
+    async def delete_workflow(self, workflow_id, user_id=None):
+        raise NotImplementedError
+
+    async def list_workflows(self, **kwargs):
+        raise NotImplementedError
+
+    async def toggle_workflow_thumsup(self, workflow_id, user_id):
+        raise NotImplementedError
+
+    async def get_workflow_thumsup(self, workflow_id, user_id=None):
+        raise NotImplementedError
+
     def fmt_dict(self, data):
         for k in ["status"]:
             if k in data:
@@ -240,6 +261,59 @@ class BaseTaskManager:
         }
         assert await self.insert_voice_clone_if_not_exists(voice_clone), f"create voice clone {voice_clone} failed"
         return True
+
+    async def create_workflow(
+        self,
+        user_id,
+        name,
+        description="",
+        nodes=[],
+        connections=[],
+        workflow_id=None,
+        visibility="private",
+        tags=[],
+        node_output_history={},
+        author_id=None,
+        author_name=None,
+        files_tasks={},
+    ):
+        if workflow_id is None:
+            workflow_id = str(uuid.uuid4())
+        else:
+            import re
+
+            if not re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", workflow_id, re.IGNORECASE):
+                raise ValueError(f"Invalid workflow_id format: {workflow_id}. Must be a valid UUID.")
+
+            existing = await self.query_workflow(workflow_id, user_id=None)
+            if existing:
+                raise ValueError(f"Workflow {workflow_id} already exists. Use update_workflow instead.")
+
+        cur_t = current_time()
+        if visibility not in ["private", "public"]:
+            raise ValueError(f"Invalid workflow visibility: {visibility}")
+
+        workflow_data = {
+            "workflow_id": workflow_id,
+            "user_id": user_id,
+            "name": name,
+            "description": description,
+            "create_t": cur_t,
+            "update_t": cur_t,
+            "nodes": nodes,
+            "connections": connections,
+            "chat_history": [],
+            "extra_info": {},
+            "visibility": visibility,
+            "tags": tags,
+            "node_output_history": node_output_history,
+            "files_tasks": files_tasks,
+            "author_id": author_id,
+            "author_name": author_name,
+            "global_inputs": {},
+        }
+        assert await self.insert_workflow(workflow_data), f"create workflow {workflow_data} failed"
+        return workflow_id
 
     async def mark_server_restart(self):
         pass

@@ -35,14 +35,20 @@ pre-commit run --all-files
 
 除了LightX2V团队的贡献，我们也收到一些社区开发者的贡献，包括但不限于：
 
+- [zhtshr](https://github.com/zhtshr)
 - [triple-Mu](https://github.com/triple-Mu)
 - [vivienfanghuagood](https://github.com/vivienfanghuagood)
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
+- [ziyanxzy](https://github.com/ziyanxzy)
 
 ## :fire: 最新动态
 
-- **2026年2月27日：** 🚀 我们现已支持自回归视频生成模型（[Self Forcing](https://github.com/guandeh17/Self-Forcing)）的 **NVFP4 量化**！你可以在这里获取量化后的模型：**[Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**。
+- **2026年3月5日：** 🚀 支持 Intel AIPC PTL 的部署，感谢Intel团队。
+
+- **2026年3月5日：** 🚀 我们现已支持基于[Mooncake](https://github.com/kvcache-ai/Mooncake)的分离部署，更多关于分离部署的改进和文档正在进行中。感谢Mooncake团队的帮助！
+
+- **2026年2月27日：** 🚀 我们现已支持自回归视频生成模型（[Self Forcing](https://github.com/guandeh17/Self-Forcing)）的 **FP8 和 NVFP4 量化**！你可以在这里获取量化后的模型：**[Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8)， [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)**。
 
 - **2026年2月11日:** 🎉 我们很高兴宣布推出 **[GenRL](https://github.com/ModelTC/GenRL)** —— 一个用于视觉生成的可扩展强化学习训练框架！GenRL 支持使用 GRPO 算法对 diffusion/flow 模型进行多奖励优化训练（HPSv3、VideoAlign等）。我们已经发布了在多机多卡上训练的高性能 LoRA checkpoints，在美学质量、运动连贯性和文本-视频对齐等方面都有显著提升。欢迎查看我们在 HuggingFace 上的[模型合集](https://huggingface.co/collections/lightx2v/genrl)！觉得有用的话欢迎给个 ⭐！
 
@@ -309,6 +315,7 @@ pipe.generate(
 - [radial-attention](https://github.com/mit-han-lab/radial-attention)
 - [xDiT](https://github.com/xdit-project/xDiT)
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
+- [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
 ## 🌟 Star 历史
 

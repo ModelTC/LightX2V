@@ -2,6 +2,7 @@ import { ref, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import i18n from './i18n'
 import router from '../router'
+import { sharedStore } from './sharedStore'
 export const t = i18n.global.t
 export const locale = i18n.global.locale
 
@@ -162,6 +163,7 @@ export const locale = i18n.global.locale
         const selectedTaskFiles = ref({ inputs: {}, outputs: {} }); // 存储任务的输入输出文件
         const loadingTaskFiles = ref(false); // 加载任务文件的状态
         const statusFilter = ref('ALL');
+        const taskTypeFilter = ref([]);  // 任务类型多选筛选，空数组表示全部
         const pagination = ref(null);
         const currentTaskPage = ref(1);
         const taskPageSize = ref(20);
@@ -177,6 +179,46 @@ export const locale = i18n.global.locale
             'animate': t('animate'),
             'flf2v': t('firstAndLastFrameToVideo')
         }));
+
+        // 任务类型输入输出映射：{ taskType: { input: ['image'|'video'|'audio'|'prompt'], output: 'image'|'video' } }
+        const TASK_TYPE_IO_MAP = {
+            t2v: { input: ['prompt'], output: 'video' },
+            i2v: { input: ['image', 'prompt'], output: 'video' },
+            s2v: { input: ['image', 'audio', 'prompt'], output: 'video' },
+            i2i: { input: ['image', 'prompt'], output: 'image' },
+            t2i: { input: ['prompt'], output: 'image' },
+            animate: { input: ['image', 'video'], output: 'video' },
+            flf2v: { input: ['image', 'image'], output: 'video' }  // first_frame, last_frame
+        };
+
+        // 根据输出类型获取可应用的目标任务类型
+        const getTargetTasksForOutput = (outputType) => {
+            if (!outputType) return [];
+            const targets = [];
+            if (outputType === 'image') {
+                targets.push('i2v', 's2v', 'flf2v', 'animate', 'i2i');
+            } else if (outputType === 'video') {
+                targets.push('animate');
+            }
+            return targets;
+        };
+
+        // 获取任务可应用到的目标列表（含 flf2v 首帧/尾帧拆分）
+        const getApplyToTargetsForTask = (task) => {
+            if (!task || task.status !== 'SUCCEED') return [];
+            const outputType = TASK_TYPE_IO_MAP[task.task_type]?.output;
+            const targetIds = getTargetTasksForOutput(outputType);
+            const baseName = nameMap.value['flf2v'] || getTaskTypeName('flf2v');
+            return targetIds.flatMap(id => {
+                if (id === 'flf2v' && outputType === 'image') {
+                    return [
+                        { id, flf2vFrame: 'first', name: `${baseName} - ${t('firstFrameImage')}` },
+                        { id, flf2vFrame: 'last', name: `${baseName} - ${t('lastFrameImage')}` }
+                    ];
+                }
+                return [{ id, flf2vFrame: null, name: nameMap.value[id] || getTaskTypeName(id) }];
+            });
+        };
 
         // 任务类型提示信息
         const taskHints = computed(() => ({
@@ -591,12 +633,27 @@ export const locale = i18n.global.locale
                 .map(m => m.model_cls))];
         });
 
+        const toggleTaskTypeFilter = (taskType) => {
+            const arr = taskTypeFilter.value;
+            const idx = arr.indexOf(taskType);
+            if (idx >= 0) {
+                taskTypeFilter.value = arr.filter(t => t !== taskType);
+            } else {
+                taskTypeFilter.value = [...arr, taskType];
+            }
+        };
+
         const filteredTasks = computed(() => {
             let filtered = tasks.value;
 
             // 状态过滤
             if (statusFilter.value !== 'ALL') {
                 filtered = filtered.filter(task => task.status === statusFilter.value);
+            }
+
+            // 任务类型多选过滤
+            if (taskTypeFilter.value && taskTypeFilter.value.length > 0) {
+                filtered = filtered.filter(task => taskTypeFilter.value.includes(task.task_type));
             }
 
             // 搜索过滤
@@ -626,6 +683,17 @@ export const locale = i18n.global.locale
                 refreshTasks(true); // 强制刷新
             }
         });
+
+        // 监听任务类型筛选变化，重置分页到第一页
+        watch(taskTypeFilter, (newVal, oldVal) => {
+            const oldStr = JSON.stringify(oldVal || []);
+            const newStr = JSON.stringify(newVal || []);
+            if (oldStr !== newStr) {
+                currentTaskPage.value = 1;
+                taskPageInput.value = 1;
+                refreshTasks(true);
+            }
+        }, { deep: true });
 
         // 监听搜索查询变化，重置分页到第一页
         watch(taskSearchQuery, (newQuery, oldQuery) => {
@@ -950,10 +1018,12 @@ export const locale = i18n.global.locale
 
                 if (response.ok) {
                     localStorage.setItem('accessToken', data.access_token);
+                    sharedStore.setState('token', data.access_token);
                     if (data.refresh_token) {
                         localStorage.setItem('refreshToken', data.refresh_token);
                     }
                     localStorage.setItem('currentUser', JSON.stringify(data.user_info));
+                    sharedStore.setState('user', data.user_info);
                     currentUser.value = data.user_info;
 
                     // 登录成功后初始化数据
@@ -1046,10 +1116,12 @@ export const locale = i18n.global.locale
                     const data = await response.json();
                     console.log(data);
                     localStorage.setItem('accessToken', data.access_token);
+                    sharedStore.setState('token', data.access_token);
                     if (data.refresh_token) {
                         localStorage.setItem('refreshToken', data.refresh_token);
                     }
                     localStorage.setItem('currentUser', JSON.stringify(data.user_info));
+                    sharedStore.setState('user', data.user_info);
                     currentUser.value = data.user_info;
                     isLoggedIn.value = true;
 
@@ -1100,6 +1172,7 @@ export const locale = i18n.global.locale
             localStorage.removeItem('accessToken');
             localStorage.removeItem('refreshToken');
             localStorage.removeItem('currentUser');
+            sharedStore.clear();
             refreshPromise = null;
 
             clearAllCache();
@@ -4608,6 +4681,100 @@ export const locale = i18n.global.locale
             }
         };
 
+        // 将任务输出应用到目标任务类型（如 i2i 输出图片可应用到 i2v、s2v、数字人等）
+        // options: { flf2vFrame: 'first'|'last' } - 应用到 flf2v 时可指定首帧或尾帧
+        const applyTaskOutputToTask = async (task, targetTaskType, options = {}) => {
+            if (!task || !task.task_id || task.status !== 'SUCCEED') {
+                showAlert(t('applyTaskOutputFailed'), 'danger');
+                return;
+            }
+            const sourceOutputType = TASK_TYPE_IO_MAP[task.task_type]?.output;
+            const targetInputs = TASK_TYPE_IO_MAP[targetTaskType]?.input;
+            if (!sourceOutputType || !targetInputs?.includes(sourceOutputType === 'image' ? 'image' : 'video')) {
+                showAlert(t('applyTaskOutputFailed'), 'danger');
+                return;
+            }
+            try {
+                templateLoading.value = true;
+                templateLoadingMessage.value = t('prefillLoadingTask');
+                if (showTaskDetailModal.value) closeTaskDetailModal();
+                selectedTaskId.value = targetTaskType;
+                const currentForm = getCurrentForm();
+                switchToCreateView();
+                isCreationAreaExpanded.value = true;
+                const imageKey = sourceOutputType === 'image' ? 'output_image' : null;
+                const videoKey = sourceOutputType === 'video' ? 'output_video' : null;
+                const fileKey = imageKey || videoKey;
+                const outputRef = task.outputs?.[fileKey];
+                if (!outputRef) {
+                    showAlert(t('applyTaskOutputFailed'), 'danger');
+                    return;
+                }
+                const fileUrl = await getTaskFileUrl(task.task_id, fileKey);
+                if (!fileUrl) {
+                    showAlert(t('applyTaskOutputFailed'), 'danger');
+                    return;
+                }
+                const response = await fetch(fileUrl);
+                if (!response.ok) {
+                    showAlert(t('applyTaskOutputFailed'), 'danger');
+                    return;
+                }
+                const blob = await response.blob();
+                const ext = sourceOutputType === 'image' ? (outputRef.split('.').pop() || 'jpg') : (outputRef.split('.').pop() || 'mp4');
+                const mimeTypes = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', mp4: 'video/mp4', webm: 'video/webm' };
+                const mimeType = mimeTypes[ext] || (sourceOutputType === 'image' ? 'image/jpeg' : 'video/mp4');
+                const file = new File([blob], outputRef || `output.${ext}`, { type: blob.type || mimeType });
+                if (sourceOutputType === 'image') {
+                    if (targetTaskType === 'i2i') {
+                        if (!i2iForm.value.imageFiles) i2iForm.value.imageFiles = [];
+                        i2iForm.value.imageFiles = [file];
+                        i2iForm.value.imageFile = file;
+                        const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = e => res(e.target.result); r.onerror = rej; r.readAsDataURL(file); });
+                        i2iImagePreviews.value = [dataUrl];
+                    } else if (targetTaskType === 'flf2v') {
+                        const flf2vFrame = options.flf2vFrame || 'first';
+                        if (flf2vFrame === 'last') {
+                            flf2vForm.value.lastFrameFile = file;
+                            setCurrentLastFramePreview(URL.createObjectURL(file));
+                            flf2vForm.value.imageFile = null;
+                            setCurrentImagePreview(null);
+                        } else {
+                            flf2vForm.value.imageFile = file;
+                            setCurrentImagePreview(URL.createObjectURL(file));
+                            flf2vForm.value.lastFrameFile = null;
+                            setCurrentLastFramePreview(null);
+                        }
+                    } else {
+                        currentForm.imageFile = file;
+                        setCurrentImagePreview(URL.createObjectURL(file));
+                        if (targetTaskType === 'i2v') i2vForm.value.detectedFaces = [];
+                        if (targetTaskType === 's2v') s2vForm.value.detectedFaces = [];
+                        if (targetTaskType === 'animate') animateForm.value.detectedFaces = [];
+                    }
+                } else if (sourceOutputType === 'video' && targetTaskType === 'animate') {
+                    animateForm.value.videoFile = file;
+                    const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = e => res(e.target.result); r.onerror = rej; r.readAsDataURL(file); });
+                    setCurrentVideoPreview(dataUrl);
+                }
+                if (task.params?.prompt && ['i2v', 's2v', 'i2i'].includes(targetTaskType)) {
+                    currentForm.prompt = task.params.prompt || '';
+                }
+                updateUploadedContentStatus();
+                showAlert(t('taskOutputAppliedSuccess'), 'success');
+                setTimeout(() => {
+                    const mainScrollable = document.querySelector('.main-scrollbar');
+                    if (mainScrollable) mainScrollable.scrollTo({ top: 0, behavior: 'smooth' });
+                }, 150);
+            } catch (error) {
+                console.error('applyTaskOutputToTask failed:', error);
+                showAlert(t('applyTaskOutputFailed'), 'danger');
+            } finally {
+                templateLoading.value = false;
+                templateLoadingMessage.value = '';
+            }
+        };
+
         const downloadFile = async (fileInfo) => {
             if (!fileInfo || !fileInfo.blob) {
                 showAlert(t('fileUnavailableAlert'), 'danger');
@@ -6448,6 +6615,7 @@ export const locale = i18n.global.locale
                     const data = await response.json();
                     if (data.access_token) {
                         localStorage.setItem('accessToken', data.access_token);
+                        sharedStore.setState('token', data.access_token);
                     }
                     if (data.refresh_token) {
                         localStorage.setItem('refreshToken', data.refresh_token);
@@ -6455,6 +6623,7 @@ export const locale = i18n.global.locale
                     if (data.user_info) {
                         currentUser.value = data.user_info;
                         localStorage.setItem('currentUser', JSON.stringify(data.user_info));
+                        sharedStore.setState('user', data.user_info);
                     }
                     return true;
                 } catch (error) {
@@ -8530,6 +8699,8 @@ export {
             selectedTaskFiles,
             loadingTaskFiles,
             statusFilter,
+            taskTypeFilter,
+            toggleTaskTypeFilter,
             pagination,
             paginationInfo,
             currentTaskPage,
@@ -8664,6 +8835,10 @@ export {
             startPollingTask,
             stopPollingTask,
             reuseTask,
+            TASK_TYPE_IO_MAP,
+            getTargetTasksForOutput,
+            getApplyToTargetsForTask,
+            applyTaskOutputToTask,
             showTaskCreator,
             toggleSidebar,
             clearPrompt,
@@ -8673,6 +8848,7 @@ export {
             getModelBtnClass,
             getTaskTypeIcon,
             getTaskTypeName,
+            nameMap,
             getPromptPlaceholder,
             getStatusTextClass,
             getImagePreview,
