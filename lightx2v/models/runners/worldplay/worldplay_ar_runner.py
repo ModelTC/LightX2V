@@ -1,4 +1,3 @@
-import copy
 import gc
 import os
 
@@ -92,6 +91,13 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     def _run_input_encoder_local_i2v(self):
         """Run encoders with pose processing for i2v task."""
         img_ori = self.read_image_input(self.input_info.image_path)
+        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
+            from lightx2v.models.networks.worldplay.pose_utils import get_latent_num_from_pose
+            latent_num = get_latent_num_from_pose(self.input_info.pose)
+            vae_stride_t = self.config["vae_stride"][0]
+            with self.config.temporarily_unlocked():
+                self.config["target_video_length"] = latent_num * vae_stride_t - (vae_stride_t - 1)
+            logger.info(f"Auto-set target_video_length={self.config['target_video_length']} from pose ({latent_num} latent frames)")
         if self.sr_version and self.config_sr["is_sr_running"]:
             self.latent_sr_shape = self.get_sr_latent_shape_with_target_hw()
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw(origin_size=img_ori.size)
@@ -121,6 +127,13 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         """Run encoders with pose processing for t2v task."""
+        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
+            from lightx2v.models.networks.worldplay.pose_utils import get_latent_num_from_pose
+            latent_num = get_latent_num_from_pose(self.input_info.pose)
+            vae_stride_t = self.config["vae_stride"][0]
+            with self.config.temporarily_unlocked():
+                self.config["target_video_length"] = latent_num * vae_stride_t - (vae_stride_t - 1)
+            logger.info(f"Auto-set target_video_length={self.config['target_video_length']} from pose ({latent_num} latent frames)")
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
 
@@ -190,9 +203,30 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         )
         self.model.set_scheduler(self.scheduler)
 
+    @ProfilingContext4DebugL2("Run DiT")
+    def run_main(self):
+        """Override to use chunk-based AR generation instead of run_segment()."""
+        self.init_run()
+        self.run_denoising_loop()
+        latents = self.scheduler.latents
+        if self.config.get("use_stream_vae", False):
+            frames = []
+            for frame_segment in self.run_vae_decoder_stream(latents):
+                frames.append(frame_segment)
+            self.gen_video = torch.cat(frames, dim=2)
+        else:
+            self.gen_video = self.run_vae_decoder(latents)
+        self.gen_video_final = self.gen_video
+        gen_video_final = self.process_images_after_vae_decoder()
+        self.end_run()
+        return gen_video_final
+
     def run_denoising_loop(self):
         """
         Run autoregressive denoising loop with chunk-based generation.
+
+        Preserves full pose data and slices per-chunk from it to avoid
+        overwriting scheduler state with chunk-sized data.
 
         AR rollout flow (matching HY-WorldPlay ar_rollout):
         1. Cache text KV once at the beginning
@@ -201,7 +235,22 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
            b. For each denoising step, run vision inference using cached KV
         """
         total_chunks = self.scheduler.total_chunks
+        total_frames = self.scheduler.latents.shape[2]
+        _, _, _, H, W = self.scheduler.latents.shape
         logger.info(f"Starting AR generation with {total_chunks} chunks")
+
+        # Preserve full pose/cos_sin/cond data before chunk iteration
+        full_viewmats = self.scheduler.viewmats
+        full_Ks = self.scheduler.Ks
+        full_action = self.scheduler.action
+        full_cos_sin = self.scheduler.cos_sin
+        full_cond_latents_concat = self.scheduler.cond_latents_concat
+        full_mask_concat = self.scheduler.mask_concat
+
+        # Remove pose_output from inputs so infer_vision() doesn't overwrite
+        # chunk-sliced data on the scheduler. Runner manages pose directly.
+        saved_pose_output = self.inputs.get("pose_output")
+        self.inputs["pose_output"] = None
 
         # Step 1: Cache text KV (called once at generation start)
         logger.info("Caching text KV...")
@@ -210,86 +259,113 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         for chunk_idx in range(total_chunks):
             logger.info(f"Generating chunk {chunk_idx + 1}/{total_chunks}")
 
-            # Prepare chunk data
-            (chunk_latents, chunk_viewmats, chunk_Ks, chunk_action) = self.scheduler.prepare_chunk(chunk_idx)
+            # Calculate frame range for this chunk
+            start_frame = chunk_idx * self.chunk_latent_frames
+            end_frame = min(start_frame + self.chunk_latent_frames, total_frames)
 
-            # Update scheduler with chunk-specific pose data
-            if chunk_viewmats is not None:
-                self.scheduler.viewmats = chunk_viewmats
-            if chunk_Ks is not None:
-                self.scheduler.Ks = chunk_Ks
-            if chunk_action is not None:
-                self.scheduler.action = chunk_action
+            # Set chunk pose from FULL data
+            if full_viewmats is not None:
+                self.scheduler.viewmats = full_viewmats[:, start_frame:end_frame]
+            if full_Ks is not None:
+                self.scheduler.Ks = full_Ks[:, start_frame:end_frame]
+            if full_action is not None:
+                self.scheduler.action = full_action[:, start_frame:end_frame]
+            # Set chunk cos_sin from full
+            self._set_chunk_cos_sin(full_cos_sin, start_frame, end_frame, H, W)
+            # Slice cond_latents_concat and mask_concat for this chunk
+            if full_cond_latents_concat is not None:
+                self.scheduler.cond_latents_concat = full_cond_latents_concat[:, :, start_frame:end_frame, :, :]
+            if full_mask_concat is not None:
+                self.scheduler.mask_concat = full_mask_concat[:, :, start_frame:end_frame, :, :]
 
             # Step 2: For non-first chunks, cache context frame KV
             if chunk_idx > 0:
-                context_inputs = self._prepare_context_inputs(chunk_idx)
-                if context_inputs is not None:
-                    self.model.infer_vision(context_inputs, cache_vision=True)
+                self.model.clear_vision_cache()
+                self._cache_context_kv(chunk_idx, full_viewmats, full_Ks,
+                                       full_action, full_cos_sin,
+                                       full_cond_latents_concat, full_mask_concat,
+                                       H, W)
 
             # Step 3: Run denoising for this chunk
+            chunk_latents = self.scheduler.latents[:, :, start_frame:end_frame, :, :]
             chunk_output = self._denoise_chunk(chunk_idx, chunk_latents)
 
             # Update latents with generated chunk
             self.scheduler.update_chunk_latents(chunk_idx, chunk_output)
 
+        # Restore full data
+        self.scheduler.viewmats = full_viewmats
+        self.scheduler.Ks = full_Ks
+        self.scheduler.action = full_action
+        self.scheduler.cos_sin = full_cos_sin
+        self.scheduler.cond_latents_concat = full_cond_latents_concat
+        self.scheduler.mask_concat = full_mask_concat
+        self.inputs["pose_output"] = saved_pose_output
+
         # Clear KV cache after generation
         self.model.clear_kv_cache()
 
-    def _prepare_context_inputs(self, chunk_idx):
-        """
-        Prepare inputs for caching context frame KV.
+    def _set_chunk_cos_sin(self, full_cos_sin, start_frame, end_frame, H, W):
+        """Slice cos_sin by frame range (token = frame * H * W)."""
+        if full_cos_sin is None:
+            return
+        start_token = start_frame * H * W
+        end_token = end_frame * H * W
+        self.scheduler.cos_sin = full_cos_sin[start_token:end_token]
 
-        Args:
-            chunk_idx: Current chunk index
-
-        Returns:
-            Dict with inputs for context frame caching, or None if no context
+    def _cache_context_kv(self, chunk_idx, full_viewmats, full_Ks,
+                          full_action, full_cos_sin,
+                          full_cond_latents_concat, full_mask_concat,
+                          H, W):
         """
-        # Get memory window for context frames
+        Set scheduler state for context frames and cache their KV.
+
+        Slices from full pose data to avoid index-out-of-bounds issues.
+        """
         start_chunk, end_chunk = self.scheduler.get_memory_window(chunk_idx)
-
         if end_chunk <= 0:
-            return None
+            return
 
-        # Get context latents from previously generated chunks
         context_start_frame = start_chunk * self.chunk_latent_frames
         context_end_frame = chunk_idx * self.chunk_latent_frames
 
         if context_end_frame <= context_start_frame:
-            return None
+            return
 
-        # Extract context latents (already denoised)
-        context_latents = self.scheduler.latents[:, :, context_start_frame:context_end_frame, :, :]
+        # Save current scheduler state
+        saved_latents = self.scheduler.latents
+        saved_viewmats = self.scheduler.viewmats
+        saved_Ks = self.scheduler.Ks
+        saved_action = self.scheduler.action
+        saved_cos_sin = self.scheduler.cos_sin
+        saved_cond = self.scheduler.cond_latents_concat
+        saved_mask = self.scheduler.mask_concat
 
-        # Temporarily set scheduler latents to context
-        original_latents = self.scheduler.latents
-        self.scheduler.latents = context_latents
+        # Set context data from FULL arrays
+        self.scheduler.latents = saved_latents[:, :, context_start_frame:context_end_frame, :, :]
+        if full_viewmats is not None:
+            self.scheduler.viewmats = full_viewmats[:, context_start_frame:context_end_frame]
+        if full_Ks is not None:
+            self.scheduler.Ks = full_Ks[:, context_start_frame:context_end_frame]
+        if full_action is not None:
+            self.scheduler.action = full_action[:, context_start_frame:context_end_frame]
+        if full_cond_latents_concat is not None:
+            self.scheduler.cond_latents_concat = full_cond_latents_concat[:, :, context_start_frame:context_end_frame, :, :]
+        if full_mask_concat is not None:
+            self.scheduler.mask_concat = full_mask_concat[:, :, context_start_frame:context_end_frame, :, :]
+        self._set_chunk_cos_sin(full_cos_sin, context_start_frame, context_end_frame, H, W)
 
-        # Prepare context pose data
-        if self.scheduler.viewmats is not None:
-            original_viewmats = self.scheduler.viewmats
-            self.scheduler.viewmats = original_viewmats[:, context_start_frame:context_end_frame]
-        if self.scheduler.Ks is not None:
-            original_Ks = self.scheduler.Ks
-            self.scheduler.Ks = original_Ks[:, context_start_frame:context_end_frame]
-        if self.scheduler.action is not None:
-            original_action = self.scheduler.action
-            self.scheduler.action = original_action[:, context_start_frame:context_end_frame]
+        # Cache context KV
+        self.model.infer_vision(self.inputs, cache_vision=True)
 
-        # Create context inputs
-        context_inputs = copy.copy(self.inputs)
-
-        # Restore original scheduler state
-        self.scheduler.latents = original_latents
-        if self.scheduler.viewmats is not None:
-            self.scheduler.viewmats = original_viewmats
-        if self.scheduler.Ks is not None:
-            self.scheduler.Ks = original_Ks
-        if self.scheduler.action is not None:
-            self.scheduler.action = original_action
-
-        return context_inputs
+        # Restore scheduler state for the current chunk
+        self.scheduler.latents = saved_latents
+        self.scheduler.viewmats = saved_viewmats
+        self.scheduler.Ks = saved_Ks
+        self.scheduler.action = saved_action
+        self.scheduler.cos_sin = saved_cos_sin
+        self.scheduler.cond_latents_concat = saved_cond
+        self.scheduler.mask_concat = saved_mask
 
     def _denoise_chunk(self, chunk_idx, chunk_latents):
         """

@@ -231,6 +231,20 @@ def pose_string_to_json(pose_string):
     return pose_json
 
 
+def get_latent_num_from_pose(pose_data):
+    """Get the number of latent frames from pose data without full tensor conversion."""
+    if isinstance(pose_data, str):
+        if pose_data.endswith(".json"):
+            pose_json = json.load(open(pose_data, "r"))
+        else:
+            pose_json = pose_string_to_json(pose_data)
+    elif isinstance(pose_data, dict):
+        pose_json = pose_data
+    else:
+        raise ValueError(f"Invalid pose_data type: {type(pose_data)}")
+    return len(pose_json)
+
+
 def pose_to_input(pose_data, latent_num, tps=False):
     """
     Convert pose data to input tensors.

@@ -189,6 +189,17 @@ class WorldPlayARScheduler(HunyuanVideo15Scheduler):
         """Get sigmas for a specific chunk in AR generation."""
         return self.sigmas
 
+    def prepare_cos_sin(self, rope_sizes):
+        """Store full cos_sin for AR without seq_parallel splitting.
+
+        Per-chunk splitting happens at inference time in ar_model.py.
+        """
+        original_seq_p_group = self.seq_p_group
+        self.seq_p_group = None
+        cos_sin = super().prepare_cos_sin(rope_sizes)
+        self.seq_p_group = original_seq_p_group
+        return cos_sin
+
     def clear(self):
         """Cleanup scheduler state."""
         super().clear()

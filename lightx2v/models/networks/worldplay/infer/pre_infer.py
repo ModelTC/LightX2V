@@ -167,6 +167,7 @@ class WorldPlayPreInfer(HunyuanVideo15PreInfer):
             img=img.contiguous(),
             txt=txt.contiguous(),
             vec=vec.contiguous(),
+            cos_sin=self.scheduler.cos_sin,
             grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
         )
 
