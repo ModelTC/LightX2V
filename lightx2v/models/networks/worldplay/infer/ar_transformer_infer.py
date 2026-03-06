@@ -578,7 +578,9 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                 apply_fn_o = None
 
                 if use_prope:
-                    img_q_prope, img_k_prope, img_v_prope, apply_fn_o = self._apply_prope(img_q_pre_rope, img_k_pre_rope, img_v, self.scheduler.viewmats, self.scheduler.Ks, infer_module_out.grid_sizes)
+                    img_q_prope, img_k_prope, img_v_prope, apply_fn_o = self._apply_prope(
+                        img_q_pre_rope, img_k_pre_rope, img_v, self.scheduler.viewmats, self.scheduler.Ks, infer_module_out.grid_sizes
+                    )
                     query = torch.cat([img_q, img_q_prope], dim=0)
                     key_current = torch.cat([img_k, img_k_prope], dim=0)
                     value_current = torch.cat([img_v, img_v_prope], dim=0)
@@ -604,9 +606,13 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                     cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
                     cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
                     attn_out = block_weights.self_attention.apply(
-                        q=query, k=key_full, v=value_full,
-                        cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_kv,
-                        max_seqlen_q=img_seqlen, max_seqlen_kv=kv_seqlen,
+                        q=query,
+                        k=key_full,
+                        v=value_full,
+                        cu_seqlens_q=cu_seqlens_q,
+                        cu_seqlens_kv=cu_seqlens_kv,
+                        max_seqlen_q=img_seqlen,
+                        max_seqlen_kv=kv_seqlen,
                     )
                     total_len = attn_out.shape[0]
                     img_attn = attn_out[: total_len // 2]
@@ -641,9 +647,13 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                     cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
                     cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
                     img_attn = block_weights.self_attention.apply(
-                        q=img_q, k=key, v=value,
-                        cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_kv,
-                        max_seqlen_q=img_seqlen, max_seqlen_kv=kv_seqlen,
+                        q=img_q,
+                        k=key,
+                        v=value,
+                        cu_seqlens_q=cu_seqlens_q,
+                        cu_seqlens_kv=cu_seqlens_kv,
+                        max_seqlen_q=img_seqlen,
+                        max_seqlen_kv=kv_seqlen,
                     )
 
                 infer_module_out.img = self._infer_img_branch_after_attn(block_weights, img_attn, infer_module_out.img, img_branch_out, img_attn_prope)

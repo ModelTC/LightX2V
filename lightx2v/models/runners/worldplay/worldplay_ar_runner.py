@@ -93,6 +93,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         img_ori = self.read_image_input(self.input_info.image_path)
         if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
             from lightx2v.models.networks.worldplay.pose_utils import get_latent_num_from_pose
+
             latent_num = get_latent_num_from_pose(self.input_info.pose)
             vae_stride_t = self.config["vae_stride"][0]
             with self.config.temporarily_unlocked():
@@ -129,6 +130,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         """Run encoders with pose processing for t2v task."""
         if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
             from lightx2v.models.networks.worldplay.pose_utils import get_latent_num_from_pose
+
             latent_num = get_latent_num_from_pose(self.input_info.pose)
             vae_stride_t = self.config["vae_stride"][0]
             with self.config.temporarily_unlocked():
@@ -281,10 +283,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
             # Step 2: For non-first chunks, cache context frame KV
             if chunk_idx > 0:
                 self.model.clear_vision_cache()
-                self._cache_context_kv(chunk_idx, full_viewmats, full_Ks,
-                                       full_action, full_cos_sin,
-                                       full_cond_latents_concat, full_mask_concat,
-                                       H, W)
+                self._cache_context_kv(chunk_idx, full_viewmats, full_Ks, full_action, full_cos_sin, full_cond_latents_concat, full_mask_concat, H, W)
 
             # Step 3: Run denoising for this chunk
             chunk_latents = self.scheduler.latents[:, :, start_frame:end_frame, :, :]
@@ -313,10 +312,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         end_token = end_frame * H * W
         self.scheduler.cos_sin = full_cos_sin[start_token:end_token]
 
-    def _cache_context_kv(self, chunk_idx, full_viewmats, full_Ks,
-                          full_action, full_cos_sin,
-                          full_cond_latents_concat, full_mask_concat,
-                          H, W):
+    def _cache_context_kv(self, chunk_idx, full_viewmats, full_Ks, full_action, full_cos_sin, full_cond_latents_concat, full_mask_concat, H, W):
         """
         Set scheduler state for context frames and cache their KV.
 

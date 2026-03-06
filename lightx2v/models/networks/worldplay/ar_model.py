@@ -249,7 +249,7 @@ class WorldPlayARModel(HunyuanVideo15Model):
         pre_infer_out.img = torch.chunk(pre_infer_out.img, world_size, dim=1)[cur_rank]
 
         # Split per-token vec
-        if getattr(self.scheduler, 'vec_is_per_token', False) and pre_infer_out.vec.dim() == 3:
+        if getattr(self.scheduler, "vec_is_per_token", False) and pre_infer_out.vec.dim() == 3:
             if padding_size > 0:
                 pre_infer_out.vec = F.pad(pre_infer_out.vec, (0, 0, 0, padding_size))
             pre_infer_out.vec = torch.chunk(pre_infer_out.vec, world_size, dim=1)[cur_rank]
