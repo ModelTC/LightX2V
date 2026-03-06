@@ -150,6 +150,7 @@ class WorldPlayARPreInfer(HunyuanVideo15PreInfer):
             img=img.contiguous(),
             txt=txt.contiguous(),
             vec=vec.contiguous(),
+            cos_sin=self.scheduler.cos_sin,
             grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
         )
 
@@ -276,5 +277,6 @@ class WorldPlayARPreInfer(HunyuanVideo15PreInfer):
             img=None,  # No image for text-only inference
             txt=txt.contiguous(),
             vec=vec.contiguous(),
+            cos_sin=self.scheduler.cos_sin,
             grid_sizes=None,  # No grid sizes for text-only
         )

@@ -2,6 +2,8 @@ import glob
 import os
 
 import torch
+import torch.distributed as dist
+import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
@@ -133,11 +135,21 @@ class WorldPlayARModel(HunyuanVideo15Model):
         if not hasattr(self.transformer_infer, "_kv_cache") or self.transformer_infer._kv_cache is None:
             self.init_kv_cache()
 
+        if self.cpu_offload and self.offload_granularity != "model":
+            self.pre_weight.to_cuda()
+            self.transformer_weights.non_block_weights_to_cuda()
+
         # Run text-only pre-processing
         infer_module_out = self.pre_infer.infer_txt_only(self.pre_weight, inputs)
 
         # Cache text KV
-        return self.transformer_infer.infer_txt(self.transformer_weights, infer_module_out, cache_txt=cache_txt)
+        result = self.transformer_infer.infer_txt(self.transformer_weights, infer_module_out, cache_txt=cache_txt)
+
+        if self.cpu_offload and self.offload_granularity != "model":
+            self.pre_weight.to_cpu()
+            self.transformer_weights.non_block_weights_to_cpu()
+
+        return result
 
     @torch.no_grad()
     def infer_vision(self, inputs, cache_vision=False):
@@ -164,16 +176,38 @@ class WorldPlayARModel(HunyuanVideo15Model):
                 self.scheduler.action = pose_output["action"]
 
         # Run pre-inference (full, including image)
+        if self.cpu_offload and self.offload_granularity != "model":
+            self.pre_weight.to_cuda()
+            self.transformer_weights.non_block_weights_to_cuda()
+
         infer_module_out = self.pre_infer.infer(self.pre_weight, inputs)
+
+        if self.config["seq_parallel"]:
+            # Save chunk cos_sin before splitting — must restore after transformer
+            # to prevent double-splitting on subsequent denoising steps
+            chunk_cos_sin = self.scheduler.cos_sin
+            infer_module_out = self._seq_parallel_pre_process_ar(infer_module_out)
+            # Set split cos_sin for RoPE inside transformer
+            self.scheduler.cos_sin = infer_module_out.cos_sin
 
         # Vision inference with KV cache
         output = self.transformer_infer.infer_vision(self.transformer_weights, infer_module_out, cache_vision=cache_vision)
 
+        if self.cpu_offload and self.offload_granularity != "model":
+            self.pre_weight.to_cpu()
+            self.transformer_weights.non_block_weights_to_cpu()
+
+        if self.config["seq_parallel"]:
+            # Restore full chunk cos_sin so next denoising step starts from unsplit data
+            self.scheduler.cos_sin = chunk_cos_sin
+
         if cache_vision:
             return output  # Return KV cache
         else:
+            if self.config["seq_parallel"]:
+                output = self._seq_parallel_post_process(output)
             # Run post-inference
-            return self.post_infer.infer(self.post_weight, output)
+            return self.post_infer.infer(output, infer_module_out)
 
     @torch.no_grad()
     def infer(self, inputs):
@@ -198,6 +232,37 @@ class WorldPlayARModel(HunyuanVideo15Model):
 
         # Call parent inference
         super().infer(inputs)
+
+    @torch.no_grad()
+    def _seq_parallel_pre_process_ar(self, pre_infer_out):
+        """AR-specific seq_parallel pre-processing.
+
+        Extends base to also split per-token vec and cos_sin.
+        """
+        seqlen = pre_infer_out.img.shape[1]
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+
+        if padding_size > 0:
+            pre_infer_out.img = F.pad(pre_infer_out.img, (0, 0, 0, padding_size))
+        pre_infer_out.img = torch.chunk(pre_infer_out.img, world_size, dim=1)[cur_rank]
+
+        # Split per-token vec
+        if getattr(self.scheduler, "vec_is_per_token", False) and pre_infer_out.vec.dim() == 3:
+            if padding_size > 0:
+                pre_infer_out.vec = F.pad(pre_infer_out.vec, (0, 0, 0, padding_size))
+            pre_infer_out.vec = torch.chunk(pre_infer_out.vec, world_size, dim=1)[cur_rank]
+
+        # Split cos_sin
+        if pre_infer_out.cos_sin is not None:
+            cs_len = pre_infer_out.cos_sin.shape[0]
+            cs_pad = (world_size - (cs_len % world_size)) % world_size
+            if cs_pad > 0:
+                pre_infer_out.cos_sin = F.pad(pre_infer_out.cos_sin, (0, 0, 0, cs_pad))
+            pre_infer_out.cos_sin = torch.chunk(pre_infer_out.cos_sin, world_size, dim=0)[cur_rank]
+
+        return pre_infer_out
 
     @torch.no_grad()
     def infer_chunk(self, inputs, chunk_idx, total_chunks):
@@ -233,6 +298,6 @@ class WorldPlayARModel(HunyuanVideo15Model):
         x = self.transformer_infer.infer(self.transformer_weights, infer_module_out)
 
         # Run post-inference
-        output = self.post_infer.infer(self.post_weight, x)
+        output = self.post_infer.infer(x, infer_module_out)
 
         return output
