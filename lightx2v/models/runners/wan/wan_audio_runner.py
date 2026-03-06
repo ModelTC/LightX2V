@@ -15,7 +15,6 @@ from PIL import Image, ImageCms, ImageOps
 from einops import rearrange
 from loguru import logger
 
-from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioModel
@@ -27,6 +26,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
+from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")

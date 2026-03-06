@@ -87,7 +87,7 @@ class VAController:
         logger.info(f"Rank {self.rank} init recorder with: {self.output_video_path}")
         whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
         if whip_shared_path and self.output_video_path.startswith("http"):
-            from lightx2v.deploy.common.va_recorder_x264 import X264VARecorder
+            from lightx2v.utils.va_recorder_x264 import X264VARecorder
 
             self.recorder = X264VARecorder(
                 whip_shared_path=whip_shared_path,
@@ -98,7 +98,7 @@ class VAController:
                 prev_frame=self.prev_frame_length,
             )
         else:
-            from lightx2v.deploy.common.va_recorder import VARecorder
+            from lightx2v.utils.va_recorder import VARecorder
 
             self.recorder = VARecorder(
                 livestream_url=self.output_video_path,
@@ -117,7 +117,7 @@ class VAController:
         prev_duration = self.prev_frame_length / self.target_fps
         omni_work_dir = os.getenv("OMNI_WORK_DIR", None)
         if omni_work_dir:
-            from lightx2v.deploy.common.va_reader_omni import OmniVAReader
+            from lightx2v.utils.va_reader_omni import OmniVAReader
 
             self.reader = OmniVAReader(
                 rank=self.rank,
@@ -133,7 +133,7 @@ class VAController:
                 va_recorder=self.recorder,
             )
         else:
-            from lightx2v.deploy.common.va_reader import VAReader
+            from lightx2v.utils.va_reader import VAReader
 
             self.reader = VAReader(
                 rank=self.rank,
@@ -154,7 +154,7 @@ class VAController:
             dist.barrier()
 
     def next_control(self):
-        from lightx2v.deploy.common.va_reader_omni import OmniVAReader
+        from lightx2v.utils.va_reader_omni import OmniVAReader
 
         if isinstance(self.reader, OmniVAReader):
             action_control = self.omni_reader_action_control()
@@ -167,7 +167,7 @@ class VAController:
         return NextControl(action="fetch")
 
     def before_control(self):
-        from lightx2v.deploy.common.va_reader_omni import OmniVAReader
+        from lightx2v.utils.va_reader_omni import OmniVAReader
 
         if isinstance(self.reader, OmniVAReader):
             self.len_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)

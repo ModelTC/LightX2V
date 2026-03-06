@@ -6,12 +6,12 @@ import numpy as np
 import torch
 from loguru import logger
 
-from lightx2v.deploy.common.va_controller import VAController
 from lightx2v.infer import init_runner  # noqa
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
+from lightx2v.utils.va_controller import VAController
 
 
 class ParallelModelRunner:
