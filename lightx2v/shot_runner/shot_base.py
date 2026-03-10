@@ -66,6 +66,8 @@ class ShotPipeline:
         self.clip_generators = {}
         self.clip_inputs = {}
         self.progress_callback = None
+        self.clip_name = clip_configs[0].name
+        self.va_controller = None
 
         for clip_config in clip_configs:
             name = clip_config.name
@@ -132,3 +134,15 @@ class ShotPipeline:
     def run_pipeline(self, input_info):
         self.update_input_info(input_info)
         return self.generate()
+
+    @property
+    def config(self):
+        return self.clip_generators[self.clip_name].config
+
+    @property
+    def stop_signal(self):
+        return self.clip_generators[self.clip_name].stop_signal
+
+    @stop_signal.setter
+    def stop_signal(self, value):
+        self.clip_generators[self.clip_name].stop_signal = value
