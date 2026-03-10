@@ -1,5 +1,4 @@
 import argparse
-import os
 
 import numpy as np
 import torch
@@ -7,10 +6,11 @@ import torchaudio as ta
 from loguru import logger
 
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
-from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
+from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader
 from lightx2v.utils.input_info import init_input_info_from_args
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image
+from lightx2v.utils.utils import seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
+from lightx2v.utils.va_controller import VAController
 
 
 def get_reference_state_sequence(frames_per_clip=17, target_fps=16):
@@ -62,6 +62,12 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
         ref_state_sq = get_reference_state_sequence(target_video_length - 3, target_fps)
 
+        # run input encoder only once, get the target shape, init video recorder
+        rs2v.input_info = clip_input_info
+        rs2v.inputs = rs2v.run_input_encoder()
+        self.va_controller = VAController(rs2v)
+        logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
+
         idx = 0
         while True:
             audio_clip, pad_len = audio_reader.next_frame()
@@ -72,6 +78,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             is_last = True if pad_len > 0 else False
 
             pipe = rs2v
+            pipe.check_stop()
 
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
@@ -82,32 +89,41 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             if self.progress_callback:
                 self.progress_callback(idx, total_clips)
 
-            gen_clip_video, audio_clip, gen_latents = pipe.run_clip_pipeline(clip_input_info)
+            gen_clip_video, audio_clip, gen_latents = pipe.run_clip_main()
             logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
 
             video_pad_len = pad_len // audio_per_frame
-            gen_video_list.append(gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len].clone())
-            cut_audio_list.append(audio_clip[: audio_clip.shape[0] - pad_len])
+            audio_pad_len = video_pad_len * audio_per_frame
+            video_seg = gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len]
+            audio_seg = audio_clip[: audio_clip.shape[0] - audio_pad_len]
+
             clip_input_info.overlap_latent = gen_latents[:, -1:]
+
+            if clip_input_info.return_result_tensor:
+                gen_video_list.append(video_seg.clone())
+                cut_audio_list.append(audio_seg)
+            elif self.va_controller.recorder is not None:
+                video_seg = torch.clamp(video_seg, -1, 1).to(torch.float).cpu()
+                video_seg = vae_to_comfyui_image_inplace(video_seg)
+                self.va_controller.pub_livestream(video_seg, audio_seg, None)
+
+        if not clip_input_info.return_result_tensor:
+            return None, None, None
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()
         gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
         merge_audio = np.concatenate(cut_audio_list, axis=0).astype(np.float32)
 
-        if is_main_process() and clip_input_info.save_result_path:
-            out_path = os.path.join("./", "video_merge.mp4")
-            audio_file = os.path.join("./", "audio_merge.wav")
-
-            save_to_video(gen_lvideo, out_path, 16)
-            save_audio(merge_audio, audio_file, out_path, output_path=clip_input_info.save_result_path)
-            os.remove(out_path)
-            os.remove(audio_file)
-
         return gen_lvideo, merge_audio, audio_sr
 
     def run_pipeline(self, input_info):
         # input_info = self.update_input_info(input_info)
-        gen_lvideo, merge_audio, audio_sr = self.generate(input_info)
+        try:
+            gen_lvideo, merge_audio, audio_sr = self.generate(input_info)
+        finally:
+            if self.va_controller is not None:
+                self.va_controller.clear()
+                self.va_controller = None
         if isinstance(input_info, dict):
             return_result_tensor = input_info.get("return_result_tensor", False)
         else:

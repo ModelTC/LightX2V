@@ -68,7 +68,7 @@ class VAController:
         # how many frames to publish stream as a batch
         self.slice_frame = config.get("slice_frame", self.prev_frame_length)
         # estimate the max infer seconds, for immediate switch with local omni
-        slice_interval = self.slice_frame / self.record_fps
+        slice_interval = max(1, self.slice_frame / self.record_fps)
 
         est_max_infer_secs = config.get("est_max_infer_secs", 0.6)
         est_max_switch_image_secs = config.get("est_max_switch_image_secs", 0)
