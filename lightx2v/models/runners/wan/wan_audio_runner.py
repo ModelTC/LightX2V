@@ -461,6 +461,46 @@ class WanAudioRunner(WanRunner):  # type:ignore
             "person_mask_latens": person_mask_latens,
         }
 
+    @ProfilingContext4DebugL2("Run Encoders Static (RS2V)")
+    def _run_input_encoder_local_rs2v_static(self):
+        img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        if self.config.get("f2v_process", False):
+            self.ref_img = img
+        self.input_info.latent_shape = latent_shape
+        self.input_info.target_shape = target_shape
+        clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
+        vae_encode_out = self.run_vae_encoder(img)
+        text_encoder_output = self.run_text_encoder(self.input_info)
+
+        self.inputs_static = {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": {
+                "clip_encoder_out": clip_encoder_out,
+                "vae_encoder_out": vae_encode_out,
+            },
+        }
+        return self.inputs_static
+
+    @ProfilingContext4DebugL2("Run Encoders Dynamic (RS2V)")
+    def _run_input_encoder_local_rs2v_dynamic(self):
+        if not hasattr(self, "inputs_static") or self.inputs_static is None:
+            self._run_input_encoder_local_rs2v_static()
+
+        inputs = self.inputs_static.copy()
+
+        person_mask_latens = getattr(self.input_info, "person_mask_latens", None)
+        self.input_info.with_mask = person_mask_latens is not None
+
+        inputs.update(
+            {
+                "person_mask_latens": person_mask_latens,
+            }
+        )
+
+        torch.cuda.empty_cache()
+        gc.collect()
+        return inputs
+
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
@@ -833,8 +873,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         # 处理音频输入
         audio_clip = self.input_info.audio_clip
-        audio_features = self.audio_encoder.infer(audio_clip)
-        audio_features = self.audio_adapter.forward_audio_proj(audio_features, self.model.scheduler.latents.shape[1])
+        features_list = []
+        for i in range(audio_clip.shape[0]):
+            feat = self.audio_encoder.infer(audio_clip[i])
+            feat = self.audio_adapter.forward_audio_proj(feat, self.model.scheduler.latents.shape[1])
+            features_list.append(feat.squeeze(0))
+        audio_features = torch.stack(features_list, dim=0)
+
         self.inputs["audio_encoder_output"] = audio_features
         # 处理前一帧图像或latent输入
         if self.task in ["rs2v"]:
