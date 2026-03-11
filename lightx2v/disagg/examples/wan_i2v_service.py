@@ -107,9 +107,9 @@ def main():
     decoder_thread = threading.Thread(target=run_decoder)
 
     logger.info("Starting services in separate threads...")
-    decoder_thread.start()
     encoder_thread.start()
     transformer_thread.start()
+    decoder_thread.start()
 
     # 5. Wait for completion
     encoder_thread.join()
