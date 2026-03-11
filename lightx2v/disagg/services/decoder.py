@@ -163,4 +163,3 @@ class DecoderService(BaseService):
                     self.data_mgr.engine.deregister(buf.data_ptr())
             self._rdma_buffers = []
         torch.cuda.empty_cache()
-

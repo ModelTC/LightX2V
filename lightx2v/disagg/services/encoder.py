@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -158,9 +158,7 @@ class EncoderService(BaseService):
             )
             ptr = buf.data_ptr()
             self._rdma_buffers.append(buf)
-            buffers.append(
-                RemoteBuffer(addr=ptr, nbytes=nbytes)
-            )
+            buffers.append(RemoteBuffer(addr=ptr, nbytes=nbytes))
 
         return MemoryHandle(buffers=buffers)
 
@@ -169,7 +167,7 @@ class EncoderService(BaseService):
         Generates encoder outputs from prompt and image input.
         """
         self.logger.info("Starting processing in EncoderService...")
-        
+
         prompt = self.config.get("prompt")
         negative_prompt = self.config.get("negative_prompt")
         if prompt is None:
@@ -177,7 +175,7 @@ class EncoderService(BaseService):
 
         # 1. Text Encoding
         text_len = self.config.get("text_len", 512)
-        
+
         context = self.text_encoder.infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])
 
@@ -193,7 +191,7 @@ class EncoderService(BaseService):
             "context": context,
             "context_null": context_null,
         }
-        
+
         task = self.config.get("task")
         clip_encoder_out = None
 
@@ -235,6 +233,7 @@ class EncoderService(BaseService):
         self.logger.info("Encode processing completed. Preparing to send data...")
 
         if self.data_mgr is not None and self.data_sender is not None:
+
             def _buffer_view(buf: torch.Tensor, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
                 view = torch.empty(0, dtype=dtype, device=buf.device)
                 view.set_(buf.untyped_storage(), 0, shape)
@@ -273,7 +272,11 @@ class EncoderService(BaseService):
 
                 vae_buf = self._rdma_buffers[buffer_index]
                 vae_buf.zero_()
-                vae_view = _buffer_view(vae_buf, GET_DTYPE(), tuple(image_encoder_output["vae_encoder_out"].shape),)
+                vae_view = _buffer_view(
+                    vae_buf,
+                    GET_DTYPE(),
+                    tuple(image_encoder_output["vae_encoder_out"].shape),
+                )
                 vae_view.copy_(image_encoder_output["vae_encoder_out"])
                 buffer_index += 1
 
@@ -316,6 +319,7 @@ class EncoderService(BaseService):
             self.data_sender.send(buffer_ptrs)
 
             import time
+
             while True:
                 status = self.data_sender.poll()
                 if status == DataPoll.Success:

@@ -147,9 +147,10 @@ class TransformerService(BaseService):
                 data_tensor = data_tensor.to(torch.float32)
             data = data_tensor.contiguous().cpu().numpy().tobytes()
             return hashlib.sha256(data).hexdigest()
-        
+
         # Poll for data from EncoderService
         import time
+
         if self.data_receiver is not None:
             while True:
                 status = self.data_receiver.poll()
@@ -271,7 +272,7 @@ class TransformerService(BaseService):
                 latent_tensor = torch.tensor(latent_shape, device=AI_DEVICE, dtype=torch.int64)
                 if _sha256_tensor(latent_tensor) != meta.get("latent_hash"):
                     raise ValueError("latent_shape hash mismatch between encoder and transformer")
-        
+
         inputs = {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output,
@@ -281,14 +282,14 @@ class TransformerService(BaseService):
         seed = self.config.get("seed")
         if seed is None:
             raise ValueError("seed is required in config.")
-        
+
         if latent_shape is None:
             raise ValueError("latent_shape is required in inputs.")
-        
+
         # Scheduler Preparation
         self.logger.info(f"Preparing scheduler with seed {seed}...")
         self.scheduler.prepare(seed=seed, latent_shape=latent_shape, image_encoder_output=image_encoder_output)
-        
+
         # Denoising Loop
         self.logger.info("Starting denoising loop...")
         infer_steps = self.scheduler.infer_steps
@@ -299,9 +300,9 @@ class TransformerService(BaseService):
             self.scheduler.step_pre(step_index=step_index)
             self.transformer.infer(inputs)
             self.scheduler.step_post()
-            
+
         latents = self.scheduler.latents
-        
+
         # Send latents to DecoderService
         if not self.rdma_buffer2:
             raise RuntimeError("phase2 RDMA buffers are not initialized.")
@@ -312,9 +313,7 @@ class TransformerService(BaseService):
         latents_nbytes = latents_to_send.numel() * latents_to_send.element_size()
         latents_buf = self.rdma_buffer2[0]
         if latents_nbytes > latents_buf.numel():
-            raise ValueError(
-                f"latents buffer too small: need={latents_nbytes}, capacity={latents_buf.numel()}"
-            )
+            raise ValueError(f"latents buffer too small: need={latents_nbytes}, capacity={latents_buf.numel()}")
 
         latents_buf.zero_()
         latents_view = _buffer_view(latents_buf, latents_to_send.dtype, tuple(latents_to_send.shape))
@@ -347,7 +346,6 @@ class TransformerService(BaseService):
                 self.logger.info("Latents sent successfully to DecoderService.")
                 break
             time.sleep(0.01)
-        
 
     def release_memory(self):
         """
@@ -364,5 +362,5 @@ class TransformerService(BaseService):
                 if self.data_mgr2 is not None:
                     self.data_mgr2.engine.deregister(buf.data_ptr())
             self.rdma_buffer2 = []
-        
+
         torch.cuda.empty_cache()
