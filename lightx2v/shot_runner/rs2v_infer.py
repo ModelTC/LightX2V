@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 
 import numpy as np
 import torch
@@ -43,17 +45,63 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         gen_video_list = []
         cut_audio_list = []
         video_duration = clip_input_info.video_duration
-        audio_array, ori_sr = ta.load(clip_input_info.audio_path)
-        audio_array = audio_array.mean(0)
-        if ori_sr != audio_sr:
-            audio_array = ta.functional.resample(audio_array, ori_sr, audio_sr)
+
+        def get_audio_files_from_audio_path(audio_path):
+            if os.path.isdir(audio_path):
+                audio_files = []
+                mask_files = []
+                audio_config_path = os.path.join(audio_path, "config.json")
+                assert os.path.exists(audio_config_path), "config.json not found in audio_path"
+                with open(audio_config_path, "r") as f:
+                    audio_config = json.load(f)
+                for talk_object in audio_config["talk_objects"]:
+                    audio_files.append(os.path.join(audio_path, talk_object["audio"]))
+                    mask_files.append(os.path.join(audio_path, talk_object["mask"]))
+            else:
+                audio_files = [audio_path]
+                mask_files = None
+            return audio_files, mask_files
+
+        def load_audio(audio_path, target_sr):
+            arr, ori_sr = ta.load(audio_path)
+            arr = arr.mean(0)
+            if ori_sr != target_sr:
+                arr = ta.functional.resample(arr, ori_sr, target_sr)
+            return arr
+
+        audio_files, mask_files = get_audio_files_from_audio_path(clip_input_info.audio_path)
+        clip_input_info.audio_num = len(audio_files)
+
+        if len(audio_files) == 1:
+            audio_array = load_audio(audio_files[0], audio_sr)
+            audio_array = audio_array.unsqueeze(0)
+        else:
+            audio_arrays = []
+            max_len = 0
+            for a_file in audio_files:
+                arr = load_audio(a_file, audio_sr)
+                audio_arrays.append(arr)
+                max_len = max(max_len, arr.numel())
+            num_files = len(audio_arrays)
+            audio_array = torch.zeros(num_files, max_len, dtype=torch.float32)
+            for i, arr in enumerate(audio_arrays):
+                length = arr.numel()
+                audio_array[i, :length] = arr
+
         if video_duration is not None and video_duration > 0:
             max_samples = int(video_duration * audio_sr)
-            if audio_array.numel() > max_samples:
-                audio_array = audio_array[:max_samples]
+            if audio_array.shape[1] > max_samples:
+                audio_array = audio_array[:, :max_samples]
+
+        if mask_files is not None:
+            mask_latents = [rs2v.process_single_mask(mask_file) for mask_file in mask_files]
+            person_mask_latens = torch.cat(mask_latents, dim=0)
+        else:
+            person_mask_latens = None
+
         audio_reader = RS2V_SlidingWindowReader(audio_array, first_clip_len=target_video_length, clip_len=target_video_length + 3, sr=audio_sr, fps=target_fps)
 
-        total_frames = int(np.ceil(audio_array.numel() / audio_per_frame))
+        total_frames = int(np.ceil(audio_array.shape[1] / audio_per_frame))
         if total_frames <= target_video_length:
             total_clips = 1
         else:
@@ -62,9 +110,10 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
         ref_state_sq = get_reference_state_sequence(target_video_length - 3, target_fps)
 
-        # run input encoder only once, get the target shape, init video recorder
+        # 预先运行输入编码的静态部分 (处理ref image的vae编码和文本编码)
         rs2v.input_info = clip_input_info
-        rs2v.inputs = rs2v.run_input_encoder()
+        rs2v.inputs_static = rs2v._run_input_encoder_local_rs2v_static()
+
         self.va_controller = VAController(rs2v)
         logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
@@ -89,14 +138,20 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             if self.progress_callback:
                 self.progress_callback(idx, total_clips)
 
-            gen_clip_video, audio_clip, gen_latents = pipe.run_clip_main()
+            rs2v.input_info = clip_input_info
+            clip_input_info.person_mask_latens = person_mask_latens
+
+            # 使用动态输入获取当前 clip 控制参数
+            rs2v.inputs = rs2v._run_input_encoder_local_rs2v_dynamic()
+
+            gen_clip_video, audio_clip, gen_latents = rs2v.run_clip_main()
             logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
 
             video_pad_len = pad_len // audio_per_frame
             audio_pad_len = video_pad_len * audio_per_frame
             video_seg = gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len]
-            audio_seg = audio_clip[: audio_clip.shape[0] - audio_pad_len]
-
+            # Since audio_clip is now multidimensional (N, T), slice on dim 1 and sum on dim 0 to merge tracks
+            audio_seg = audio_clip[:, : audio_clip.shape[1] - audio_pad_len].sum(dim=0)
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
             if clip_input_info.return_result_tensor:
@@ -112,7 +167,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()
         gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
-        merge_audio = np.concatenate(cut_audio_list, axis=0).astype(np.float32)
+        merge_audio = torch.cat(cut_audio_list, dim=0).numpy().astype(np.float32)
 
         return gen_lvideo, merge_audio, audio_sr
 

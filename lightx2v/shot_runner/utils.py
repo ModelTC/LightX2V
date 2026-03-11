@@ -47,7 +47,9 @@ class RS2V_SlidingWindowReader:
         fps: int = 16,
     ):
         assert isinstance(samples, torch.Tensor)
-        assert samples.dim() == 1, "samples 必须是 1D Tensor"
+        assert samples.dim() in [1, 2], "samples 必须是 1D 或 2D Tensor"
+        if samples.dim() == 1:
+            samples = samples.unsqueeze(0)
 
         self.samples = samples
         self.first_clip_len = first_clip_len
@@ -61,16 +63,16 @@ class RS2V_SlidingWindowReader:
         cur_clip_len = self.first_clip_len if self.chunk_idx == 0 else self.clip_len
 
         start_sample = self.pos_frame * self.audio_per_frame
-        if start_sample >= self.samples.numel():
+        if start_sample >= self.samples.shape[1]:
             return None, 0
 
         end_sample = start_sample + cur_clip_len * self.audio_per_frame
-        real_end = min(end_sample, self.samples.numel())
+        real_end = min(end_sample, self.samples.shape[1])
 
-        frame = self.samples[start_sample:real_end].float()
+        frame = self.samples[:, start_sample:real_end].float()
 
         expected_samples = cur_clip_len * self.audio_per_frame
-        real_samples = frame.numel()
+        real_samples = frame.shape[1]
         pad_len = expected_samples - real_samples
 
         if pad_len > 0:
