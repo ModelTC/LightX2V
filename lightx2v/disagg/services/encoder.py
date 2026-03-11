@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
-from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode
+from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import (
     estimate_encoder_buffer_sizes,
@@ -25,8 +26,9 @@ class EncoderService(BaseService):
         self.text_encoder = None
         self.image_encoder = None
         self.vae_encoder = None
-        self.sender_engine_rank = int(self.config.get("sender_engine_rank", 0))
-        self.receiver_engine_rank = int(self.config.get("receiver_engine_rank", 1))
+        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
+        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
+        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
         self.data_mgr = None
         self.data_sender = None
         self._rdma_buffers: List[torch.Tensor] = []
@@ -41,18 +43,31 @@ class EncoderService(BaseService):
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
 
-        if data_bootstrap_addr is not None and data_bootstrap_room is not None:
-            data_ptrs, data_lens = self.alloc_bufs()
-            data_args = DataArgs(
-                sender_engine_rank=self.sender_engine_rank,
-                receiver_engine_rank=self.receiver_engine_rank,
-                data_ptrs=data_ptrs,
-                data_lens=data_lens,
-                data_item_lens=data_lens,
-                ib_device=None,
-            )
-            self.data_mgr = DataManager(data_args, DisaggregationMode.ENCODE)
-            self.data_sender = DataSender(self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room))
+        if data_bootstrap_addr is None or data_bootstrap_room is None:
+            return
+
+        buffer_sizes = estimate_encoder_buffer_sizes(self.config)
+        request = AllocationRequest(
+            bootstrap_room=str(data_bootstrap_room),
+            buffer_sizes=buffer_sizes,
+        )
+        handle = self.alloc_memory(request)
+        data_ptrs = [buf.addr for buf in handle.buffers]
+        data_lens = [buf.nbytes for buf in handle.buffers]
+        data_args = DataArgs(
+            sender_engine_rank=self.encoder_engine_rank,
+            receiver_engine_rank=self.transformer_engine_rank,
+            data_ptrs=data_ptrs,
+            data_lens=data_lens,
+            data_item_lens=data_lens,
+            ib_device=None,
+        )
+        self.data_mgr = DataManager(
+            data_args,
+            DisaggregationPhase.PHASE1,
+            DisaggregationMode.ENCODE,
+        )
+        self.data_sender = DataSender(self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room))
 
     def load_models(self):
         self.logger.info("Loading Encoder Models...")
@@ -121,12 +136,17 @@ class EncoderService(BaseService):
         vae_encoder_out = torch.concat([msk, vae_encoder_out]).to(GET_DTYPE())
         return vae_encoder_out
 
-    def alloc_bufs(self):
-        # torch.cuda.set_device(self.sender_engine_rank)
-        buffer_sizes = estimate_encoder_buffer_sizes(self.config)
+    def alloc_memory(self, request: AllocationRequest) -> MemoryHandle:
+        """
+        Args:
+            request: AllocationRequest containing precomputed buffer sizes.
+
+        Returns:
+            MemoryHandle with RDMA-registered buffer addresses.
+        """
+        buffer_sizes = request.buffer_sizes
         self._rdma_buffers = []
-        data_ptrs: List[int] = []
-        data_lens: List[int] = []
+        buffers: List[RemoteBuffer] = []
 
         for nbytes in buffer_sizes:
             if nbytes <= 0:
@@ -136,18 +156,20 @@ class EncoderService(BaseService):
                 dtype=torch.uint8,
                 # device=torch.device(f"cuda:{self.sender_engine_rank}"),
             )
+            ptr = buf.data_ptr()
             self._rdma_buffers.append(buf)
-            data_ptrs.append(buf.data_ptr())
-            data_lens.append(nbytes)
+            buffers.append(
+                RemoteBuffer(addr=ptr, nbytes=nbytes)
+            )
 
-        return data_ptrs, data_lens
+        return MemoryHandle(buffers=buffers)
 
-    def process(self) -> Dict[str, Any]:
+    def process(self):
         """
         Generates encoder outputs from prompt and image input.
         """
         self.logger.info("Starting processing in EncoderService...")
-
+        
         prompt = self.config.get("prompt")
         negative_prompt = self.config.get("negative_prompt")
         if prompt is None:
@@ -155,7 +177,7 @@ class EncoderService(BaseService):
 
         # 1. Text Encoding
         text_len = self.config.get("text_len", 512)
-
+        
         context = self.text_encoder.infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])
 
@@ -171,7 +193,7 @@ class EncoderService(BaseService):
             "context": context,
             "context_null": context_null,
         }
-
+        
         task = self.config.get("task")
         clip_encoder_out = None
 
@@ -213,7 +235,6 @@ class EncoderService(BaseService):
         self.logger.info("Encode processing completed. Preparing to send data...")
 
         if self.data_mgr is not None and self.data_sender is not None:
-
             def _buffer_view(buf: torch.Tensor, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
                 view = torch.empty(0, dtype=dtype, device=buf.device)
                 view.set_(buf.untyped_storage(), 0, shape)
@@ -228,51 +249,32 @@ class EncoderService(BaseService):
                 data = data_tensor.contiguous().cpu().numpy().tobytes()
                 return hashlib.sha256(data).hexdigest()
 
-            text_len = int(self.config.get("text_len", 512))
-            text_dim = int(self.config.get("text_encoder_dim", 4096))
-            clip_dim = int(self.config.get("clip_embed_dim", 1024))
-            z_dim = int(self.config.get("vae_z_dim", 16))
-
-            vae_stride = self.config.get("vae_stride", (4, 8, 8))
-            stride_t = int(vae_stride[0])
-            stride_h = int(vae_stride[1])
-            stride_w = int(vae_stride[2])
-
-            target_video_length = int(self.config.get("target_video_length", 81))
-            target_height = int(self.config.get("target_height", 480))
-            target_width = int(self.config.get("target_width", 832))
-
-            t_prime = 1 + (target_video_length - 1) // stride_t
-            h_prime = int(np.ceil(target_height / stride_h))
-            w_prime = int(np.ceil(target_width / stride_w))
-
             buffer_index = 0
-            context_buf = _buffer_view(self._rdma_buffers[buffer_index], GET_DTYPE(), (1, text_len, text_dim))
-            context_buf.copy_(context)
+            context_buf = self._rdma_buffers[buffer_index]
+            context_buf.zero_()
+            context_view = _buffer_view(context_buf, GET_DTYPE(), tuple(context.shape))
+            context_view.copy_(context)
             buffer_index += 1
             if self.config.get("enable_cfg", False):
-                context_null_buf = _buffer_view(self._rdma_buffers[buffer_index], GET_DTYPE(), (1, text_len, text_dim))
-                context_null_buf.copy_(context_null)
+                context_null_buf = self._rdma_buffers[buffer_index]
+                context_null_buf.zero_()
+                context_null_view = _buffer_view(context_null_buf, GET_DTYPE(), tuple(context_null.shape))
+                context_null_view.copy_(context_null)
                 buffer_index += 1
 
             if task == "i2v":
                 if self.config.get("use_image_encoder", True):
-                    clip_buf = _buffer_view(self._rdma_buffers[buffer_index], GET_DTYPE(), (clip_dim,))
+                    clip_buf = self._rdma_buffers[buffer_index]
+                    clip_buf.zero_()
                     if image_encoder_output.get("clip_encoder_out") is not None:
-                        clip_buf.copy_(image_encoder_output["clip_encoder_out"])
-                    else:
-                        clip_buf.zero_()
+                        clip_view = _buffer_view(clip_buf, GET_DTYPE(), tuple(image_encoder_output["clip_encoder_out"].shape))
+                        clip_view.copy_(image_encoder_output["clip_encoder_out"])
                     buffer_index += 1
 
-                vae_buf = _buffer_view(
-                    self._rdma_buffers[buffer_index],
-                    GET_DTYPE(),
-                    (z_dim + 4, t_prime, h_prime, w_prime),
-                )
+                vae_buf = self._rdma_buffers[buffer_index]
                 vae_buf.zero_()
-                vae_flat = vae_buf.view(-1)
-                src_flat = image_encoder_output["vae_encoder_out"].reshape(-1)
-                vae_flat[: src_flat.numel()].copy_(src_flat)
+                vae_view = _buffer_view(vae_buf, GET_DTYPE(), tuple(image_encoder_output["vae_encoder_out"].shape),)
+                vae_view.copy_(image_encoder_output["vae_encoder_out"])
                 buffer_index += 1
 
             latent_tensor = torch.tensor(latent_shape, device=AI_DEVICE, dtype=torch.int64)
@@ -283,16 +285,25 @@ class EncoderService(BaseService):
             meta = {
                 "version": 1,
                 "context_shape": list(context.shape),
+                "context_dtype": str(context.dtype),
                 "context_hash": _sha256_tensor(context),
                 "context_null_shape": list(context_null.shape) if context_null is not None else None,
+                "context_null_dtype": str(context_null.dtype) if context_null is not None else None,
                 "context_null_hash": _sha256_tensor(context_null),
                 "clip_shape": list(clip_encoder_out.shape) if clip_encoder_out is not None else None,
+                "clip_dtype": str(clip_encoder_out.dtype) if clip_encoder_out is not None else None,
                 "clip_hash": _sha256_tensor(clip_encoder_out),
                 "vae_shape": list(image_encoder_output["vae_encoder_out"].shape) if image_encoder_output is not None else None,
+                "vae_dtype": str(image_encoder_output["vae_encoder_out"].dtype) if image_encoder_output is not None else None,
                 "vae_hash": _sha256_tensor(image_encoder_output["vae_encoder_out"]) if image_encoder_output is not None else None,
                 "latent_shape": list(latent_shape),
+                "latent_dtype": str(latent_tensor.dtype),
                 "latent_hash": _sha256_tensor(latent_tensor),
             }
+            meta_shapes = {k: v for k, v in meta.items() if k.endswith("_shape")}
+            meta_dtypes = {k: v for k, v in meta.items() if k.endswith("_dtype")}
+            self.logger.info("Encoder meta shapes: %s", meta_shapes)
+            self.logger.info("Encoder meta dtypes: %s", meta_dtypes)
             meta_bytes = json.dumps(meta, ensure_ascii=True).encode("utf-8")
             meta_buf = _buffer_view(self._rdma_buffers[buffer_index], torch.uint8, (self._rdma_buffers[buffer_index].numel(),))
             if meta_bytes and len(meta_bytes) > meta_buf.numel():
@@ -305,7 +316,6 @@ class EncoderService(BaseService):
             self.data_sender.send(buffer_ptrs)
 
             import time
-
             while True:
                 status = self.data_sender.poll()
                 if status == DataPoll.Success:
