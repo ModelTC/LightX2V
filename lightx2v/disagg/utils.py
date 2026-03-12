@@ -10,7 +10,7 @@ from PIL import Image
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
@@ -162,7 +162,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = wan_module(**model_kwargs)
-        lora_wrapper = WanLoraWrapper(model)
+        lora_wrapper = LoraAdapter(model)
         if model_type in ["high_noise_model", "low_noise_model"]:
             lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
         lora_wrapper.apply_lora(lora_configs, model_type=model_type)
