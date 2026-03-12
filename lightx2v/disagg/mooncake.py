@@ -67,14 +67,12 @@ class MooncakeTransferEngine:
         if self.engine:
             ret = self.engine.register_memory(ptr, length)
             if ret != 0:
-                logger.error("Mooncake memory registration failed.")
                 raise RuntimeError("Mooncake memory registration failed.")
 
     def deregister(self, ptr):
         if self.engine:
             ret = self.engine.unregister_memory(ptr)
             if ret != 0:
-                logger.error("Mooncake memory deregistration failed.")
                 raise RuntimeError("Mooncake memory deregistration failed.")
 
     def initialize(

@@ -10,7 +10,7 @@ from PIL import Image
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
-from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
@@ -162,7 +162,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = wan_module(**model_kwargs)
-        lora_wrapper = WanLoraWrapper(model)
+        lora_wrapper = LoraAdapter(model)
         if model_type in ["high_noise_model", "low_noise_model"]:
             lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
         lora_wrapper.apply_lora(lora_configs, model_type=model_type)
@@ -433,3 +433,24 @@ def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     buffer_sizes.append(4096)
 
     return buffer_sizes
+
+
+def estimate_transformer_buffer_sizes(config: Dict[str, Any]) -> List[int]:
+    z_dim = int(config.get("vae_z_dim", 16))
+
+    vae_stride = config.get("vae_stride", (4, 8, 8))
+    stride_t = int(vae_stride[0])
+    stride_h = int(vae_stride[1])
+    stride_w = int(vae_stride[2])
+
+    target_video_length = int(config.get("target_video_length", 81))
+    target_height = int(config.get("target_height", 480))
+    target_width = int(config.get("target_width", 832))
+
+    t_prime = 1 + (target_video_length - 1) // stride_t
+    h_prime = int(math.ceil(target_height / stride_h))
+    w_prime = int(math.ceil(target_width / stride_w))
+
+    bytes_per_elem = torch.tensor([], dtype=torch.float32).element_size()
+    latents_bytes = z_dim * t_prime * h_prime * w_prime * bytes_per_elem
+    return [int(latents_bytes), 4096]
