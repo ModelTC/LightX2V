@@ -25,16 +25,6 @@ class MooncakeTransferEngineConfig:
         )
 
     @staticmethod
-    def from_dict(config: dict) -> "MooncakeTransferEngineConfig":
-        """Build config directly from a dict (e.g. disagg_config in runner config)."""
-        return MooncakeTransferEngineConfig(
-            local_hostname=config.get("local_hostname", None),
-            metadata_server=config.get("metadata_server", "P2PHANDSHAKE"),
-            protocol=config.get("protocol", "rdma"),
-            device_name=config.get("device_name", ""),
-        )
-
-    @staticmethod
     def load_from_env() -> "MooncakeTransferEngineConfig":
         config_file_path = os.getenv("MOONCAKE_CONFIG_PATH", "/data/nvme1/yongyang/FL/LightX2V/configs/mooncake_config.json")
         if config_file_path is None:
@@ -43,7 +33,7 @@ class MooncakeTransferEngineConfig:
 
 
 class MooncakeTransferEngine:
-    def __init__(self, mooncake_config: dict = None):
+    def __init__(self):
         self.engine = None
         try:
             from mooncake.engine import TransferEngine
@@ -56,12 +46,8 @@ class MooncakeTransferEngine:
             # We allow continuing without engine for non-transfer operations or testing structure
 
         try:
-            if mooncake_config:
-                self.config = MooncakeTransferEngineConfig.from_dict(mooncake_config)
-                logger.info("Mooncake Configuration loaded from disagg_config.")
-            else:
-                self.config = MooncakeTransferEngineConfig.load_from_env()
-                logger.info("Mooncake Configuration loaded from env/file.")
+            self.config = MooncakeTransferEngineConfig.load_from_env()
+            logger.info("Mooncake Configuration loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load Mooncake config: {e}")
             raise
@@ -81,14 +67,12 @@ class MooncakeTransferEngine:
         if self.engine:
             ret = self.engine.register_memory(ptr, length)
             if ret != 0:
-                logger.error("Mooncake memory registration failed.")
                 raise RuntimeError("Mooncake memory registration failed.")
 
     def deregister(self, ptr):
         if self.engine:
             ret = self.engine.unregister_memory(ptr)
             if ret != 0:
-                logger.error("Mooncake memory deregistration failed.")
                 raise RuntimeError("Mooncake memory deregistration failed.")
 
     def initialize(

@@ -166,7 +166,7 @@ class QwenImageRunner(DefaultRunner):
         super().init_modules()
         logger.info("Initializing QwenImage specific runner modules...")
         self.run_dit = self._run_dit_local
-        
+
         disagg_mode = self.config.get("disagg_mode")
         if not disagg_mode:
             if self.config["task"] == "t2i":
@@ -420,17 +420,16 @@ class QwenImageRunner(DefaultRunner):
         pass
 
 
-
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        
+
         disagg_mode = self.config.get("disagg_mode")
 
         if disagg_mode == "transformer":
             # Transformer node: Receive data from Mooncake directly into self.inputs
             self.inputs = self.receive_encoder_outputs()
-            
+
             # Reconstruct txt_seq_lens for QwenImage
             prompt_embeds = self.inputs.get("text_encoder_output", {}).get("prompt_embeds")
             if prompt_embeds is not None:
@@ -450,7 +449,7 @@ class QwenImageRunner(DefaultRunner):
         self.set_target_shape()
         self.set_img_shapes()
         logger.info(f"input_info: {self.input_info}")
-        
+
         # If Encoder node, serialize the inputs and send to Mooncake, then skip DiT
         if disagg_mode == "encoder":
             latent_shape = list(self.input_info.target_shape)

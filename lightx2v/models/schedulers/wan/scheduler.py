@@ -28,7 +28,7 @@ class WanScheduler(BaseScheduler):
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
 
-    def prepare(self, seed, latent_shape, image_encoder_output=None, **kwargs):
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
 

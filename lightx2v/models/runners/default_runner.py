@@ -10,7 +10,6 @@ from loguru import logger
 from requests.exceptions import RequestException
 
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
@@ -53,7 +52,7 @@ def resize_image(img, resolution, bucket_shape=None):
     return cropped_img, target_h, target_w
 
 
-class DefaultRunner(DisaggMixin, BaseRunner):
+class DefaultRunner(BaseRunner):
     def __init__(self, config):
         super().__init__(config)
         self.has_prompt_enhancer = False
@@ -70,21 +69,13 @@ class DefaultRunner(DisaggMixin, BaseRunner):
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
-        disagg_mode = self.config.get("disagg_mode")
-        if disagg_mode:
-            self.init_disagg(self.config)  # from DisaggMixin
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        if hasattr(self, "model") and self.model is not None:
+        if hasattr(self, "model"):
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
-        # Set run_input_encoder based on disagg_mode or task
-        if disagg_mode == "encoder":
-            self.run_input_encoder = self._run_input_encoder_disagg_encoder
-        elif disagg_mode == "transformer":
-            self.run_input_encoder = self._run_input_encoder_disagg_transformer
-        elif self.config["task"] == "i2v":
+        if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif self.config["task"] == "flf2v":
             self.run_input_encoder = self._run_input_encoder_local_flf2v
@@ -103,7 +94,7 @@ class DefaultRunner(DisaggMixin, BaseRunner):
         elif self.config["task"] == "sr":
             self.run_input_encoder = self._run_input_encoder_local_sr
         self.config.lock()  # lock config to avoid modification
-        if self.config.get("compile", False) and hasattr(self, "model") and self.model is not None and hasattr(self.model, "compile"):
+        if self.config.get("compile", False) and hasattr(self.model, "compile"):
             logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
             self.model.compile(self.config.get("compile_shapes", []))
 
@@ -133,29 +124,10 @@ class DefaultRunner(DisaggMixin, BaseRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
-        disagg_mode = self.config.get("disagg_mode")
-        if disagg_mode == "encoder":
-            # Encoder role: only load encoders, skip transformer and vae decoder
-            logger.info("[Disagg] Loading models for ENCODER role...")
-            self.model = None
-            self.text_encoders = self.load_text_encoder()
-            self.image_encoder = self.load_image_encoder()
-            self.vae_encoder = self.load_vae_encoder() if hasattr(self, 'load_vae_encoder') else None
-            self.vae_decoder = None
-        elif disagg_mode == "transformer":
-            # Transformer role: only load transformer and vae decoder, skip encoders
-            logger.info("[Disagg] Loading models for TRANSFORMER role...")
-            self.model = self.load_transformer()
-            self.text_encoders = None
-            self.image_encoder = None
-            self.vae_encoder = None
-            self.vae_decoder = self.load_vae_decoder() if hasattr(self, 'load_vae_decoder') else None
-        else:
-            # Default: load everything
-            self.model = self.load_transformer()
-            self.text_encoders = self.load_text_encoder()
-            self.image_encoder = self.load_image_encoder()
-            self.vae_encoder, self.vae_decoder = self.load_vae()
+        self.model = self.load_transformer()
+        self.text_encoders = self.load_text_encoder()
+        self.image_encoder = self.load_image_encoder()
+        self.vae_encoder, self.vae_decoder = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
         self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
 
@@ -376,9 +348,7 @@ class DefaultRunner(DisaggMixin, BaseRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
-        self.model.scheduler.prepare(
-            seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.model.scheduler.infer_steps, image_encoder_output=self.inputs["image_encoder_output"]
-        )
+        self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
@@ -501,60 +471,11 @@ class DefaultRunner(DisaggMixin, BaseRunner):
 
         self.inputs = self.run_input_encoder()
 
-        # Encoder role: encoding + send done, skip denoising
-        if self.config.get("disagg_mode") == "encoder":
-            logger.info("[Disagg] Encoder role completed. Skipping run_main.")
-            if GET_RECORDER_MODE():
-                monitor_cli.lightx2v_worker_request_success.inc()
-            return None
-
         gen_video_final = self.run_main()
 
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video_final
-
-    # ------------------------------------------------------------------ #
-    #  Disagg-specific encoder methods
-    # ------------------------------------------------------------------ #
-
-    def _run_input_encoder_disagg_encoder(self):
-        """Encoder role: run local encoding then send results via Mooncake."""
-        task = self.config["task"]
-        # Dispatch to the appropriate local encoder based on task
-        if task == "i2v":
-            inputs = self._run_input_encoder_local_i2v()
-        elif task == "flf2v":
-            inputs = self._run_input_encoder_local_flf2v()
-        elif task == "t2v":
-            inputs = self._run_input_encoder_local_t2v()
-        elif task == "vace":
-            inputs = self._run_input_encoder_local_vace()
-        elif task == "animate":
-            inputs = self._run_input_encoder_local_animate()
-        elif task in ("s2v", "rs2v"):
-            inputs = self._run_input_encoder_local_s2v()
-        elif task == "t2i":
-            inputs = self._run_input_encoder_local_t2i()
-        elif task == "i2i":
-            inputs = self._run_input_encoder_local_i2i()
-        else:
-            raise ValueError(f"Unsupported task for disagg encoder: {task}")
-
-        # Send via Mooncake
-        latent_shape = list(getattr(self.input_info, "latent_shape", getattr(self.input_info, "target_shape", [])))
-        self.send_encoder_outputs(inputs, latent_shape)
-        return inputs
-
-    def _run_input_encoder_disagg_transformer(self):
-        """Transformer role: receive encoder outputs from Mooncake."""
-        result = self.receive_encoder_outputs()
-        # Set latent_shape on input_info from the received data
-        self.input_info.latent_shape = result["latent_shape"]
-        return {
-            "text_encoder_output": result["text_encoder_output"],
-            "image_encoder_output": result["image_encoder_output"],
-        }
 
     def switch_lora(self, lora_path: str, strength: float = 1.0):
         """

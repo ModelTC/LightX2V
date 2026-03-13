@@ -1,7 +1,9 @@
 import logging
+import threading
 
 from loguru import logger
 
+from lightx2v.disagg.services.decoder import DecoderService
 from lightx2v.disagg.services.encoder import EncoderService
 from lightx2v.disagg.services.transformer import TransformerService
 from lightx2v.disagg.utils import set_config
@@ -13,10 +15,10 @@ logging.basicConfig(level=logging.INFO)
 
 def main():
     # 1. Configuration
-    model_path = "/data/nvme0/models/Wan-AI/Wan2.1-T2V-1.3B"
+    model_path = "/root/zht/LightX2V/models/Wan-AI/Wan2.1-T2V-1.3B"
     task = "t2v"
     model_cls = "wan2.1"
-    save_result_path = "/data/nvme1/yongyang/FL/LightX2V/save_results/test_disagg.mp4"
+    save_result_path = "/root/zht/LightX2V/save_results/test_disagg.mp4"
 
     # Generation parameters
     seed = 42
@@ -43,6 +45,9 @@ def main():
         enable_cfg=True,
         data_bootstrap_addr="127.0.0.1",
         data_bootstrap_room=0,
+        encoder_engine_rank=0,
+        transformer_engine_rank=1,
+        decoder_engine_rank=2,
     )
 
     logger.info(f"Config initialized for task: {task}")
@@ -55,34 +60,44 @@ def main():
     config["save_path"] = save_result_path
 
     # 2. Define service threads
-    import threading
-
     def run_encoder():
         logger.info("Initializing Encoder Service...")
         encoder_service = EncoderService(config)
         logger.info("Running Encoder Service...")
         encoder_service.process()
+        logger.info("Encoder Service completed.")
         encoder_service.release_memory()
 
     def run_transformer():
         logger.info("Initializing Transformer Service...")
         transformer_service = TransformerService(config)
         logger.info("Running Transformer Service...")
-        result_path = transformer_service.process()
-        logger.info(f"Video generation completed. Saved to: {result_path}")
+        transformer_service.process()
+        logger.info("Transformer Service completed.")
         transformer_service.release_memory()
+
+    def run_decoder():
+        logger.info("Initializing Decoder Service...")
+        decoder_service = DecoderService(config)
+        logger.info("Running Decoder Service...")
+        decoder_service.process()
+        logger.info("Video generation completed.")
+        decoder_service.release_memory()
 
     # 3. Start threads
     encoder_thread = threading.Thread(target=run_encoder)
     transformer_thread = threading.Thread(target=run_transformer)
+    decoder_thread = threading.Thread(target=run_decoder)
 
     logger.info("Starting services in separate threads...")
     encoder_thread.start()
     transformer_thread.start()
+    decoder_thread.start()
 
     # 4. Wait for completion
     encoder_thread.join()
     transformer_thread.join()
+    decoder_thread.join()
     logger.info("All services finished.")
 
 

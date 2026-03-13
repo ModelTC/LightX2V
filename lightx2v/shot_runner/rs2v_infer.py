@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 
 import numpy as np
@@ -7,10 +8,11 @@ import torchaudio as ta
 from loguru import logger
 
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
-from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
+from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader
 from lightx2v.utils.input_info import init_input_info_from_args
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image
+from lightx2v.utils.utils import seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
+from lightx2v.utils.va_controller import VAController
 
 
 def get_reference_state_sequence(frames_per_clip=17, target_fps=16):
@@ -43,17 +45,63 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         gen_video_list = []
         cut_audio_list = []
         video_duration = clip_input_info.video_duration
-        audio_array, ori_sr = ta.load(clip_input_info.audio_path)
-        audio_array = audio_array.mean(0)
-        if ori_sr != audio_sr:
-            audio_array = ta.functional.resample(audio_array, ori_sr, audio_sr)
+
+        def get_audio_files_from_audio_path(audio_path):
+            if os.path.isdir(audio_path):
+                audio_files = []
+                mask_files = []
+                audio_config_path = os.path.join(audio_path, "config.json")
+                assert os.path.exists(audio_config_path), "config.json not found in audio_path"
+                with open(audio_config_path, "r") as f:
+                    audio_config = json.load(f)
+                for talk_object in audio_config["talk_objects"]:
+                    audio_files.append(os.path.join(audio_path, talk_object["audio"]))
+                    mask_files.append(os.path.join(audio_path, talk_object["mask"]))
+            else:
+                audio_files = [audio_path]
+                mask_files = None
+            return audio_files, mask_files
+
+        def load_audio(audio_path, target_sr):
+            arr, ori_sr = ta.load(audio_path)
+            arr = arr.mean(0)
+            if ori_sr != target_sr:
+                arr = ta.functional.resample(arr, ori_sr, target_sr)
+            return arr
+
+        audio_files, mask_files = get_audio_files_from_audio_path(clip_input_info.audio_path)
+        clip_input_info.audio_num = len(audio_files)
+
+        if len(audio_files) == 1:
+            audio_array = load_audio(audio_files[0], audio_sr)
+            audio_array = audio_array.unsqueeze(0)
+        else:
+            audio_arrays = []
+            max_len = 0
+            for a_file in audio_files:
+                arr = load_audio(a_file, audio_sr)
+                audio_arrays.append(arr)
+                max_len = max(max_len, arr.numel())
+            num_files = len(audio_arrays)
+            audio_array = torch.zeros(num_files, max_len, dtype=torch.float32)
+            for i, arr in enumerate(audio_arrays):
+                length = arr.numel()
+                audio_array[i, :length] = arr
+
         if video_duration is not None and video_duration > 0:
             max_samples = int(video_duration * audio_sr)
-            if audio_array.numel() > max_samples:
-                audio_array = audio_array[:max_samples]
+            if audio_array.shape[1] > max_samples:
+                audio_array = audio_array[:, :max_samples]
+
+        if mask_files is not None:
+            mask_latents = [rs2v.process_single_mask(mask_file) for mask_file in mask_files]
+            person_mask_latens = torch.cat(mask_latents, dim=0)
+        else:
+            person_mask_latens = None
+
         audio_reader = RS2V_SlidingWindowReader(audio_array, first_clip_len=target_video_length, clip_len=target_video_length + 3, sr=audio_sr, fps=target_fps)
 
-        total_frames = int(np.ceil(audio_array.numel() / audio_per_frame))
+        total_frames = int(np.ceil(audio_array.shape[1] / audio_per_frame))
         if total_frames <= target_video_length:
             total_clips = 1
         else:
@@ -61,6 +109,13 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             total_clips = 1 + int(np.ceil(remaining / (target_video_length + 3)))
 
         ref_state_sq = get_reference_state_sequence(target_video_length - 3, target_fps)
+
+        # 预先运行输入编码的静态部分 (处理ref image的vae编码和文本编码)
+        rs2v.input_info = clip_input_info
+        rs2v.inputs_static = rs2v._run_input_encoder_local_rs2v_static()
+
+        self.va_controller = VAController(rs2v)
+        logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
         idx = 0
         while True:
@@ -72,6 +127,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             is_last = True if pad_len > 0 else False
 
             pipe = rs2v
+            pipe.check_stop()
 
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
@@ -82,32 +138,47 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             if self.progress_callback:
                 self.progress_callback(idx, total_clips)
 
-            gen_clip_video, audio_clip, gen_latents = pipe.run_clip_pipeline(clip_input_info)
+            rs2v.input_info = clip_input_info
+            clip_input_info.person_mask_latens = person_mask_latens
+
+            # 使用动态输入获取当前 clip 控制参数
+            rs2v.inputs = rs2v._run_input_encoder_local_rs2v_dynamic()
+
+            gen_clip_video, audio_clip, gen_latents = rs2v.run_clip_main()
             logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
 
             video_pad_len = pad_len // audio_per_frame
-            gen_video_list.append(gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len].clone())
-            cut_audio_list.append(audio_clip[: audio_clip.shape[0] - pad_len])
+            audio_pad_len = video_pad_len * audio_per_frame
+            video_seg = gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len]
+            # Since audio_clip is now multidimensional (N, T), slice on dim 1 and sum on dim 0 to merge tracks
+            audio_seg = audio_clip[:, : audio_clip.shape[1] - audio_pad_len].sum(dim=0)
             clip_input_info.overlap_latent = gen_latents[:, -1:]
+
+            if clip_input_info.return_result_tensor:
+                gen_video_list.append(video_seg.clone())
+                cut_audio_list.append(audio_seg)
+            elif self.va_controller.recorder is not None:
+                video_seg = torch.clamp(video_seg, -1, 1).to(torch.float).cpu()
+                video_seg = vae_to_comfyui_image_inplace(video_seg)
+                self.va_controller.pub_livestream(video_seg, audio_seg, None)
+
+        if not clip_input_info.return_result_tensor:
+            return None, None, None
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()
         gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
-        merge_audio = np.concatenate(cut_audio_list, axis=0).astype(np.float32)
-
-        if is_main_process() and clip_input_info.save_result_path:
-            out_path = os.path.join("./", "video_merge.mp4")
-            audio_file = os.path.join("./", "audio_merge.wav")
-
-            save_to_video(gen_lvideo, out_path, 16)
-            save_audio(merge_audio, audio_file, out_path, output_path=clip_input_info.save_result_path)
-            os.remove(out_path)
-            os.remove(audio_file)
+        merge_audio = torch.cat(cut_audio_list, dim=0).numpy().astype(np.float32)
 
         return gen_lvideo, merge_audio, audio_sr
 
     def run_pipeline(self, input_info):
         # input_info = self.update_input_info(input_info)
-        gen_lvideo, merge_audio, audio_sr = self.generate(input_info)
+        try:
+            gen_lvideo, merge_audio, audio_sr = self.generate(input_info)
+        finally:
+            if self.va_controller is not None:
+                self.va_controller.clear()
+                self.va_controller = None
         if isinstance(input_info, dict):
             return_result_tensor = input_info.get("return_result_tensor", False)
         else:

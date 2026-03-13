@@ -19,7 +19,6 @@ class EulerScheduler(WanScheduler):
         self.transformer_infer = None
         self.infer_condition = True  # cfg status
         self.keep_latents_dtype_in_scheduler = False
-        self.infer_steps = self.config["infer_steps"]
         self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
         if self.config["seq_parallel"]:
@@ -93,9 +92,13 @@ class EulerScheduler(WanScheduler):
             if self.prev_latents is not None:
                 self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
 
-    def prepare(self, seed, latent_shape, infer_steps, image_encoder_output=None):
+    def prepare(self, seed, latent_shape, infer_steps=None, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
-        self.infer_steps = infer_steps
+        if infer_steps is not None:
+            self.infer_steps = infer_steps
+        else:
+            self.infer_steps = self.config["infer_steps"]
+
         timesteps = np.linspace(self.num_train_timesteps, 0, self.infer_steps + 1, dtype=np.float32)
 
         self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=AI_DEVICE)

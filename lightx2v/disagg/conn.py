@@ -17,10 +17,17 @@ from lightx2v.disagg.mooncake import MooncakeTransferEngine
 logger = logging.getLogger(__name__)
 
 
+class DisaggregationPhase(Enum):
+    NULL = "null"
+    PHASE1 = "phase1"
+    PHASE2 = "phase2"
+
+
 class DisaggregationMode(Enum):
     NULL = "null"
     ENCODE = "encode"
     TRANSFORMER = "transformer"
+    DECODE = "decode"
 
 
 def group_concurrent_contiguous(src_indices: npt.NDArray[np.int64], dst_indices: npt.NDArray[np.int64]) -> Tuple[List[npt.NDArray[np.int64]], List[npt.NDArray[np.int64]]]:
@@ -67,28 +74,41 @@ class DataPoll:
 
 RequestPoolType = Dict[int, List[int]]
 WaitingPoolType = Dict[int, Tuple[str, list[int]]]
-DATASENDER_POLLING_PORT = 19788
-DATARECEIVER_POLLING_PORT = 29788
+DATASENDER_POLLING_PORT = 17788
+DATARECEIVER_POLLING_PORT = 27788
 
 
 class DataManager:
     # TODO: make it general and support multiple transfer backend before merging
-    def __init__(self, args: DataArgs, disaggregation_mode: DisaggregationMode, mooncake_config: dict = None):
-        self.engine = MooncakeTransferEngine(mooncake_config=mooncake_config)
+    def __init__(self, args: DataArgs, disaggregation_phase: DisaggregationPhase, disaggregation_mode: DisaggregationMode):
+        self.engine = MooncakeTransferEngine()
         self.data_args = args
+        self.disaggregation_phase = disaggregation_phase
         self.disaggregation_mode = disaggregation_mode
         self.request_pool: RequestPoolType = {}
         self.request_status: Dict[int, DataPoll] = {}
         self.server_socket = zmq.Context().socket(zmq.PULL)
         self.register_buffer_to_engine()
-        if self.disaggregation_mode == DisaggregationMode.ENCODE:
-            self.waiting_pool: WaitingPoolType = {}
-            self.transfer_event = threading.Event()
-            self.start_encode_thread()
-        elif self.disaggregation_mode == DisaggregationMode.TRANSFORMER:
-            self.start_transformer_thread()
+        if self.disaggregation_phase == DisaggregationPhase.PHASE1:
+            if self.disaggregation_mode == DisaggregationMode.ENCODE:
+                self.waiting_pool: WaitingPoolType = {}
+                self.transfer_event = threading.Event()
+                self.start_phase1_encode_thread()
+            elif self.disaggregation_mode == DisaggregationMode.TRANSFORMER:
+                self.start_phase1_transformer_thread()
+            else:
+                raise ValueError(f"Unsupported DisaggregationMode in this phase: {self.disaggregation_phase}, {self.disaggregation_mode}")
+        elif self.disaggregation_phase == DisaggregationPhase.PHASE2:
+            if self.disaggregation_mode == DisaggregationMode.TRANSFORMER:
+                self.waiting_pool: WaitingPoolType = {}
+                self.transfer_event = threading.Event()
+                self.start_phase2_transformer_thread()  # TODO: start_p2_transformer_thread
+            elif self.disaggregation_mode == DisaggregationMode.DECODE:
+                self.start_phase2_decode_thread()  # TODO: start_p2_decode_thread
+            else:
+                raise ValueError(f"Unsupported DisaggregationMode in this phase: {self.disaggregation_phase}, {self.disaggregation_mode}")
         else:
-            raise ValueError(f"Unsupported DisaggregationMode: {self.disaggregation_mode}")
+            raise ValueError(f"Unsupported DisaggregationPhase: {self.disaggregation_phase}")
 
     def register_buffer_to_engine(self):
         for data_ptr, data_len in zip(self.data_args.data_ptrs, self.data_args.data_lens):
@@ -133,7 +153,7 @@ class DataManager:
             ]
         )
 
-    def start_encode_thread(self):
+    def start_phase1_encode_thread(self):
         sender_rank_port = DATASENDER_POLLING_PORT + self.data_args.sender_engine_rank
         logger.info("Encoder sender_rank_port=%s", sender_rank_port)
         self.server_socket.bind("tcp://*:" + str(sender_rank_port))
@@ -201,7 +221,7 @@ class DataManager:
 
         threading.Thread(target=transfer_thread).start()
 
-    def start_transformer_thread(self):
+    def start_phase1_transformer_thread(self):
         receiver_rank_port = DATARECEIVER_POLLING_PORT + self.data_args.receiver_engine_rank
         self.server_socket.bind("tcp://*:" + str(receiver_rank_port))
 
@@ -214,6 +234,87 @@ class DataManager:
 
         threading.Thread(target=transformer_thread).start()
 
+    def start_phase2_transformer_thread(self):
+        sender_rank_port = DATASENDER_POLLING_PORT + self.data_args.sender_engine_rank
+        logger.info("Transformer sender_rank_port=%s", sender_rank_port)
+        self.server_socket.bind("tcp://*:" + str(sender_rank_port))
+
+        def transformer_thread():
+            while True:
+                (
+                    endpoint,
+                    mooncake_session_id,
+                    bootstrap_room,
+                    decode_ptrs,
+                ) = self.server_socket.recv_multipart()
+                if bootstrap_room.decode("ascii") == "None":
+                    continue
+                endpoint = endpoint.decode("ascii")
+                mooncake_session_id = mooncake_session_id.decode("ascii")
+                bootstrap_room = int(bootstrap_room.decode("ascii"))
+                decode_ptrs = list(struct.unpack(f"{len(decode_ptrs) // 8}Q", decode_ptrs))
+                logger.info(
+                    "Transformer received ZMQ: endpoint=%s session_id=%s room=%s decode_ptrs=%s",
+                    endpoint,
+                    mooncake_session_id,
+                    bootstrap_room,
+                    decode_ptrs,
+                )
+                self.waiting_pool[bootstrap_room] = (
+                    endpoint,
+                    mooncake_session_id,
+                    decode_ptrs,
+                )
+                self.transfer_event.set()
+
+        threading.Thread(target=transformer_thread).start()
+
+        def transfer_thread():
+            while True:
+                self.transfer_event.wait()
+                self.transfer_event.clear()
+                bootstrap_room_ready = self.request_pool.keys()
+                bootstrap_room_request = self.waiting_pool.keys()
+                for room in list(bootstrap_room_request):
+                    if room not in list(bootstrap_room_ready):
+                        continue
+                    status = DataPoll.Transferring
+                    self.request_status[room] = status
+                    (
+                        endpoint,
+                        mooncake_session_id,
+                        decode_ptrs,
+                    ) = self.waiting_pool.pop(room)
+                    self.sync_status_to_transformer_endpoint(endpoint, room)
+                    transformer_data_ptrs = self.request_pool.pop(room)
+                    ret = self.send_data(
+                        mooncake_session_id,
+                        transformer_data_ptrs,
+                        decode_ptrs,
+                    )
+                    if ret != 0:
+                        status = DataPoll.Failed
+                        self.sync_status_to_transformer_endpoint(endpoint, room)
+                        continue
+                    status = DataPoll.Success
+                    self.request_status[room] = status
+                    self.sync_status_to_transformer_endpoint(endpoint, room)
+
+        threading.Thread(target=transfer_thread).start()
+
+    def start_phase2_decode_thread(self):
+        receiver_rank_port = DATARECEIVER_POLLING_PORT + self.data_args.receiver_engine_rank
+        self.server_socket.bind("tcp://*:" + str(receiver_rank_port))
+
+        def decode_thread():
+            while True:
+                (bootstrap_room, status) = self.server_socket.recv_multipart()
+                status = int(status.decode("ascii"))
+                bootstrap_room = int(bootstrap_room.decode("ascii"))
+                self.request_status[bootstrap_room] = status
+
+        threading.Thread(target=decode_thread).start()
+
     def enqueue_request(
         self,
         bootstrap_room: int,
@@ -221,11 +322,21 @@ class DataManager:
     ):
         self.request_pool[bootstrap_room] = data_ptrs
         self.request_status[bootstrap_room] = DataPoll.WaitingForInput
-        if self.disaggregation_mode == DisaggregationMode.ENCODE:
+        if (
+            self.disaggregation_phase == DisaggregationPhase.PHASE1
+            and self.disaggregation_mode == DisaggregationMode.ENCODE
+            or self.disaggregation_phase == DisaggregationPhase.PHASE2
+            and self.disaggregation_mode == DisaggregationMode.TRANSFORMER
+        ):
             self.transfer_event.set()
 
     def check_status(self, bootstrap_room: int):
-        if self.disaggregation_mode == DisaggregationMode.TRANSFORMER and self.request_status[bootstrap_room] == DataPoll.Success:
+        if (
+            self.disaggregation_phase == DisaggregationPhase.PHASE1
+            and self.disaggregation_mode == DisaggregationMode.TRANSFORMER
+            or self.disaggregation_phase == DisaggregationPhase.PHASE2
+            and self.disaggregation_mode == DisaggregationMode.DECODE
+        ) and self.request_status[bootstrap_room] == DataPoll.Success:
             if bootstrap_room in self.request_pool:
                 self.request_pool.pop(bootstrap_room)
 

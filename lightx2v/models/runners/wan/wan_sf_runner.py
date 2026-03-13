@@ -3,7 +3,6 @@ import gc
 import torch
 from loguru import logger
 
-from lightx2v.deploy.common.video_recorder import VideoRecorder
 from lightx2v.models.networks.wan.sf_model import WanSFModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
@@ -13,6 +12,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import wan_vae_to_comfy
+from lightx2v.utils.video_recorder import VideoRecorder
 
 
 @RUNNER_REGISTER("wan2.1_sf")

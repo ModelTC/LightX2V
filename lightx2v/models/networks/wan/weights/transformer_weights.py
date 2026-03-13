@@ -353,7 +353,8 @@ class WanSelfAttention(WeightModule):
             "nbhd_attn",
             "nbhd_attn_flashinfer",
         ]:
-            attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
+            attnmap_frame_num = ((self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1) // self.config["patch_size"][0]
+            attention_weights_cls.attnmap_frame_num = attnmap_frame_num
         # nbhd_attn setting
         if self.config["self_attn_1_type"] in ["nbhd_attn", "nbhd_attn_flashinfer"]:
             if "nbhd_attn_setting" in self.config:
@@ -376,7 +377,8 @@ class WanSelfAttention(WeightModule):
 
         # general_sparse_attn setting
         if self.config["self_attn_1_type"] == "general_sparse_attn":
-            attention_weights_cls.attnmap_frame_num = self.config["attnmap_frame_num"]
+            attnmap_frame_num = ((self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1) // self.config["patch_size"][0]
+            attention_weights_cls.attnmap_frame_num = attnmap_frame_num
             general_sparse_attn_setting = self.config.get("general_sparse_attn_setting", {})
             if "sparse_mask_generator" in general_sparse_attn_setting:
                 attention_weights_cls.sparse_mask_generator = general_sparse_attn_setting["sparse_mask_generator"]
