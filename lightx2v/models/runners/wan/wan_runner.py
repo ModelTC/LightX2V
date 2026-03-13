@@ -13,6 +13,7 @@ from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
     WanScheduler4ChangingResolutionInterface,
 )

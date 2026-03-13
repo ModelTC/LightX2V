@@ -67,14 +67,14 @@ class DataPoll:
 
 RequestPoolType = Dict[int, List[int]]
 WaitingPoolType = Dict[int, Tuple[str, list[int]]]
-DATASENDER_POLLING_PORT = 17788
-DATARECEIVER_POLLING_PORT = 27788
+DATASENDER_POLLING_PORT = 19788
+DATARECEIVER_POLLING_PORT = 29788
 
 
 class DataManager:
     # TODO: make it general and support multiple transfer backend before merging
-    def __init__(self, args: DataArgs, disaggregation_mode: DisaggregationMode):
-        self.engine = MooncakeTransferEngine()
+    def __init__(self, args: DataArgs, disaggregation_mode: DisaggregationMode, mooncake_config: dict = None):
+        self.engine = MooncakeTransferEngine(mooncake_config=mooncake_config)
         self.data_args = args
         self.disaggregation_mode = disaggregation_mode
         self.request_pool: RequestPoolType = {}
