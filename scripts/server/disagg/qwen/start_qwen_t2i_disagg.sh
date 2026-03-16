@@ -36,7 +36,7 @@ CUDA_VISIBLE_DEVICES=${GPU_DECODER} python -m lightx2v.server \
     --model_cls qwen_image \
     --task t2i \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/qwen_image/qwen_image_t2i_disagg_decode.json" \
+    --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_t2i_disagg_decode.json" \
     --host 0.0.0.0 \
     --port 8008 &
 PID_DECODER=$!
@@ -47,7 +47,7 @@ CUDA_VISIBLE_DEVICES=${GPU_TRANSFORMER} python -m lightx2v.server \
     --model_cls qwen_image \
     --task t2i \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/qwen_image/qwen_image_t2i_disagg_transformer.json" \
+    --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_t2i_disagg_transformer.json" \
     --host 0.0.0.0 \
     --port 8003 &
 PID_TRANSFORMER=$!
@@ -58,7 +58,7 @@ CUDA_VISIBLE_DEVICES=${GPU_ENCODER} python -m lightx2v.server \
     --model_cls qwen_image \
     --task t2i \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/qwen_image/qwen_image_t2i_disagg_encoder.json" \
+    --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_t2i_disagg_encoder.json" \
     --host 0.0.0.0 \
     --port 8002 &
 PID_ENCODER=$!

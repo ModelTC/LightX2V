@@ -177,7 +177,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 
 ### 2.1 T2V 配置示例
 
-**Encoder 端（`configs/wan/wan_t2v_disagg_encoder.json`）**：
+**Encoder 端（`configs/disagg/wan/wan_t2v_disagg_encoder.json`）**：
 
 ```json
 {
@@ -207,7 +207,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 }
 ```
 
-**Transformer 端（`configs/wan/wan_t2v_disagg_transformer.json`）**：将 `disagg_mode` 改为 `"transformer"`，并增加 Phase2 相关配置，用于向 Decoder 发送潜空间：
+**Transformer 端（`configs/disagg/wan/wan_t2v_disagg_transformer.json`）**：将 `disagg_mode` 改为 `"transformer"`，并增加 Phase2 相关配置，用于向 Decoder 发送潜空间：
 
 ```json
 {
@@ -226,7 +226,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 }
 ```
 
-**Decoder 端（`configs/wan/wan_t2v_disagg_decode.json`）**：仅加载 VAE Decoder，Phase2 接收端；`bootstrap_room` 需与 Transformer 的 `decoder_bootstrap_room` 一致：
+**Decoder 端（`configs/disagg/wan/wan_t2v_disagg_decode.json`）**：仅加载 VAE Decoder，Phase2 接收端；`bootstrap_room` 需与 Transformer 的 `decoder_bootstrap_room` 一致：
 
 ```json
 {
@@ -247,7 +247,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 
 I2V 使用 **ViT-H/14** CLIP 图像编码器，其输出为完整序列特征（257 个 token × 1280 维），因此**必须额外指定 `clip_embed_dim`** 以保证 RDMA buffer 正确分配：
 
-**Encoder 端（`configs/wan/wan_i2v_disagg_encoder.json`）**：
+**Encoder 端（`configs/disagg/wan/wan_i2v_disagg_encoder.json`）**：
 
 ```json
 {
@@ -282,7 +282,7 @@ I2V 使用 **ViT-H/14** CLIP 图像编码器，其输出为完整序列特征（
 
 ### 2.3 Decoder 配置示例（三段式）
 
-Wan T2V Decoder 见上文；Qwen Image I2I Decoder 示例（`configs/qwen_image/qwen_image_i2i_disagg_decode.json`）：
+Wan T2V Decoder 见上文；Qwen Image I2I Decoder 示例（`configs/disagg/qwen/qwen_image_i2i_disagg_decode.json`）：
 
 ```json
 {
@@ -360,7 +360,7 @@ python -m lightx2v.server \
     --model_cls wan2.1 \
     --task t2v \
     --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/wan/wan_t2v_disagg_decode.json \
+    --config_json ${lightx2v_path}/configs/disagg/wan/wan_t2v_disagg_decode.json \
     --host 0.0.0.0 \
     --port 8004
 ```

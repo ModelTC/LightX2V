@@ -34,7 +34,7 @@ CUDA_VISIBLE_DEVICES=${GPU_DECODER} python -m lightx2v.server \
     --model_cls wan2.1 \
     --task i2v \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/wan/wan_i2v_disagg_decode.json" \
+    --config_json "${lightx2v_path}/configs/disagg/wan/wan_i2v_disagg_decode.json" \
     --host 0.0.0.0 \
     --port 8007 &
 PID_DECODER=$!
@@ -45,7 +45,7 @@ CUDA_VISIBLE_DEVICES=${GPU_TRANSFORMER} python -m lightx2v.server \
     --model_cls wan2.1 \
     --task i2v \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/wan/wan_i2v_disagg_transformer.json" \
+    --config_json "${lightx2v_path}/configs/disagg/wan/wan_i2v_disagg_transformer.json" \
     --host 0.0.0.0 \
     --port 8005 &
 PID_TRANSFORMER=$!
@@ -56,7 +56,7 @@ CUDA_VISIBLE_DEVICES=${GPU_ENCODER} python -m lightx2v.server \
     --model_cls wan2.1 \
     --task i2v \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/wan/wan_i2v_disagg_encoder.json" \
+    --config_json "${lightx2v_path}/configs/disagg/wan/wan_i2v_disagg_encoder.json" \
     --host 0.0.0.0 \
     --port 8004 &
 PID_ENCODER=$!
