@@ -169,6 +169,12 @@ class FloatQuantizer(BaseQuantizer):
         tensor = (tensor - zeros) * scales
         return tensor
 
+    def dequant(self, tensor, scales, out_dtype=torch.bfloat16):
+        tensor_f = tensor.to(torch.float32)
+        scales_f = scales.to(dtype=torch.float32, device=tensor.device)
+        out = tensor_f * scales_f
+        return out.to(out_dtype)
+
     def quant_dequant(self, tensor, scales, zeros, qmax, qmin):
         tensor = self.quant(tensor, scales, zeros, qmax, qmin)
         tensor = self.dequant(tensor, scales, zeros)

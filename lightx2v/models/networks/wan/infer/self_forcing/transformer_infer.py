@@ -42,9 +42,16 @@ class WanSFTransformerInfer(WanTransformerInfer):
         sf_config = self.config["sf_config"]
         self.local_attn_size = sf_config["local_attn_size"]
         self.max_attention_size = 32760 if self.local_attn_size == -1 else self.local_attn_size * 1560
+        self.sink_size = sf_config.get("sink_size", 0)
         self.num_frame_per_block = sf_config["num_frame_per_block"]
         self.num_transformer_blocks = sf_config["num_transformer_blocks"]
         self.frame_seq_length = sf_config["frame_seq_length"]
+        self.kv_quant_config = sf_config.get("kv_quant", None)
+        if self.kv_quant_config is not None:
+            from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
+
+            self.quant_fp8_vllm = quant_fp8_vllm
+            self.dequant_fp8_vllm = dequant_fp8_vllm
         self._initialize_kv_cache(self.device, self.dtype)
         self._initialize_crossattn_cache(self.device, self.dtype)
 
@@ -67,15 +74,34 @@ class WanSFTransformerInfer(WanTransformerInfer):
         else:
             # Use the default KV cache size
             kv_cache_size = 32760
+        self.kv_cache_size = kv_cache_size
+        if self.kv_quant_config is not None:
+            k_bit = self.kv_quant_config["k_bit"]
+            v_bit = self.kv_quant_config["v_bit"]
+            self.k_cache_dtype = torch.float8_e4m3fn if k_bit == "e4m3" else torch.float8_e5m2
+            self.v_cache_dtype = torch.float8_e4m3fn if v_bit == "e4m3" else torch.float8_e5m2
+        else:
+            self.k_cache_dtype = None
+            self.v_cache_dtype = None
+
         for _ in range(self.num_transformer_blocks):
-            kv_cache1.append(
-                {
+            if self.k_cache_dtype is not None:
+                entry = {
+                    "k": torch.zeros((kv_cache_size, 12, 128), dtype=self.k_cache_dtype, device=self.device),
+                    "v": torch.zeros((kv_cache_size, 12, 128), dtype=self.v_cache_dtype, device=self.device),
+                    "k_scales": torch.zeros((kv_cache_size, 12, 1), dtype=torch.float32, device=self.device),
+                    "v_scales": torch.zeros((kv_cache_size, 12, 1), dtype=torch.float32, device=self.device),
+                    "global_end_index": torch.tensor([0], dtype=torch.long, device=self.device),
+                    "local_end_index": torch.tensor([0], dtype=torch.long, device=self.device),
+                }
+            else:
+                entry = {
                     "k": torch.zeros((kv_cache_size, 12, 128)).to(dtype).to(device),
                     "v": torch.zeros((kv_cache_size, 12, 128)).to(dtype).to(device),
                     "global_end_index": torch.tensor([0], dtype=torch.long).to(device),
                     "local_end_index": torch.tensor([0], dtype=torch.long).to(device),
                 }
-            )
+            kv_cache1.append(entry)
 
         self.kv_cache1_default = kv_cache1  # always store the clean cache
 
@@ -131,16 +157,60 @@ class WanSFTransformerInfer(WanTransformerInfer):
         q = causal_rope_apply(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
         k = causal_rope_apply(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
 
-        # Assign new keys/values directly up to current_end
+        # Assign new keys/values with optional cache eviction
         seg_seq_len = self.frame_seq_length * self.num_frame_per_block
-        local_start_index = seg_index * seg_seq_len
-        local_end_index = (seg_index + 1) * seg_seq_len
+        num_new_tokens = seg_seq_len
+        current_start = seg_index * seg_seq_len
+        current_end = current_start + num_new_tokens
+        kv_cache = self.kv_cache1[self.block_idx]
+        sink_tokens = self.sink_size * self.frame_seq_length
 
-        self.kv_cache1[self.block_idx]["k"][local_start_index:local_end_index] = k
-        self.kv_cache1[self.block_idx]["v"][local_start_index:local_end_index] = v
+        if self.local_attn_size != -1 and (current_end > kv_cache["global_end_index"].item()) and (num_new_tokens + kv_cache["local_end_index"].item() > self.kv_cache_size):
+            num_evicted_tokens = num_new_tokens + kv_cache["local_end_index"].item() - self.kv_cache_size
+            num_rolled_tokens = kv_cache["local_end_index"].item() - num_evicted_tokens - sink_tokens
+            src_start = sink_tokens + num_evicted_tokens
+            src_end = src_start + num_rolled_tokens
+            dst_start = sink_tokens
+            dst_end = dst_start + num_rolled_tokens
+            kv_cache["k"][dst_start:dst_end] = kv_cache["k"][src_start:src_end].clone()
+            kv_cache["v"][dst_start:dst_end] = kv_cache["v"][src_start:src_end].clone()
+            if self.kv_quant_config is not None:
+                kv_cache["k_scales"][dst_start:dst_end] = kv_cache["k_scales"][src_start:src_end].clone()
+                kv_cache["v_scales"][dst_start:dst_end] = kv_cache["v_scales"][src_start:src_end].clone()
+            local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item() - num_evicted_tokens
+            local_start_index = local_end_index - num_new_tokens
+        else:
+            local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item()
+            local_start_index = local_end_index - num_new_tokens
 
-        attn_k = self.kv_cache1[self.block_idx]["k"][max(0, local_end_index - self.max_attention_size) : local_end_index]
-        attn_v = self.kv_cache1[self.block_idx]["v"][max(0, local_end_index - self.max_attention_size) : local_end_index]
+        if self.kv_quant_config is not None:
+            s0, s1, s2 = k.shape  # (seq_len, num_heads, head_dim)
+            k_2d = k.view(s0 * s1, s2)
+            v_2d = v.view(s0 * s1, s2)
+            k_q, k_scales = self.quant_fp8_vllm(k_2d)
+            v_q, v_scales = self.quant_fp8_vllm(v_2d)
+            kv_cache["k"][local_start_index:local_end_index] = k_q.view(s0, s1, s2)
+            kv_cache["v"][local_start_index:local_end_index] = v_q.view(s0, s1, s2)
+            kv_cache["k_scales"][local_start_index:local_end_index] = k_scales.view(s0, s1, 1)
+            kv_cache["v_scales"][local_start_index:local_end_index] = v_scales.view(s0, s1, 1)
+        else:
+            kv_cache["k"][local_start_index:local_end_index] = k
+            kv_cache["v"][local_start_index:local_end_index] = v
+
+        kv_cache["global_end_index"].fill_(current_end)
+        kv_cache["local_end_index"].fill_(local_end_index)
+
+        attn_start = max(0, local_end_index - self.max_attention_size)
+        if self.kv_quant_config is not None:
+            k_fp8 = kv_cache["k"][attn_start:local_end_index]
+            v_fp8 = kv_cache["v"][attn_start:local_end_index]
+            k_sc = kv_cache["k_scales"][attn_start:local_end_index]
+            v_sc = kv_cache["v_scales"][attn_start:local_end_index]
+            attn_k = self.dequant_fp8_vllm(k_fp8, k_sc, self.dtype)
+            attn_v = self.dequant_fp8_vllm(v_fp8, v_sc, self.dtype)
+        else:
+            attn_k = kv_cache["k"][attn_start:local_end_index]
+            attn_v = kv_cache["v"][attn_start:local_end_index]
 
         k_lens = torch.empty_like(seq_lens).fill_(attn_k.size(0))
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
