@@ -3,6 +3,7 @@ import threading
 
 from loguru import logger
 
+from lightx2v.disagg.services.controller import ControllerService
 from lightx2v.disagg.services.decoder import DecoderService
 from lightx2v.disagg.services.encoder import EncoderService
 from lightx2v.disagg.services.transformer import TransformerService
@@ -14,6 +15,8 @@ logging.basicConfig(level=logging.INFO)
 
 
 def main():
+    encoder_stop_event = threading.Event()
+
     # 1. Configuration
     model_path = "/root/zht/LightX2V/models/Wan-AI/Wan2.1-T2V-1.3B"
     task = "t2v"
@@ -62,42 +65,50 @@ def main():
     # 2. Define service threads
     def run_encoder():
         logger.info("Initializing Encoder Service...")
-        encoder_service = EncoderService(config)
+        encoder_service = EncoderService()
         logger.info("Running Encoder Service...")
-        encoder_service.process()
+        encoder_service.exec_request(stop_event=encoder_stop_event)
         logger.info("Encoder Service completed.")
-        encoder_service.release_memory()
 
     def run_transformer():
         logger.info("Initializing Transformer Service...")
-        transformer_service = TransformerService(config)
+        transformer_service = TransformerService()
         logger.info("Running Transformer Service...")
-        transformer_service.process()
+        transformer_service.exec_request()
         logger.info("Transformer Service completed.")
-        transformer_service.release_memory()
 
     def run_decoder():
         logger.info("Initializing Decoder Service...")
-        decoder_service = DecoderService(config)
+        decoder_service = DecoderService()
         logger.info("Running Decoder Service...")
-        decoder_service.process()
+        decoder_service.exec_request()
         logger.info("Video generation completed.")
-        decoder_service.release_memory()
+
+    def run_controller():
+        logger.info("Initializing Controller Service...")
+        controller_service = ControllerService()
+        logger.info("Dispatching request to services...")
+        controller_service.add_request(config)
+        encoder_stop_event.set()
+        logger.info("Controller Service completed.")
 
     # 3. Start threads
     encoder_thread = threading.Thread(target=run_encoder)
     transformer_thread = threading.Thread(target=run_transformer)
     decoder_thread = threading.Thread(target=run_decoder)
+    controller_thread = threading.Thread(target=run_controller)
 
     logger.info("Starting services in separate threads...")
     encoder_thread.start()
     transformer_thread.start()
     decoder_thread.start()
+    controller_thread.start()
 
     # 4. Wait for completion
     encoder_thread.join()
     transformer_thread.join()
     decoder_thread.join()
+    controller_thread.join()
     logger.info("All services finished.")
 
 

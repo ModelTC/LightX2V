@@ -5,7 +5,7 @@ from typing import List, Optional
 import numpy as np
 import torch
 
-from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.conn import REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import (
@@ -20,15 +20,30 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class TransformerService(BaseService):
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self):
+        super().__init__()
+        self.request_port = REQUEST_POLLING_PORT + 1
+        self.req_mgr = ReqManager()
         self.transformer = None
         self.scheduler = None
         self.rdma_buffer1: List[torch.Tensor] = []
         self.rdma_buffer2: List[torch.Tensor] = []
+        self.data_mgr1 = DataManager(DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
+        self.data_mgr2 = DataManager(DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
+        self.data_receiver = None
+        self.data_sender = None
+
+    def init(self, config):
+        self.config = config
+        self.transformer = None
+        self.scheduler = None
+        self.rdma_buffer1 = []
+        self.rdma_buffer2 = []
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
+        self.data_receiver = None
+        self.data_sender = None
 
         self.load_models()
 
@@ -58,7 +73,7 @@ class TransformerService(BaseService):
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self.data_mgr1 = DataManager(data_args, DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
+        self.data_mgr1.init(data_args, int(data_bootstrap_room))
         self.data_receiver = DataReceiver(self.data_mgr1, data_bootstrap_addr, int(data_bootstrap_room))
         self.data_receiver.init()
 
@@ -78,7 +93,7 @@ class TransformerService(BaseService):
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self.data_mgr2 = DataManager(data_args, DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
+        self.data_mgr2.init(data_args, int(data_bootstrap_room))
         self.data_sender = DataSender(self.data_mgr2, data_bootstrap_addr, int(data_bootstrap_room))
 
     def load_models(self):
@@ -349,18 +364,29 @@ class TransformerService(BaseService):
 
     def release_memory(self):
         """
-        Releases the RDMA buffers, deregisters them from transfer engine, and clears GPU cache.
+        Releases the RDMA buffers and clears GPU cache.
         """
         if self.rdma_buffer1:
-            for buf in self.rdma_buffer1:
-                if self.data_mgr1 is not None:
-                    self.data_mgr1.engine.deregister(buf.data_ptr())
             self.rdma_buffer1 = []
 
         if self.rdma_buffer2:
-            for buf in self.rdma_buffer2:
-                if self.data_mgr2 is not None:
-                    self.data_mgr2.engine.deregister(buf.data_ptr())
             self.rdma_buffer2 = []
 
         torch.cuda.empty_cache()
+
+    def release(self, room: int):
+        self.release_memory()
+
+        if self.data_mgr1 is not None:
+            self.data_mgr1.release(room)
+        if self.data_mgr2 is not None:
+            self.data_mgr2.release(room)
+
+    def exec_request(self):
+        config = self.req_mgr.receive(self.request_port)
+        room = int(config.get("data_bootstrap_room", 0))
+        try:
+            self.init(config)
+            return self.process()
+        finally:
+            self.release(room)

@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import torch
 
-from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataReceiver, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.conn import REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import estimate_transformer_buffer_sizes, load_wan_vae_decoder
@@ -15,16 +15,27 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class DecoderService(BaseService):
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self):
+        super().__init__()
+        self.request_port = REQUEST_POLLING_PORT + 2
+        self.req_mgr = ReqManager()
         self.vae_decoder = None
         self._rdma_buffers: List[torch.Tensor] = []
+        self.data_mgr = DataManager(
+            DisaggregationPhase.PHASE2,
+            DisaggregationMode.DECODE,
+        )
+        self.data_receiver = None
+
+    def init(self, config):
+        self.config = config
+        self.vae_decoder = None
+        self._rdma_buffers = []
 
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
 
-        self.data_mgr = None
         self.data_receiver = None
 
         self.load_models()
@@ -53,11 +64,7 @@ class DecoderService(BaseService):
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self.data_mgr = DataManager(
-            data_args,
-            DisaggregationPhase.PHASE2,
-            DisaggregationMode.DECODE,
-        )
+        self.data_mgr.init(data_args, int(data_bootstrap_room))
         self.data_receiver = DataReceiver(self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room))
         self.data_receiver.init()
 
@@ -158,8 +165,22 @@ class DecoderService(BaseService):
 
     def release_memory(self):
         if self._rdma_buffers:
-            for buf in self._rdma_buffers:
-                if self.data_mgr is not None:
-                    self.data_mgr.engine.deregister(buf.data_ptr())
             self._rdma_buffers = []
         torch.cuda.empty_cache()
+
+    def release(self, room: int):
+        self.release_memory()
+
+        if self.data_mgr is None:
+            return
+
+        self.data_mgr.release(room)
+
+    def exec_request(self):
+        config = self.req_mgr.receive(self.request_port)
+        room = int(config.get("data_bootstrap_room", 0))
+        try:
+            self.init(config)
+            return self.process()
+        finally:
+            self.release(room)
