@@ -114,6 +114,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             "gguf-Q3_K_S",
             "gguf-Q3_K_M",
             "int8-npu",
+            "fp8-intel-xpu",
         ]
 
     @abstractmethod

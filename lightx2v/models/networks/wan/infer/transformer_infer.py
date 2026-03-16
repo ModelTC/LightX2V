@@ -5,6 +5,9 @@ import torch
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
@@ -120,7 +123,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del e
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
         return x
 
     def infer_without_offload(self, blocks, x, pre_infer_out):
@@ -164,7 +167,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del embed0
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
@@ -200,7 +203,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
 
         attn_running_args = {
             "block_idx": self.block_idx,
@@ -239,7 +242,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del q, k, v, attn_out
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
 
         return y
 
@@ -309,13 +312,13 @@ class WanTransformerInfer(BaseTransformerInfer):
 
             if self.clean_cuda_cache:
                 del k_img, v_img, img_attn_out
-                torch.cuda.empty_cache()
+                torch_device_module.empty_cache()
 
         attn_out = phase.cross_attn_o.apply(attn_out)
 
         if self.clean_cuda_cache:
             del q, k, v, norm3_out, context, context_img
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
         return x, attn_out
 
     def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
@@ -323,7 +326,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del attn_out
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
 
         if hasattr(phase, "smooth_norm2_weight"):
             norm2_weight = (1 + c_scale_msa.squeeze()) * phase.smooth_norm2_weight.tensor
@@ -344,10 +347,10 @@ class WanTransformerInfer(BaseTransformerInfer):
         y = phase.ffn_0.apply(norm2_out)
         if self.clean_cuda_cache:
             del norm2_out, x
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
         y = torch.nn.functional.gelu(y, approximate="tanh")
         if self.clean_cuda_cache:
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
         y = phase.ffn_2.apply(y)
 
         return y
@@ -360,5 +363,5 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del y, c_gate_msa
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
         return x
