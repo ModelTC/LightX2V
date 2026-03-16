@@ -32,9 +32,12 @@ def get_config_json(config_json):
     raise TypeError("config_json must be str or dict")
 
 
-def load_clip_configs(main_json_path: str):
-    with open(main_json_path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
+def load_clip_configs(main_json_path):
+    if isinstance(main_json_path, dict):
+        cfg = main_json_path
+    else:
+        with open(main_json_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
 
     if "parallel" in cfg:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
