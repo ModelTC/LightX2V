@@ -10,8 +10,8 @@ class WanAnimateModel(WanModel):
     transformer_weight_class = WanAnimateTransformerWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
-        self.remove_keys.extend(["face_encoder", "motion_encoder"])
         super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
+        self.remove_keys.extend(["face_encoder", "motion_encoder"])
 
     def _init_infer_class(self):
         super()._init_infer_class()
