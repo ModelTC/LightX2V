@@ -16,6 +16,8 @@ logging.basicConfig(level=logging.INFO)
 
 def main():
     encoder_stop_event = threading.Event()
+    transformer_stop_event = threading.Event()
+    decoder_stop_event = threading.Event()
 
     # 1. Configuration
     model_path = "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B"
@@ -91,14 +93,14 @@ def main():
         logger.info("Initializing Transformer Service...")
         transformer_service = TransformerService()
         logger.info("Running Transformer Service...")
-        transformer_service.exec_request()
+        transformer_service.exec_request(stop_event=transformer_stop_event)
         logger.info("Transformer Service completed.")
 
     def run_decoder():
         logger.info("Initializing Decoder Service...")
         decoder_service = DecoderService()
         logger.info("Running Decoder Service...")
-        decoder_service.exec_request()
+        decoder_service.exec_request(stop_event=decoder_stop_event)
         logger.info("Video generation completed.")
 
     def run_controller():
@@ -107,6 +109,8 @@ def main():
         logger.info("Dispatching request to services...")
         controller_service.add_request(config)
         encoder_stop_event.set()
+        transformer_stop_event.set()
+        decoder_stop_event.set()
         logger.info("Controller Service completed.")
 
     # 4. Start threads

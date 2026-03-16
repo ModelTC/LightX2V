@@ -358,13 +358,14 @@ class EncoderService(BaseService):
         complete_queue: Dict[int, dict] = {}
 
         while True:
-            config = self.req_mgr.receive(self.request_port)
-            req_queue.append(config)
-            # while True:
-            #     config = self.req_mgr.receive_non_block(self.request_port)
-            #     if config is None:
-            #         break
-            #     req_queue.append(config)
+            # config = self.req_mgr.receive(self.request_port)
+            # req_queue.append(config)
+            while True:
+                config = self.req_mgr.receive_non_block(self.request_port)
+                if config is None:
+                    break
+                self.logger.info("Received request config: %s", {k: v for k, v in config.items() if not k.endswith("_path")})
+                req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()

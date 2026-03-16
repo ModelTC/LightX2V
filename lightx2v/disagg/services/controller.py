@@ -1,6 +1,7 @@
 from collections import deque
 from threading import Lock
 from typing import Any, Deque
+import time
 
 from lightx2v.disagg.conn import REQUEST_POLLING_PORT, ReqManager
 from lightx2v.disagg.services.base import BaseService
@@ -26,3 +27,5 @@ class ControllerService(BaseService):
 		self.req_mgr.send(bootstrap_addr, REQUEST_POLLING_PORT + 1, config)
 		self.req_mgr.send(bootstrap_addr, REQUEST_POLLING_PORT + 2, config)
 		self.logger.info("Request added to controller queue and dispatched to services")
+
+		time.sleep(10)  # Sleep briefly to allow services to process the request

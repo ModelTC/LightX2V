@@ -1,7 +1,8 @@
 import hashlib
 import json
 import time
-from typing import List, Optional
+from collections import deque
+from typing import Dict, List, Optional
 
 import torch
 
@@ -20,23 +21,20 @@ class DecoderService(BaseService):
         self.request_port = REQUEST_POLLING_PORT + 2
         self.req_mgr = ReqManager()
         self.vae_decoder = None
-        self._rdma_buffers: List[torch.Tensor] = []
+        self._rdma_buffers: Dict[int, List[torch.Tensor]] = {}
         self.data_mgr = DataManager(
             DisaggregationPhase.PHASE2,
             DisaggregationMode.DECODE,
         )
-        self.data_receiver = None
+        self.data_receiver: Dict[int, DataReceiver] = {}
 
     def init(self, config):
         self.config = config
         self.vae_decoder = None
-        self._rdma_buffers = []
 
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
-
-        self.data_receiver = None
 
         self.load_models()
 
@@ -50,7 +48,7 @@ class DecoderService(BaseService):
 
         buffer_sizes = estimate_transformer_buffer_sizes(self.config)
         request = AllocationRequest(
-            bootstrap_room=str(data_bootstrap_room),
+            bootstrap_room=data_bootstrap_room,
             buffer_sizes=buffer_sizes,
         )
         handle = self.alloc_memory(request)
@@ -64,9 +62,9 @@ class DecoderService(BaseService):
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self.data_mgr.init(data_args, int(data_bootstrap_room))
-        self.data_receiver = DataReceiver(self.data_mgr, data_bootstrap_addr, int(data_bootstrap_room))
-        self.data_receiver.init()
+        self.data_mgr.init(data_args, data_bootstrap_room)
+        self.data_receiver[data_bootstrap_room] = DataReceiver(self.data_mgr, data_bootstrap_addr, data_bootstrap_room)
+        self.data_receiver[data_bootstrap_room].init()
 
     def load_models(self):
         self.logger.info("Loading Decoder Models...")
@@ -75,21 +73,30 @@ class DecoderService(BaseService):
 
     def alloc_memory(self, request: AllocationRequest) -> MemoryHandle:
         buffer_sizes = request.buffer_sizes
+        room = request.bootstrap_room
 
-        self._rdma_buffers = []
+        self._rdma_buffers[room] = []
         buffers: List[RemoteBuffer] = []
         for nbytes in buffer_sizes:
             if nbytes <= 0:
                 continue
             buf = torch.empty((nbytes,), dtype=torch.uint8)
             ptr = buf.data_ptr()
-            self._rdma_buffers.append(buf)
+            self._rdma_buffers[room].append(buf)
             buffers.append(RemoteBuffer(addr=ptr, nbytes=nbytes))
 
         return MemoryHandle(buffers=buffers)
 
-    def process(self):
+    def process(self, config):
         self.logger.info("Starting processing in DecoderService...")
+        room = config.get("data_bootstrap_room", 0)
+        room_buffers = self._rdma_buffers.get(room)
+        receiver = self.data_receiver.get(room)
+
+        if receiver is None:
+            raise RuntimeError(f"DataReceiver is not initialized in DecoderService for room={room}.")
+        if room_buffers is None:
+            raise RuntimeError(f"No RDMA buffer available in DecoderService for room={room}.")
 
         def _buffer_view(buf: torch.Tensor, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
             view = torch.empty(0, dtype=dtype, device=buf.device)
@@ -105,22 +112,10 @@ class DecoderService(BaseService):
             data = data_tensor.contiguous().cpu().numpy().tobytes()
             return hashlib.sha256(data).hexdigest()
 
-        if self.data_receiver is not None:
-            while True:
-                status = self.data_receiver.poll()
-                if status == DataPoll.Success:
-                    self.logger.info("Latents received successfully in DecoderService.")
-                    break
-                time.sleep(0.01)
-        else:
-            raise RuntimeError("DataReceiver is not initialized in DecoderService.")
-
-        if not self._rdma_buffers:
-            raise RuntimeError("No RDMA buffer available in DecoderService.")
-        if len(self._rdma_buffers) < 2:
+        if len(room_buffers) < 2:
             raise RuntimeError("Phase2 RDMA buffers require [latents, meta] entries.")
 
-        meta_buf = self._rdma_buffers[1]
+        meta_buf = room_buffers[1]
         meta_bytes = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
         meta_str = meta_bytes.split(b"\x00", 1)[0].decode("utf-8") if meta_bytes else ""
         if not meta_str:
@@ -139,7 +134,7 @@ class DecoderService(BaseService):
         }
         latents_dtype = dtype_map.get(meta.get("latents_dtype"), GET_DTYPE())
 
-        latents = _buffer_view(self._rdma_buffers[0], latents_dtype, latent_shape)
+        latents = _buffer_view(room_buffers[0], latents_dtype, latent_shape)
         if list(latents.shape) != meta.get("latents_shape"):
             raise ValueError("latents shape mismatch between transformer and decoder")
         if meta.get("latents_hash") is not None and _sha256_tensor(latents) != meta.get("latents_hash"):
@@ -153,34 +148,88 @@ class DecoderService(BaseService):
         gen_video = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         gen_video_final = wan_vae_to_comfy(gen_video)
 
-        save_path = self.config.get("save_path")
+        save_path = config.get("save_path")
         if save_path is None:
             raise ValueError("save_path is required in config.")
 
         self.logger.info(f"Saving video to {save_path}...")
-        save_to_video(gen_video_final, save_path, fps=self.config.get("fps", 16), method="ffmpeg")
+        save_to_video(gen_video_final, save_path, fps=config.get("fps", 16), method="ffmpeg")
         self.logger.info("Done!")
 
         return save_path
 
-    def release_memory(self):
-        if self._rdma_buffers:
-            self._rdma_buffers = []
+    def release_memory(self, room: int):
+        if room in self._rdma_buffers:
+            self._rdma_buffers.pop(room, None)
         torch.cuda.empty_cache()
 
     def release(self, room: int):
-        self.release_memory()
+        self.release_memory(room)
+
+        self.data_receiver.pop(room, None)
 
         if self.data_mgr is None:
             return
 
         self.data_mgr.release(room)
 
-    def exec_request(self):
-        config = self.req_mgr.receive(self.request_port)
-        room = int(config.get("data_bootstrap_room", 0))
-        try:
-            self.init(config)
-            return self.process()
-        finally:
-            self.release(room)
+    def exec_request(self, stop_event=None):
+        req_queue = deque()
+        waiting_queue: Dict[int, dict] = {}
+        exec_queue = deque()
+
+        while True:
+            while True:
+                config = self.req_mgr.receive_non_block(self.request_port)
+                if config is None:
+                    break
+                req_queue.append(config)
+
+            if req_queue:
+                config = req_queue.popleft()
+                room = int(config.get("data_bootstrap_room", 0))
+                try:
+                    self.init(config)
+                    waiting_queue[room] = config
+                except Exception:
+                    self.logger.exception("Failed to initialize request for room=%s", room)
+                    self.release(room)
+
+            ready_rooms: List[int] = []
+            failed_rooms: List[int] = []
+            for room in list(waiting_queue.keys()):
+                receiver = self.data_receiver.get(room)
+                if receiver is None:
+                    failed_rooms.append(room)
+                    continue
+
+                status = receiver.poll()
+                if status == DataPoll.Success:
+                    ready_rooms.append(room)
+                elif status == DataPoll.Failed:
+                    failed_rooms.append(room)
+
+            for room in ready_rooms:
+                self.logger.info("Latents received successfully in DecoderService for room=%s.", room)
+                exec_queue.append((room, waiting_queue.pop(room)))
+
+            for room in failed_rooms:
+                waiting_queue.pop(room, None)
+                self.logger.error("DataReceiver transfer failed for room=%s", room)
+                self.release(room)
+
+            if exec_queue:
+                room, config = exec_queue.popleft()
+                try:
+                    self.process(config)
+                except Exception:
+                    self.logger.exception("Failed to process request for room=%s", room)
+                finally:
+                    self.release(room)
+
+            if stop_event is not None and stop_event.is_set() and not req_queue and not waiting_queue and not exec_queue:
+                self.logger.info("DecoderService received stop event, exiting request loop.")
+                break
+
+            if not req_queue and not exec_queue:
+                time.sleep(0.01)
