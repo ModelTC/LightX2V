@@ -21,6 +21,23 @@ class WanScheduler4ChangingResolution:
             config["changing_resolution_steps"] = [config.infer_steps // 2]
         assert len(config["resolution_rate"]) == len(config["changing_resolution_steps"])
 
+    def _refresh_cos_sin_cache(self):
+        self.cos_sin = self.prepare_cos_sin(
+            (
+                self.latents.shape[1] // self.patch_size[0],
+                self.latents.shape[2] // self.patch_size[1],
+                self.latents.shape[3] // self.patch_size[2],
+            )
+        )
+
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
+        super().prepare(seed, latent_shape, image_encoder_output=image_encoder_output)
+        self._refresh_cos_sin_cache()
+
+    def reset(self, seed, latent_shape, step_index=None):
+        super().reset(seed, latent_shape, step_index=step_index)
+        self._refresh_cos_sin_cache()
+
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents_list = []
@@ -86,6 +103,7 @@ class WanScheduler4ChangingResolution:
 
         # 5. update timesteps using shift + self.changing_resolution_index + 1 更激进的去噪
         self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift + self.changing_resolution_index + 1)
+        self._refresh_cos_sin_cache()
 
     def add_noise(self, original_samples, noise, timesteps):
         sigma = self.sigmas[self.step_index]

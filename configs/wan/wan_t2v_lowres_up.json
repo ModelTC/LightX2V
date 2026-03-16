@@ -13,11 +13,11 @@
     "cpu_offload": false,
     "changing_resolution": true,
     "resolution_rate": [
-        0.75,
-        0.9
+        1.0,
+        0.75
     ],
     "changing_resolution_steps": [
-        30,
-        40
+        10,
+        35
     ]
 }
