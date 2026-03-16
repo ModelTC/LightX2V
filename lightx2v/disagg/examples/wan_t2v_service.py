@@ -63,7 +63,7 @@ def main():
     encoder_stop_event = threading.Event()
     transformer_stop_event = threading.Event()
     decoder_stop_event = threading.Event()
-    
+
     # 2. Define service threads
     def run_encoder():
         logger.info("Initializing Encoder Service...")

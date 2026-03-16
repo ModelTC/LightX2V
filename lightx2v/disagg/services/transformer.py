@@ -446,14 +446,7 @@ class TransformerService(BaseService):
                 complete_queue.pop(room, None)
                 self.release(room)
 
-            if (
-                stop_event is not None
-                and stop_event.is_set()
-                and not req_queue
-                and not waiting_queue
-                and not exec_queue
-                and not complete_queue
-            ):
+            if stop_event is not None and stop_event.is_set() and not req_queue and not waiting_queue and not exec_queue and not complete_queue:
                 self.logger.info("TransformerService received stop event, exiting request loop.")
                 break
 
