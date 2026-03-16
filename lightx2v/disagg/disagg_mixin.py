@@ -16,7 +16,6 @@ from typing import List, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from lightx2v.disagg.conn import (
     DataArgs,
@@ -27,7 +26,6 @@ from lightx2v.disagg.conn import (
     DisaggregationMode,
     DisaggregationPhase,
 )
-from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -259,7 +257,7 @@ class DisaggMixin:
         # Support both Wan2.1 and QwenImage keys
         context = text_encoder_output.get("context", text_encoder_output.get("prompt_embeds"))
         context_null = text_encoder_output.get("context_null", text_encoder_output.get("negative_prompt_embeds"))
-        
+
         # In QwenImage I2I, image_info is part of text_encoder_output, we serialize it to meta
         image_info = text_encoder_output.get("image_info", None)
         if image_info:
@@ -310,16 +308,18 @@ class DisaggMixin:
         # context
         context_flat = context.reshape(-1)
         context_buf = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
-        context_buf[:context_flat.numel()].copy_(context_flat)
+        context_buf[: context_flat.numel()].copy_(context_flat)
         buffer_index += 1
 
         # context_null
         if enable_cfg and context_null is not None:
             context_null_flat = context_null.reshape(-1)
-            context_null_buf = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
-            context_null_buf[:context_null_flat.numel()].copy_(context_null_flat)
+            context_null_buf = _buffer_view(
+                self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),)
+            )
+            context_null_buf[: context_null_flat.numel()].copy_(context_null_flat)
             buffer_index += 1
-        elif enable_cfg: # if enable_cfg is True but context_null is None (e.g. QwenImage empty neg_prompt)
+        elif enable_cfg:  # if enable_cfg is True but context_null is None (e.g. QwenImage empty neg_prompt)
             buffer_index += 1
 
         # clip + vae (for i2v-like tasks)
@@ -328,7 +328,7 @@ class DisaggMixin:
                 clip_buf = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (clip_dim,))
                 if clip_encoder_out is not None:
                     clip_encoder_out_flat = clip_encoder_out.reshape(-1)
-                    clip_buf[:clip_encoder_out_flat.numel()].copy_(clip_encoder_out_flat)
+                    clip_buf[: clip_encoder_out_flat.numel()].copy_(clip_encoder_out_flat)
                 else:
                     clip_buf.zero_()
                 buffer_index += 1
@@ -349,7 +349,7 @@ class DisaggMixin:
         latent_buf = _buffer_view(self._disagg_rdma_buffers[buffer_index], torch.int64, (10,))
         latent_buf.zero_()
         if latent_tensor.numel() > 0:
-            latent_buf[:latent_tensor.numel()].copy_(latent_tensor)
+            latent_buf[: latent_tensor.numel()].copy_(latent_tensor)
         buffer_index += 1
 
         # meta includes shapes, hashes, and image_info (for QwenImage)
@@ -444,7 +444,7 @@ class DisaggMixin:
         # context
         context_shape = tuple(meta.get("context_shape") or (1, text_len, text_dim))
         context_buf_flat = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
-        context = context_buf_flat[:math.prod(context_shape)].view(context_shape).to(AI_DEVICE).clone()
+        context = context_buf_flat[: math.prod(context_shape)].view(context_shape).to(AI_DEVICE).clone()
         buffer_index += 1
 
         # context_null
@@ -453,8 +453,10 @@ class DisaggMixin:
             context_null_shape = meta.get("context_null_shape")
             if context_null_shape is not None:
                 context_null_shape = tuple(context_null_shape)
-                context_null_buf_flat = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
-                context_null = context_null_buf_flat[:math.prod(context_null_shape)].view(context_null_shape).to(AI_DEVICE).clone()
+                context_null_buf_flat = _buffer_view(
+                    self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),)
+                )
+                context_null = context_null_buf_flat[: math.prod(context_null_shape)].view(context_null_shape).to(AI_DEVICE).clone()
             buffer_index += 1
 
         # Restore appropriately depending on model
@@ -509,10 +511,7 @@ class DisaggMixin:
             if task == "i2i":
                 image_encoder_output = [{"image_latents": vae_encoder_out}]
             else:
-                image_encoder_output = {
-                    "clip_encoder_out": clip_encoder_out,
-                    "vae_encoder_out": vae_encoder_out
-                }
+                image_encoder_output = {"clip_encoder_out": clip_encoder_out, "vae_encoder_out": vae_encoder_out}
         else:
             # T2V — only latent_shape
             latent_shape_buf = self._disagg_rdma_buffers[buffer_index]

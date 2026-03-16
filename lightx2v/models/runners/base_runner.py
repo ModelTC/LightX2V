@@ -99,8 +99,7 @@ class BaseRunner(ABC):
         pass
 
     def init_scheduler(self):
-        """Initialize scheduler.
-        """
+        """Initialize scheduler."""
         if self.config.get("disagg_mode") == "decode":
             from lightx2v.models.schedulers.scheduler import NullScheduler
 

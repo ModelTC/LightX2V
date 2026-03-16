@@ -7,10 +7,10 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
+from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
-from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
@@ -176,13 +176,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if self.config.get("disagg_mode"):
             self.init_disagg(self.config)
         super().init_modules()
-        logger.info("Initializing runner modules...")
-        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
-            self.load_model()
-            if self.model is not None:
-                self.model.set_scheduler(self.scheduler)
-        elif self.config.get("lazy_load", False):
-            assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
 
         disagg_mode = self.config.get("disagg_mode")
@@ -433,7 +426,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def run_image_encoder(self):
         pass
 
-
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         """Run full pipeline. Modes:
@@ -449,11 +441,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             # Decoder role: receive DiT latents from Transformer, decode with VAE, save image
             latents = self.receive_transformer_outputs()
 
-            # Retrieve pixel-space dimensions from Phase 2 metadata.
-            # QwenImage latents are in packed format (batch, num_patches, channels), so
-            # latents.shape[-2:] are patch counts, NOT latent spatial dims. We cannot
-            # recover the original pixel height/width from the packed shape alone without
-            # knowing the aspect ratio, so the Transformer embeds them in the metadata.
             scale_factor = self.config["vae_scale_factor"]
             p2_meta = getattr(self, "_p2_receive_meta", {})
             auto_height = p2_meta.get("auto_height")

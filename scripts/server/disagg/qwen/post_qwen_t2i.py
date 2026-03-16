@@ -7,6 +7,7 @@ Request order (same as Wan 3-way):
   3. Send request to Encoder (text encoding + Phase1 send)
   4. Poll Decoder for completion (image saved on Decoder node)
 """
+
 import time
 
 import requests
