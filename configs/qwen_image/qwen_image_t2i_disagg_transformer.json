@@ -10,6 +10,11 @@
     "attn_type": "flash_attn3",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
+    "vae_z_dim": 16,
+    "vae_stride": [1, 8, 8],
+    "target_video_length": 1,
+    "target_height": 1664,
+    "target_width": 1664,
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 0,
@@ -18,6 +23,8 @@
         "protocol": "rdma",
         "local_hostname": "localhost",
         "metadata_server": "P2PHANDSHAKE",
-        "device_name": ""
+        "device_name": "",
+        "decoder_engine_rank": 2,
+        "decoder_bootstrap_room": 2
     }
 }

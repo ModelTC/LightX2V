@@ -21,6 +21,8 @@
         "receiver_engine_rank": 1,
         "protocol": "rdma",
         "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "metadata_server": "P2PHANDSHAKE",
+        "decoder_engine_rank": 2,
+        "decoder_bootstrap_room": 3
     }
 }

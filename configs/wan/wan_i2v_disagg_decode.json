@@ -1,0 +1,20 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "clip_embed_dim": 329216,
+    "cpu_offload": false,
+    "fps": 16,
+    "disagg_mode": "decode",
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 3,
+        "sender_engine_rank": 1,
+        "receiver_engine_rank": 2,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE"
+    }
+}

@@ -25,6 +25,7 @@ from lightx2v.disagg.conn import (
     DataReceiver,
     DataSender,
     DisaggregationMode,
+    DisaggregationPhase,
 )
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.utils.envs import GET_DTYPE
@@ -104,9 +105,15 @@ class DisaggMixin:
     # ------------------------------------------------------------------ #
 
     def init_disagg(self, config):
-        """Initialize Mooncake communication based on ``disagg_mode``."""
+        """Initialize Mooncake communication based on ``disagg_mode``.
+
+        Supported modes:
+        - "encoder"     : Phase 1 sender  (Encoder → Transformer)
+        - "transformer" : Phase 1 receiver + optional Phase 2 sender (→ Decoder)
+        - "decode"      : Phase 2 receiver (Transformer → Decoder)
+        """
         disagg_cfg = config.get("disagg_config", {})
-        self._disagg_mode = config.get("disagg_mode")  # "encoder" | "transformer" | None
+        self._disagg_mode = config.get("disagg_mode")  # "encoder" | "transformer" | "decode" | None
         self._disagg_bootstrap_addr = disagg_cfg.get("bootstrap_addr", "127.0.0.1")
         self._disagg_bootstrap_room = int(disagg_cfg.get("bootstrap_room", 0))
         self._disagg_sender_rank = int(disagg_cfg.get("sender_engine_rank", 0))
@@ -116,16 +123,14 @@ class DisaggMixin:
         self._disagg_receiver: Optional[DataReceiver] = None
         self._disagg_rdma_buffers: List[torch.Tensor] = []
 
-        # Extract Mooncake transport config from disagg_config (optional).
-        # If present, MooncakeTransferEngine will use it directly instead of
-        # reading from the MOONCAKE_CONFIG_PATH environment variable.
-        mooncake_keys = {"protocol", "local_hostname", "metadata_server", "device_name"}
-        mooncake_cfg = {k: v for k, v in disagg_cfg.items() if k in mooncake_keys}
-        mooncake_cfg = mooncake_cfg if mooncake_cfg else None
-
-        buffer_sizes = _estimate_encoder_buffer_sizes(config)
+        # Phase 2 attributes (Transformer → Decoder)
+        self._disagg_p2_data_mgr: Optional[DataManager] = None
+        self._disagg_p2_sender: Optional[DataSender] = None
+        self._disagg_p2_receiver: Optional[DataReceiver] = None
+        self._disagg_p2_rdma_buffers: List[torch.Tensor] = []
 
         if self._disagg_mode == "encoder":
+            buffer_sizes = _estimate_encoder_buffer_sizes(config)
             self._disagg_alloc_buffers(buffer_sizes)
             data_ptrs = [buf.data_ptr() for buf in self._disagg_rdma_buffers]
             data_lens = [buf.numel() for buf in self._disagg_rdma_buffers]
@@ -137,7 +142,7 @@ class DisaggMixin:
                 data_item_lens=data_lens,
                 ib_device=None,
             )
-            self._disagg_data_mgr = DataManager(data_args, DisaggregationMode.ENCODE, mooncake_config=mooncake_cfg)
+            self._disagg_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE1, DisaggregationMode.ENCODE)
             self._disagg_sender = DataSender(
                 self._disagg_data_mgr,
                 self._disagg_bootstrap_addr,
@@ -145,6 +150,8 @@ class DisaggMixin:
             )
 
         elif self._disagg_mode == "transformer":
+            # Phase 1: receive encoder outputs
+            buffer_sizes = _estimate_encoder_buffer_sizes(config)
             self._disagg_alloc_buffers(buffer_sizes)
             data_ptrs = [buf.data_ptr() for buf in self._disagg_rdma_buffers]
             data_lens = [buf.numel() for buf in self._disagg_rdma_buffers]
@@ -156,13 +163,21 @@ class DisaggMixin:
                 data_item_lens=data_lens,
                 ib_device=None,
             )
-            self._disagg_data_mgr = DataManager(data_args, DisaggregationMode.TRANSFORMER, mooncake_config=mooncake_cfg)
+            self._disagg_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
             self._disagg_receiver = DataReceiver(
                 self._disagg_data_mgr,
                 self._disagg_bootstrap_addr,
                 self._disagg_bootstrap_room,
             )
             self._disagg_receiver.init()
+
+            # Phase 2 (optional): send latents to decoder
+            if disagg_cfg.get("decoder_engine_rank") is not None:
+                self._init_phase2_transformer_sender(config, disagg_cfg)
+
+        elif self._disagg_mode == "decode":
+            # Phase 2: receive latents from transformer
+            self._init_phase2_decoder_receiver(config, disagg_cfg)
 
     def _disagg_alloc_buffers(self, buffer_sizes: List[int]):
         self._disagg_rdma_buffers = []
@@ -171,6 +186,65 @@ class DisaggMixin:
                 continue
             buf = torch.empty((nbytes,), dtype=torch.uint8, pin_memory=True)
             self._disagg_rdma_buffers.append(buf)
+
+    def _disagg_alloc_p2_buffers(self, buffer_sizes: List[int]):
+        self._disagg_p2_rdma_buffers = []
+        for nbytes in buffer_sizes:
+            if nbytes <= 0:
+                continue
+            buf = torch.empty((nbytes,), dtype=torch.uint8, pin_memory=True)
+            self._disagg_p2_rdma_buffers.append(buf)
+
+    def _init_phase2_transformer_sender(self, config, disagg_cfg):
+        """Setup Phase 2 sender for Transformer role (send latents to Decoder)."""
+        from lightx2v.disagg.utils import estimate_transformer_buffer_sizes
+
+        p2_transformer_rank = int(disagg_cfg.get("receiver_engine_rank", 1))
+        p2_decoder_rank = int(disagg_cfg.get("decoder_engine_rank", 2))
+        p2_bootstrap_addr = disagg_cfg.get("bootstrap_addr", "127.0.0.1")
+        p2_bootstrap_room = int(disagg_cfg.get("decoder_bootstrap_room", 1))
+
+        buffer_sizes = estimate_transformer_buffer_sizes(config)
+        self._disagg_alloc_p2_buffers(buffer_sizes)
+        data_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
+        data_lens = [buf.numel() for buf in self._disagg_p2_rdma_buffers]
+        data_args = DataArgs(
+            sender_engine_rank=p2_transformer_rank,
+            receiver_engine_rank=p2_decoder_rank,
+            data_ptrs=data_ptrs,
+            data_lens=data_lens,
+            data_item_lens=data_lens,
+            ib_device=None,
+        )
+        self._disagg_p2_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
+        self._disagg_p2_sender = DataSender(self._disagg_p2_data_mgr, p2_bootstrap_addr, p2_bootstrap_room)
+        logger.info(f"[Disagg] Phase2 sender initialized (rank {p2_transformer_rank} → {p2_decoder_rank}, room={p2_bootstrap_room})")
+
+    def _init_phase2_decoder_receiver(self, config, disagg_cfg):
+        """Setup Phase 2 receiver for Decoder role (receive latents from Transformer)."""
+        from lightx2v.disagg.utils import estimate_transformer_buffer_sizes
+
+        p2_transformer_rank = int(disagg_cfg.get("sender_engine_rank", 1))
+        p2_decoder_rank = int(disagg_cfg.get("receiver_engine_rank", 2))
+        p2_bootstrap_addr = disagg_cfg.get("bootstrap_addr", "127.0.0.1")
+        p2_bootstrap_room = int(disagg_cfg.get("bootstrap_room", 1))
+
+        buffer_sizes = estimate_transformer_buffer_sizes(config)
+        self._disagg_alloc_p2_buffers(buffer_sizes)
+        data_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
+        data_lens = [buf.numel() for buf in self._disagg_p2_rdma_buffers]
+        data_args = DataArgs(
+            sender_engine_rank=p2_transformer_rank,
+            receiver_engine_rank=p2_decoder_rank,
+            data_ptrs=data_ptrs,
+            data_lens=data_lens,
+            data_item_lens=data_lens,
+            ib_device=None,
+        )
+        self._disagg_p2_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE2, DisaggregationMode.DECODE)
+        self._disagg_p2_receiver = DataReceiver(self._disagg_p2_data_mgr, p2_bootstrap_addr, p2_bootstrap_room)
+        self._disagg_p2_receiver.init()
+        logger.info(f"[Disagg] Phase2 receiver initialized (rank {p2_transformer_rank} → {p2_decoder_rank}, room={p2_bootstrap_room})")
 
     # ------------------------------------------------------------------ #
     #  Encoder role: serialize and send
@@ -491,11 +565,111 @@ class DisaggMixin:
         logger.info("Disagg: all integrity checks passed.")
 
     # ------------------------------------------------------------------ #
+    #  Transformer role: send latents to Decoder (Phase 2)
+    # ------------------------------------------------------------------ #
+
+    def send_transformer_outputs(self, latents: torch.Tensor):
+        """Serialize DiT latents into Phase 2 RDMA buffer and send via Mooncake."""
+        if self._disagg_p2_sender is None:
+            raise RuntimeError("[Disagg] Phase2 sender is not initialized. Check decoder_engine_rank in disagg_config.")
+        if len(self._disagg_p2_rdma_buffers) < 2:
+            raise RuntimeError("[Disagg] Phase2 RDMA buffers require [latents, meta] entries.")
+
+        latents_to_send = latents.detach().to(GET_DTYPE()).contiguous()
+        latents_nbytes = latents_to_send.numel() * latents_to_send.element_size()
+        latents_buf = self._disagg_p2_rdma_buffers[0]
+        if latents_nbytes > latents_buf.numel():
+            raise ValueError(f"[Disagg] Latents buffer too small: need={latents_nbytes}, capacity={latents_buf.numel()}")
+
+        latents_buf.zero_()
+        latents_view = _buffer_view(latents_buf, latents_to_send.dtype, tuple(latents_to_send.shape))
+        latents_view.copy_(latents_to_send)
+
+        import numpy as _np
+
+        # Include pixel-space dimensions so the Decoder can reconstruct auto_height/width
+        # correctly even when latents are in packed (sequence) format (e.g. QwenImage).
+        _input_info = getattr(self, "input_info", None)
+        latents_meta = {
+            "version": 1,
+            "latents_shape": list(latents_to_send.shape),
+            "latents_dtype": str(latents_to_send.dtype),
+            "latents_hash": _sha256_tensor(latents_to_send),
+            "auto_height": getattr(_input_info, "auto_height", None),
+            "auto_width": getattr(_input_info, "auto_width", None),
+        }
+        meta_bytes = json.dumps(latents_meta, ensure_ascii=True).encode("utf-8")
+        meta_buf = self._disagg_p2_rdma_buffers[1]
+        meta_view = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),))
+        if len(meta_bytes) > meta_view.numel():
+            raise ValueError("[Disagg] Phase2 metadata buffer too small for latents meta payload")
+        meta_view.zero_()
+        meta_view[: len(meta_bytes)].copy_(torch.from_numpy(_np.frombuffer(meta_bytes, dtype=_np.uint8).copy()))
+
+        torch.cuda.synchronize()
+        buffer_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
+        self._disagg_p2_sender.send(buffer_ptrs)
+        while True:
+            status = self._disagg_p2_sender.poll()
+            if status == DataPoll.Success:
+                logger.info("[Disagg] Transformer latents sent to Decoder successfully.")
+                break
+            time.sleep(0.01)
+
+    # ------------------------------------------------------------------ #
+    #  Decoder role: receive latents from Transformer (Phase 2)
+    # ------------------------------------------------------------------ #
+
+    def receive_transformer_outputs(self) -> torch.Tensor:
+        """Poll Phase 2 and reconstruct latents tensor from RDMA buffer."""
+        if self._disagg_p2_receiver is None:
+            raise RuntimeError("[Disagg] Phase2 receiver is not initialized.")
+        if len(self._disagg_p2_rdma_buffers) < 2:
+            raise RuntimeError("[Disagg] Phase2 RDMA buffers require [latents, meta] entries.")
+
+        while True:
+            status = self._disagg_p2_receiver.poll()
+            if status == DataPoll.Success:
+                logger.info("[Disagg] Decoder received latents from Transformer successfully.")
+                break
+            time.sleep(0.01)
+
+        meta_buf = self._disagg_p2_rdma_buffers[1]
+        meta_raw = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
+        meta_str = meta_raw.split(b"\x00", 1)[0].decode("utf-8") if meta_raw else ""
+        if not meta_str:
+            raise ValueError("[Disagg] Missing latents metadata from transformer (Phase 2)")
+        meta = json.loads(meta_str)
+
+        latents_shape_val = meta.get("latents_shape")
+        if not isinstance(latents_shape_val, list) or len(latents_shape_val) < 1:
+            raise ValueError(f"[Disagg] Invalid latents_shape in Phase 2 metadata: {latents_shape_val}")
+        latent_shape = tuple(int(v) for v in latents_shape_val)
+
+        dtype_map = {
+            "torch.float16": torch.float16,
+            "torch.bfloat16": torch.bfloat16,
+            "torch.float32": torch.float32,
+        }
+        latents_dtype = dtype_map.get(meta.get("latents_dtype"), GET_DTYPE())
+
+        latents = _buffer_view(self._disagg_p2_rdma_buffers[0], latents_dtype, latent_shape)
+        if meta.get("latents_hash") is not None and _sha256_tensor(latents) != meta.get("latents_hash"):
+            raise ValueError("[Disagg] Latents hash mismatch between transformer and decoder")
+        latents = latents.to(AI_DEVICE).contiguous()
+        logger.info(f"[Disagg] Phase2 latents restored: shape={latent_shape}, dtype={latents_dtype}")
+        # Store the Phase 2 metadata so the caller (e.g. QwenImageRunner decode mode) can
+        # access pixel-space dimensions (auto_height/auto_width) that are not recoverable
+        # from the packed latent tensor shape alone.
+        self._p2_receive_meta = meta
+        return latents
+
+    # ------------------------------------------------------------------ #
     #  Cleanup
     # ------------------------------------------------------------------ #
 
     def release_disagg(self):
-        """Release RDMA buffers and deregister from transfer engine."""
+        """Release RDMA buffers (Phase 1 and Phase 2) and deregister from transfer engine."""
         if self._disagg_rdma_buffers:
             for buf in self._disagg_rdma_buffers:
                 if self._disagg_data_mgr is not None:
@@ -504,4 +678,12 @@ class DisaggMixin:
                     except Exception:
                         pass
             self._disagg_rdma_buffers = []
+        if self._disagg_p2_rdma_buffers:
+            for buf in self._disagg_p2_rdma_buffers:
+                if self._disagg_p2_data_mgr is not None:
+                    try:
+                        self._disagg_p2_data_mgr.engine.deregister(buf.data_ptr())
+                    except Exception:
+                        pass
+            self._disagg_p2_rdma_buffers = []
         torch.cuda.empty_cache()

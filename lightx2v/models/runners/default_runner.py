@@ -73,7 +73,7 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        if hasattr(self, "model"):
+        if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
@@ -217,7 +217,10 @@ class DefaultRunner(BaseRunner):
         self.run_main(total_steps=1)
 
     def end_run(self):
-        self.model.scheduler.clear()
+        if self.model is not None:
+            self.model.scheduler.clear()
+        elif hasattr(self, "scheduler") and self.scheduler is not None:
+            self.scheduler.clear()
         if hasattr(self, "inputs"):
             del self.inputs
         self.input_info = None

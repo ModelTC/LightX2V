@@ -10,6 +10,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
+from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
@@ -51,7 +52,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 
 
 @RUNNER_REGISTER("qwen_image")
-class QwenImageRunner(DefaultRunner):
+class QwenImageRunner(DisaggMixin, DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
@@ -71,7 +72,7 @@ class QwenImageRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         disagg_mode = self.config.get("disagg_mode")
-        
+
         if disagg_mode == "encoder":
             logger.info("[Disagg] Loading models for ENCODER role (QwenImage)...")
             self.model = None
@@ -80,6 +81,15 @@ class QwenImageRunner(DefaultRunner):
         elif disagg_mode == "transformer":
             logger.info("[Disagg] Loading models for TRANSFORMER role (QwenImage)...")
             self.model = self.load_transformer()
+            self.text_encoders = None
+            # Skip VAE when a dedicated Decoder service handles Phase 2 (3-way disagg)
+            if self.config.get("disagg_config", {}).get("decoder_engine_rank") is not None:
+                self.vae = None
+            else:
+                self.vae = self.load_vae()
+        elif disagg_mode == "decode":
+            logger.info("[Disagg] Loading models for DECODE role (QwenImage)...")
+            self.model = None
             self.text_encoders = None
             self.vae = self.load_vae()
         else:
@@ -110,10 +120,8 @@ class QwenImageRunner(DefaultRunner):
         - "lightllm_kernel": HuggingFace model with Triton kernel optimizations
         - "baseline" (default): HuggingFace baseline implementation
         """
-        # Prepare encoder config by merging lightllm_config if present
-        encoder_config = self.config.copy()
-        lightllm_config = self.config.get("lightllm_config", {})
-        encoder_config.update(lightllm_config)
+        encoder_config = dict(self.config)
+        encoder_config.update(self.config.get("lightllm_config", {}))
 
         if self.text_encoder_type == "lightllm_service":
             from lightx2v.models.input_encoders.lightllm import LightLLMServiceTextEncoder
@@ -165,15 +173,22 @@ class QwenImageRunner(DefaultRunner):
         return vae
 
     def init_modules(self):
+        if self.config.get("disagg_mode"):
+            self.init_disagg(self.config)
         super().init_modules()
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
-            self.model.set_scheduler(self.scheduler)
+            if self.model is not None:
+                self.model.set_scheduler(self.scheduler)
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
 
+        disagg_mode = self.config.get("disagg_mode")
+        if disagg_mode == "decode":
+            # Decoder role does not need a task-specific input encoder
+            return
         if self.config["task"] == "t2i":
             self.run_input_encoder = self._run_input_encoder_local_t2i
         elif self.config["task"] == "i2i":
@@ -407,6 +422,9 @@ class QwenImageRunner(DefaultRunner):
         self.input_info.image_shapes = image_shapes
 
     def init_scheduler(self):
+        super().init_scheduler()
+        if self.config.get("disagg_mode") == "decode":
+            return
         self.scheduler = QwenImageScheduler(self.config)
 
     def get_encoder_output_i2v(self):
@@ -422,9 +440,57 @@ class QwenImageRunner(DefaultRunner):
         - local (no disagg_mode): run encoder → set_shape → DiT → VAE → save.
         - disagg encoder: run encoder → set_shape → send_encoder_outputs → return.
         - disagg transformer: receive_encoder_outputs → set_shape → DiT → VAE → save.
+        - disagg decode: receive_transformer_outputs → VAE → save.
         """
         self.input_info = input_info
         disagg_mode = self.config.get("disagg_mode")
+
+        if disagg_mode == "decode":
+            # Decoder role: receive DiT latents from Transformer, decode with VAE, save image
+            latents = self.receive_transformer_outputs()
+
+            # Retrieve pixel-space dimensions from Phase 2 metadata.
+            # QwenImage latents are in packed format (batch, num_patches, channels), so
+            # latents.shape[-2:] are patch counts, NOT latent spatial dims. We cannot
+            # recover the original pixel height/width from the packed shape alone without
+            # knowing the aspect ratio, so the Transformer embeds them in the metadata.
+            scale_factor = self.config["vae_scale_factor"]
+            p2_meta = getattr(self, "_p2_receive_meta", {})
+            auto_height = p2_meta.get("auto_height")
+            auto_width = p2_meta.get("auto_width")
+            if auto_height is None or auto_width is None:
+                # Fallback for spatial-format latents (non-packed models)
+                latent_h = latents.shape[-2]
+                latent_w = latents.shape[-1]
+                auto_height = latent_h * scale_factor * 2
+                auto_width = latent_w * scale_factor * 2
+            self.input_info.auto_height = int(auto_height)
+            self.input_info.auto_width = int(auto_width)
+            # Compute image_shapes: number of spatial patches per image
+            h_patches = int(auto_height) // (scale_factor * 2)
+            w_patches = int(auto_width) // (scale_factor * 2)
+            self.input_info.image_shapes = [[(1, h_patches, w_patches)]]
+            images = self.run_vae_decoder(latents)
+            self.end_run()
+
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                if not input_info.return_result_tensor:
+                    image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+                    image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+                    if isinstance(images[0], list) and len(images[0]) > 1:
+                        for idx, image in enumerate(images[0]):
+                            image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                            logger.info(f"[Disagg] Decode: image saved: {image_prefix}_{idx:05d}.{image_suffix}")
+                    else:
+                        image = images[0]
+                        image.save(f"{image_prefix}.{image_suffix}")
+                        logger.info(f"[Disagg] Decode: image saved: {image_prefix}.{image_suffix}")
+
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            if input_info.return_result_tensor:
+                return {"images": images}
+            return {"images": None}
 
         if disagg_mode == "transformer":
             # Disagg transformer node: receive from Mooncake, no local encoder
@@ -452,6 +518,14 @@ class QwenImageRunner(DefaultRunner):
             return None
 
         latents, generator = self.run_dit()
+        # 3-way disagg: send latents to Decoder, skip local VAE
+        if getattr(self, "_disagg_p2_sender", None) is not None:
+            self.send_transformer_outputs(latents)
+            self.end_run()
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            return None
+
         images = self.run_vae_decoder(latents)
         self.end_run()
 

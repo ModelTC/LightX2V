@@ -1,6 +1,13 @@
 from lightx2v.utils.envs import *
 
 
+class NullScheduler:
+    """No-op scheduler for disagg roles that skip DiT (e.g. decode role)."""
+
+    def clear(self):
+        pass
+
+
 class BaseScheduler:
     def __init__(self, config):
         self.config = config

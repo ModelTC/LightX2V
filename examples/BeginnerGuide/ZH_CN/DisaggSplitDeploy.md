@@ -2,27 +2,81 @@
 
 对于大规模生成模型（如 Wan、Qwen Image 等），Text Encoder、Image Encoder 以及 VAE 编解码器往往常驻显存，极大挤压核心 DiT 模型的可用空间，在高分辨率、长时生成场景下容易导致 OOM。
 
-LightX2V 提供了原生的 **Disaggregation Mode（分离部署模式）**，通过高性能 **Mooncake 传输引擎**，将 Encoder 与 Transformer 部署在不同显卡或节点上，支持 RDMA / TCP 通信。分离部署模式还支持 Encoder 与 Transformer 并发处理不同请求，从而提升多请求吞吐。
+LightX2V 提供了原生的 **Disaggregation Mode（分离部署模式）**，通过高性能 **Mooncake 传输引擎**，将推理流水线拆分为 **Encoder、Transformer、Decoder** 三段，分别部署在不同显卡或节点上，支持 RDMA / TCP 通信。**Wan** 与 **Qwen Image** 均已支持完整三段式部署（含 VAE Decoder 独立节点）。分离部署模式支持各段并发处理不同请求，从而提升多请求吞吐。
 
 ---
 
 ## 方案对比
 
 
-| 特性       | **Baseline（常规单机部署）** | **Disagg Mode（分离微服务部署）**                   |
-| -------- | -------------------- | ------------------------------------------ |
-| **部署架构** | 所有模型聚合在同一进程中         | 拆分为 **Encoder 节点** 与 **Transformer 节点**    |
-| **显存占用** | 极高                   | **按需分配**（各节点只加载自身所需部分）                     |
-| **通信底层** | 进程内原生 Tensor 共享      | **Mooncake 引擎**（支持 Zero-Copy RDMA 与标准 TCP） |
-| **适用场景** | 显存充裕的单机环境、快速验证       | **显存受限**、长帧视频、多机分布式高并发生产环境                 |
+| 特性       | **Baseline（常规单机部署）** | **Disagg Mode（分离微服务部署）**                                                 |
+| -------- | -------------------- | ------------------------------------------------------------------------ |
+| **部署架构** | 所有模型聚合在同一进程中         | 三段式：**Encoder 节点** → **Transformer 节点** → **Decoder 节点**（VAE 解码独立）       |
+| **显存占用** | 极高                   | **按需分配**（各节点只加载自身所需部分，Decoder 仅 VAE Decoder）                             |
+| **通信底层** | 进程内原生 Tensor 共享      | **Mooncake 引擎**（Phase1: Encoder→Transformer；Phase2: Transformer→Decoder） |
+| **适用场景** | 显存充裕的单机环境、快速验证       | **显存受限**、长帧视频、多机分布式高并发生产环境                                               |
 
 
 ---
 
+## Quick Start
+
+#### Wan2.1-T2V-14B（50 Steps, 480×832, 81 帧）
+
+```bash
+# 指定各阶段部署的卡
+# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+
+# 启动三段式分离部署服务
+bash scripts/server/disagg/wan/start_wan_t2v_disagg.sh
+
+# 成功启动后测试
+python scripts/server/disagg/wan/post_wan_t2v.py
+```
+
+#### Wan2.1-I2V-14B-480P（40 Steps, 480×832, 81 帧）
+
+```bash
+# 指定各阶段部署的卡
+# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+
+# 启动三段式分离部署服务
+bash scripts/server/disagg/wan/start_wan_i2v_disagg.sh
+
+# 成功启动后测试
+python scripts/server/disagg/wan/post_wan_i2v.py
+```
+
+### qwen-image-edit-release-251130（t2i）
+
+```bash
+# 指定各阶段部署的卡
+# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+
+# 启动三段式分离部署服务
+bash scripts/server/disagg/qwen/start_qwen_t2i_disagg.sh
+
+# 成功启动后测试
+python scripts/server/disagg/qwen/post_qwen_t2i.py
+```
+
+### qwen-image-edit-release-251130（i2i）
+
+```bash
+# 指定各阶段部署的卡
+# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+
+# 启动三段式分离部署服务
+bash scripts/server/disagg/qwen/start_qwen_i2i_disagg.sh
+
+# 成功启动后测试
+python scripts/server/disagg/qwen/post_qwen_i2i.py
+```
+
 ## 性能实测 Benchmark
 
 测试环境：NVIDIA H100 SXM5 80 GB，`sage_attn2`，`BF16`，`PROFILING_DEBUG_LEVEL=2`，Mooncake RDMA 协议。
-Baseline 使用单张 GPU 加载全部模型；Disagg Mode 将 Encoder 与 Transformer 部署在不同 GPU 上。
+Baseline 使用单张 GPU 加载全部模型；Disagg Mode 可将 Encoder、Transformer、Decoder 分别部署在不同 GPU 上（下表为两段式或含 Decoder 的实测；三段式时 VAE Decoder 独立成节点，可进一步降低 Transformer 卡显存）。
 
 ### Wan2.1-T2V-1.3B（小模型参考）
 
@@ -103,14 +157,17 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 
 ## 1. Disagg 分离架构解析
 
-通过配置参数 `disagg_mode`，推理 Pipeline 被物理拆分为两个独立服务：
+通过配置参数 `disagg_mode`，推理 Pipeline 被物理拆分为 **三段式** 独立服务，数据流经 **Phase1（Encoder → Transformer）** 与 **Phase2（Transformer → Decoder）** 两次 Mooncake 传输：
 
 - **Encoder 角色（`disagg_mode="encoder"`）**：
-  - 仅加载 Text Encoder、Image Encoder（I2V 时）以及 VAE Encoder，**跳过 DiT 加载**。
-  - 执行特征提取，将 `context`、`clip_encoder_out`、`vae_encoder_out`、`latent_shape` 等结果通过 Mooncake 投递给 Transformer 节点。
+  - 仅加载 Text Encoder、Image Encoder（I2V / I2I 时）以及 VAE Encoder，**跳过 DiT 与 VAE Decoder**。
+  - 执行特征提取，将 `context`、`clip_encoder_out`、`vae_encoder_out`、`latent_shape` 等通过 Mooncake **Phase1** 投递给 Transformer 节点。
 - **Transformer 角色（`disagg_mode="transformer"`）**：
-  - 仅加载 DiT 模型与 VAE Decoder，**跳过 Encoder 加载**。
-  - 启动后进入 Mooncake 接收等待状态，收到数据后执行哈希校验、拼装输入并完成去噪与解码，最终保存输出视频。
+  - 仅加载 DiT 模型，**跳过 Encoder 与 VAE Decoder**（三段式下由 Decoder 节点承担解码）。
+  - 启动后等待 Phase1 数据，收到后执行哈希校验、拼装输入并完成去噪；若配置了 `decoder_engine_rank`，将去噪后的潜空间通过 Mooncake **Phase2** 发送给 Decoder 节点，**不本地做 VAE 解码**。
+- **Decoder 角色（`disagg_mode="decode"`）**：
+  - 仅加载 **VAE Decoder**，**跳过 Text/Image Encoder 与 DiT**。
+  - 启动后进入 Phase2 接收等待状态，收到 Transformer 发来的潜空间后执行 VAE 解码并保存输出视频/图像，**任务完成状态与结果文件均落在 Decoder 节点**。
 
 ---
 
@@ -150,7 +207,41 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 }
 ```
 
-**Transformer 端（`configs/wan/wan_t2v_disagg_transformer.json`）**：将上述 `disagg_mode` 改为 `"transformer"` 即可，其余参数保持一致。
+**Transformer 端（`configs/wan/wan_t2v_disagg_transformer.json`）**：将 `disagg_mode` 改为 `"transformer"`，并增加 Phase2 相关配置，用于向 Decoder 发送潜空间：
+
+```json
+{
+    "disagg_mode": "transformer",
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 0,
+        "sender_engine_rank": 0,
+        "receiver_engine_rank": 1,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE",
+        "decoder_engine_rank": 2,
+        "decoder_bootstrap_room": 1
+    }
+}
+```
+
+**Decoder 端（`configs/wan/wan_t2v_disagg_decode.json`）**：仅加载 VAE Decoder，Phase2 接收端；`bootstrap_room` 需与 Transformer 的 `decoder_bootstrap_room` 一致：
+
+```json
+{
+    "disagg_mode": "decode",
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 1,
+        "sender_engine_rank": 1,
+        "receiver_engine_rank": 2,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE"
+    }
+}
+```
 
 ### 2.2 I2V 配置示例
 
@@ -189,86 +280,100 @@ I2V 使用 **ViT-H/14** CLIP 图像编码器，其输出为完整序列特征（
 >
 > **Transformer 端**同样需要 `clip_embed_dim: 329216`，与 Encoder 端保持一致。
 
-### 2.3 关键参数说明
+### 2.3 Decoder 配置示例（三段式）
+
+Wan T2V Decoder 见上文；Qwen Image I2I Decoder 示例（`configs/qwen_image/qwen_image_i2i_disagg_decode.json`）：
+
+```json
+{
+    "task": "i2i",
+    "disagg_mode": "decode",
+    "infer_steps": 40,
+    "vae_z_dim": 16,
+    "vae_stride": [1, 8, 8],
+    "target_video_length": 1,
+    "target_height": 1664,
+    "target_width": 1664,
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 2,
+        "sender_engine_rank": 1,
+        "receiver_engine_rank": 2,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE"
+    }
+}
+```
+
+Decoder 的 `bootstrap_room` 必须与 Transformer 配置中的 `**decoder_bootstrap_room**` 相同；`sender_engine_rank` / `receiver_engine_rank` 对应 Phase2 的 Transformer（发送方）与 Decoder（接收方）引擎 rank。
+
+### 2.4 关键参数说明
 
 
-| 参数                     | 说明                                               |
-| ---------------------- | ------------------------------------------------ |
-| `disagg_mode`          | 分离部署服务角色：`"encoder"` 或 `"transformer"`           |
-| `bootstrap_addr`       | Transformer 节点的 IP 地址（Encoder 据此建立 Mooncake 连接）  |
-| `bootstrap_room`       | 通信房间号，**收发端必须一致**；多组 disagg 服务并存时需各自使用不同 room    |
-| `sender_engine_rank`   | Encoder 侧 Mooncake 引擎 rank                       |
-| `receiver_engine_rank` | Transformer 侧 Mooncake 引擎 rank                   |
-| `protocol`             | Mooncake 传输协议：`"rdma"`（推荐，需 IB/RoCE 网卡）或 `"tcp"` |
-| `local_hostname`       | 本节点主机名/IP，用于 Mooncake P2P 握手                     |
-| `metadata_server`      | Mooncake 元数据服务，单节点使用 `"P2PHANDSHAKE"` 即可         |
-| `clip_embed_dim`       | CLIP 输出的展平元素总数（**仅 I2V 需要**，ViT-H/14 为 329216）   |
+| 参数                       | 说明                                                               |
+| ------------------------ | ---------------------------------------------------------------- |
+| `disagg_mode`            | 分离部署服务角色：`"encoder"`、`"transformer"` 或 `"decode"`                |
+| `bootstrap_addr`         | 对端节点 IP（Encoder 连 Transformer；Decoder 连 Transformer）             |
+| `bootstrap_room`         | Phase1/Phase2 房间号，**收发端必须一致**；多组服务需不同 room                       |
+| `sender_engine_rank`     | Phase1 中 Encoder 的 rank；Phase2 中 Transformer 的 rank              |
+| `receiver_engine_rank`   | Phase1 中 Transformer 的 rank；Phase2 中 Decoder 的 rank              |
+| `decoder_engine_rank`    | **仅 Transformer 配置**：Phase2 中 Decoder 的 rank，用于建立 Phase2 发送      |
+| `decoder_bootstrap_room` | **仅 Transformer 配置**：Phase2 房间号，需与 Decoder 的 `bootstrap_room` 一致 |
+| `protocol`               | Mooncake 传输协议：`"rdma"`（推荐）或 `"tcp"`                              |
+| `local_hostname`         | 本节点主机名/IP，用于 Mooncake P2P 握手                                     |
+| `metadata_server`        | Mooncake 元数据服务，单节点使用 `"P2PHANDSHAKE"` 即可                         |
+| `clip_embed_dim`         | CLIP 输出的展平元素总数（**仅 I2V 需要**，ViT-H/14 为 329216）                   |
 
 
 ---
 
 ## 3. 启动服务与请求流程
 
-LightX2V 使用 `lightx2v.server` 启动 HTTP API 服务。分离部署时的通用原则如下：
+LightX2V 使用 `lightx2v.server` 启动 HTTP API 服务。**三段式**分离部署的通用原则如下：
 
-1. **先启动 Transformer 服务，再启动 Encoder 服务。**
-2. **先向 Transformer 发请求，再向 Encoder 发同样的请求。**
-3. **最终结果由 Transformer 保存，任务状态也应从 Transformer 轮询。**
+**启动顺序（建议）：**
 
-> 原因：Transformer 的 `run_pipeline` 会在收到 HTTP 请求后进入 `receive_encoder_outputs()`，阻塞等待 Encoder 通过 Mooncake 发送编码结果。如果不先请求 Transformer，它不会开始等待，Encoder 侧即使完成编码和发送，也不会触发后续 DiT 推理。
+1. **先启动 Decoder 服务**（进入 Phase2 接收等待）。
+2. **再启动 Transformer 服务**（等待 Phase1 数据，并准备向 Decoder 发送 Phase2）。
+3. **最后启动 Encoder 服务**。
 
-### 3.1 Wan2.1 T2V 启动示例
+**请求与轮询顺序：**
 
-参考脚本：
+1. **先向 Decoder 发请求**，拿到 `decoder_task_id`（Decoder 开始等待 Phase2 数据）。
+2. **再向 Transformer 发相同 payload 的请求**（Transformer 等待 Phase1，收到后跑 DiT，再通过 Phase2 发给 Decoder）。
+3. **再向 Encoder 发相同 payload 的请求**（Encoder 编码并通过 Phase1 发给 Transformer）。
+4. **向 Decoder 轮询任务状态**：结果文件与 `completed` 状态均在 Decoder 节点，使用 Decoder 的 `task_id` 与 Decoder 的 URL 轮询。
 
-- `scripts/server/disagg/wan/`
+> 原因：Transformer 收到请求后才开始等待 Phase1；Encoder 发送后触发 Transformer 的 DiT；Transformer 完成后通过 Phase2 把潜空间发给已等待的 Decoder；Decoder 完成 VAE 解码并落盘，故任务完成与结果路径以 Decoder 为准。
 
-先启动 Transformer：
+### 3.1 Wan2.1 T2V 启动示例（三段式）
+
+参考脚本：`scripts/server/disagg/wan/`。配置使用带 `decoder_engine_rank` 的 transformer 与 decode 配置（见 2.1、2.3）。
+
+**启动顺序：** Decoder → Transformer → Encoder（三端可绑定不同 `CUDA_VISIBLE_DEVICES` 与端口）。
+
+先启动 Decoder（例如 port 8004）：
 
 ```bash
-#!/bin/bash
-lightx2v_path=
-model_path=/data/nvme0/models/Wan-AI/Wan2.1-T2V-14B
-
-export CUDA_VISIBLE_DEVICES=
-
-source ${lightx2v_path}/scripts/base/base.sh
-
 python -m lightx2v.server \
     --model_cls wan2.1 \
     --task t2v \
     --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/wan/wan_t2v_disagg_transformer.json \
+    --config_json ${lightx2v_path}/configs/wan/wan_t2v_disagg_decode.json \
     --host 0.0.0.0 \
-    --port 8003
+    --port 8004
 ```
 
-再启动 Encoder：
+再启动 Transformer（例如 port 8003）、最后启动 Encoder（例如 port 8002）。
 
-```bash
-#!/bin/bash
-lightx2v_path=
-model_path=/data/nvme0/models/Wan-AI/Wan2.1-T2V-14B
-
-export CUDA_VISIBLE_DEVICES=
-
-source ${lightx2v_path}/scripts/base/base.sh
-
-python -m lightx2v.server \
-    --model_cls wan2.1 \
-    --task t2v \
-    --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/wan/wan_t2v_disagg_encoder.json \
-    --host 0.0.0.0 \
-    --port 8002
-```
-
-发起请求时，Wan 的 T2V / I2V 都走视频任务接口 `/v1/tasks/video/`：
+发起请求时，Wan 的 T2V / I2V 走视频任务接口 `/v1/tasks/video/`。**三段式请求顺序**：先 POST Decoder → 再 POST Transformer → 再 POST Encoder → 轮询 Decoder 状态：
 
 ```python
 import requests
 import time
 
+DECODER_URL = "http://localhost:8004"
 TRANSFORMER_URL = "http://localhost:8003"
 ENCODER_URL = "http://localhost:8002"
 PAYLOAD = {
@@ -278,13 +383,19 @@ PAYLOAD = {
     "save_result_path": "/path/to/output.mp4",
 }
 
-resp_t = requests.post(f"{TRANSFORMER_URL}/v1/tasks/video/", json=PAYLOAD)
-task_id = resp_t.json()["task_id"]
+# 1. Decoder 先收请求，进入 Phase2 等待
+resp_d = requests.post(f"{DECODER_URL}/v1/tasks/video/", json=PAYLOAD)
+decoder_task_id = resp_d.json()["task_id"]
 
+# 2. Transformer 收请求，等待 Phase1 并跑 DiT，再发 Phase2
+requests.post(f"{TRANSFORMER_URL}/v1/tasks/video/", json=PAYLOAD)
+
+# 3. Encoder 编码并发送 Phase1
 requests.post(f"{ENCODER_URL}/v1/tasks/video/", json=PAYLOAD)
 
+# 4. 轮询 Decoder 获取完成状态与结果路径
 while True:
-    status = requests.get(f"{TRANSFORMER_URL}/v1/tasks/{task_id}/status").json()
+    status = requests.get(f"{DECODER_URL}/v1/tasks/{decoder_task_id}/status").json()
     if status["status"] == "completed":
         print(f"Done: {status['save_result_path']}")
         break
@@ -293,65 +404,39 @@ while True:
     time.sleep(5)
 ```
 
-### 3.2 Qwen Image T2I / I2I 启动示例
+### 3.2 Qwen Image T2I / I2I 启动示例（三段式）
 
-参考脚本：
+参考脚本：`scripts/server/disagg/qwen`。Qwen Image 的 T2I / I2I 均支持 Encoder + Transformer + Decoder 三段式，走图片任务接口 `/v1/tasks/image/`（与 Wan 的 `/v1/tasks/video/` 不同）。
 
-- `scripts/server/disagg/qwen`
+**启动顺序：** 先 Decoder → 再 Transformer → 再 Encoder。端口示例：Encoder 8012、Transformer 8013、Decoder 8014。
 
-#### Qwen T2I
+#### Qwen T2I 三段式
 
-先启动 Transformer：
-
-```bash
-bash LightX2V/scripts/server/disagg/qwen/start_qwen_t2i_disagg_transformer.sh
-```
-
-再启动 Encoder：
+依次启动 Decoder、Transformer、Encoder（使用 `qwen_image_t2i_disagg_decode.json`、`qwen_image_t2i_disagg_transformer.json`、`qwen_image_t2i_disagg_encoder.json`）。请求顺序：先 POST Decoder 拿 `task_id` → 再 POST Transformer → 再 POST Encoder → 轮询 **Decoder** 的 `task_id` 状态，结果图在 Decoder 节点保存。
 
 ```bash
-bash LightX2V/scripts/server/disagg/qwen/start_qwen_t2i_disagg_encoder.sh
-```
-
-然后执行测试请求：
-
-```bash
+# 启动三端后再执行（脚本内已配置 ENCODER_URL / TRANSFORMER_URL / DECODER_URL 与 ENDPOINT）
 python scripts/server/disagg/qwen/post_qwen_t2i.py
 ```
 
-T2I 结果图默认保存为 `qwen_t2i_disagg.png`。
+#### Qwen I2I 三段式
 
-#### Qwen I2I
-
-先启动 Transformer：
+同样先启动 Decoder、Transformer、Encoder（使用 `qwen_image_i2i_disagg_decode.json`、`qwen_image_i2i_disagg_transformer.json`、`qwen_image_i2i_disagg_encoder.json`）。可直接使用提供的 3-way 请求脚本：
 
 ```bash
-bash LightX2V/scripts/server/disagg/qwen/start_qwen_i2i_disagg_transformer.sh
-```
-
-再启动 Encoder：
-
-```bash
-bash LightX2V/scripts/server/disagg/qwen/start_qwen_i2i_disagg_encoder.sh
-```
-
-再执行测试请求：
-
-```bash
+# 启动三端后再执行（脚本内已配置 ENCODER_URL / TRANSFORMER_URL / DECODER_URL 与 ENDPOINT）
 python scripts/server/disagg/qwen/post_qwen_i2i.py
 ```
 
-I2I 结果图默认保存为 `qwen_i2i_disagg.png`。执行前请先在 `scripts/server/disagg/qwen/post_qwen_i2i.py` 中确认 `IMAGE_PATH` 指向有效输入图。
-
-> Qwen Image 的 T2I / I2I 都走图片任务接口 `/v1/tasks/image/`。与 Wan 使用 `/v1/tasks/video/` 不同，请求脚本不要混用。
+脚本逻辑：先向 Decoder 发请求 → 再向 Transformer 发请求 → 再向 Encoder 发请求 → 轮询 Decoder 完成；结果图默认保存为 `save_results/qwen_i2i_disagg_3way.png`（在 Decoder 节点）。执行前请在脚本中确认 `IMAGE_PATH` 指向有效输入图。
 
 ### 3.3 接口约定总结
 
 
-| 模型         | 任务        | 请求接口               |
-| ---------- | --------- | ------------------ |
-| Wan2.1     | T2V / I2V | `/v1/tasks/video/` |
-| Qwen Image | T2I / I2I | `/v1/tasks/image/` |
+| 模型         | 任务        | 请求接口               | 结果与状态轮询        |
+| ---------- | --------- | ------------------ | -------------- |
+| Wan2.1     | T2V / I2V | `/v1/tasks/video/` | **Decoder** 节点 |
+| Qwen Image | T2I / I2I | `/v1/tasks/image/` | **Decoder** 节点 |
 
 
 启动成功后日志一般会出现：
