@@ -340,6 +340,80 @@ def save_to_video(
         raise ValueError(f"Unknown save method: {method}")
 
 
+def mux_audio_from_video(
+    source_video_path: str,
+    target_video_path: str,
+    output_path: Optional[str] = None,
+    prefer_copy: bool = True,
+) -> Optional[str]:
+    """Mux audio from source_video_path into target_video_path.
+
+    Args:
+        source_video_path: Video file that contains the audio to copy.
+        target_video_path: Video file that contains the video stream to keep.
+        output_path: Optional output path. Defaults to target_video_path (in-place replace).
+        prefer_copy: If True, try stream copy for audio first, then fallback to AAC re-encode.
+
+    Returns:
+        The output path on success, or None on failure.
+    """
+    if not os.path.exists(source_video_path):
+        logger.warning(f"Source video not found, skip audio mux: {source_video_path}")
+        return None
+    if not os.path.exists(target_video_path):
+        logger.warning(f"Target video not found, skip audio mux: {target_video_path}")
+        return None
+
+    ffmpeg_exe = ffmpeg.get_ffmpeg_exe()
+    output_path = output_path or target_video_path
+    # Ensure temp file has a standard extension so ffmpeg can infer format
+    tmp_path = f"{output_path}.tmp.mp4"
+
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
+    def _run_mux(audio_codec: str, extra_args: Optional[list] = None) -> subprocess.CompletedProcess:
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-i",
+            target_video_path,
+            "-i",
+            source_video_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            audio_codec,
+            "-shortest",
+        ]
+        # Be explicit about container format in case ffmpeg can't infer it
+        cmd += ["-f", "mp4"]
+        if extra_args:
+            cmd += extra_args
+        cmd.append(tmp_path)
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    result = _run_mux("copy") if prefer_copy else _run_mux("aac", ["-b:a", "192k"])
+
+    if result.returncode != 0 and prefer_copy:
+        # Fallback to AAC re-encode if stream copy fails
+        result = _run_mux("aac", ["-b:a", "192k"])
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="ignore") if result.stderr else "Unknown error"
+        logger.warning(f"Audio mux failed, keep silent video. Error: {stderr}")
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return None
+
+    os.replace(tmp_path, output_path)
+    return output_path
+
+
 def remove_substrings_from_keys(original_dict, substr):
     new_dict = {}
     for key, value in original_dict.items():
