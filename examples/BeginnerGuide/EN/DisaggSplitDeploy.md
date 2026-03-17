@@ -59,6 +59,49 @@ python scripts/server/disagg/qwen/post_qwen_i2i.py
 
 Environment: NVIDIA H100 SXM5 80 GB, `sage_attn2`, BF16, Mooncake RDMA. Baseline = single GPU; Disagg = Encoder / Transformer / Decoder on separate GPUs (three-stage further reduces Transformer card memory).
 
+- **RTX 4090 24GB (memory/PCIe-constrained)**: On memory-constrained GPUs (e.g. 4090 24GB), baseline often requires `cpu_offload=block` to run, while Disagg reduces per-GPU resident memory by splitting Encoder/DiT/VAE Decoder across processes/GPUs, which can reduce offload pressure and improve latency/throughput.
+
+### RTX 4090 24GB (memory/PCIe-constrained)
+
+This section highlights baseline vs disagg behavior on **memory-constrained GPUs**. Numbers below are collected on RTX 4090 24GB.
+
+#### Wan2.1-I2V-14B (BF16, 40 steps)
+
+| Metric | Baseline (1×4090, block offload) | Disagg (2×4090, block offload) | Notes |
+| --- | --- | --- | --- |
+| Peak VRAM | 480P: 9GB; 720P: 14GB | — | Baseline relies on offload to run |
+| DiT step | 480P: 24.24 s/step; 720P: 90.71 s/step | 480P: 19.02 s/step; 720P: 62.80 s/step | DiT is more likely to be memory/PCIe limited on 4090 |
+| Image Encoder | 480P: 0.57s; 720P: 0.52s | 480P: 0.28s; 720P: 0.20s | Encoder is more stable after resource decoupling |
+| VAE Encoder | 480P: 3.02s; 720P: 6.83s | 480P: 3.22s; 720P: 7.36s | Strongly affected by resolution |
+| Text Encoder | 480P: 2.14s; 720P: 1.90s | 480P: 0.20s; 720P: 0.20s | Baseline is more impacted by offload/scheduling |
+| Encoder total | 480P: 6.09s; 720P: 9.78s | 480P: 4.08s; 720P: 8.32s |  |
+
+#### Wan2.1-I2V-14B (INT8)
+
+| Metric | Baseline (block offload) | Disagg (no offload) | Disagg (block offload) |
+| --- | --- | --- | --- |
+| Notes | `use_offload=false` will OOM | — | — |
+| DiT step | 12.94 s/step | 12.55 s/step | 12.91 s/step |
+| Image Encoder | 0.79s | 0.19s | 0.19s |
+| VAE Encoder | 3.11s | 2.93s | 2.93s |
+| Text Encoder | 1.67s | 0.20s | 0.20s |
+| Encoder total | 5.90s | 3.69s | 3.70s |
+
+#### 4090 concurrency (BF16 + block offload, Wan2.1 480P, 4 steps)
+
+This table is used to observe whether Disagg improves QPS and tail latency under **multi-request contention**.
+
+| N (concurrency) | mode | ok/total | QPS | P50 (s) | P95 (s) | P99 (s) | note |
+| ---:| --- | ---:| ---:| ---:| ---:| ---:| --- |
+| 1 | baseline | 1 | 0.0091 | 109.45 | 109.45 | 109.45 | wan2.1 480P 4step |
+| 2 | baseline | 2 | 0.0092 | 162.52 | 211.01 | 215.32 | wan2.1 480P 4step |
+| 4 | baseline | 4 | 0.0093 | 269.85 | 414.94 | 427.83 | wan2.1 480P 4step |
+| 8 | baseline | 8 | 0.0093 | 485.82 | 824.24 | 854.32 | wan2.1 480P 4step |
+| 1 | disagg | 1 | 0.0117 | 85.38 | 85.38 | 85.38 | wan2.1 480P 4step |
+| 2 | disagg | 2 | 0.0122 | 125.83 | 160.18 | 163.23 | wan2.1 480P 4step |
+| 4 | disagg | 4 | 0.0126 | 201.85 | 305.73 | 314.94 | wan2.1 480P 4step |
+| 8 | disagg | 8 | 0.0129 | 358.20 | 595.12 | 616.48 | wan2.1 480P 4step |
+
 - **Wan2.1-T2V-1.3B**: Disagg reduces peak memory (e.g. Transformer ~9.2 GB) and can slightly improve DiT step time; end-to-end ~3 s faster.
 - **Wan2.1-14B (T2V/I2V)**: End-to-end latency on par with baseline; Disagg allows Encoder and Transformer to serve different requests concurrently.
 - **Qwen Image T2I/I2I**: Disagg with `lightllm_kernel` Text Encoder gives ~30% T2I encoder speedup and ~19% I2I encoder speedup; I2I end-to-end ~5 s lower.

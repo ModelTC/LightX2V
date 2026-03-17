@@ -414,6 +414,20 @@ class DisaggMixin:
                 break
             time.sleep(0.01)
 
+        # Immediately snapshot all RDMA destination buffers after poll() returns.
+        # Without this, a concurrent Encoder send for the next request can overwrite
+        # these shared buffers before we finish reading the current request's data,
+        # causing the meta hash (read first) to mismatch the tensor data (read later).
+        received_buffers = [buf.detach().clone() for buf in self._disagg_rdma_buffers]
+
+        # Re-register for the next request immediately after snapshotting.
+        # The bootstrap_room status is never automatically reset between requests:
+        # without this call, the next request's poll() returns Success instantly
+        # using stale buffer content from this request.
+        # Calling init() resets request_status[room] = WaitingForInput and notifies
+        # the Encoder sender that we are ready to receive the next transfer.
+        self._disagg_receiver.init()
+
         text_len = int(config.get("text_len", 512))
         text_dim = int(config.get("text_encoder_dim", 4096))
         clip_dim = int(config.get("clip_embed_dim", 1024))
@@ -434,7 +448,7 @@ class DisaggMixin:
         buffer_index = 0
 
         # Parse metadata first (last buffer)
-        meta_buf = self._disagg_rdma_buffers[-1]
+        meta_buf = received_buffers[-1]
         meta_raw = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
         meta_str = meta_raw.split(b"\x00", 1)[0].decode("utf-8") if meta_raw else ""
         meta = json.loads(meta_str) if meta_str else {}
@@ -443,7 +457,7 @@ class DisaggMixin:
 
         # context
         context_shape = tuple(meta.get("context_shape") or (1, text_len, text_dim))
-        context_buf_flat = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
+        context_buf_flat = _buffer_view(received_buffers[buffer_index], GET_DTYPE(), (received_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
         context = context_buf_flat[: math.prod(context_shape)].view(context_shape).to(AI_DEVICE).clone()
         buffer_index += 1
 
@@ -453,9 +467,7 @@ class DisaggMixin:
             context_null_shape = meta.get("context_null_shape")
             if context_null_shape is not None:
                 context_null_shape = tuple(context_null_shape)
-                context_null_buf_flat = _buffer_view(
-                    self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), (self._disagg_rdma_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),)
-                )
+                context_null_buf_flat = _buffer_view(received_buffers[buffer_index], GET_DTYPE(), (received_buffers[buffer_index].numel() // torch.tensor([], dtype=GET_DTYPE()).element_size(),))
                 context_null = context_null_buf_flat[: math.prod(context_null_shape)].view(context_null_shape).to(AI_DEVICE).clone()
             buffer_index += 1
 
@@ -479,16 +491,16 @@ class DisaggMixin:
         if task in ("i2v", "flf2v", "animate", "s2v", "rs2v", "i2i"):
             if use_image_encoder:
                 clip_shape = tuple(meta.get("clip_shape") or (clip_dim,))
-                clip_encoder_out = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), clip_shape).to(AI_DEVICE)
+                clip_encoder_out = _buffer_view(received_buffers[buffer_index], GET_DTYPE(), clip_shape).to(AI_DEVICE).clone()
                 buffer_index += 1
 
             # vae_encoder_out
             vae_shape = tuple(meta.get("vae_shape") or (z_dim + 4, t_prime, h_prime, w_prime))
-            vae_encoder_out_padded = _buffer_view(self._disagg_rdma_buffers[buffer_index], GET_DTYPE(), vae_shape).to(AI_DEVICE)
+            vae_encoder_out_padded = _buffer_view(received_buffers[buffer_index], GET_DTYPE(), vae_shape).to(AI_DEVICE).clone()
             buffer_index += 1
 
             # latent_shape
-            latent_shape_buf = self._disagg_rdma_buffers[buffer_index]
+            latent_shape_buf = received_buffers[buffer_index]
             buffer_index += 1
             if meta and meta.get("latent_shape") is not None:
                 latent_shape = meta.get("latent_shape")
@@ -501,10 +513,10 @@ class DisaggMixin:
             else:
                 if vae_encoder_out_padded.ndim == 3:
                     valid_c, valid_h, valid_w = latent_shape[2], latent_shape[3], latent_shape[4]
-                    vae_encoder_out = vae_encoder_out_padded[:valid_c, :valid_h, :valid_w]
+                    vae_encoder_out = vae_encoder_out_padded[:valid_c, :valid_h, :valid_w].clone()
                 elif vae_encoder_out_padded.ndim == 4:
                     valid_t, valid_h, valid_w = latent_shape[1], latent_shape[2], latent_shape[3]
-                    vae_encoder_out = vae_encoder_out_padded[:, :valid_t, :valid_h, :valid_w]
+                    vae_encoder_out = vae_encoder_out_padded[:, :valid_t, :valid_h, :valid_w].clone()
                 else:
                     vae_encoder_out = vae_encoder_out_padded
 
@@ -514,7 +526,7 @@ class DisaggMixin:
                 image_encoder_output = {"clip_encoder_out": clip_encoder_out, "vae_encoder_out": vae_encoder_out}
         else:
             # T2V — only latent_shape
-            latent_shape_buf = self._disagg_rdma_buffers[buffer_index]
+            latent_shape_buf = received_buffers[buffer_index]
             buffer_index += 1
             if meta and meta.get("latent_shape") is not None:
                 latent_shape = meta.get("latent_shape")
@@ -633,7 +645,18 @@ class DisaggMixin:
                 break
             time.sleep(0.01)
 
-        meta_buf = self._disagg_p2_rdma_buffers[1]
+        # Immediately snapshot all Phase2 RDMA destination buffers after poll() returns.
+        # Without this, a concurrent Transformer send for the next request can overwrite
+        # these shared buffers before we finish reading, causing hash mismatches.
+        received_p2_buffers = [buf.detach().clone() for buf in self._disagg_p2_rdma_buffers]
+
+        # Re-register for the next request: resets request_status[room] = WaitingForInput
+        # and notifies the Transformer sender to accept the next Phase 2 transfer.
+        # Without this, the next request's poll() returns Success instantly with stale
+        # data, and the Transformer hangs forever in send_transformer_outputs().
+        self._disagg_p2_receiver.init()
+
+        meta_buf = received_p2_buffers[1]
         meta_raw = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
         meta_str = meta_raw.split(b"\x00", 1)[0].decode("utf-8") if meta_raw else ""
         if not meta_str:
@@ -652,7 +675,7 @@ class DisaggMixin:
         }
         latents_dtype = dtype_map.get(meta.get("latents_dtype"), GET_DTYPE())
 
-        latents = _buffer_view(self._disagg_p2_rdma_buffers[0], latents_dtype, latent_shape)
+        latents = _buffer_view(received_p2_buffers[0], latents_dtype, latent_shape)
         if meta.get("latents_hash") is not None and _sha256_tensor(latents) != meta.get("latents_hash"):
             raise ValueError("[Disagg] Latents hash mismatch between transformer and decoder")
         latents = latents.to(AI_DEVICE).contiguous()
