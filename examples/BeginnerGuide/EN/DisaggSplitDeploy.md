@@ -102,6 +102,19 @@ This table is used to observe whether Disagg improves QPS and tail latency under
 | 4 | disagg | 4 | 0.0126 | 201.85 | 305.73 | 314.94 | wan2.1 480P 4step |
 | 8 | disagg | 8 | 0.0129 | 358.20 | 595.12 | 616.48 | wan2.1 480P 4step |
 
+#### 4090 concurrency (Qwen Image 2512, T2I, 5 steps)
+
+| N (concurrency) | mode | ok/total | QPS | P50 (s) | P95 (s) | P99 (s) | note |
+| ---:| --- | ---:| ---:| ---:| ---:| ---:| --- |
+| 1 | baseline | 1 | 0.0207 | 48.30  | 48.30  | 48.30  | qwen-image-2512 5step |
+| 2 | baseline | 2 | 0.0207 | 72.57  | 94.31  | 94.24  | qwen-image-2512 5step |
+| 4 | baseline | 4 | 0.0212 | 118.77 | 181.44 | 187.33 | qwen-image-2512 5step |
+| 8 | baseline | 8 | 0.0216 | 208.64 | 354.94 | 367.90 | qwen-image-2512 5step |
+| 1 | disagg | 1 | 0.0452 | 22.11  | 22.11  | 22.11  | qwen-image-2512 5step |
+| 2 | disagg | 2 | 0.0510 | 29.68  | 38.25  | 39.02  | qwen-image-2512 5step |
+| 4 | disagg | 4 | 0.0528 | 48.52  | 73.00  | 75.17  | qwen-image-2512 5step |
+| 8 | disagg | 8 | 0.0534 | 85.78  | 143.37 | 148.62 | qwen-image-2512 5step |
+
 - **Wan2.1-T2V-1.3B**: Disagg reduces peak memory (e.g. Transformer ~9.2 GB) and can slightly improve DiT step time; end-to-end ~3 s faster.
 - **Wan2.1-14B (T2V/I2V)**: End-to-end latency on par with baseline; Disagg allows Encoder and Transformer to serve different requests concurrently.
 - **Qwen Image T2I/I2I**: Disagg with `lightllm_kernel` Text Encoder gives ~30% T2I encoder speedup and ~19% I2I encoder speedup; I2I end-to-end ~5 s lower.
