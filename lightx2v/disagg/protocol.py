@@ -23,7 +23,7 @@ class AllocationRequest:
     - buffer_sizes: Precomputed upper-bound buffer sizes.
     """
 
-    bootstrap_room: str
+    bootstrap_room: int
     buffer_sizes: List[int]
 
 

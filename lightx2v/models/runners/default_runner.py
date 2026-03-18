@@ -15,7 +15,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -460,6 +460,12 @@ class DefaultRunner(BaseRunner):
                 logger.info(f"🎬 Start to save video 🎬")
 
                 save_to_video(self.gen_video_final, self.input_info.save_result_path, fps=fps, method="ffmpeg")
+                if self.config.get("task") == "sr":
+                    input_video_path = getattr(self.input_info, "video_path", "")
+                    if input_video_path:
+                        muxed_path = mux_audio_from_video(input_video_path, self.input_info.save_result_path)
+                        if muxed_path:
+                            logger.info(f"Audio muxed from input video: {input_video_path}")
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 

@@ -1,11 +1,13 @@
 import hashlib
 import json
+import time
+from collections import deque
 from typing import List, Optional
 
 import numpy as np
 import torch
 
-from lightx2v.disagg.conn import DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.conn import REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import (
@@ -20,12 +22,23 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class TransformerService(BaseService):
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self):
+        super().__init__()
+        self.request_port = REQUEST_POLLING_PORT + 1
+        self.req_mgr = ReqManager()
         self.transformer = None
         self.scheduler = None
-        self.rdma_buffer1: List[torch.Tensor] = []
-        self.rdma_buffer2: List[torch.Tensor] = []
+        self.rdma_buffer1: dict[int, List[torch.Tensor]] = {}
+        self.rdma_buffer2: dict[int, List[torch.Tensor]] = {}
+        self.data_mgr1 = DataManager(DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
+        self.data_mgr2 = DataManager(DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
+        self.data_receiver: dict[int, DataReceiver] = {}
+        self.data_sender: dict[int, DataSender] = {}
+
+    def init(self, config):
+        self.config = config
+        self.transformer = None
+        self.scheduler = None
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
@@ -44,7 +57,7 @@ class TransformerService(BaseService):
 
         buffer_sizes = estimate_encoder_buffer_sizes(self.config)
         request = AllocationRequest(
-            bootstrap_room=str(data_bootstrap_room),
+            bootstrap_room=data_bootstrap_room,
             buffer_sizes=buffer_sizes,
         )
         handle = self.alloc_memory(DisaggregationPhase.PHASE1, request)
@@ -58,13 +71,13 @@ class TransformerService(BaseService):
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self.data_mgr1 = DataManager(data_args, DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
-        self.data_receiver = DataReceiver(self.data_mgr1, data_bootstrap_addr, int(data_bootstrap_room))
-        self.data_receiver.init()
+        self.data_mgr1.init(data_args, data_bootstrap_room)
+        self.data_receiver[data_bootstrap_room] = DataReceiver(self.data_mgr1, data_bootstrap_addr, data_bootstrap_room)
+        self.data_receiver[data_bootstrap_room].init()
 
         buffer_sizes = estimate_transformer_buffer_sizes(self.config)
         request = AllocationRequest(
-            bootstrap_room=str(data_bootstrap_room),
+            bootstrap_room=data_bootstrap_room,
             buffer_sizes=buffer_sizes,
         )
         handle = self.alloc_memory(DisaggregationPhase.PHASE2, request)
@@ -78,8 +91,8 @@ class TransformerService(BaseService):
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self.data_mgr2 = DataManager(data_args, DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
-        self.data_sender = DataSender(self.data_mgr2, data_bootstrap_addr, int(data_bootstrap_room))
+        self.data_mgr2.init(data_args, data_bootstrap_room)
+        self.data_sender[data_bootstrap_room] = DataSender(self.data_mgr2, data_bootstrap_addr, data_bootstrap_room)
 
     def load_models(self):
         self.logger.info("Loading Transformer Models...")
@@ -101,15 +114,16 @@ class TransformerService(BaseService):
             MemoryHandle with RDMA-registered buffer addresses.
         """
         buffer_sizes = request.buffer_sizes
+        room = int(request.bootstrap_room)
 
         # torch.cuda.set_device(self.receiver_engine_rank)
 
         if phase == DisaggregationPhase.PHASE1:
-            self.rdma_buffer1 = []
-            target_buffers = self.rdma_buffer1
+            self.rdma_buffer1[room] = []
+            target_buffers = self.rdma_buffer1[room]
         elif phase == DisaggregationPhase.PHASE2:
-            self.rdma_buffer2 = []
-            target_buffers = self.rdma_buffer2
+            self.rdma_buffer2[room] = []
+            target_buffers = self.rdma_buffer2[room]
         else:
             raise ValueError(f"unsupported disaggregation phase: {phase}")
 
@@ -128,11 +142,26 @@ class TransformerService(BaseService):
 
         return MemoryHandle(buffers=buffers)
 
-    def process(self):
+    def process(self, config):
         """
         Executes the diffusion process and video decoding.
         """
         self.logger.info("Starting processing in TransformerService...")
+        room = config.get("data_bootstrap_room", 0)
+
+        phase1_buffers = self.rdma_buffer1.get(room)
+        phase2_buffers = self.rdma_buffer2.get(room)
+        receiver = self.data_receiver.get(room)
+        sender = self.data_sender.get(room)
+
+        if phase1_buffers is None:
+            raise RuntimeError(f"phase1 RDMA buffers are not initialized for room={room}.")
+        if phase2_buffers is None:
+            raise RuntimeError(f"phase2 RDMA buffers are not initialized for room={room}.")
+        if receiver is None:
+            raise RuntimeError(f"DataReceiver is not initialized for room={room}.")
+        if sender is None:
+            raise RuntimeError(f"DataSender is not initialized for room={room}.")
 
         def _buffer_view(buf: torch.Tensor, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
             view = torch.empty(0, dtype=dtype, device=buf.device)
@@ -148,49 +177,35 @@ class TransformerService(BaseService):
             data = data_tensor.contiguous().cpu().numpy().tobytes()
             return hashlib.sha256(data).hexdigest()
 
-        # Poll for data from EncoderService
-        import time
-
-        if self.data_receiver is not None:
-            while True:
-                status = self.data_receiver.poll()
-                if status == DataPoll.Success:
-                    self.logger.info("Data received successfully in TransformerService.")
-                    break
-                time.sleep(0.01)
-        else:
-            self.logger.warning("DataReceiver is not initialized. Using dummy or existing data if any.")
-            pass
-
         # Reconstruct inputs from rdma_buffer1
-        enable_cfg = bool(self.config.get("enable_cfg", False))
-        task = self.config.get("task", "i2v")
-        use_image_encoder = bool(self.config.get("use_image_encoder", True))
+        enable_cfg = bool(config.get("enable_cfg", False))
+        task = config.get("task", "i2v")
+        use_image_encoder = bool(config.get("use_image_encoder", True))
 
         buffer_index = 0
 
-        context_buf = self.rdma_buffer1[buffer_index]
+        context_buf = phase1_buffers[buffer_index]
         buffer_index += 1
 
         context_null_buf = None
         if enable_cfg:
-            context_null_buf = self.rdma_buffer1[buffer_index]
+            context_null_buf = phase1_buffers[buffer_index]
             buffer_index += 1
 
         clip_buf = None
         vae_buf = None
         if task == "i2v":
             if use_image_encoder:
-                clip_buf = self.rdma_buffer1[buffer_index]
+                clip_buf = phase1_buffers[buffer_index]
                 buffer_index += 1
 
-            vae_buf = self.rdma_buffer1[buffer_index]
+            vae_buf = phase1_buffers[buffer_index]
             buffer_index += 1
 
-        latent_buf = self.rdma_buffer1[buffer_index]
+        latent_buf = phase1_buffers[buffer_index]
         buffer_index += 1
 
-        meta_buf = self.rdma_buffer1[buffer_index]
+        meta_buf = phase1_buffers[buffer_index]
         meta_bytes = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
         meta_str = meta_bytes.split(b"\x00", 1)[0].decode("utf-8") if meta_bytes else ""
         if not meta_str:
@@ -279,7 +294,7 @@ class TransformerService(BaseService):
             "latent_shape": latent_shape,
         }
 
-        seed = self.config.get("seed")
+        seed = config.get("seed")
         if seed is None:
             raise ValueError("seed is required in config.")
 
@@ -304,14 +319,12 @@ class TransformerService(BaseService):
         latents = self.scheduler.latents
 
         # Send latents to DecoderService
-        if not self.rdma_buffer2:
-            raise RuntimeError("phase2 RDMA buffers are not initialized.")
-        if len(self.rdma_buffer2) < 2:
+        if len(phase2_buffers) < 2:
             raise RuntimeError("phase2 RDMA buffers require [latents, meta] entries.")
 
         latents_to_send = latents.detach().to(GET_DTYPE()).contiguous()
         latents_nbytes = latents_to_send.numel() * latents_to_send.element_size()
-        latents_buf = self.rdma_buffer2[0]
+        latents_buf = phase2_buffers[0]
         if latents_nbytes > latents_buf.numel():
             raise ValueError(f"latents buffer too small: need={latents_nbytes}, capacity={latents_buf.numel()}")
 
@@ -326,7 +339,7 @@ class TransformerService(BaseService):
             "latents_hash": _sha256_tensor(latents_to_send),
         }
         meta_bytes = json.dumps(latents_meta, ensure_ascii=True).encode("utf-8")
-        meta_buf = self.rdma_buffer2[1]
+        meta_buf = phase2_buffers[1]
         meta_view = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),))
         if len(meta_bytes) > meta_view.numel():
             raise ValueError("phase2 metadata buffer too small for latents meta payload")
@@ -334,33 +347,108 @@ class TransformerService(BaseService):
         if meta_bytes:
             meta_view[: len(meta_bytes)].copy_(torch.from_numpy(np.frombuffer(meta_bytes, dtype=np.uint8)))
 
-        if self.data_sender is None:
-            raise RuntimeError("DataSender is not initialized for phase2.")
+        buffer_ptrs = [buf.data_ptr() for buf in phase2_buffers]
+        sender.send(buffer_ptrs)
 
-        buffer_ptrs = [buf.data_ptr() for buf in self.rdma_buffer2]
-        self.data_sender.send(buffer_ptrs)
-
-        while True:
-            status = self.data_sender.poll()
-            if status == DataPoll.Success:
-                self.logger.info("Latents sent successfully to DecoderService.")
-                break
-            time.sleep(0.01)
-
-    def release_memory(self):
+    def release_memory(self, room: int):
         """
-        Releases the RDMA buffers, deregisters them from transfer engine, and clears GPU cache.
+        Releases the RDMA buffers and clears GPU cache.
         """
-        if self.rdma_buffer1:
-            for buf in self.rdma_buffer1:
-                if self.data_mgr1 is not None:
-                    self.data_mgr1.engine.deregister(buf.data_ptr())
-            self.rdma_buffer1 = []
+        if room in self.rdma_buffer1:
+            self.rdma_buffer1.pop(room, None)
 
-        if self.rdma_buffer2:
-            for buf in self.rdma_buffer2:
-                if self.data_mgr2 is not None:
-                    self.data_mgr2.engine.deregister(buf.data_ptr())
-            self.rdma_buffer2 = []
+        if room in self.rdma_buffer2:
+            self.rdma_buffer2.pop(room, None)
 
         torch.cuda.empty_cache()
+
+    def release(self, room: int):
+        self.release_memory(room)
+
+        self.data_receiver.pop(room, None)
+        self.data_sender.pop(room, None)
+
+        if self.data_mgr1 is not None:
+            self.data_mgr1.release(room)
+        if self.data_mgr2 is not None:
+            self.data_mgr2.release(room)
+
+    def exec_request(self, stop_event=None):
+        req_queue = deque()
+        waiting_queue: dict[int, dict] = {}
+        exec_queue = deque()
+        complete_queue: dict[int, dict] = {}
+
+        while True:
+            while True:
+                config = self.req_mgr.receive_non_block(self.request_port)
+                if config is None:
+                    break
+                req_queue.append(config)
+
+            if req_queue:
+                config = req_queue.popleft()
+                room = int(config.get("data_bootstrap_room", 0))
+                try:
+                    self.init(config)
+                    waiting_queue[room] = config
+                except Exception:
+                    self.logger.exception("Failed to initialize request for room=%s", room)
+                    self.release(room)
+
+            ready_rooms: List[int] = []
+            failed_rooms: List[int] = []
+            for room, config in list(waiting_queue.items()):
+                receiver = self.data_receiver.get(room)
+                if receiver is None:
+                    failed_rooms.append(room)
+                    continue
+
+                status = receiver.poll()
+                if status == DataPoll.Success:
+                    ready_rooms.append(room)
+                elif status == DataPoll.Failed:
+                    failed_rooms.append(room)
+
+            for room in ready_rooms:
+                exec_queue.append((room, waiting_queue.pop(room)))
+
+            for room in failed_rooms:
+                waiting_queue.pop(room, None)
+                self.logger.error("DataReceiver transfer failed for room=%s", room)
+                self.release(room)
+
+            if exec_queue:
+                room, config = exec_queue.popleft()
+                try:
+                    self.process(config)
+                    complete_queue[room] = config
+                except Exception:
+                    self.logger.exception("Failed to process request for room=%s", room)
+                    complete_queue.pop(room, None)
+                    self.release(room)
+
+            completed_rooms: List[int] = []
+            for room in list(complete_queue.keys()):
+                sender = self.data_sender.get(room)
+                if sender is None:
+                    completed_rooms.append(room)
+                    continue
+
+                status = sender.poll()
+                if status == DataPoll.Success:
+                    completed_rooms.append(room)
+                elif status == DataPoll.Failed:
+                    self.logger.error("DataSender transfer failed for room=%s", room)
+                    completed_rooms.append(room)
+
+            for room in completed_rooms:
+                complete_queue.pop(room, None)
+                self.release(room)
+
+            if stop_event is not None and stop_event.is_set() and not req_queue and not waiting_queue and not exec_queue and not complete_queue:
+                self.logger.info("TransformerService received stop event, exiting request loop.")
+                break
+
+            if not req_queue and not exec_queue:
+                time.sleep(0.01)
