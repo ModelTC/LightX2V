@@ -42,7 +42,7 @@ class SeedVRRunner(DefaultRunner):
         self.neg_emb_path = os.path.join(model_path_base, "neg_emb.pt")
 
     def _build_video_transform(self, img):
-        from torchvision.transforms import Compose, Lambda, Normalize
+        from torchvision.transforms import Normalize
 
         from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.divisible_crop import DivisibleCrop
         from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.na_resize import NaResize
@@ -51,7 +51,6 @@ class SeedVRRunner(DefaultRunner):
         target_height = self.config.get("target_height", 720)
         target_width = self.config.get("target_width", 1280)
         resolution = min((self.ori_h * self.ori_w) ** 0.5 * self.input_info.sr_ratio, (target_height * target_width) ** 0.5)
-
 
         img = NaResize(
             resolution=resolution,
@@ -371,7 +370,7 @@ class SeedVRRunner(DefaultRunner):
                     self._set_output_fps(info.get("video_fps", None))
             if video.numel() == 0:
                 raise ValueError(f"Failed to read video from {video_path}")
-            
+
             img = video.to(GET_DTYPE()).div_(255.0).to(self.init_device)
 
         elif "image_path" in self.input_info.__dataclass_fields__ and self.input_info.image_path:
