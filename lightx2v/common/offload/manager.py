@@ -47,6 +47,18 @@ class WeightAsyncStreamManager(object):
         else:
             raise NotImplementedError
 
+    def _sync(self):
+        """Synchronize to ensure memory visibility across streams.
+
+        XPU streams do not guarantee cross-stream memory visibility after a
+        per-stream synchronize, so we use a device-wide sync on XPU.
+        On CUDA, per-stream synchronize is sufficient and preferred.
+        """
+        if AI_DEVICE == "xpu":
+            torch_device_module.synchronize()
+        else:
+            self.init_stream.synchronize()
+
     def init_first_buffer(self, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.init_stream):
             if hasattr(self, "cpu_buffers"):
@@ -59,7 +71,7 @@ class WeightAsyncStreamManager(object):
                     self.cuda_buffers[0].load_state_dict(blocks[0].state_dict(), 0, adapter_block_idx)
                 else:
                     self.cuda_buffers[0].load_state_dict(blocks[0].compute_phases[0].state_dict(), 0, adapter_block_idx)
-        self.init_stream.synchronize()
+        self._sync()
         self.need_init_first_buffer = False
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
@@ -77,16 +89,22 @@ class WeightAsyncStreamManager(object):
                 self.cuda_buffers[phase_idx].load_state_dict(blocks[block_idx].compute_phases[phase_idx].state_dict(), block_idx, adapter_block_idx)
 
     def swap_blocks(self):
-        self.cuda_load_stream.synchronize()
-        self.compute_stream.synchronize()
+        if AI_DEVICE == "xpu":
+            torch_device_module.synchronize()
+        else:
+            self.cuda_load_stream.synchronize()
+            self.compute_stream.synchronize()
         self.cuda_buffers[0], self.cuda_buffers[1] = (
             self.cuda_buffers[1],
             self.cuda_buffers[0],
         )
 
     def swap_phases(self):
-        self.cuda_load_stream.synchronize()
-        self.compute_stream.synchronize()
+        if AI_DEVICE == "xpu":
+            torch_device_module.synchronize()
+        else:
+            self.cuda_load_stream.synchronize()
+            self.compute_stream.synchronize()
 
     @ExcludedProfilingContext("🔥 warm_up_cpu_buffers")
     def warm_up_cpu_buffers(self, blocks_num):

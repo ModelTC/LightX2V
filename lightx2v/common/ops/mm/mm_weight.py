@@ -2331,7 +2331,10 @@ class MMWeightFp8IntelXpu(MMWeightQuantTemplate):
         # # print(input_tensor.dtype)
 
         if sycl_kernels is not None:
-            return sycl_kernels.onednn_w8a16_fp8(input_tensor, self.weight, self.weight_scale.to(torch.float))
+            try:
+                return sycl_kernels.onednn_w8a16_fp8(input_tensor, self.weight, self.weight_scale.to(torch.float))
+            except RuntimeError:
+                pass  # Fall through to torch dequantization path
 
         infer_dtype = self.infer_dtype
         squeeze_output = False
