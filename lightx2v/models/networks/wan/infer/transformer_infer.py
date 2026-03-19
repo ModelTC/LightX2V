@@ -7,10 +7,10 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-torch_device_module = getattr(torch, AI_DEVICE)
-
 from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def modulate(x, scale, shift):
