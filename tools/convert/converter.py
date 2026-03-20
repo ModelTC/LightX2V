@@ -791,10 +791,7 @@ def main():
         dest="ignore_quant_keys_override",
         type=str,
         default=None,
-        help=(
-            "Comma-separated substrings: if a tensor key contains any of these substrings, "
-            "it will NOT be quantized but will still be kept and saved."
-        ),
+        help=("Comma-separated substrings: if a tensor key contains any of these substrings, it will NOT be quantized but will still be kept and saved."),
     )
 
     # Quantization
@@ -930,18 +927,10 @@ def main():
                 raise ValueError(f"Unsupported model_type for quantization overrides: {args.model_type}")
 
             args.target_keys = model_type_keys_map[args.model_type]["target_keys"]
-            args.adapter_keys = (
-                model_type_keys_map[args.model_type]["adapter_keys"]
-                if "adapter_keys" in model_type_keys_map[args.model_type]
-                else None
-            )
+            args.adapter_keys = model_type_keys_map[args.model_type]["adapter_keys"] if "adapter_keys" in model_type_keys_map[args.model_type] else None
             args.key_idx = model_type_keys_map[args.model_type]["key_idx"]
             args.ignore_key = model_type_keys_map[args.model_type]["ignore_key"]
-            args.comfyui_keys = (
-                model_type_keys_map[args.model_type]["comfyui_keys"]
-                if "comfyui_keys" in model_type_keys_map[args.model_type]
-                else None
-            )
+            args.comfyui_keys = model_type_keys_map[args.model_type]["comfyui_keys"] if "comfyui_keys" in model_type_keys_map[args.model_type] else None
         else:
             args.target_keys = None
             args.adapter_keys = None
