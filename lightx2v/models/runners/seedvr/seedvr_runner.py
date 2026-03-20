@@ -70,7 +70,7 @@ class SeedVRRunner(DefaultRunner):
 
     def _get_sr_segment_params(self):
         seg_len = int(self.config.get("sr_segment_length", 81))
-        overlap = int(self.config.get("sr_overlap", 0))
+        overlap = int(self.config.get("sr_overlap", 1))
         if seg_len <= 0:
             return None, 0
         if overlap >= seg_len:
