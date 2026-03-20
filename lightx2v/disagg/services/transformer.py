@@ -362,18 +362,31 @@ class TransformerService(BaseService):
 
         torch.cuda.empty_cache()
 
-    def release(self, room: int):
+    def remove(self, room: int):
         self.release_memory(room)
 
         self.data_receiver.pop(room, None)
         self.data_sender.pop(room, None)
 
         if self.data_mgr1 is not None:
-            self.data_mgr1.release(room)
+            self.data_mgr1.remove(room)
         if self.data_mgr2 is not None:
-            self.data_mgr2.release(room)
+            self.data_mgr2.remove(room)
 
-    def exec_request(self, stop_event=None):
+    def release(self):
+        room_ids = set(self.rdma_buffer1.keys()) | set(self.rdma_buffer2.keys())
+        for room in list(room_ids):
+            self.remove(room)
+        if self.data_mgr1 is not None:
+            self.data_mgr1.release()
+        if self.data_mgr2 is not None:
+            self.data_mgr2.release()
+        self.data_receiver.clear()
+        self.data_sender.clear()
+        self.transformer = None
+        self.scheduler = None
+
+    def run(self, stop_event=None):
         req_queue = deque()
         waiting_queue: dict[int, dict] = {}
         exec_queue = deque()
@@ -394,7 +407,7 @@ class TransformerService(BaseService):
                     waiting_queue[room] = config
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
-                    self.release(room)
+                    self.remove(room)
 
             ready_rooms: List[int] = []
             failed_rooms: List[int] = []
@@ -416,7 +429,7 @@ class TransformerService(BaseService):
             for room in failed_rooms:
                 waiting_queue.pop(room, None)
                 self.logger.error("DataReceiver transfer failed for room=%s", room)
-                self.release(room)
+                self.remove(room)
 
             if exec_queue:
                 room, config = exec_queue.popleft()
@@ -426,7 +439,7 @@ class TransformerService(BaseService):
                 except Exception:
                     self.logger.exception("Failed to process request for room=%s", room)
                     complete_queue.pop(room, None)
-                    self.release(room)
+                    self.remove(room)
 
             completed_rooms: List[int] = []
             for room in list(complete_queue.keys()):
@@ -444,7 +457,7 @@ class TransformerService(BaseService):
 
             for room in completed_rooms:
                 complete_queue.pop(room, None)
-                self.release(room)
+                self.remove(room)
 
             if stop_event is not None and stop_event.is_set() and not req_queue and not waiting_queue and not exec_queue and not complete_queue:
                 self.logger.info("TransformerService received stop event, exiting request loop.")
@@ -452,3 +465,5 @@ class TransformerService(BaseService):
 
             if not req_queue and not exec_queue:
                 time.sleep(0.01)
+
+        self.release()

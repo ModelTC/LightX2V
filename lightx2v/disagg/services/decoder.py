@@ -163,7 +163,7 @@ class DecoderService(BaseService):
             self._rdma_buffers.pop(room, None)
         torch.cuda.empty_cache()
 
-    def release(self, room: int):
+    def remove(self, room: int):
         self.release_memory(room)
 
         self.data_receiver.pop(room, None)
@@ -171,9 +171,17 @@ class DecoderService(BaseService):
         if self.data_mgr is None:
             return
 
-        self.data_mgr.release(room)
+        self.data_mgr.remove(room)
 
-    def exec_request(self, stop_event=None):
+    def release(self):
+        for room in list(self._rdma_buffers.keys()):
+            self.remove(room)
+        if self.data_mgr is not None:
+            self.data_mgr.release()
+        self.data_receiver.clear()
+        self.vae_decoder = None
+
+    def run(self, stop_event=None):
         req_queue = deque()
         waiting_queue: Dict[int, dict] = {}
         exec_queue = deque()
@@ -193,7 +201,7 @@ class DecoderService(BaseService):
                     waiting_queue[room] = config
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
-                    self.release(room)
+                    self.remove(room)
 
             ready_rooms: List[int] = []
             failed_rooms: List[int] = []
@@ -216,7 +224,7 @@ class DecoderService(BaseService):
             for room in failed_rooms:
                 waiting_queue.pop(room, None)
                 self.logger.error("DataReceiver transfer failed for room=%s", room)
-                self.release(room)
+                self.remove(room)
 
             if exec_queue:
                 room, config = exec_queue.popleft()
@@ -225,7 +233,7 @@ class DecoderService(BaseService):
                 except Exception:
                     self.logger.exception("Failed to process request for room=%s", room)
                 finally:
-                    self.release(room)
+                    self.remove(room)
 
             if stop_event is not None and stop_event.is_set() and not req_queue and not waiting_queue and not exec_queue:
                 self.logger.info("DecoderService received stop event, exiting request loop.")
@@ -233,3 +241,5 @@ class DecoderService(BaseService):
 
             if not req_queue and not exec_queue:
                 time.sleep(0.01)
+
+        self.release()
