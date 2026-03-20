@@ -306,7 +306,6 @@ class LTX2Runner(DefaultRunner):
             prompt=prompt,
             negative_prompt=neg_prompt,
         )
-
         text_encoder_output = {
             "v_context_p": v_context_p,
             "a_context_p": a_context_p,
@@ -485,10 +484,10 @@ class LTX2Runner(DefaultRunner):
                     video=self.gen_video_final,
                     fps=self.config.get("fps", 24),
                     audio=self.gen_audio_final,
-                    audio_sample_rate=self.config.get("audio_fps", 24000),
                     output_path=self.input_info.save_result_path,
                     video_chunks_number=1,
                 )
+
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 

@@ -85,6 +85,7 @@ class LTX2TransformerBlock(WeightModule):
         self.config = config
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_path
+        self.cross_attention_adaln = config.get("cross_attention_adaln", False)
         block_prefix = "transformer_blocks"
         model_prefix = "model.diffusion_model"
 
@@ -139,6 +140,24 @@ class LTX2TransformerBlock(WeightModule):
             "scale_shift_table_a2v_ca_video",
             self.scale_shift_table_a2v_ca_video,
         )
+
+        if self.cross_attention_adaln:
+            self.prompt_scale_shift_table = TENSOR_REGISTER["Default"](
+                tensor_name=f"{model_prefix}.{block_prefix}.{self.block_index}.prompt_scale_shift_table",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            )
+            self.add_module("prompt_scale_shift_table", self.prompt_scale_shift_table)
+            self.audio_prompt_scale_shift_table = TENSOR_REGISTER["Default"](
+                tensor_name=f"{model_prefix}.{block_prefix}.{self.block_index}.audio_prompt_scale_shift_table",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            )
+            self.add_module("audio_prompt_scale_shift_table", self.audio_prompt_scale_shift_table)
 
         # Check if tensor parallel is enabled
         use_tp = config.get("tensor_parallel", False)
@@ -283,10 +302,6 @@ class LTX2TransformerBlock(WeightModule):
         )
         self.add_module("compute_phases", self.compute_phases)
 
-        # Create aliases for easier access
-        # The modules are stored with names like "attn1_to_q", "attn1_to_k", etc.
-        # These are automatically created by LTX2Attention and LTX2FFN classes
-
 
 class LTX2Attention(WeightModule):
     def __init__(
@@ -313,6 +328,7 @@ class LTX2Attention(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+        self.apply_gated_attention = self.config.get("apply_gated_attention", False)
 
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
@@ -324,6 +340,21 @@ class LTX2Attention(WeightModule):
             self.add_module(
                 "attn_func_parallel",
                 ATTN_WEIGHT_REGISTER[self.config.get("parallel", {}).get("seq_p_attn_type", "ulysses")](),
+            )
+
+        if self.apply_gated_attention:
+            self.add_module(
+                "to_gate_logits",
+                MM_WEIGHT_REGISTER[self.mm_type](
+                    weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_gate_logits.weight",
+                    bias_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_gate_logits.bias",
+                    create_cuda_buffer=create_cuda_buffer,
+                    create_cpu_buffer=create_cpu_buffer,
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
+                    lora_prefix=block_lora_prefix,
+                    lora_path=lora_path,
+                ),
             )
 
         self.add_module(

@@ -20,6 +20,18 @@ from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
+def _parse_mm_guider_branch(branch: Optional[dict], fallback_cfg_scale: float) -> dict:
+    b = branch or {}
+    return {
+        "cfg_scale": float(b.get("cfg_scale", fallback_cfg_scale)),
+        "stg_scale": float(b.get("stg_scale", 0.0)),
+        "stg_blocks": list(b.get("stg_blocks") or []),
+        "modality_scale": float(b.get("modality_scale", 1.0)),
+        "rescale_scale": float(b.get("rescale_scale", 0.0)),
+        "skip_step": int(b.get("skip_step", 0)),
+    }
+
+
 def get_pixel_coords(
     latent_coords: torch.Tensor,
     scale_factors: Tuple[int, int, int],
@@ -165,6 +177,9 @@ class AudioPatchifier:
     def patch_size(self) -> Tuple[int, int, int]:
         return self._patch_size
 
+    def get_token_count(self, tgt_shape) -> int:
+        return tgt_shape.frames
+
     def patchify(self, audio_latents: torch.Tensor) -> torch.Tensor:
         """Patchify audio latents from [C, T, F] to [T, D]."""
         if len(audio_latents.shape) == 4:
@@ -200,14 +215,29 @@ class AudioPatchifier:
         dtype: torch.dtype,
         device: Optional[torch.device] = None,
     ) -> torch.Tensor:
-        """Convert latent indices into real-time seconds."""
+        """
+        Converts latent indices into real-time seconds while honoring causal
+        offsets and the configured hop length.
+        Args:
+            start_latent: Inclusive start index inside the latent sequence. This
+                sets the first timestamp returned.
+            end_latent: Exclusive end index. Determines how many timestamps get
+                generated.
+            dtype: Floating-point dtype used for the returned tensor, allowing
+                callers to control precision.
+            device: Target device for the timestamp tensor. When omitted the
+                computation occurs on CPU to avoid surprising GPU allocations.
+        """
         if device is None:
             device = torch.device("cpu")
 
         audio_latent_frame = torch.arange(start_latent, end_latent, dtype=dtype, device=device)
+
         audio_mel_frame = audio_latent_frame * self.audio_latent_downsample_factor
 
         if self.is_causal:
+            # Frame offset for causal alignment.
+            # The "+1" ensures the timestamp corresponds to the first sample that is fully available.
             causal_offset = 1
             audio_mel_frame = (audio_mel_frame + causal_offset - self.audio_latent_downsample_factor).clip(min=0)
 
@@ -321,6 +351,15 @@ class LTX2Scheduler(BaseScheduler):
         # self.stepper = EulerDiffusionStep()
         self.sample_guide_scale = self.config["sample_guide_scale"]
 
+        # 多模态引导（与 ltx multi_modal_guider_denoising_func / MultiModalGuider 对齐的配置入口）
+        mm = config.get("mm_guider") or {}
+        self.mm_guider_enabled = bool(mm.get("enabled", False))
+        fb = float(self.sample_guide_scale)
+        self.mm_guider_video = _parse_mm_guider_branch(mm.get("video"), fb)
+        self.mm_guider_audio = _parse_mm_guider_branch(mm.get("audio"), fb)
+        self.mm_last_v_pred: Optional[torch.Tensor] = None
+        self.mm_last_a_pred: Optional[torch.Tensor] = None
+
         # State
         self.video_latent_state = None
         self.audio_latent_state = None
@@ -361,6 +400,8 @@ class LTX2Scheduler(BaseScheduler):
         self.step_index = 0
         self.v_noise_pred = None
         self.a_noise_pred = None
+        self.mm_last_v_pred = None
+        self.mm_last_a_pred = None
 
         # Initialize generator
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
@@ -711,6 +752,8 @@ class LTX2Scheduler(BaseScheduler):
         self.audio_latent_state = None
         self.v_noise_pred = None
         self.a_noise_pred = None
+        self.mm_last_v_pred = None
+        self.mm_last_a_pred = None
         self.sigmas = None
 
     def video_timesteps_from_mask(self) -> torch.Tensor:

@@ -107,7 +107,7 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
             with torch_device_module.stream(self.offload_manager.compute_stream):
                 # Use the block currently in cuda_buffers[0]
                 current_block = self.offload_manager.cuda_buffers[0]
-                vx, ax = self.infer_block(current_block, vx, ax, pre_infer_out)
+                vx, ax = self.infer_block(block_idx, current_block, vx, ax, pre_infer_out)
 
             # Swap buffers: cuda_buffers[1] (prefetched) -> cuda_buffers[0] (current)
             self.offload_manager.swap_blocks()

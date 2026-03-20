@@ -323,28 +323,27 @@ if __name__ == "__main__":
     dtype = torch.bfloat16
 
     video_vae = LTX2VideoVAE(
-        checkpoint_path="/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-distilled-fp8.safetensors",
+        checkpoint_path="/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev.safetensors",
         device=dev,
         dtype=dtype,
     )
 
     audio_vae = LTX2AudioVAE(
-        checkpoint_path="/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-distilled-fp8.safetensors",
+        checkpoint_path="/data/nvme0/gushiqiao/models/official_models/LTX-2/ltx-2-19b-dev.safetensors",
         device=dev,
         dtype=dtype,
     )
 
-    vid_enc = torch.load("/data/nvme0/gushiqiao/models/code/LightX2V/scripts/v.pth").unsqueeze(0)
+    vid_enc = torch.load("/data/nvme0/gushiqiao/models/v.pth")  # .unsqueeze(0)
     vid_dec = video_vae.decode(vid_enc)
 
-    audio_enc = torch.load("/data/nvme0/gushiqiao/models/code/LightX2V/scripts/a.pth").unsqueeze(0)
+    audio_enc = torch.load("/data/nvme0/gushiqiao/models/a.pth")  # .unsqueeze(0)
     audio_dec = audio_vae.decode(audio_enc)
 
     encode_video(
         video=vid_dec,
         fps=24,
         audio=audio_dec,
-        audio_sample_rate=24000,
         output_path=f"reconstructed_1.mp4",
         video_chunks_number=1,
     )

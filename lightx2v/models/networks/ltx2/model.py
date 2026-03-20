@@ -1,3 +1,6 @@
+import math
+from typing import Optional
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -20,6 +23,41 @@ from lightx2v.models.networks.ltx2.weights.transformer_weights import (
 from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+
+
+def _multimodal_guider_calculate(
+    cond: torch.Tensor,
+    uncond_text: Optional[torch.Tensor],
+    uncond_perturbed: Optional[torch.Tensor],
+    uncond_modality: Optional[torch.Tensor],
+    *,
+    cfg_scale: float,
+    stg_scale: float,
+    modality_scale: float,
+    rescale_scale: float,
+) -> torch.Tensor:
+    """与 ltx_core MultiModalGuider.calculate 一致（避免从 scheduler 大模块导入导致循环依赖/旧缓存问题）。"""
+    if not math.isclose(cfg_scale, 1.0) and uncond_text is None:
+        raise ValueError("mm_guider: cfg_scale != 1 时需要 uncond 前向，但 uncond_text 为 None")
+    ut = uncond_text if not math.isclose(cfg_scale, 1.0) else cond
+    up = uncond_perturbed if not math.isclose(stg_scale, 0.0) else cond
+    um = uncond_modality if not math.isclose(modality_scale, 1.0) else cond
+
+    pred = cond + (cfg_scale - 1.0) * (cond - ut) + stg_scale * (cond - up) + (modality_scale - 1.0) * (cond - um)
+
+    if not math.isclose(rescale_scale, 0.0):
+        factor = cond.std() / pred.std()
+        factor = rescale_scale * factor + (1.0 - rescale_scale)
+        pred = pred * factor
+
+    return pred
+
+
+def _mm_guider_should_skip_step(skip_step: int, step_index: int) -> bool:
+    """与 ltx_core MultiModalGuider.should_skip_step 一致。"""
+    if skip_step == 0:
+        return False
+    return step_index % (skip_step + 1) != 0
 
 
 class LTX2Model(BaseTransformerModel):
@@ -276,28 +314,126 @@ class LTX2Model(BaseTransformerModel):
 
     @compiled_method()
     @torch.no_grad()
-    def _infer_cond_uncond(self, inputs, infer_condition=True):
-        self.scheduler.infer_condition = infer_condition
-        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
+    def _infer_cond_uncond(self, inputs, infer_condition=True, mm_perturb=None):
+        self.transformer_infer.reset_guidance_perturbation()
+        if mm_perturb:
+            self.transformer_infer.set_guidance_perturbation(**mm_perturb)
+        try:
+            self.scheduler.infer_condition = infer_condition
+            pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
-        # Apply sequence parallel pre-processing (only for video)
-        if self.config.get("seq_parallel", False):
-            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+            # Apply sequence parallel pre-processing (only for video)
+            if self.config.get("seq_parallel", False):
+                pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
-        # Apply tensor parallel pre-processing (split positional embeddings)
-        if self.config.get("tensor_parallel", False):
-            pre_infer_out = self._tensor_parallel_pre_process(pre_infer_out)
+            # Apply tensor parallel pre-processing (split positional embeddings)
+            if self.config.get("tensor_parallel", False):
+                pre_infer_out = self._tensor_parallel_pre_process(pre_infer_out)
 
-        vx, ax, video_embedded_timestep, audio_embedded_timestep = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
+            vx, ax, video_embedded_timestep, audio_embedded_timestep = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
-        # Apply sequence parallel post-processing (only for video)
-        if self.config.get("seq_parallel", False):
-            vx = self._seq_parallel_post_process(vx, self.original_video_seq_len)
-            video_embedded_timestep = self._seq_parallel_post_process(video_embedded_timestep, self.original_video_seq_len)
-            # Audio remains global, no gather needed
+            # Apply sequence parallel post-processing (only for video)
+            if self.config.get("seq_parallel", False):
+                vx = self._seq_parallel_post_process(vx, self.original_video_seq_len)
+                video_embedded_timestep = self._seq_parallel_post_process(video_embedded_timestep, self.original_video_seq_len)
+                # Audio remains global, no gather needed
 
-        vx, ax = self.post_infer.infer(self.post_weight, vx, ax, video_embedded_timestep, audio_embedded_timestep)
-        return vx, ax
+            vx, ax = self.post_infer.infer(self.post_weight, vx, ax, video_embedded_timestep, audio_embedded_timestep)
+            return vx, ax
+        finally:
+            self.transformer_infer.reset_guidance_perturbation()
+
+    @torch.no_grad()
+    def _infer_mm_guider_cfg(self, inputs):
+        """
+        与 ltx ``multi_modal_guider_denoising_func`` + ``MultiModalGuider.calculate`` 对齐：
+        cond / uncond / perturbed(STG) / isolated-modality 多路前向，经 transformer_infer 扰动标志实现。
+        """
+        sch = self.scheduler
+        step_i = sch.step_index
+        v_p, a_p = sch.mm_guider_video, sch.mm_guider_audio
+        v_skip = _mm_guider_should_skip_step(v_p["skip_step"], step_i)
+        a_skip = _mm_guider_should_skip_step(a_p["skip_step"], step_i)
+
+        need_neg = (not math.isclose(v_p["cfg_scale"], 1.0)) or (not math.isclose(a_p["cfg_scale"], 1.0))
+        need_ptb = (not math.isclose(v_p["stg_scale"], 0.0)) or (not math.isclose(a_p["stg_scale"], 0.0))
+        need_mod = (not math.isclose(v_p["modality_scale"], 1.0)) or (not math.isclose(a_p["modality_scale"], 1.0))
+
+        if v_skip and a_skip and sch.mm_last_v_pred is not None and sch.mm_last_a_pred is not None:
+            sch.v_noise_pred = sch.mm_last_v_pred
+            sch.a_noise_pred = sch.mm_last_a_pred
+            return
+
+        v_noise_pred_cond, a_noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
+
+        if need_neg:
+            v_noise_pred_uncond, a_noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
+        else:
+            v_noise_pred_uncond, a_noise_pred_uncond = None, None
+
+        if need_ptb:
+            v_sb = frozenset(v_p["stg_blocks"]) if not math.isclose(v_p["stg_scale"], 0.0) else frozenset()
+            a_sb = frozenset(a_p["stg_blocks"]) if not math.isclose(a_p["stg_scale"], 0.0) else frozenset()
+            v_noise_pred_ptb, a_noise_pred_ptb = self._infer_cond_uncond(
+                inputs,
+                infer_condition=True,
+                mm_perturb={
+                    "skip_video_self_blocks": v_sb,
+                    "skip_audio_self_blocks": a_sb,
+                    "skip_a2v": False,
+                    "skip_v2a": False,
+                },
+            )
+        else:
+            v_noise_pred_ptb, a_noise_pred_ptb = None, None
+
+        if need_mod:
+            v_noise_pred_mod, a_noise_pred_mod = self._infer_cond_uncond(
+                inputs,
+                infer_condition=True,
+                mm_perturb={
+                    "skip_video_self_blocks": frozenset(),
+                    "skip_audio_self_blocks": frozenset(),
+                    "skip_a2v": True,
+                    "skip_v2a": True,
+                },
+            )
+        else:
+            v_noise_pred_mod, a_noise_pred_mod = None, None
+
+        v_out = (
+            sch.mm_last_v_pred
+            if v_skip and sch.mm_last_v_pred is not None
+            else _multimodal_guider_calculate(
+                v_noise_pred_cond,
+                v_noise_pred_uncond,
+                v_noise_pred_ptb,
+                v_noise_pred_mod,
+                cfg_scale=v_p["cfg_scale"],
+                stg_scale=v_p["stg_scale"],
+                modality_scale=v_p["modality_scale"],
+                rescale_scale=v_p["rescale_scale"],
+            )
+        )
+        a_out = (
+            sch.mm_last_a_pred
+            if a_skip and sch.mm_last_a_pred is not None
+            else _multimodal_guider_calculate(
+                a_noise_pred_cond,
+                a_noise_pred_uncond,
+                a_noise_pred_ptb,
+                a_noise_pred_mod,
+                cfg_scale=a_p["cfg_scale"],
+                stg_scale=a_p["stg_scale"],
+                modality_scale=a_p["modality_scale"],
+                rescale_scale=a_p["rescale_scale"],
+            )
+        )
+
+        sch.mm_last_v_pred = v_out
+        sch.mm_last_a_pred = a_out
+        sch.v_noise_pred = v_out
+        sch.a_noise_pred = a_out
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
@@ -508,7 +644,11 @@ class LTX2Model(BaseTransformerModel):
                 self.post_weight.to_cuda()
 
         if self.config["enable_cfg"]:
-            if self.config["cfg_parallel"]:
+            if getattr(self.scheduler, "mm_guider_enabled", False):
+                if self.config["cfg_parallel"]:
+                    raise NotImplementedError("LTX2 mm_guider 与 cfg_parallel 同时使用尚未实现，请关闭其一。")
+                self._infer_mm_guider_cfg(inputs)
+            elif self.config["cfg_parallel"]:
                 # ==================== CFG Parallel Processing ====================
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
@@ -526,13 +666,16 @@ class LTX2Model(BaseTransformerModel):
                 v_noise_pred_uncond = v_noise_pred_list[1]  # cfg_p_rank == 1
                 a_noise_pred_cond = a_noise_pred_list[0]  # cfg_p_rank == 0
                 a_noise_pred_uncond = a_noise_pred_list[1]  # cfg_p_rank == 1
+
+                self.scheduler.v_noise_pred = v_noise_pred_uncond + self.scheduler.sample_guide_scale * (v_noise_pred_cond - v_noise_pred_uncond)
+                self.scheduler.a_noise_pred = a_noise_pred_uncond + self.scheduler.sample_guide_scale * (a_noise_pred_cond - a_noise_pred_uncond)
             else:
                 # ==================== CFG Processing ====================
                 v_noise_pred_cond, a_noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
                 v_noise_pred_uncond, a_noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
 
-            self.scheduler.v_noise_pred = v_noise_pred_uncond + self.scheduler.sample_guide_scale * (v_noise_pred_cond - v_noise_pred_uncond)
-            self.scheduler.a_noise_pred = a_noise_pred_uncond + self.scheduler.sample_guide_scale * (a_noise_pred_cond - a_noise_pred_uncond)
+                self.scheduler.v_noise_pred = v_noise_pred_uncond + self.scheduler.sample_guide_scale * (v_noise_pred_cond - v_noise_pred_uncond)
+                self.scheduler.a_noise_pred = a_noise_pred_uncond + self.scheduler.sample_guide_scale * (a_noise_pred_cond - a_noise_pred_uncond)
         else:
             # ==================== No CFG ====================
             v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
