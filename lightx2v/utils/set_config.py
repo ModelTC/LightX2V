@@ -38,6 +38,12 @@ def get_default_config():
 def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
+    # LTX-2 / HuggingFace: root config.json may nest transformer under "transformer".
+    # LightX2V DiT expects num_layers, rope_type, etc. on the root config.
+    _nested_transformer = config.get("transformer")
+    if isinstance(_nested_transformer, dict):
+        config.update(_nested_transformer)
+
     return config
 
 
@@ -129,12 +135,19 @@ def auto_calc_config(config):
             elif "block_out_channels" in vae_config:
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
 
+    # LTX-2 / HuggingFace: root config.json may nest transformer under "transformer".
+    # LightX2V DiT expects num_layers, rope_type, etc. on the root config.
+    _nested_transformer = config.get("transformer")
+    if isinstance(_nested_transformer, dict):
+        config.update(_nested_transformer)
+
     return config
 
 
 def set_config(args):
     config = set_args2config(args)
     config = auto_calc_config(config)
+
     return config
 
 

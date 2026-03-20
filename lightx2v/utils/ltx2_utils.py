@@ -1,9 +1,16 @@
 import json
 from dataclasses import dataclass, replace
-from typing import Callable, NamedTuple, Protocol, TypeVar
+from typing import Any, Callable, NamedTuple, Protocol, TypeVar
 
 import safetensors
 import torch
+
+
+def check_config_value(config: dict, key: str, expected: Any) -> None:  # noqa: ANN401
+    actual = config.get(key)
+    if actual != expected:
+        raise ValueError(f"Config value {key} is {actual}, expected {expected}")
+
 
 ModelType = TypeVar("ModelType")
 

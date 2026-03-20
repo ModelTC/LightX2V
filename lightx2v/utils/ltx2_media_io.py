@@ -1,3 +1,4 @@
+import logging
 import math
 from collections.abc import Generator, Iterator
 from fractions import Fraction
@@ -11,7 +12,11 @@ from einops import rearrange
 from torch._prims_common import DeviceLikeType
 from tqdm import tqdm
 
+from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
+
 DEFAULT_IMAGE_CRF = 33
+
+logger = logging.getLogger(__name__)
 
 
 def resize_aspect_ratio_preserving(image: torch.Tensor, long_side: int) -> torch.Tensor:
@@ -75,13 +80,20 @@ def normalize_latent(latent: torch.Tensor, device: torch.device, dtype: torch.dt
     return (latent / 127.5 - 1.0).to(device=device, dtype=dtype)
 
 
-def load_image_conditioning(image_path: str, height: int, width: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+def load_image_conditioning(
+    image_path: str,
+    height: int,
+    width: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    crf: int = DEFAULT_IMAGE_CRF,
+) -> torch.Tensor:
     """
     Loads an image from a path and preprocesses it for conditioning.
     Note: The image is resized to the nearest multiple of 2 for compatibility with video codecs.
     """
     image = decode_image(image_path=image_path)
-    image = preprocess(image=image)
+    image = preprocess(image=image, crf=crf)
     image = torch.tensor(image, dtype=torch.float32, device=device)
     image = resize_and_center_crop(image, height, width)
     image = normalize_latent(image, device, dtype)
@@ -108,7 +120,8 @@ def decode_image(image_path: str) -> np.ndarray:
     return np_array
 
 
-def _write_audio(container: av.container.Container, audio_stream: av.audio.AudioStream, samples: torch.Tensor, audio_sample_rate: int) -> None:
+def _write_audio(container: av.container.Container, audio_stream: av.audio.AudioStream, audio: Audio) -> None:
+    samples = audio.waveform
     if samples.ndim == 1:
         samples = samples[:, None]
 
@@ -128,7 +141,7 @@ def _write_audio(container: av.container.Container, audio_stream: av.audio.Audio
         format="s16",
         layout="stereo",
     )
-    frame_in.sample_rate = audio_sample_rate
+    frame_in.sample_rate = audio.sampling_rate
 
     _resample_audio(container, audio_stream, frame_in)
 
@@ -174,8 +187,7 @@ def _resample_audio(container: av.container.Container, audio_stream: av.audio.Au
 def encode_video(
     video: torch.Tensor | Iterator[torch.Tensor],
     fps: int,
-    audio: torch.Tensor | None,
-    audio_sample_rate: int | None,
+    audio: Audio | None,
     output_path: str,
     video_chunks_number: int,
 ) -> None:
@@ -193,10 +205,7 @@ def encode_video(
     stream.pix_fmt = "yuv420p"
 
     if audio is not None:
-        if audio_sample_rate is None:
-            raise ValueError("audio_sample_rate is required when audio is provided")
-
-        audio_stream = _prepare_audio_stream(container, audio_sample_rate)
+        audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
 
     def all_tiles(first_chunk: torch.Tensor, tiles_generator: Generator[tuple[torch.Tensor, int], None, None]) -> Generator[tuple[torch.Tensor, int], None, None]:
         yield first_chunk
@@ -214,26 +223,112 @@ def encode_video(
         container.mux(packet)
 
     if audio is not None:
-        _write_audio(container, audio_stream, audio, audio_sample_rate)
+        _write_audio(container, audio_stream, audio)
 
     container.close()
+    logger.info(f"Video saved to {output_path}")
 
 
-def decode_audio_from_file(path: str, device: torch.device) -> torch.Tensor | None:
+_INT_FORMAT_MAX: dict[str, float] = {
+    "u8": 128.0,
+    "u8p": 128.0,
+    "s16": 32768.0,
+    "s16p": 32768.0,
+    "s32": 2147483648.0,
+    "s32p": 2147483648.0,
+}
+
+
+def _audio_frame_to_float(frame: av.AudioFrame) -> np.ndarray:
+    """Convert an audio frame to a float32 ndarray with values in [-1, 1] and shape (channels, samples)."""
+    fmt = frame.format.name
+    arr = frame.to_ndarray().astype(np.float32)
+    if fmt in _INT_FORMAT_MAX:
+        arr = arr / _INT_FORMAT_MAX[fmt]
+    if not frame.format.is_planar:
+        # Interleaved formats have shape (1, samples * channels) — reshape to (channels, samples).
+        channels = len(frame.layout.channels)
+        arr = arr.reshape(-1, channels).T
+    return arr
+
+
+def get_videostream_metadata(path: str) -> tuple[float, int, int, int]:
+    """Read video stream metadata: (fps, num_frames, width, height).
+    If frame count is missing in the container, decodes the stream to count frames.
+    """
     container = av.open(path)
     try:
-        audio = []
-        audio_stream = next(s for s in container.streams if s.type == "audio")
-        for frame in container.decode(audio_stream):
-            audio.append(torch.tensor(frame.to_ndarray(), dtype=torch.float32, device=device).unsqueeze(0))
-        container.close()
-        audio = torch.cat(audio)
-    except StopIteration:
-        audio = None
+        video_stream = next(s for s in container.streams if s.type == "video")
+        fps = float(video_stream.average_rate)
+        num_frames = video_stream.frames or 0
+        if num_frames == 0:
+            num_frames = sum(1 for _ in container.decode(video_stream))
+        width = video_stream.codec_context.width
+        height = video_stream.codec_context.height
+        return fps, num_frames, width, height
     finally:
         container.close()
 
-    return audio
+
+def decode_audio_from_file(path: str, device: torch.device, start_time: float = 0.0, max_duration: float | None = None) -> Audio | None:
+    """Decodes audio from a file, optionally seeking to a start time and limiting duration.
+    Args:
+        path: Path to the audio/video file containing an audio stream.
+        device: Device to place the resulting tensor on.
+        start_time: Start time in seconds to begin reading audio from.
+        max_duration: Maximum audio duration in seconds. If None, reads to end of stream.
+    Returns:
+        An Audio object with waveform of shape (1, channels, samples), or None if no audio stream.
+    """
+    container = av.open(path)
+    try:
+        audio_stream = next(s for s in container.streams if s.type == "audio")
+    except StopIteration:
+        container.close()
+        return None
+
+    sample_rate = audio_stream.rate
+    start_pts = int(start_time / audio_stream.time_base)
+    end_time = start_time + max_duration if max_duration else audio_stream.duration * audio_stream.time_base
+    container.seek(start_pts, stream=audio_stream)
+
+    samples = []
+    first_frame_time = None
+    for frame in container.decode(audio=0):
+        if frame.pts is None:
+            continue
+        frame_time = float(frame.pts * audio_stream.time_base)
+        frame_end = frame_time + frame.samples / frame.sample_rate
+        if frame_end < start_time:
+            continue
+        if frame_time > end_time:
+            break
+        if first_frame_time is None:
+            first_frame_time = frame_time
+        samples.append(_audio_frame_to_float(frame))
+
+    container.close()
+
+    if not samples:
+        return None
+
+    audio = np.concatenate(samples, axis=-1)
+
+    # Trim samples that fall outside the requested [start_time, start_time + max_duration] window.
+    # Audio codecs decode in fixed-size frames whose boundaries may not align with the requested
+    # time range, so the first frame can start before start_time and the last frame can end after
+    # start_time + max_duration.
+    skip_samples = round((start_time - first_frame_time) * sample_rate)
+    if skip_samples > 0:
+        audio = audio[..., skip_samples:]
+
+    if max_duration is not None:
+        max_samples = round(max_duration * sample_rate)
+        audio = audio[..., :max_samples]
+
+    waveform = torch.from_numpy(audio).to(device).unsqueeze(0)
+
+    return Audio(waveform=waveform, sampling_rate=sample_rate)
 
 
 def decode_video_from_file(path: str, frame_cap: int, device: DeviceLikeType) -> Generator[torch.Tensor]:

@@ -1,0 +1,42 @@
+{
+    "infer_steps": 30,
+    "target_video_length": 121,
+    "target_height": 512,
+    "target_width": 768,
+    "attn_type": "sage_attn2",
+    "sample_guide_scale": 3.0,
+    "sample_shift": [2.05, 0.95],
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "vae_cpu_offload": false,
+    "num_channels_latents": 128,
+    "fps": 24,
+    "audio_fps": 24000,
+    "audio_mel_bins":16,
+    "double_precision_rope": true,
+    "use_tiling_vae": false,
+    "dit_original_ckpt": "Lightricks/LTX-2.3ltx-2.3-22b-dev.safetensors",
+    "caption_proj_before_connector": true,
+    "cross_attention_adaln": true,
+    "apply_gated_attention": true,
+    "mm_guider": {
+        "enabled": true,
+        "video": {
+            "cfg_scale": 3.0,
+            "stg_scale": 1.0,
+            "stg_blocks": [28],
+            "modality_scale": 3.0,
+            "rescale_scale": 0.7,
+            "skip_step": 0
+        },
+        "audio": {
+            "cfg_scale": 7.0,
+            "stg_scale": 1.0,
+            "stg_blocks": [28],
+            "modality_scale": 3.0,
+            "rescale_scale": 0.7,
+            "skip_step": 0
+        }
+    }
+}
