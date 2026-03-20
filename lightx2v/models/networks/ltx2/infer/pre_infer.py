@@ -72,9 +72,7 @@ class LTX2PreInfer:
             v_context = inputs["text_encoder_output"]["v_context_p"]
         else:
             v_context = inputs["text_encoder_output"]["v_context_n"]
-        # print(v_latent, v_positions, v_timesteps, v_context)
-        # print(v_latent.shape, v_positions.shape, v_timesteps.shape, v_context.shape)
-        # exit()
+
         # 1. Patchify projection
         video_x = weights.patchify_proj.apply(v_latent)
 
