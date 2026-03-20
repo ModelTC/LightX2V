@@ -1,0 +1,25 @@
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 512,
+    "target_width": 832,
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 6,
+    "sample_shift": 8,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "feature_caching": "NoCaching",
+    "changing_resolution": true,
+    "resolution_rate": [
+        0.5
+    ],
+    "changing_resolution_steps": [
+        25
+    ],
+    "ltx2_cpu_offload": false,
+    "ltx2_vae_ckpt": "Lightricks/LTX-2/ltx-2-19b-distilled-fp8.safetensors",
+    "ltx2_upsampler_ckpt": "Lightricks/LTX-2/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+}
