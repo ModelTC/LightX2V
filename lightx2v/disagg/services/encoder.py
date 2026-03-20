@@ -342,7 +342,7 @@ class EncoderService(BaseService):
             self._rdma_buffers.pop(room, None)
         torch.cuda.empty_cache()
 
-    def release(self, room: int):
+    def remove(self, room: int):
         self.release_memory(room)
 
         self.data_sender.pop(room, None)
@@ -350,9 +350,19 @@ class EncoderService(BaseService):
         if self.data_mgr is None:
             return
 
-        self.data_mgr.release(room)
+        self.data_mgr.remove(room)
 
-    def exec_request(self, stop_event=None):
+    def release(self):
+        for room in list(self._rdma_buffers.keys()):
+            self.remove(room)
+        if self.data_mgr is not None:
+            self.data_mgr.release()
+        self.data_sender.clear()
+        self.text_encoder = None
+        self.image_encoder = None
+        self.vae_encoder = None
+
+    def run(self, stop_event=None):
         req_queue = deque()
         exec_queue = deque()
         complete_queue: Dict[int, dict] = {}
@@ -375,7 +385,7 @@ class EncoderService(BaseService):
                     exec_queue.append((room, config))
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
-                    self.release(room)
+                    self.remove(room)
 
             if exec_queue:
                 room, config = exec_queue.popleft()
@@ -385,7 +395,7 @@ class EncoderService(BaseService):
                 except Exception:
                     self.logger.exception("Failed to process request for room=%s", room)
                     complete_queue.pop(room, None)
-                    self.release(room)
+                    self.remove(room)
 
             completed_rooms: List[int] = []
             for room in list(complete_queue.keys()):
@@ -403,7 +413,7 @@ class EncoderService(BaseService):
 
             for room in completed_rooms:
                 complete_queue.pop(room, None)
-                self.release(room)
+                self.remove(room)
 
             if stop_event is not None and stop_event.is_set() and not req_queue and not exec_queue and not complete_queue:
                 self.logger.info("EncoderService received stop event, exiting request loop.")
@@ -411,3 +421,5 @@ class EncoderService(BaseService):
 
             if not req_queue and not exec_queue:
                 time.sleep(0.01)
+
+        self.release()

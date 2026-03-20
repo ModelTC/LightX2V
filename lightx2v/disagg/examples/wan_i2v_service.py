@@ -86,28 +86,28 @@ def main():
         logger.info("Initializing Encoder Service...")
         encoder_service = EncoderService()
         logger.info("Running Encoder Service...")
-        encoder_service.exec_request(stop_event=encoder_stop_event)
+        encoder_service.run(stop_event=encoder_stop_event)
         logger.info("Encoder Service completed.")
 
     def run_transformer():
         logger.info("Initializing Transformer Service...")
         transformer_service = TransformerService()
         logger.info("Running Transformer Service...")
-        transformer_service.exec_request(stop_event=transformer_stop_event)
+        transformer_service.run(stop_event=transformer_stop_event)
         logger.info("Transformer Service completed.")
 
     def run_decoder():
         logger.info("Initializing Decoder Service...")
         decoder_service = DecoderService()
         logger.info("Running Decoder Service...")
-        decoder_service.exec_request(stop_event=decoder_stop_event)
+        decoder_service.run(stop_event=decoder_stop_event)
         logger.info("Video generation completed.")
 
     def run_controller():
         logger.info("Initializing Controller Service...")
         controller_service = ControllerService()
         logger.info("Dispatching request to services...")
-        controller_service.add_request(config)
+        controller_service.run(config)
         encoder_stop_event.set()
         transformer_stop_event.set()
         decoder_stop_event.set()
