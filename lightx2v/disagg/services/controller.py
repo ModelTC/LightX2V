@@ -31,9 +31,7 @@ class ControllerService(BaseService):
         elif instance_type == "decoder":
             self.decoder_policy.add_instance(instance_address)
         else:
-            raise ValueError(
-                "instance_type must be one of: encoder, transformer, decoder"
-            )
+            raise ValueError("instance_type must be one of: encoder, transformer, decoder")
 
     def remove_instance(self, instance_type: str, instance_address: str):
         """Remove instance address from the matching scheduling policy by type."""
@@ -47,9 +45,7 @@ class ControllerService(BaseService):
         elif instance_type == "decoder":
             self.decoder_policy.remove_instance(instance_address)
         else:
-            raise ValueError(
-                "instance_type must be one of: encoder, transformer, decoder"
-            )
+            raise ValueError("instance_type must be one of: encoder, transformer, decoder")
 
     def send_request(self, config):
         """Dispatch request config to services."""
@@ -83,16 +79,12 @@ class ControllerService(BaseService):
         self.transformer_policy = RoundRobinPolicy()
         self.decoder_policy = RoundRobinPolicy()
 
-        self.add_instance(
-            "encoder", f"{bootstrap_addr}:{REQUEST_POLLING_PORT + encoder_engine_rank}"
-        )
+        self.add_instance("encoder", f"{bootstrap_addr}:{REQUEST_POLLING_PORT + encoder_engine_rank}")
         self.add_instance(
             "transformer",
             f"{bootstrap_addr}:{REQUEST_POLLING_PORT + transformer_engine_rank}",
         )
-        self.add_instance(
-            "decoder", f"{bootstrap_addr}:{REQUEST_POLLING_PORT + decoder_engine_rank}"
-        )
+        self.add_instance("decoder", f"{bootstrap_addr}:{REQUEST_POLLING_PORT + decoder_engine_rank}")
 
         base_save_path = config.get("save_path")
 
