@@ -7,6 +7,7 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
+from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
@@ -51,7 +52,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 
 
 @RUNNER_REGISTER("qwen_image")
-class QwenImageRunner(DefaultRunner):
+class QwenImageRunner(DisaggMixin, DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
@@ -70,9 +71,33 @@ class QwenImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
-        self.model = self.load_transformer()
-        self.text_encoders = self.load_text_encoder()
-        self.vae = self.load_vae()
+        disagg_mode = self.config.get("disagg_mode")
+
+        if disagg_mode == "encoder":
+            logger.info("[Disagg] Loading models for ENCODER role (QwenImage)...")
+            self.model = None
+            self.text_encoders = self.load_text_encoder()
+            self.vae = self.load_vae()
+        elif disagg_mode == "transformer":
+            logger.info("[Disagg] Loading models for TRANSFORMER role (QwenImage)...")
+            self.model = self.load_transformer()
+            self.text_encoders = None
+            # Skip VAE when a dedicated Decoder service handles Phase 2 (3-way disagg)
+            if self.config.get("disagg_config", {}).get("decoder_engine_rank") is not None:
+                self.vae = None
+            else:
+                self.vae = self.load_vae()
+        elif disagg_mode == "decode":
+            logger.info("[Disagg] Loading models for DECODE role (QwenImage)...")
+            self.model = None
+            self.text_encoders = None
+            self.vae = self.load_vae()
+        else:
+            self.model = self.load_transformer()
+            self.text_encoders = self.load_text_encoder()
+            self.image_encoder = self.load_image_encoder()
+            self.vae = self.load_vae()
+            self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
@@ -95,10 +120,8 @@ class QwenImageRunner(DefaultRunner):
         - "lightllm_kernel": HuggingFace model with Triton kernel optimizations
         - "baseline" (default): HuggingFace baseline implementation
         """
-        # Prepare encoder config by merging lightllm_config if present
-        encoder_config = self.config.copy()
-        lightllm_config = self.config.get("lightllm_config", {})
-        encoder_config.update(lightllm_config)
+        encoder_config = dict(self.config)
+        encoder_config.update(self.config.get("lightllm_config", {}))
 
         if self.text_encoder_type == "lightllm_service":
             from lightx2v.models.input_encoders.lightllm import LightLLMServiceTextEncoder
@@ -150,19 +173,21 @@ class QwenImageRunner(DefaultRunner):
         return vae
 
     def init_modules(self):
-        logger.info("Initializing runner modules...")
-        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
-            self.load_model()
-            self.model.set_scheduler(self.scheduler)
-        elif self.config.get("lazy_load", False):
-            assert self.config.get("cpu_offload", False)
+        if self.config.get("disagg_mode"):
+            self.init_disagg(self.config)
+        super().init_modules()
         self.run_dit = self._run_dit_local
+
+        disagg_mode = self.config.get("disagg_mode")
+        if disagg_mode == "decode":
+            # Decoder role does not need a task-specific input encoder
+            return
         if self.config["task"] == "t2i":
             self.run_input_encoder = self._run_input_encoder_local_t2i
         elif self.config["task"] == "i2i":
             self.run_input_encoder = self._run_input_encoder_local_i2i
         else:
-            assert NotImplementedError
+            raise NotImplementedError(f"QwenImageRunner does not support task: {self.config['task']}")
 
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
@@ -337,6 +362,17 @@ class QwenImageRunner(DefaultRunner):
         return None
 
     def set_target_shape(self):
+        # In disagg transformer mode, use the shape transmitted from encoder
+        if self.config.get("disagg_mode") == "transformer" and getattr(self, "inputs", {}).get("latent_shape"):
+            latent_shape = self.inputs["latent_shape"]
+            self.input_info.target_shape = tuple(latent_shape)
+            # Reconstruct auto_height and auto_width
+            scale_factor = self.config["vae_scale_factor"]
+            self.input_info.auto_height = latent_shape[-2] * scale_factor
+            self.input_info.auto_width = latent_shape[-1] * scale_factor
+            logger.info(f"Qwen Image Runner restored target shape from disagg: {latent_shape}")
+            return
+
         custom_shape = self.get_custom_shape()
         if custom_shape is not None:
             width, height = custom_shape
@@ -379,6 +415,9 @@ class QwenImageRunner(DefaultRunner):
         self.input_info.image_shapes = image_shapes
 
     def init_scheduler(self):
+        super().init_scheduler()
+        if self.config.get("disagg_mode") == "decode":
+            return
         self.scheduler = QwenImageScheduler(self.config)
 
     def get_encoder_output_i2v(self):
@@ -387,23 +426,93 @@ class QwenImageRunner(DefaultRunner):
     def run_image_encoder(self):
         pass
 
-    @ProfilingContext4DebugL2("Load models")
-    def load_model(self):
-        self.model = self.load_transformer()
-        self.text_encoders = self.load_text_encoder()
-        self.image_encoder = self.load_image_encoder()
-        self.vae = self.load_vae()
-        self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
-
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
+        """Run full pipeline. Modes:
+        - local (no disagg_mode): run encoder → set_shape → DiT → VAE → save.
+        - disagg encoder: run encoder → set_shape → send_encoder_outputs → return.
+        - disagg transformer: receive_encoder_outputs → set_shape → DiT → VAE → save.
+        - disagg decode: receive_transformer_outputs → VAE → save.
+        """
         self.input_info = input_info
+        disagg_mode = self.config.get("disagg_mode")
 
-        self.inputs = self.run_input_encoder()
+        if disagg_mode == "decode":
+            # Decoder role: receive DiT latents from Transformer, decode with VAE, save image
+            latents = self.receive_transformer_outputs()
+
+            scale_factor = self.config["vae_scale_factor"]
+            p2_meta = getattr(self, "_p2_receive_meta", {})
+            auto_height = p2_meta.get("auto_height")
+            auto_width = p2_meta.get("auto_width")
+            if auto_height is None or auto_width is None:
+                # Fallback for spatial-format latents (non-packed models)
+                latent_h = latents.shape[-2]
+                latent_w = latents.shape[-1]
+                auto_height = latent_h * scale_factor * 2
+                auto_width = latent_w * scale_factor * 2
+            self.input_info.auto_height = int(auto_height)
+            self.input_info.auto_width = int(auto_width)
+            # Compute image_shapes: number of spatial patches per image
+            h_patches = int(auto_height) // (scale_factor * 2)
+            w_patches = int(auto_width) // (scale_factor * 2)
+            self.input_info.image_shapes = [[(1, h_patches, w_patches)]]
+            images = self.run_vae_decoder(latents)
+            self.end_run()
+
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                if not input_info.return_result_tensor:
+                    image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+                    image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+                    if isinstance(images[0], list) and len(images[0]) > 1:
+                        for idx, image in enumerate(images[0]):
+                            image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                            logger.info(f"[Disagg] Decode: image saved: {image_prefix}_{idx:05d}.{image_suffix}")
+                    else:
+                        image = images[0]
+                        image.save(f"{image_prefix}.{image_suffix}")
+                        logger.info(f"[Disagg] Decode: image saved: {image_prefix}.{image_suffix}")
+
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            if input_info.return_result_tensor:
+                return {"images": images}
+            return {"images": None}
+
+        if disagg_mode == "transformer":
+            # Disagg transformer node: receive from Mooncake, no local encoder
+            self.inputs = self.receive_encoder_outputs()
+            prompt_embeds = self.inputs.get("text_encoder_output", {}).get("prompt_embeds")
+            if prompt_embeds is not None:
+                self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
+                neg_embeds = self.inputs.get("text_encoder_output", {}).get("negative_prompt_embeds")
+                if neg_embeds is not None:
+                    self.input_info.txt_seq_lens.append(neg_embeds.shape[1])
+        else:
+            # Local mode or disagg encoder node: run encoder locally
+            self.inputs = self.run_input_encoder()
+
         self.set_target_shape()
         self.set_img_shapes()
         logger.info(f"input_info: {self.input_info}")
+
+        if disagg_mode == "encoder":
+            latent_shape = list(self.input_info.target_shape)
+            self.send_encoder_outputs(self.inputs, latent_shape)
+            logger.info("[Disagg] Encoder role completed. Skipping DiT run_main.")
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            return None
+
         latents, generator = self.run_dit()
+        # 3-way disagg: send latents to Decoder, skip local VAE
+        if getattr(self, "_disagg_p2_sender", None) is not None:
+            self.send_transformer_outputs(latents)
+            self.end_run()
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            return None
+
         images = self.run_vae_decoder(latents)
         self.end_run()
 
