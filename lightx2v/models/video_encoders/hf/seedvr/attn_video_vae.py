@@ -1,8 +1,8 @@
+import gc
 from contextlib import nullcontext
 from typing import List, Literal, Optional, Tuple, Union
 
 import diffusers
-import gc
 import torch
 import torch.nn as nn
 from diffusers.models.attention_processor import Attention, SpatialNorm
