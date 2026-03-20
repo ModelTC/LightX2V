@@ -226,6 +226,7 @@ class SeedVRRunner(DefaultRunner):
             weights_map_location="cpu",
             weights_mmap=True,
             strict=False,
+            cpu_offload=self.config.get("cpu_offload", False),
         )
         vae.requires_grad_(False).eval()
         vae.set_causal_slicing(split_size=4, memory_device="same")

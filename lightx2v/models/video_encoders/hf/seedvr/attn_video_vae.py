@@ -2,6 +2,7 @@ from contextlib import nullcontext
 from typing import List, Literal, Optional, Tuple, Union
 
 import diffusers
+import gc
 import torch
 import torch.nn as nn
 from diffusers.models.attention_processor import Attention, SpatialNorm
@@ -884,7 +885,6 @@ class Decoder3D(nn.Module):
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
         output_channel = reversed_block_out_channels[0]
-        print(f"slicing_up_num: {slicing_up_num}")
         for i, up_block_type in enumerate(up_block_types):
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
@@ -1226,11 +1226,13 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         spatial_downsample_factor: int,
         temporal_downsample_factor: int,
         freeze_encoder: bool,
+        cpu_offload: bool = False,
         **kwargs,
     ):
         self.spatial_downsample_factor = spatial_downsample_factor
         self.temporal_downsample_factor = temporal_downsample_factor
         self.freeze_encoder = freeze_encoder
+        self.cpu_offload = cpu_offload
         super().__init__(*args, **kwargs)
 
     def forward(self, x: torch.FloatTensor) -> CausalAutoencoderOutput:
@@ -1286,6 +1288,8 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
 
     @torch.no_grad()
     def vae_encode(self, samples: List[Tensor]) -> List[Tensor]:
+        if self.cpu_offload:
+            self.to(AI_DEVICE)
         use_sample = True
         latents = []
         if len(samples) > 0:
@@ -1313,10 +1317,21 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
 
             latents = [latent.squeeze(0) for latent in latents]
 
+        if self.cpu_offload:
+            for m in self.modules():
+                if hasattr(m, "memory"):
+                    m.memory = None
+            self.to("cpu")
+            torch.cuda.empty_cache()
+            gc.collect()
+
         return latents
 
     @torch.no_grad()
     def vae_decode(self, latents: List[Tensor]) -> List[Tensor]:
+        if self.cpu_offload:
+            self.to(AI_DEVICE)
+
         samples = []
         if len(latents) > 0:
             scale = 0.9152
@@ -1340,6 +1355,14 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
 
             samples = [sample.squeeze(0) for sample in samples]
 
+        if self.cpu_offload:
+            for m in self.modules():
+                if hasattr(m, "memory"):
+                    m.memory = None
+            self.to("cpu")
+            torch.cuda.empty_cache()
+            gc.collect()
+
         return samples
 
 
@@ -1351,6 +1374,7 @@ def attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
     weights_map_location: Union[str, torch.device] = "cpu",
     weights_mmap: bool = False,
     strict: bool = True,
+    cpu_offload: bool = False,
 ) -> VideoAutoencoderKLWrapper:
     """Example: initialize VideoAutoencoderKLWrapper with SD3 inflation config params."""
     model = VideoAutoencoderKLWrapper(
@@ -1380,6 +1404,7 @@ def attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
         spatial_downsample_factor=8,
         temporal_downsample_factor=4,
         freeze_encoder=False,
+        cpu_offload=cpu_offload,
     )
 
     if weights_path is not None:

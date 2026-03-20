@@ -69,7 +69,12 @@ class DefaultTensor:
         self.pin_tensor = self._create_cpu_pin_tensor(tensor)
 
     def to_cuda(self, non_blocking=False):
-        self.tensor = self.pin_tensor.to(AI_DEVICE, non_blocking=non_blocking)
+        if hasattr(self, "pin_tensor"):
+            self.tensor = self.pin_tensor.to(AI_DEVICE, non_blocking=non_blocking)
+        elif hasattr(self, "tensor"):
+            self.tensor = self.tensor.to(AI_DEVICE, non_blocking=non_blocking)
+        else:
+            self.tensor = self._get_tensor(use_infer_dtype=True).to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_tensor"):
