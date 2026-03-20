@@ -318,6 +318,7 @@ def quantize_model(
     adapter_keys=None,
     key_idx=2,
     ignore_key=None,
+    ignore_quant_keys=None,
     linear_type="int8",
     non_linear_dtype=torch.float,
     comfyui_mode=False,
@@ -377,6 +378,17 @@ def quantize_model(
                         non_quantized_size += weights[key].numel() * weights[key].element_size()
                     else:
                         non_quantized_size += tensor.numel() * tensor.element_size()
+                else:
+                    non_quantized_size += tensor.numel() * tensor.element_size()
+                continue
+
+            # ignore_quant_keys: keep tensor but skip quantization when key matches.
+            if ignore_quant_keys is not None and any(ig_q in key for ig_q in ignore_quant_keys):
+                original_tensor_size = tensor.numel() * tensor.element_size()
+                original_size += original_tensor_size
+                if tensor.dtype != non_linear_dtype:
+                    weights[key] = tensor.to(non_linear_dtype)
+                    non_quantized_size += weights[key].numel() * weights[key].element_size()
                 else:
                     non_quantized_size += tensor.numel() * tensor.element_size()
                 continue
@@ -597,6 +609,7 @@ def convert_weights(args):
                 adapter_keys=args.adapter_keys,
                 key_idx=args.key_idx,
                 ignore_key=args.ignore_key,
+                ignore_quant_keys=args.ignore_quant_keys,
                 linear_type=args.linear_type,
                 non_linear_dtype=args.non_linear_dtype,
                 comfyui_mode=args.comfyui_mode,
@@ -755,6 +768,35 @@ def main():
     )
     parser.add_argument("-b", "--save_by_block", action="store_true")
 
+    # Quantization module selection overrides.
+    # If provided, these override the per-model_type defaults inside the quantized branch.
+    parser.add_argument("--key-idx", dest="key_idx_override", type=int, default=None, help="Override quantize key_idx selection")
+    parser.add_argument(
+        "--target-keys",
+        dest="target_keys_override",
+        type=str,
+        default=None,
+        help="Override quantize target_keys (comma-separated, e.g. 'self_attn,cross_attn,ffn')",
+    )
+    parser.add_argument(
+        "--ignore-keys",
+        dest="ignore_keys_override",
+        type=str,
+        default=None,
+        help="Override quantize ignore_key (comma-separated). Use 'none' to disable ignoring.",
+    )
+
+    parser.add_argument(
+        "--ignore-quant-keys",
+        dest="ignore_quant_keys_override",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated substrings: if a tensor key contains any of these substrings, "
+            "it will NOT be quantized but will still be kept and saved."
+        ),
+    )
+
     # Quantization
     parser.add_argument("--comfyui_mode", action="store_true")
     parser.add_argument("--full_quantized", action="store_true")
@@ -811,6 +853,14 @@ def main():
 
     if args.single_file and args.chunk_size > 0 and args.chunk_size != 100:
         logger.warning("--chunk_size is ignored when using --single_file option.")
+
+    def _parse_csv_override(v: str | None) -> list[str] | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if v == "" or v.lower() in {"none", "null"}:
+            return None
+        return [x.strip() for x in v.split(",") if x.strip()]
 
     if args.quantized:
         args.linear_dtype = dtype_mapping.get(args.linear_type, None)
@@ -873,11 +923,50 @@ def main():
             },
         }
 
-        args.target_keys = model_type_keys_map[args.model_type]["target_keys"]
-        args.adapter_keys = model_type_keys_map[args.model_type]["adapter_keys"] if "adapter_keys" in model_type_keys_map[args.model_type] else None
-        args.key_idx = model_type_keys_map[args.model_type]["key_idx"]
-        args.ignore_key = model_type_keys_map[args.model_type]["ignore_key"]
-        args.comfyui_keys = model_type_keys_map[args.model_type]["comfyui_keys"] if "comfyui_keys" in model_type_keys_map[args.model_type] else None
+        # If model_type wasn't provided by caller, keep user-provided overrides.
+        # (This matters for programmatic usage / custom wrappers where args.model_type can be None.)
+        if args.model_type is not None:
+            if args.model_type not in model_type_keys_map:
+                raise ValueError(f"Unsupported model_type for quantization overrides: {args.model_type}")
+
+            args.target_keys = model_type_keys_map[args.model_type]["target_keys"]
+            args.adapter_keys = (
+                model_type_keys_map[args.model_type]["adapter_keys"]
+                if "adapter_keys" in model_type_keys_map[args.model_type]
+                else None
+            )
+            args.key_idx = model_type_keys_map[args.model_type]["key_idx"]
+            args.ignore_key = model_type_keys_map[args.model_type]["ignore_key"]
+            args.comfyui_keys = (
+                model_type_keys_map[args.model_type]["comfyui_keys"]
+                if "comfyui_keys" in model_type_keys_map[args.model_type]
+                else None
+            )
+        else:
+            args.target_keys = None
+            args.adapter_keys = None
+            args.key_idx = None
+            args.ignore_key = None
+            args.comfyui_keys = None
+
+        # Apply CLI overrides (if provided)
+        if args.key_idx_override is not None:
+            args.key_idx = args.key_idx_override
+
+        target_keys_ov = _parse_csv_override(args.target_keys_override)
+        if target_keys_ov is not None:
+            args.target_keys = target_keys_ov
+
+        ignore_keys_ov = _parse_csv_override(args.ignore_keys_override)
+        if args.ignore_keys_override is not None:
+            # Explicit override even if user passes 'none'
+            args.ignore_key = ignore_keys_ov
+
+        ignore_quant_keys_ov = _parse_csv_override(args.ignore_quant_keys_override)
+        if args.ignore_quant_keys_override is not None:
+            args.ignore_quant_keys = ignore_quant_keys_ov
+        else:
+            args.ignore_quant_keys = None
 
     if os.path.isfile(args.output):
         raise ValueError("Output path must be a directory, not a file")
