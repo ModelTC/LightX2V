@@ -15,6 +15,8 @@ class RingComm:
         self.send_rank = (self.rank + 1) % self.world_size
         self.recv_rank = (self.rank - 1) % self.world_size
 
+        self.comm_stream = torch.cuda.Stream()
+
         if process_group is not None:
             self.send_rank = dist.get_global_rank(self._process_group, self.send_rank)
             self.recv_rank = dist.get_global_rank(self._process_group, self.recv_rank)
@@ -35,7 +37,8 @@ class RingComm:
     def commit(self):
         if self._reqs is not None:
             raise RuntimeError("commit called twice")
-        self._reqs = dist.batch_isend_irecv(self._ops)
+        with torch.cuda.stream(self.comm_stream):
+            self._reqs = dist.batch_isend_irecv(self._ops)
 
     def wait(self):
         if self._reqs is None:
@@ -44,3 +47,5 @@ class RingComm:
             req.wait()
         self._reqs = None
         self._ops = []
+        # compute stream must wait for communication
+        torch.cuda.current_stream().wait_stream(self.comm_stream)
