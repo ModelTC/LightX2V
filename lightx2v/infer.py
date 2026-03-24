@@ -56,6 +56,7 @@ def main():
             "wan2.1_sf_mtxg2",
             "seko_talk",
             "wan2.2_moe",
+            "lingbot_world",
             "wan2.2",
             "wan2.2_moe_audio",
             "wan2.2_audio",
@@ -143,6 +144,12 @@ def main():
         type=str,
         default=None,
         help="Pose string (e.g., 'w-3, right-0.5') or JSON file path for WorldPlay models.",
+    )
+    parser.add_argument(
+        "--action_path",
+        type=str,
+        default=None,
+        help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy).",
     )
     parser.add_argument(
         "--action_ckpt",
