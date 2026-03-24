@@ -146,7 +146,15 @@ class WanTransformerInfer(BaseTransformerInfer):
             shift_msa,
             scale_msa,
         )
-        x, attn_out = self.infer_cross_attn(block.compute_phases[1], x, pre_infer_out.context, y_out, gate_msa)
+        x, attn_out = self.infer_cross_attn(
+            block.compute_phases[1],
+            x,
+            pre_infer_out.context,
+            y_out,
+            gate_msa,
+            block=block,
+            conditional_dict=pre_infer_out.conditional_dict,
+        )
         y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         if hasattr(block.compute_phases[2], "after_proj"):
@@ -246,11 +254,26 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         return y
 
-    def infer_cross_attn(self, phase, x, context, y_out, gate_msa):
+    def infer_cross_attn(self, phase, x, context, y_out, gate_msa, block=None, conditional_dict=None):
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y_out.to(self.sensitive_layer_dtype) * gate_msa.squeeze()
         else:
             x.add_(y_out * gate_msa.squeeze())
+
+        if block is not None and conditional_dict is not None and hasattr(block, "cam_injector_layer1") and "c2ws_plucker_emb" in conditional_dict:
+            cam = conditional_dict["c2ws_plucker_emb"]
+            if cam.dim() == 3:
+                cam = cam.squeeze(0)
+            if cam.shape[0] < x.shape[0]:
+                cam = torch.nn.functional.pad(cam, (0, 0, 0, x.shape[0] - cam.shape[0]))
+            elif cam.shape[0] > x.shape[0]:
+                cam = cam[: x.shape[0]]
+            cam = cam.to(dtype=x.dtype, device=x.device)
+            cam_hidden = block.cam_injector_layer2.apply(torch.nn.functional.silu(block.cam_injector_layer1.apply(cam)))
+            cam_hidden = cam_hidden + cam
+            cam_scale = block.cam_scale_layer.apply(cam_hidden)
+            cam_shift = block.cam_shift_layer.apply(cam_hidden)
+            x = (1.0 + cam_scale) * x + cam_shift
 
         norm3_out = phase.norm3.apply(x)
         if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):

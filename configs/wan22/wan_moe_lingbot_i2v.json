@@ -1,0 +1,27 @@
+{
+    "infer_steps": 70,
+    "target_video_length": 161,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": [
+        5.0,
+        5.0
+    ],
+    "sample_shift": 10.0,
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": true,
+    "offload_granularity": "model",
+    "boundary": 0.947,
+    "use_image_encoder": false,
+    "enable_lingbot_cam_ctrl": true,
+    "parallel": {
+        "seq_p_size": 8,
+        "seq_p_attn_type": "ulysses"
+    }
+}

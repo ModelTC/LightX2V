@@ -52,6 +52,45 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    def _build_lingbot_cam_conditional(self, weights, inputs, x_tokens: torch.Tensor) -> dict:
+        image_encoder_output = inputs.get("image_encoder_output") or {}
+        dit_cond_dict = image_encoder_output.get("dit_cond_dict") or {}
+        c2ws_plucker_emb = dit_cond_dict.get("c2ws_plucker_emb", None)
+        if c2ws_plucker_emb is None:
+            return {}
+        if isinstance(c2ws_plucker_emb, (list, tuple)):
+            if len(c2ws_plucker_emb) == 0:
+                return {}
+            c2ws_plucker_emb = c2ws_plucker_emb[0]
+        if c2ws_plucker_emb.dim() == 4:
+            c2ws_plucker_emb = c2ws_plucker_emb.unsqueeze(0)
+        if c2ws_plucker_emb.dim() != 5:
+            return {}
+        if not hasattr(weights, "patch_embedding_wancamctrl"):
+            return {}
+
+        b, c, f, h, w = c2ws_plucker_emb.shape
+        p0, p1, p2 = self.config["patch_size"]
+        if f % p0 != 0 or h % p1 != 0 or w % p2 != 0:
+            return {}
+
+        # [B, C, F, H, W] -> [B, L, C*p0*p1*p2]
+        cam = c2ws_plucker_emb.reshape(b, c, f // p0, p0, h // p1, p1, w // p2, p2)
+        cam = cam.permute(0, 2, 4, 6, 1, 3, 5, 7).contiguous().reshape(b, -1, c * p0 * p1 * p2)
+        cam = cam.to(dtype=x_tokens.dtype, device=x_tokens.device)
+        cam = weights.patch_embedding_wancamctrl.apply(cam.squeeze(0)).unsqueeze(0)
+        cam_hidden = weights.c2ws_hidden_states_layer2.apply(torch.nn.functional.silu(weights.c2ws_hidden_states_layer1.apply(cam.squeeze(0))))
+        cam = cam.squeeze(0) + cam_hidden
+
+        seq_len = x_tokens.shape[0]
+        cam_len = cam.shape[0]
+        if cam_len < seq_len:
+            cam = torch.nn.functional.pad(cam, (0, 0, 0, seq_len - cam_len))
+        elif cam_len > seq_len:
+            cam = cam[:seq_len]
+
+        return {"c2ws_plucker_emb": cam}
+
     def prepare_cos_sin(self, grid_sizes, freqs):
         c = self.head_size // 2
         freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
@@ -205,6 +244,10 @@ class WanPreInfer:
             self.grid_sizes = grid_sizes.tuple
             self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
 
+        conditional_dict = {}
+        if self.config.get("enable_lingbot_cam_ctrl", False) or self.config.get("model_cls") == "wan2.2_moe_lingbot":
+            conditional_dict = self._build_lingbot_cam_conditional(weights, inputs, x.squeeze(0))
+
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
@@ -213,4 +256,5 @@ class WanPreInfer:
             context=context,
             cos_sin=self.cos_sin,
             adapter_args={"motion_vec": motion_vec},
+            conditional_dict=conditional_dict,
         )
