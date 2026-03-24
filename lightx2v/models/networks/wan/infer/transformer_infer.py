@@ -152,8 +152,6 @@ class WanTransformerInfer(BaseTransformerInfer):
             pre_infer_out.context,
             y_out,
             gate_msa,
-            pre_infer_out=pre_infer_out,
-            block=block,
         )
         y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)

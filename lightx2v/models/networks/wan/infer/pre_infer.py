@@ -10,13 +10,6 @@ from .utils import guidance_scale_embedding, sinusoidal_embedding_1d
 
 
 class WanPreInfer:
-    def __new__(cls, config):
-        if cls is WanPreInfer and (config.get("enable_lingbot_cam_ctrl", False) or config.get("model_cls") == "lingbot_world"):
-            from lightx2v.models.networks.wan.infer.lingbot.pre_infer import WanLingbotPreInfer
-
-            return super().__new__(WanLingbotPreInfer)
-        return super().__new__(cls)
-
     def __init__(self, config):
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
         self.config = config
