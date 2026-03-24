@@ -7,10 +7,13 @@ import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
+from scipy.interpolate import interp1d  # type: ignore
+from scipy.spatial.transform import Rotation, Slerp  # type: ignore
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
@@ -708,8 +711,8 @@ class Wan22DenseRunner(WanRunner):
         return z
 
 
-@RUNNER_REGISTER("wan2.2_moe_lingbot")
-class WanLingbotRunner(Wan22MoeRunner):
+@RUNNER_REGISTER("lingbot_world")
+class LingbotRunner(Wan22MoeRunner):
     def __init__(self, config):
         with config.temporarily_unlocked():
             if "use_image_encoder" not in config:
@@ -733,6 +736,47 @@ class WanLingbotRunner(Wan22MoeRunner):
         if self.config.get("use_image_encoder", True):
             return super().load_image_encoder()
         return None
+
+    def load_transformer(self):
+        if self.config.get("dynamic_multimodel", False):
+            model_struct = MultiModelStruct([None, None], self.config, self.config["boundary"])
+            model_struct.low_noise_model_path = self.low_noise_model_path
+            model_struct.high_noise_model_path = self.high_noise_model_path
+            model_struct.init_device = self.init_device
+            return model_struct
+
+        high_model_kwargs = {
+            "model_path": self.high_noise_model_path,
+            "config": self.config,
+            "device": self.init_device,
+            "model_type": "wan2.2_moe_high_noise",
+        }
+        low_model_kwargs = {
+            "model_path": self.low_noise_model_path,
+            "config": self.config,
+            "device": self.init_device,
+            "model_type": "wan2.2_moe_low_noise",
+        }
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            high_noise_model = WanLingbotModel(**high_model_kwargs)
+            low_noise_model = WanLingbotModel(**low_model_kwargs)
+        else:
+            high_noise_model = build_wan_model_with_lora(
+                WanLingbotModel,
+                self.config,
+                high_model_kwargs,
+                lora_configs,
+                model_type="high_noise_model",
+            )
+            low_noise_model = build_wan_model_with_lora(
+                WanLingbotModel,
+                self.config,
+                low_model_kwargs,
+                lora_configs,
+                model_type="low_noise_model",
+            )
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
 
     @staticmethod
     def _se3_inverse(T: torch.Tensor) -> torch.Tensor:
@@ -808,44 +852,29 @@ class WanLingbotRunner(Wan22MoeRunner):
             return c2ws_np
         src_idx = np.linspace(0.0, src_n - 1, src_n)
         tgt_idx = np.linspace(0.0, src_n - 1, lat_f)
-        used_scipy = False
-        try:
-            from scipy.interpolate import interp1d  # type: ignore
-            from scipy.spatial.transform import Rotation, Slerp  # type: ignore
+        src_rot = c2ws_np[:, :3, :3]
+        src_trans = c2ws_np[:, :3, 3]
+        trans_interp = interp1d(src_idx, src_trans, axis=0, kind="linear", bounds_error=False, fill_value="extrapolate")
+        tgt_trans = trans_interp(tgt_idx)
 
-            src_rot = c2ws_np[:, :3, :3]
-            src_trans = c2ws_np[:, :3, 3]
-            trans_interp = interp1d(src_idx, src_trans, axis=0, kind="linear", bounds_error=False, fill_value="extrapolate")
-            tgt_trans = trans_interp(tgt_idx)
+        rot = Rotation.from_matrix(src_rot)
+        quats = rot.as_quat().copy()
+        for i in range(1, len(quats)):
+            if np.dot(quats[i], quats[i - 1]) < 0:
+                quats[i] = -quats[i]
+        rot = Rotation.from_quat(quats)
+        slerp = Slerp(src_idx, rot)
+        tgt_rot = slerp(tgt_idx).as_matrix()
 
-            rot = Rotation.from_matrix(src_rot)
-            quats = rot.as_quat().copy()
-            for i in range(1, len(quats)):
-                if np.dot(quats[i], quats[i - 1]) < 0:
-                    quats[i] = -quats[i]
-            rot = Rotation.from_quat(quats)
-            slerp = Slerp(src_idx, rot)
-            tgt_rot = slerp(tgt_idx).as_matrix()
-
-            out = np.zeros((lat_f, 4, 4), dtype=np.float32)
-            out[:, :3, :3] = tgt_rot
-            out[:, :3, 3] = tgt_trans
-            out[:, 3, 3] = 1.0
-            used_scipy = True
-            logger.info("[lingbot] c2ws interpolation uses scipy (Slerp+interp1d)")
-            return out
-        except Exception:
-            logger.warning("[lingbot] c2ws interpolation falls back (no scipy / interp error); using nearest sampling")
-            sample_idx = np.clip(np.round(tgt_idx).astype(np.int64), 0, src_n - 1)
-            return c2ws_np[sample_idx]
+        out = np.zeros((lat_f, 4, 4), dtype=np.float32)
+        out[:, :3, :3] = tgt_rot
+        out[:, :3, 3] = tgt_trans
+        out[:, 3, 3] = 1.0
+        return out
 
     def _build_lingbot_dit_cond_dict(self, action_path: str) -> dict:
         if not action_path:
             return {}
-        # action_path 既可能是目录，也可能是 action.npy 文件本身
-        # 兼容你当前 bash 里把 action_path 指到 action.npy 的情况。
-        if os.path.isfile(action_path) and os.path.basename(action_path) == "action.npy":
-            action_path = os.path.dirname(action_path)
         poses_path = os.path.join(action_path, "poses.npy")
         intrinsics_path = os.path.join(action_path, "intrinsics.npy")
         if not (os.path.isfile(poses_path) and os.path.isfile(intrinsics_path)):
@@ -963,7 +992,3 @@ class WanLingbotRunner(Wan22MoeRunner):
             )
             out["image_encoder_output"]["dit_cond_dict"] = self._build_lingbot_dit_cond_dict(action_path)
         return out
-
-
-class Wan22MoeLingbotRunner(WanLingbotRunner):
-    pass

@@ -213,60 +213,6 @@ class WanTransformerAttentionBlock(WeightModule):
         )
 
         self.add_module("compute_phases", self.compute_phases)
-        self.enable_lingbot_cam_ctrl = self.config.get("enable_lingbot_cam_ctrl", False) or self.config.get("model_cls") == "wan2.2_moe_lingbot"
-        if self.enable_lingbot_cam_ctrl:
-            self.add_module(
-                "cam_injector_layer1",
-                MM_WEIGHT_REGISTER[self.mm_type](
-                    f"{block_prefix}.{self.block_index}.cam_injector_layer1.weight",
-                    f"{block_prefix}.{self.block_index}.cam_injector_layer1.bias",
-                    create_cuda_buffer,
-                    create_cpu_buffer,
-                    self.lazy_load,
-                    self.lazy_load_file,
-                    lora_prefix=block_prefix,
-                    lora_path=lora_path,
-                ),
-            )
-            self.add_module(
-                "cam_injector_layer2",
-                MM_WEIGHT_REGISTER[self.mm_type](
-                    f"{block_prefix}.{self.block_index}.cam_injector_layer2.weight",
-                    f"{block_prefix}.{self.block_index}.cam_injector_layer2.bias",
-                    create_cuda_buffer,
-                    create_cpu_buffer,
-                    self.lazy_load,
-                    self.lazy_load_file,
-                    lora_prefix=block_prefix,
-                    lora_path=lora_path,
-                ),
-            )
-            self.add_module(
-                "cam_scale_layer",
-                MM_WEIGHT_REGISTER[self.mm_type](
-                    f"{block_prefix}.{self.block_index}.cam_scale_layer.weight",
-                    f"{block_prefix}.{self.block_index}.cam_scale_layer.bias",
-                    create_cuda_buffer,
-                    create_cpu_buffer,
-                    self.lazy_load,
-                    self.lazy_load_file,
-                    lora_prefix=block_prefix,
-                    lora_path=lora_path,
-                ),
-            )
-            self.add_module(
-                "cam_shift_layer",
-                MM_WEIGHT_REGISTER[self.mm_type](
-                    f"{block_prefix}.{self.block_index}.cam_shift_layer.weight",
-                    f"{block_prefix}.{self.block_index}.cam_shift_layer.bias",
-                    create_cuda_buffer,
-                    create_cpu_buffer,
-                    self.lazy_load,
-                    self.lazy_load_file,
-                    lora_prefix=block_prefix,
-                    lora_path=lora_path,
-                ),
-            )
 
 
 class WanSelfAttention(WeightModule):

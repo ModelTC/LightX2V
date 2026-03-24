@@ -146,13 +146,6 @@ class WanModel(BaseTransformerModel):
             pre_infer_out.embed = torch.chunk(embed, world_size, dim=0)[cur_rank]
             pre_infer_out.embed0 = torch.chunk(embed0, world_size, dim=0)[cur_rank]
 
-        if "c2ws_plucker_emb" in pre_infer_out.conditional_dict:
-            c2ws_plucker_emb = pre_infer_out.conditional_dict["c2ws_plucker_emb"]
-            padding_size = (multiple - (c2ws_plucker_emb.shape[0] % multiple)) % multiple
-            if padding_size > 0:
-                c2ws_plucker_emb = F.pad(c2ws_plucker_emb, (0, 0, 0, padding_size))
-            pre_infer_out.conditional_dict["c2ws_plucker_emb"] = torch.chunk(c2ws_plucker_emb, world_size, dim=0)[cur_rank]
-
         return pre_infer_out
 
     @torch.no_grad()

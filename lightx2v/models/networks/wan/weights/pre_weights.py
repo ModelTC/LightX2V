@@ -19,33 +19,6 @@ class WanPreWeights(WeightModule):
                 lora_prefix="diffusion_model.patch_embedding",
             ),
         )
-        self.enable_lingbot_cam_ctrl = config.get("enable_lingbot_cam_ctrl", False) or config.get("model_cls") == "wan2.2_moe_lingbot"
-
-        if self.enable_lingbot_cam_ctrl:
-            self.add_module(
-                "patch_embedding_wancamctrl",
-                MM_WEIGHT_REGISTER["Default"](
-                    "patch_embedding_wancamctrl.weight",
-                    "patch_embedding_wancamctrl.bias",
-                    lora_prefix="diffusion_model.patch_embedding_wancamctrl",
-                ),
-            )
-            self.add_module(
-                "c2ws_hidden_states_layer1",
-                MM_WEIGHT_REGISTER["Default"](
-                    "c2ws_hidden_states_layer1.weight",
-                    "c2ws_hidden_states_layer1.bias",
-                    lora_prefix="diffusion_model.c2ws_hidden_states_layer1",
-                ),
-            )
-            self.add_module(
-                "c2ws_hidden_states_layer2",
-                MM_WEIGHT_REGISTER["Default"](
-                    "c2ws_hidden_states_layer2.weight",
-                    "c2ws_hidden_states_layer2.bias",
-                    lora_prefix="diffusion_model.c2ws_hidden_states_layer2",
-                ),
-            )
 
         if config["task"] in ["rs2v"]:
             self.add_module(

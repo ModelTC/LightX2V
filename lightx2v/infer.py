@@ -56,7 +56,7 @@ def main():
             "wan2.1_sf_mtxg2",
             "seko_talk",
             "wan2.2_moe",
-            "wan2.2_moe_lingbot",
+            "lingbot_world",
             "wan2.2",
             "wan2.2_moe_audio",
             "wan2.2_audio",
