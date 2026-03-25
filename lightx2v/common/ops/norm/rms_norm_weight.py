@@ -306,22 +306,52 @@ class RMSWeightFP32(RMSWeight):
             lora_path,
         )
 
-    def apply(self, input_tensor, moe_gen=False):
+    def apply(self, input_tensor):
         input_dtype = input_tensor.dtype
-        if moe_gen:
-            hidden_states = input_tensor.to(torch.float32)
-            variance = hidden_states.pow(2).mean(-1, keepdim=True)
-            hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
-            return self.weight * hidden_states.to(input_dtype)
-        else:
-            variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-            hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
-            if self.weight.dtype in [torch.float16, torch.bfloat16]:
-                hidden_states = hidden_states.to(self.weight.dtype)
-            if self.weight is not None:
-                hidden_states = hidden_states * self.weight
-            hidden_states = hidden_states.to(input_dtype)
-            return hidden_states
+        variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
+
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
+        if self.weight is not None:
+            hidden_states = hidden_states * (self._get_actual_weight())
+        hidden_states = hidden_states.to(input_dtype)
+
+        return hidden_states
+
+
+@RMS_WEIGHT_REGISTER("fp32_variance_qwen")
+class RMSWeightFP32Qwen(RMSWeight):
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
+
+    def apply(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+        return self.weight * hidden_states.to(input_dtype)
 
 
 @RMS_WEIGHT_REGISTER("self_forcing")

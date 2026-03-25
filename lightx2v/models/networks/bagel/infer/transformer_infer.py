@@ -129,12 +129,12 @@ class BagelTransformerInfer(BaseTransformerInfer):
             packed_value_states = packed_value_states.view(-1, self.num_key_value_heads, self.head_dim)
 
             packed_query_states = packed_query_states.to(torch.float32)
-            packed_query_states[packed_text_indexes] = weights.q_norm.apply(packed_query_states[packed_text_indexes], moe_gen=True)
-            packed_query_states[packed_vae_token_indexes] = weights.q_norm_moe_gen.apply(packed_query_states[packed_vae_token_indexes], moe_gen=True)
+            packed_query_states[packed_text_indexes] = weights.q_norm.apply(packed_query_states[packed_text_indexes])
+            packed_query_states[packed_vae_token_indexes] = weights.q_norm_moe_gen.apply(packed_query_states[packed_vae_token_indexes])
 
             packed_key_states = packed_key_states.to(torch.float32)
-            packed_key_states[packed_text_indexes] = weights.k_norm.apply(packed_key_states[packed_text_indexes], moe_gen=True)
-            packed_key_states[packed_vae_token_indexes] = weights.k_norm_moe_gen.apply(packed_key_states[packed_vae_token_indexes], moe_gen=True)
+            packed_key_states[packed_text_indexes] = weights.k_norm.apply(packed_key_states[packed_text_indexes])
+            packed_key_states[packed_vae_token_indexes] = weights.k_norm_moe_gen.apply(packed_key_states[packed_vae_token_indexes])
 
         packed_cos, packed_sin = packed_query_position_embeddings
         packed_query_states, packed_key_states = apply_rotary_pos_emb(packed_query_states, packed_key_states, packed_cos, packed_sin, unsqueeze_dim=1)

@@ -11,6 +11,7 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner impor
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
+from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
@@ -74,6 +75,7 @@ def main():
             "ltx2",
             "bagel",
             "seedvr2",
+            "neopp",
         ],
         default="wan2.1",
     )
@@ -159,7 +161,7 @@ def main():
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
-    parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
+    parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument("--video_path", type=str, default=None, help="input video path(for sr/v2v task)")
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
