@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.profiler import *
@@ -100,6 +101,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
         return hidden_states
 
+    # @ProfilingContext4DebugL1("Self Attn")
     def _self_attn(self, attn_w, layer_idx, hidden_states, indexes, past_key_values):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
@@ -146,6 +148,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         attn_output = attn_w.o_proj_mot_gen.apply(attn_output.squeeze(0)).unsqueeze(0)
         return attn_output
 
+    # @ProfilingContext4DebugL1("Compute Attn")
     def _compute_attn(self, attn_w, query_states, key_states, value_states, input_shape):
         q = query_states.squeeze(0).transpose(0, 1)
         k = key_states.squeeze(0).transpose(0, 1)
@@ -162,6 +165,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         )
         return attn_output.unsqueeze(0)
 
+    # @ProfilingContext4DebugL1("Sparse MoE")
     def _sparse_moe(self, moe_w, hidden_states):
         input_shape = hidden_states.shape
         if hidden_states.dim() == 3:
@@ -178,29 +182,20 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
         if self.norm_topk_prob:
             routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(flat.dtype)
 
-        num_experts = moe_w.num_experts
-        final_hidden_states = torch.zeros_like(flat)
+        output = flashinfer_cutlass_fused_moe(
+            flat.contiguous(),
+            selected_experts.to(torch.int32),
+            routing_weights,
+            moe_w._fi_fc1_weight,
+            moe_w._fi_fc2_weight,
+            flat.dtype,
+            quant_scales=None,
+        )
 
-        expert_mask = F.one_hot(selected_experts, num_classes=num_experts).permute(2, 1, 0)
-        expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+        return output[0].view(input_shape)
 
-        for expert_idx in expert_hit:
-            ei = expert_idx.item()
-            expert_w = moe_w.experts[ei]
-            idx, top_x = torch.where(expert_mask[ei])
-
-            current_state = flat[None, top_x].reshape(-1, hidden_dim)
-            gate_out = expert_w.gate_proj.apply(current_state)
-            up_out = expert_w.up_proj.apply(current_state)
-            current_hidden = expert_w.down_proj.apply(F.silu(gate_out) * up_out)
-            current_hidden = current_hidden * routing_weights[top_x, idx, None]
-
-            final_hidden_states.index_add_(0, top_x, current_hidden.to(flat.dtype))
-
-        return final_hidden_states.view(input_shape)
-
+    # @ProfilingContext4DebugL1("FM Head")
     def _fm_head(self, fm_head_w, hidden_states):
         hidden_states = fm_head_w.fm_head_0.apply(hidden_states)
         hidden_states = F.gelu(hidden_states)

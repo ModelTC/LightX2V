@@ -1,3 +1,5 @@
+import torch
+from flashinfer.fused_moe.core import get_cutlass_fused_moe_module
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401
 from lightx2v.utils.registry_factory import (
@@ -92,6 +94,23 @@ class NeoppSparseMoeWeights(WeightModule):
         self.num_experts = num_experts
         experts = WeightModuleList(NeoppMoeSingleExpertWeights(block_index, mm_type, subname, j) for j in range(num_experts))
         self.add_module("experts", experts)
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self._build_flashinfer_weights()
+
+    def _build_flashinfer_weights(self):
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            get_cutlass_fused_moe_module(f"{major * 10 + minor}")
+        fc1_list, fc2_list = [], []
+        for expert_w in self.experts:
+            up_w = expert_w.up_proj._get_actual_weight().t().contiguous()
+            gate_w = expert_w.gate_proj._get_actual_weight().t().contiguous()
+            fc1_list.append(torch.cat([up_w, gate_w], dim=0))
+            fc2_list.append(expert_w.down_proj._get_actual_weight().t().contiguous())
+        self._fi_fc1_weight = torch.stack(fc1_list, dim=0)
+        self._fi_fc2_weight = torch.stack(fc2_list, dim=0)
 
 
 class NeoppMoeSingleExpertWeights(WeightModule):
