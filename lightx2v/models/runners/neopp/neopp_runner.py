@@ -34,10 +34,6 @@ class NeoppRunner(DefaultRunner):
         MoT: Mixture-of-Transformer-Experts (MoT) architecture
         https://arxiv.org/abs/2505.14683
         """
-        print("Loading NeoppModel...")
-        print("Model path:", self.config["model_path"])
-        print("Config:", self.config)
-        print("Init device:", self.init_device)
         model = NeoppModel(self.config["model_path"], self.config, self.init_device)
         return model
 
