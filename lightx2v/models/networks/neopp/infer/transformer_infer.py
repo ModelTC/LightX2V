@@ -167,33 +167,25 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
     # @ProfilingContext4DebugL1("Sparse MoE")
     def _sparse_moe(self, moe_w, hidden_states):
-        input_shape = hidden_states.shape
-        if hidden_states.dim() == 3:
-            batch_size, seq_len, hidden_dim = hidden_states.shape
-            flat = hidden_states.reshape(-1, hidden_dim)
-        elif hidden_states.dim() == 2:
-            flat = hidden_states
-            hidden_dim = hidden_states.shape[-1]
-        else:
-            raise ValueError(f"Expected 2D or 3D input, got {hidden_states.dim()}D")
-
-        router_logits = moe_w.gate.apply(flat)
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
+        router_logits = moe_w.gate.apply(hidden_states)
         if self.norm_topk_prob:
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+            _, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
+            routing_weights = F.softmax(router_logits.float().gather(1, selected_experts), dim=-1)
+        else:
+            routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+            routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
 
         output = flashinfer_cutlass_fused_moe(
-            flat.contiguous(),
+            hidden_states.contiguous(),
             selected_experts.to(torch.int32),
             routing_weights,
             moe_w._fi_fc1_weight,
             moe_w._fi_fc2_weight,
-            flat.dtype,
+            hidden_states.dtype,
             quant_scales=None,
-        )
+        )[0]
 
-        return output[0].view(input_shape)
+        return output
 
     # @ProfilingContext4DebugL1("FM Head")
     def _fm_head(self, fm_head_w, hidden_states):

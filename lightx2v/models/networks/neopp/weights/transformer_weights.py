@@ -1,5 +1,6 @@
 import torch
 from flashinfer.fused_moe.core import get_cutlass_fused_moe_module
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401
 from lightx2v.utils.registry_factory import (
