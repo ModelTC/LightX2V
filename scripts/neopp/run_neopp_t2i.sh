@@ -4,7 +4,7 @@
 lightx2v_path=/data/nvme1/yongyang/FL/LightX2V
 model_path=/data/nvme1/yongyang/FL/neo_gen_30b_moe/neo_gen_30b_moe
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=4
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

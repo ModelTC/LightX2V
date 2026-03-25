@@ -52,28 +52,24 @@ class NeoppRunner(DefaultRunner):
         past_key_values_cond = torch.load(to_x2v_cond_kv_path)
         past_key_values_uncond = torch.load(to_x2v_uncond_kv_path)
 
-        input_len_cond = past_key_values_cond.shape[-2]
-        input_len_uncond = past_key_values_uncond.shape[-2]
+        with ProfilingContext4DebugL1("load_input_encoder"):
+            input_len_cond = past_key_values_cond.shape[-2]
+            input_len_uncond = past_key_values_uncond.shape[-2]
 
-        # print("input_len_cond:", input_len_cond)
-        # print("input_len_uncond:", input_len_uncond)
+            token_h = self.input_info.target_shape[0] // (self.patch_size * self.merge_size)
+            token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
 
-        token_h = self.input_info.target_shape[0] // (self.patch_size * self.merge_size)
-        token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
+            indexes_image_condition = self._build_t2i_image_indexes(token_h, token_w, input_len_cond, device=self.init_device)
+            indexes_image_uncondition = self._build_t2i_image_indexes(token_h, token_w, input_len_uncond, device=self.init_device)
 
-        indexes_image_condition = self._build_t2i_image_indexes(token_h, token_w, input_len_cond, device=self.init_device)
-        indexes_image_uncondition = self._build_t2i_image_indexes(token_h, token_w, input_len_uncond, device=self.init_device)
-        # print("indexes_image_condition :", indexes_image_condition, "shape:", indexes_image_condition.shape)
-        # print("indexes_image_uncondition :", indexes_image_uncondition, "shape:", indexes_image_uncondition.shape)
+            self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
-        self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
-
-        return {
-            "past_key_values_cond": past_key_values_cond,
-            "past_key_values_uncond": past_key_values_uncond,
-            "indexes_image_condition": indexes_image_condition,
-            "indexes_image_uncondition": indexes_image_uncondition,
-        }
+            return {
+                "past_key_values_cond": past_key_values_cond,
+                "past_key_values_uncond": past_key_values_uncond,
+                "indexes_image_condition": indexes_image_condition,
+                "indexes_image_uncondition": indexes_image_uncondition,
+            }
 
     def get_latent_shape_with_target_hw(self):
         target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
@@ -99,11 +95,14 @@ class NeoppRunner(DefaultRunner):
         for step_index in range(infer_steps):
             logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
 
-            self.scheduler.step_pre(step_index)
+            with ProfilingContext4DebugL1("step_pre"):
+                self.scheduler.step_pre(step_index)
 
-            self.model.infer(self.inputs)
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                self.model.infer(self.inputs)
 
-            self.scheduler.step_post()
+            with ProfilingContext4DebugL1("step_post"):
+                self.scheduler.step_post()
 
         gen_result = self.process_images_after_vae_decoder()
         return gen_result
