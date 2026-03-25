@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.utils.profiler import *
 
 
 def rotate_half(x):
@@ -71,6 +72,13 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
         hidden_states = pre_infer_out.image_embeds
 
+        seq_len_q = hidden_states.shape[1]
+        seq_len_k = past_key_values.shape[3] + seq_len_q
+        self._cu_seqlens_q = torch.tensor([0, seq_len_q], dtype=torch.int32, device=hidden_states.device)
+        self._cu_seqlens_k = torch.tensor([0, seq_len_k], dtype=torch.int32, device=hidden_states.device)
+        self._max_seqlen_q = seq_len_q
+        self._max_seqlen_k = seq_len_k
+
         for layer_idx, block_weight in enumerate(weights.blocks):
             hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, indexes, past_key_values)
 
@@ -133,17 +141,26 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         key_states = torch.cat([past_k, key_states], dim=2)
         value_states = torch.cat([past_v, value_states], dim=2)
 
-        key_states_rep = repeat_kv(key_states, self.num_key_value_groups)
-        value_states_rep = repeat_kv(value_states, self.num_key_value_groups)
-
-        attn = torch.matmul(query_states, key_states_rep.transpose(2, 3)) * self.scaling
-        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn, value_states_rep)
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = self._compute_attn(attn_w, query_states, key_states, value_states, input_shape)
 
         attn_output = attn_w.o_proj_mot_gen.apply(attn_output.squeeze(0)).unsqueeze(0)
         return attn_output
+
+    def _compute_attn(self, attn_w, query_states, key_states, value_states, input_shape):
+        q = query_states.squeeze(0).transpose(0, 1)
+        k = key_states.squeeze(0).transpose(0, 1)
+        v = value_states.squeeze(0).transpose(0, 1)
+
+        attn_output = attn_w.cross_attn.apply(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=self._cu_seqlens_q,
+            cu_seqlens_kv=self._cu_seqlens_k,
+            max_seqlen_q=self._max_seqlen_q,
+            max_seqlen_kv=self._max_seqlen_k,
+        )
+        return attn_output.unsqueeze(0)
 
     def _sparse_moe(self, moe_w, hidden_states):
         input_shape = hidden_states.shape

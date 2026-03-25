@@ -1,5 +1,7 @@
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401
 from lightx2v.utils.registry_factory import (
+    ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
 )
@@ -12,12 +14,14 @@ class NeoppTransformerWeights(WeightModule):
         llm_config = config["llm_config"]
         self.blocks_num = llm_config["num_hidden_layers"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
+        self.attn_type = config.get("attn_type", "flash_attn2")
 
         blocks = WeightModuleList(
             NeoppDecoderLayerWeights(
                 block_index=i,
                 llm_config=llm_config,
                 mm_type=self.mm_type,
+                attn_type=self.attn_type,
             )
             for i in range(self.blocks_num)
         )
@@ -35,7 +39,7 @@ class NeoppTransformerWeights(WeightModule):
 
 
 class NeoppDecoderLayerWeights(WeightModule):
-    def __init__(self, block_index, llm_config, mm_type):
+    def __init__(self, block_index, llm_config, mm_type, attn_type="flash_attn2"):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}"
 
@@ -44,7 +48,7 @@ class NeoppDecoderLayerWeights(WeightModule):
             RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.input_layernorm_mot_gen.weight", eps=1e-6),
         )
 
-        attn = NeoppAttentionWeights(block_index, llm_config, mm_type)
+        attn = NeoppAttentionWeights(block_index, llm_config, mm_type, attn_type)
         self.add_module("self_attn", attn)
 
         self.add_module(
@@ -58,7 +62,7 @@ class NeoppDecoderLayerWeights(WeightModule):
 
 
 class NeoppAttentionWeights(WeightModule):
-    def __init__(self, block_index, llm_config, mm_type):
+    def __init__(self, block_index, llm_config, mm_type, attn_type="flash_attn2"):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.self_attn"
 
@@ -74,6 +78,8 @@ class NeoppAttentionWeights(WeightModule):
         self.add_module("q_norm_hw_mot_gen", RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.q_norm_hw_mot_gen.weight", eps=1e-6))
         self.add_module("k_norm_mot_gen", RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.k_norm_mot_gen.weight", eps=1e-6))
         self.add_module("k_norm_hw_mot_gen", RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.k_norm_hw_mot_gen.weight", eps=1e-6))
+
+        self.add_module("cross_attn", ATTN_WEIGHT_REGISTER[attn_type]())
 
 
 class NeoppSparseMoeWeights(WeightModule):

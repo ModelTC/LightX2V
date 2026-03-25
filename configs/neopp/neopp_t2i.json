@@ -1,3 +1,4 @@
 {
-    "infer_steps": 50
+    "infer_steps": 50,
+    "attn_type": "flash_attn3"
 }
