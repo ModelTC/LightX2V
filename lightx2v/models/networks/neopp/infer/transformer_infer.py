@@ -42,36 +42,16 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         self.num_experts_per_tok = llm_config["num_experts_per_tok"]
         self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
 
-        self.inv_freq_t = self._build_inv_freq(self.head_dim // 2, llm_config["rope_theta"])
-        self.inv_freq_hw = self._build_inv_freq(self.head_dim // 4, llm_config["rope_theta_hw"])
-
-    def _build_inv_freq(self, half_head_dim, theta):
-        full_dim = half_head_dim * 2
-        inv_freq_full = 1.0 / (theta ** (torch.arange(0, full_dim, 2, dtype=torch.float32) / full_dim))
-        return inv_freq_full[::2]
-
-    def _compute_rope(self, x, position_ids, inv_freq):
-        inv_freq = inv_freq.to(x.device)
-        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        position_ids_expanded = position_ids[:, None, :].float()
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos()
-            sin = emb.sin()
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, inputs):
         if self.scheduler.infer_condition:
-            indexes = inputs["indexes_image_condition"]
-            past_key_values = inputs["past_key_values_cond"]
+            past_key_values = inputs["past_key_values_cond"]  # torch.Size([48, 2, 4, 28, 128])
+            cos_sin = inputs["cos_sin_cond"]
         else:
-            indexes = inputs["indexes_image_uncondition"]
             past_key_values = inputs["past_key_values_uncond"]
+            cos_sin = inputs["cos_sin_uncond"]
 
-        hidden_states = pre_infer_out.image_embeds
+        hidden_states = pre_infer_out.image_embeds  # torch.Size([1, 1032, 2048])
 
         seq_len_q = hidden_states.shape[1]
         seq_len_k = past_key_values.shape[3] + seq_len_q
@@ -81,17 +61,17 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         self._max_seqlen_k = seq_len_k
 
         for layer_idx, block_weight in enumerate(weights.blocks):
-            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, indexes, past_key_values)
+            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, past_key_values)
 
         hidden_states = weights.norm_mot_gen.apply(hidden_states.squeeze(0)).unsqueeze(0)
         hidden_states = self._fm_head(weights.fm_head, hidden_states.squeeze(0)).unsqueeze(0)
         return hidden_states
 
-    def _decoder_layer(self, block_weight, layer_idx, hidden_states, indexes, past_key_values):
+    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin, past_key_values):
         residual = hidden_states
         hidden_states = block_weight.input_layernorm_mot_gen.apply(hidden_states.squeeze(0)).unsqueeze(0)
 
-        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, indexes, past_key_values)
+        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin, past_key_values)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
@@ -102,7 +82,8 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         return hidden_states
 
     # @ProfilingContext4DebugL1("Self Attn")
-    def _self_attn(self, attn_w, layer_idx, hidden_states, indexes, past_key_values):
+    def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin, past_key_values):
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -125,13 +106,8 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         value_states = attn_w.v_proj_mot_gen.apply(hidden_states.squeeze(0))
         value_states = value_states.view(hidden_shape).transpose(1, 2)
 
-        cos_t, sin_t = self._compute_rope(hidden_states, indexes[0].unsqueeze(0), self.inv_freq_t)
         query_states_t, key_states_t = apply_rotary_pos_emb(query_states_t, key_states_t, cos_t, sin_t)
-
-        cos_h, sin_h = self._compute_rope(hidden_states, indexes[1].unsqueeze(0), self.inv_freq_hw)
         query_states_h, key_states_h = apply_rotary_pos_emb(query_states_h, key_states_h, cos_h, sin_h)
-
-        cos_w, sin_w = self._compute_rope(hidden_states, indexes[2].unsqueeze(0), self.inv_freq_hw)
         query_states_w, key_states_w = apply_rotary_pos_emb(query_states_w, key_states_w, cos_w, sin_w)
 
         query_states = torch.cat([query_states_t, query_states_h, query_states_w], dim=-1)

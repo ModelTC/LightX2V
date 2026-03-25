@@ -20,6 +20,10 @@ class NeoppRunner(DefaultRunner):
         self.noise_scale = self.config.get("noise_scale", 1.0)
         self.noise_scale_base_image_seq_len = self.config.get("noise_scale_base_image_seq_len", 64)
         self.noise_scale_max_value = self.config.get("noise_scale_max_value", 8.0)
+        llm_config = config["llm_config"]
+        head_dim = llm_config["head_dim"]
+        self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
+        self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
 
     def init_scheduler(self):
         self.scheduler = NeoppScheduler(self.config)
@@ -36,6 +40,19 @@ class NeoppRunner(DefaultRunner):
         """
         model = NeoppModel(self.config["model_path"], self.config, self.init_device)
         return model
+
+    def _build_inv_freq(self, half_head_dim, theta):
+        full_dim = half_head_dim * 2
+        inv_freq_full = 1.0 / (theta ** (torch.arange(0, full_dim, 2, dtype=torch.float32) / full_dim))
+        return inv_freq_full[::2]
+
+    def _compute_rope(self, position_ids, inv_freq):
+        inv_freq = inv_freq.cuda()
+        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        return emb.cos().to(dtype=torch.bfloat16), emb.sin().to(dtype=torch.bfloat16)
 
     def _build_t2i_image_indexes(self, token_h, token_w, text_len, device):
         t_image = torch.full((token_h * token_w,), text_len, dtype=torch.long, device=device)
@@ -58,13 +75,21 @@ class NeoppRunner(DefaultRunner):
             indexes_image_condition = self._build_t2i_image_indexes(token_h, token_w, input_len_cond, device=self.init_device)
             indexes_image_uncondition = self._build_t2i_image_indexes(token_h, token_w, input_len_uncond, device=self.init_device)
 
+            cos_t_cond, sin_t_cond = self._compute_rope(indexes_image_condition[0].unsqueeze(0), self.inv_freq_t)
+            cos_h_cond, sin_h_cond = self._compute_rope(indexes_image_condition[1].unsqueeze(0), self.inv_freq_hw)
+            cos_w_cond, sin_w_cond = self._compute_rope(indexes_image_condition[2].unsqueeze(0), self.inv_freq_hw)
+
+            cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_image_uncondition[0].unsqueeze(0), self.inv_freq_t)
+            cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_image_uncondition[1].unsqueeze(0), self.inv_freq_hw)
+            cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_image_uncondition[2].unsqueeze(0), self.inv_freq_hw)
+
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
             return {
                 "past_key_values_cond": past_key_values_cond,
                 "past_key_values_uncond": past_key_values_uncond,
-                "indexes_image_condition": indexes_image_condition,
-                "indexes_image_uncondition": indexes_image_uncondition,
+                "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
+                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
             }
 
     def get_latent_shape_with_target_hw(self):
