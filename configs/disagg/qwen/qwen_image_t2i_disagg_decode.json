@@ -6,8 +6,9 @@
     "vae_z_dim": 16,
     "vae_stride": [1, 8, 8],
     "target_video_length": 1,
-    "target_height": 1664,
-    "target_width": 1664,
+    "target_height": 1536,
+    "target_width": 2752,
+    "max_custom_size": 3072,
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 2,

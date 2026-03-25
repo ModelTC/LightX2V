@@ -352,6 +352,22 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
+        cfg_h = self.config.get("target_height")
+        cfg_w = self.config.get("target_width")
+        if cfg_h is not None and cfg_w is not None:
+            height, width = int(cfg_h), int(cfg_w)
+            if width > max_size or height > max_size:
+                scale = max_size / max(width, height)
+                width, height = int(width * scale), int(height * scale)
+                logger.warning(
+                    f"Config target_height/target_width scaled to {width}x{height} (max_custom_size={max_size})"
+                )
+            width, height = max(width, min_size), max(height, min_size)
+            logger.info(
+                f"Qwen Image Runner got shape from config target_height/target_width: {width}x{height}"
+            )
+            return (width, height)
+
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
             logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")

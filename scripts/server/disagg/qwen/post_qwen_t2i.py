@@ -18,12 +18,14 @@ TRANSFORMER_URL = "http://localhost:8003"
 DECODER_URL = "http://localhost:8008"
 ENDPOINT = "/v1/tasks/image/"
 
+# 2K landscape 16:9: width=2752 height=1536; target_shape is [height, width] like disagg JSON.
 PAYLOAD = {
     "prompt": "A cute cat sitting on a wooden table, soft lighting, 4k photo.",
     "negative_prompt": "blurry, low quality, distorted",
     "seed": 42,
-    "save_result_path": "save_results/qwen_t2i_disagg_3way.png",
+    "save_result_path": "save_results/qwen_t2i_disagg_3way_qwen2512.png",
     "aspect_ratio": "16:9",
+    "target_shape": [1536, 2752],
 }
 
 

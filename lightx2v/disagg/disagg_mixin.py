@@ -140,7 +140,8 @@ class DisaggMixin:
                 data_item_lens=data_lens,
                 ib_device=None,
             )
-            self._disagg_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE1, DisaggregationMode.ENCODE)
+            self._disagg_data_mgr = DataManager(DisaggregationPhase.PHASE1, DisaggregationMode.ENCODE)
+            self._disagg_data_mgr.init(data_args, self._disagg_bootstrap_room)
             self._disagg_sender = DataSender(
                 self._disagg_data_mgr,
                 self._disagg_bootstrap_addr,
@@ -161,7 +162,8 @@ class DisaggMixin:
                 data_item_lens=data_lens,
                 ib_device=None,
             )
-            self._disagg_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
+            self._disagg_data_mgr = DataManager(DisaggregationPhase.PHASE1, DisaggregationMode.TRANSFORMER)
+            self._disagg_data_mgr.init(data_args, self._disagg_bootstrap_room)
             self._disagg_receiver = DataReceiver(
                 self._disagg_data_mgr,
                 self._disagg_bootstrap_addr,
@@ -214,7 +216,8 @@ class DisaggMixin:
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self._disagg_p2_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
+        self._disagg_p2_data_mgr = DataManager(DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
+        self._disagg_p2_data_mgr.init(data_args, p2_bootstrap_room)
         self._disagg_p2_sender = DataSender(self._disagg_p2_data_mgr, p2_bootstrap_addr, p2_bootstrap_room)
         logger.info(f"[Disagg] Phase2 sender initialized (rank {p2_transformer_rank} → {p2_decoder_rank}, room={p2_bootstrap_room})")
 
@@ -239,7 +242,8 @@ class DisaggMixin:
             data_item_lens=data_lens,
             ib_device=None,
         )
-        self._disagg_p2_data_mgr = DataManager(data_args, DisaggregationPhase.PHASE2, DisaggregationMode.DECODE)
+        self._disagg_p2_data_mgr = DataManager(DisaggregationPhase.PHASE2, DisaggregationMode.DECODE)
+        self._disagg_p2_data_mgr.init(data_args, p2_bootstrap_room)
         self._disagg_p2_receiver = DataReceiver(self._disagg_p2_data_mgr, p2_bootstrap_addr, p2_bootstrap_room)
         self._disagg_p2_receiver.init()
         logger.info(f"[Disagg] Phase2 receiver initialized (rank {p2_transformer_rank} → {p2_decoder_rank}, room={p2_bootstrap_room})")

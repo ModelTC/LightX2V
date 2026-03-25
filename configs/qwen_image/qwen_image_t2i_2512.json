@@ -5,5 +5,9 @@
     "prompt_template_encode_start_idx": 34,
     "attn_type": "flash_attn3",
     "enable_cfg": true,
-    "sample_guide_scale": 4.0
+    "sample_guide_scale": 4.0,
+    "text_encoder_type": "lightllm_kernel",
+    "target_height": 1536,
+    "target_width": 2752,
+    "dit_original_ckpt": "/data/gushiqiao/base_dit_info_v060_res2k_9k_3k_25kiter.safetensors"
 }

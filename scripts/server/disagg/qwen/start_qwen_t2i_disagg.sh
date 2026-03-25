@@ -13,12 +13,12 @@
 
 set -e
 
-lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
-model_path=${QWEN_IMAGE_MODEL_PATH:-/data/nvme1/models/qwen-image-edit-release-251130}
+lightx2v_path=${LIGHTX2V_PATH:-/home/fuhaiwen/LightX2V}
+model_path=${QWEN_IMAGE_MODEL_PATH:-/home/fuhaiwen/models/qwen-2512}
 
-GPU_ENCODER=${GPU_ENCODER:-4}
-GPU_TRANSFORMER=${GPU_TRANSFORMER:-5}
-GPU_DECODER=${GPU_DECODER:-4}
+GPU_ENCODER=${GPU_ENCODER:-6}
+GPU_TRANSFORMER=${GPU_TRANSFORMER:-7}
+GPU_DECODER=${GPU_DECODER:-6}
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
