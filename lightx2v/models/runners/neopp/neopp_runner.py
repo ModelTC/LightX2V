@@ -62,12 +62,12 @@ class NeoppRunner(DefaultRunner):
         return torch.stack([t_image, h_image, w_image], dim=0)
 
     def run_input_encoder(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
-        past_key_values_cond = torch.load(to_x2v_cond_kv_path)
-        past_key_values_uncond = torch.load(to_x2v_uncond_kv_path)
+        past_key_values_cond = torch.load(to_x2v_cond_kv_path).transpose(2, 3)  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        past_key_values_uncond = torch.load(to_x2v_uncond_kv_path).transpose(2, 3)
 
         with ProfilingContext4DebugL1("load_input_encoder"):
-            input_len_cond = past_key_values_cond.shape[-2]
-            input_len_uncond = past_key_values_uncond.shape[-2]
+            input_len_cond = past_key_values_cond.shape[-3]
+            input_len_uncond = past_key_values_uncond.shape[-3]
 
             token_h = self.input_info.target_shape[0] // (self.patch_size * self.merge_size)
             token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
