@@ -136,13 +136,13 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         router_logits = moe_w.gate.apply(hidden_states)
         if self.norm_topk_prob:
             _, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
-            routing_weights = F.softmax(router_logits.float().gather(1, selected_experts), dim=-1)
+            routing_weights = F.softmax(router_logits.gather(1, selected_experts).float(), dim=-1)
         else:
             routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
             routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
 
         output = flashinfer_cutlass_fused_moe(
-            hidden_states.contiguous(),
+            hidden_states if hidden_states.is_contiguous() else hidden_states.contiguous(),
             selected_experts.to(torch.int32),
             routing_weights,
             moe_w._fi_fc1_weight,
