@@ -76,7 +76,6 @@ class NeoppTransformerInfer(BaseTransformerInfer):
     # @ProfilingContext4DebugL1("Self Attn")
     def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin, past_key_values):
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
-        input_shape = hidden_states.shape[:-1]
 
         query_states = attn_w.q_proj_mot_gen.apply(hidden_states.squeeze(0))
         query_states = query_states.view(-1, self.num_heads, self.head_dim)  # [seq, num_heads, head_dim]
@@ -110,13 +109,13 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         key_states = torch.cat([past_k, key_states], dim=0)  # [total_seq, num_kv_heads, head_dim]
         value_states = torch.cat([past_v, value_states], dim=0)
 
-        attn_output = self._compute_attn(attn_w, query_states, key_states, value_states, input_shape)
+        attn_output = self._compute_attn(attn_w, query_states, key_states, value_states)
 
         attn_output = attn_w.o_proj_mot_gen.apply(attn_output.squeeze(0)).unsqueeze(0)
         return attn_output
 
     # @ProfilingContext4DebugL1("Compute Attn")
-    def _compute_attn(self, attn_w, query_states, key_states, value_states, input_shape):
+    def _compute_attn(self, attn_w, query_states, key_states, value_states):
         attn_output = attn_w.cross_attn.apply(
             q=query_states,
             k=key_states,
