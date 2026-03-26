@@ -39,10 +39,13 @@ class NeoppModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        v_pred_condition, z = self._infer_cond_uncond(inputs, infer_condition=True)
+        pre_infer_out = self.pre_infer.infer(self.pre_weight)
+
+        v_pred_condition = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+
         t = self.scheduler.timesteps[self.scheduler.step_index]
         if t > self.cfg_interval[0] and t < self.cfg_interval[1] and self.cfg_scale > 1:
-            v_pred_uncondition, _ = self._infer_cond_uncond(inputs, infer_condition=False)
+            v_pred_uncondition = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
         else:
             v_pred_uncondition = None
 
@@ -52,16 +55,15 @@ class NeoppModel(BaseTransformerModel):
             v_pred = v_pred_condition
 
         t_next = self.scheduler.timesteps[self.scheduler.step_index + 1]
-        z = z + (t_next - t) * v_pred
+        z = pre_infer_out.z + (t_next - t) * v_pred
         self.scheduler.image_prediction = self.unpatchify(z, self.patch_size * self.merge_size, self.scheduler.image_prediction.shape[-2], self.scheduler.image_prediction.shape[-1])
         return z
 
-    def _infer_cond_uncond(self, inputs, infer_condition=True):
+    def _infer_cond_uncond(self, inputs, pre_infer_out, infer_condition=True):
         self.scheduler.infer_condition = infer_condition
-        pre_infer_out = self.pre_infer.infer(self.pre_weight)
         hidden_states = self.transformer_infer.infer(self.transformer_weights, pre_infer_out, inputs)
         v_pred = self.post_infer.infer(self.post_weight, pre_infer_out, hidden_states)
-        return v_pred, pre_infer_out.z
+        return v_pred
 
     def _seq_parallel_post_process(self, pre_infer_out):
         pass
