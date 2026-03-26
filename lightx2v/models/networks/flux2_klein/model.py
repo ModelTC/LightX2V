@@ -137,7 +137,7 @@ class Flux2KleinTransformerModel(BaseTransformerModel):
                 # ==================== CFG Sequential Processing ====================
                 text_ids = inputs["text_encoder_output"].get("text_ids", None)
                 img_ids = getattr(self.scheduler, "latent_image_ids", None)
-                
+
                 noise_pred_cond = self._infer_cond_uncond(
                     latents,
                     inputs["text_encoder_output"]["prompt_embeds"],

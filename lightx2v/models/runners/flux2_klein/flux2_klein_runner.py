@@ -1,17 +1,18 @@
 import gc
 import os
+
 import torch
 from loguru import logger
 
-from lightx2v.models.networks.flux2_klein.model import Flux2KleinTransformerModel
-from lightx2v.models.schedulers.flux2_klein.scheduler import Flux2KleinScheduler
 from lightx2v.models.input_encoders.hf.flux2_klein.qwen3_model import Flux2Klein_TextEncoder
-from lightx2v.models.video_encoders.hf.flux2_klein.vae import Flux2KleinVAE
+from lightx2v.models.networks.flux2_klein.model import Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.models.schedulers.flux2_klein.scheduler import Flux2KleinScheduler
+from lightx2v.models.video_encoders.hf.flux2_klein.vae import Flux2KleinVAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v.utils.envs import GET_DTYPE
+
 
 @RUNNER_REGISTER("flux2_klein")
 class Flux2KleinRunner(DefaultRunner):
@@ -19,7 +20,7 @@ class Flux2KleinRunner(DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
     def __init__(self, config):
-        config["vae_scale_factor"] = config.get("vae_scale_factor", 16) # 8 * 2 for patch config
+        config["vae_scale_factor"] = config.get("vae_scale_factor", 16)  # 8 * 2 for patch config
         super().__init__(config)
 
     @ProfilingContext4DebugL2("Load models")
@@ -43,7 +44,7 @@ class Flux2KleinRunner(DefaultRunner):
     def load_vae(self):
         vae = Flux2KleinVAE(self.config)
         return vae
-        
+
     def init_scheduler(self):
         self.scheduler = Flux2KleinScheduler(self.config)
 
@@ -70,42 +71,39 @@ class Flux2KleinRunner(DefaultRunner):
         B, L, _ = x.shape
         out_ids = []
         for i in range(B):
-            t, h, w, l = torch.arange(1), torch.arange(1), torch.arange(1), torch.arange(L)
-            coords = torch.cartesian_prod(t, h, w, l)
+            t, h, w, c = torch.arange(1), torch.arange(1), torch.arange(1), torch.arange(L)
+            coords = torch.cartesian_prod(t, h, w, c)
             out_ids.append(coords)
         return torch.stack(out_ids)
-        
+
     # Copied from diffusers/pipelines/flux2/pipeline_flux2.py _prepare_latent_ids
     def _prepare_latent_ids(self, batch_size, height, width):
         t = torch.arange(1)
         # Patched height/width are used here
         h = torch.arange(height)
         w = torch.arange(width)
-        l = torch.arange(1)
-        latent_ids = torch.cartesian_prod(t, h, w, l)
+        c = torch.arange(1)
+        latent_ids = torch.cartesian_prod(t, h, w, c)
         latent_ids = latent_ids.unsqueeze(0).expand(batch_size, -1, -1)
         return latent_ids
 
     @ProfilingContext4DebugL1("Run Text Encoder")
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):
         prompt_embeds_list, _ = self.text_encoders[0].infer([text])
-        prompt_embeds = prompt_embeds_list[0].unsqueeze(0) # (1, seq_len, dim)
+        prompt_embeds = prompt_embeds_list[0].unsqueeze(0)  # (1, seq_len, dim)
         text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
-        
-        text_encoder_output = {
-            "prompt_embeds": prompt_embeds,
-            "text_ids": text_ids
-        }
-        
+
+        text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
+
         # Flux2Klein uses empty string as negative prompt for CFG
         if self.config.get("sample_guide_scale", 1.0) > 1.0 or self.config.get("enable_cfg", True):
             neg_prompt_embeds_list, _ = self.text_encoders[0].infer([""])
             neg_prompt_embeds = neg_prompt_embeds_list[0].unsqueeze(0)
             neg_text_ids = self._prepare_text_ids(neg_prompt_embeds).to(AI_DEVICE)
-            
+
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
             text_encoder_output["negative_text_ids"] = neg_text_ids
-            
+
         return text_encoder_output
 
     @ProfilingContext4DebugL2("Run DiT")
@@ -136,7 +134,7 @@ class Flux2KleinRunner(DefaultRunner):
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
         return self.model.scheduler.latents, self.model.scheduler.generator
-        
+
     def set_target_shape(self):
         width = self.config.get("target_width", 1024)
         height = self.config.get("target_height", 1024)
@@ -168,18 +166,17 @@ class Flux2KleinRunner(DefaultRunner):
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
         B, _, C = latents.shape
-        
+
         # Need original packed height and width. We can recover from latent_image_ids max
         H = int((self.input_info.latent_image_ids[0, :, 1].max() + 1).item())
         W = int((self.input_info.latent_image_ids[0, :, 2].max() + 1).item())
- 
+
         latents = latents.view(B, H, W, C).permute(0, 3, 1, 2)
- 
- 
+
         bn_mean = self.vae.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
         bn_std = torch.sqrt(self.vae.vae.bn.running_var.view(1, -1, 1, 1) + self.vae.vae.config.batch_norm_eps)
         latents = latents * bn_std + bn_mean
- 
+
         latents = latents.reshape(B, C // 4, 2, 2, H, W)
         latents = latents.permute(0, 1, 4, 2, 5, 3)
         latents = latents.reshape(B, C // 4, H * 2, W * 2)

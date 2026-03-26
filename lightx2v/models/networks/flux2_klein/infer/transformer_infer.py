@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .utils import apply_rope_with_flashinfer, apply_rope_with_torch
-from loguru import logger
+
 
 class Flux2KleinTransformerInfer(BaseTransformerInfer):
     """Transformer inference for LongCat Image model.
@@ -206,7 +206,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         head_dim = self.config["attention_head_dim"]
 
         assert encoder_hidden_states is None, "Encoder hidden states already cat in hidden states for single-stream blocks in Flux2-Klein, should be None here"
- 
+
         residual = hidden_states
 
         # AdaLayerNormZeroSingle
@@ -219,9 +219,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         # Parallel QKV and MLP projection
         hidden_states_proj = block_weights.to_qkv_mlp_proj.apply(norm_combined)
         inner_dim = heads * head_dim
-        qkv, mlp_hidden_states = torch.split(
-            hidden_states_proj, [3 * inner_dim, hidden_states_proj.shape[-1] - 3 * inner_dim], dim=-1
-        )
+        qkv, mlp_hidden_states = torch.split(hidden_states_proj, [3 * inner_dim, hidden_states_proj.shape[-1] - 3 * inner_dim], dim=-1)
         query, key, value = qkv.chunk(3, dim=-1)
 
         # Reshape for multi-head attention
@@ -233,10 +231,10 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         key = block_weights.norm_k.apply(key)
 
         query, key = self.apply_rope_func(query, key, image_rotary_emb)
- 
+
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
- 
+
         attn_output = block_weights.calculate.apply(
             q=query,
             k=key,
@@ -262,8 +260,8 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         # Clip for fp16
         if hidden_states.dtype == torch.float16:
             hidden_states = hidden_states.clip(-65504, 65504)
- 
-        return  hidden_states
+
+        return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
         """Run transformer inference through all blocks.
@@ -282,7 +280,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep
         image_rotary_emb = pre_infer_out.image_rotary_emb
- 
+
         num_txt_tokens = encoder_hidden_states.shape[0]
 
         # Compute modulations from timestep embedding using weight modules

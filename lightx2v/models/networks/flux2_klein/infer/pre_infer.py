@@ -1,16 +1,15 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from lightx2v.utils.envs import *
-from lightx2v.models.schedulers.flux2_klein.scheduler import get_timestep_embedding
-from .module_io import Flux2KleinPreInferModuleOutput
+
 from diffusers.models.transformers.transformer_flux2 import Flux2PosEmbed
-from loguru import logger
+from lightx2v.utils.envs import *
+
+from .module_io import Flux2KleinPreInferModuleOutput
+
 
 class Flux2KleinPreInfer:
     """Pre-processing inference for Flux2Klein.
-    
+
     Maps Flux2KleinPipeline.__call__ preprocessing logic to inference:
     - Embed image latents via x_embedder
     - Embed text embeddings via context_embedder
@@ -31,7 +30,6 @@ class Flux2KleinPreInfer:
         self.scheduler = scheduler
 
     def infer(self, weights, hidden_states, encoder_hidden_states, txt_ids=None, img_ids=None):
-
         hidden_states = weights.x_embedder.apply(hidden_states.squeeze(0))
 
         encoder_hidden_states = weights.context_embedder.apply(encoder_hidden_states.squeeze(0))
@@ -40,14 +38,6 @@ class Flux2KleinPreInfer:
         timestep_embed = weights.timestep_embedder_linear_1.apply(timesteps_proj)
         timestep_embed = F.silu(timestep_embed)
         timestep_embed = weights.timestep_embedder_linear_2.apply(timestep_embed)
-
-        if self.scheduler.guidance_embeds:
-            # For CFG distillation, also compute guidance timestep embedding
-            timesteps_guidance_proj = self.scheduler.timesteps_guidance_proj
-            guidance_embed = weights.timestep_embedder_linear_1.apply(timesteps_guidance_proj)
-            guidance_embed = F.silu(guidance_embed)
-            guidance_embed = weights.timestep_embedder_linear_2.apply(guidance_embed)
-            timestep_embed = timestep_embed + guidance_embed  
 
         txt_ids_final = txt_ids if txt_ids is not None else getattr(self.scheduler, "txt_ids", None)
         img_ids_final = img_ids if img_ids is not None else getattr(self.scheduler, "latent_image_ids", None)
@@ -64,7 +54,7 @@ class Flux2KleinPreInfer:
 
             freqs_cos = torch.cat([text_rope[0], image_rope[0]], dim=0)
             freqs_sin = torch.cat([text_rope[1], image_rope[1]], dim=0)
- 
+
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
             cos_half = freqs_cos[:, ::2].contiguous()  # [L, D/2]
             sin_half = freqs_sin[:, ::2].contiguous()  # [L, D/2]
@@ -80,4 +70,3 @@ class Flux2KleinPreInfer:
             img_ids=img_ids_final,
             image_rotary_emb=image_rotary_emb,
         )
-

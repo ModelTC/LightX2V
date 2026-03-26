@@ -1,15 +1,17 @@
 import json
 import math
 import os
-import torch
+
 import numpy as np
-from loguru import logger
-from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
+import torch
+
 from diffusers.pipelines.flux2.pipeline_flux2 import compute_empirical_mu
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from lightx2v.models.schedulers.scheduler import BaseScheduler
-from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 def get_timestep_embedding(
     timesteps: torch.Tensor,
@@ -19,7 +21,6 @@ def get_timestep_embedding(
     scale: float = 1,
     max_period: int = 10000,
 ) -> torch.Tensor:
-    """Create sinusoidal timestep embeddings, same as LongCatImage scheduler."""
     assert len(timesteps.shape) == 1, "Timesteps should be a 1D tensor"
 
     half_dim = embedding_dim // 2
@@ -39,12 +40,14 @@ def get_timestep_embedding(
 
     return emb
 
+
 def randn_tensor(shape, generator=None, device=None, dtype=None):
     if isinstance(device, str):
         device = torch.device(device)
     device = device or torch.device("cpu")
     latents = torch.randn(shape, generator=generator, device=device, dtype=dtype)
     return latents
+
 
 class Flux2KleinScheduler(BaseScheduler):
     def __init__(self, config):
@@ -85,8 +88,7 @@ class Flux2KleinScheduler(BaseScheduler):
         """Set timesteps for the scheduler."""
         sigmas = np.linspace(1.0, 1 / self.infer_steps, self.infer_steps)
         image_seq_len = self.latents.shape[1]
-        mu = compute_empirical_mu(image_seq_len=image_seq_len,
-                                  num_steps=self.infer_steps)
+        mu = compute_empirical_mu(image_seq_len=image_seq_len, num_steps=self.infer_steps)
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,
             self.infer_steps,
@@ -105,13 +107,6 @@ class Flux2KleinScheduler(BaseScheduler):
         super().step_pre(step_index)
         timestep_input = torch.tensor([self.timesteps[self.step_index]], device=AI_DEVICE, dtype=self.dtype)
         self.timesteps_proj = get_timestep_embedding(timestep_input).to(self.dtype)
-        do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
-        if do_cfg:
-            self.guidance_embeds = False
-            self.timesteps_guidance_proj = None
-        else:
-            self.guidance_embeds = True## for cfg distill: guidence timestep embedding
-            self.timesteps_guidance_proj = get_timestep_embedding(self.config.get("sample_guide_scale", 4.0)*1000).to(self.dtype)
 
     def step_post(self):
         t = self.timesteps[self.step_index]

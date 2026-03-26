@@ -1,9 +1,12 @@
 import os
+
 import torch
+
 from diffusers.models import AutoencoderKLFlux2
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 class Flux2KleinVAE:
     def __init__(self, config):
@@ -36,12 +39,12 @@ class Flux2KleinVAE:
     def encode_vae_image(self, image):
         if self.cpu_offload:
             self.vae.to(AI_DEVICE)
-        
+
         encoded = self.vae.encode(image.to(AI_DEVICE, dtype=GET_DTYPE()))
-        
+
         if self.cpu_offload:
             self.vae.to("cpu")
-            
+
         return encoded
 
     @torch.no_grad()
@@ -54,5 +57,5 @@ class Flux2KleinVAE:
 
         if self.cpu_offload:
             self.vae.to("cpu")
-            
+
         return image

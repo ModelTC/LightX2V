@@ -202,7 +202,7 @@ class Flux2KleinTransformerWeights(WeightModule):
         self.num_layers = config.get("num_layers", 10)
         self.num_single_layers = config.get("num_single_layers", 20)
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        
+
         # Calculate inner dimension for modulation weights
         inner_dim = config.get("num_attention_heads", 24) * config.get("attention_head_dim", 64)
 

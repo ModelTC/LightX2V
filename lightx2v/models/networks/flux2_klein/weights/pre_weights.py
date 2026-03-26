@@ -40,7 +40,6 @@ class Flux2KleinPreWeights(WeightModule):
             ),
         )
 
-
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):

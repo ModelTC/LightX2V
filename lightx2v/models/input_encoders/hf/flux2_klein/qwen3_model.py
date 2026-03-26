@@ -2,7 +2,6 @@ import gc
 import os
 
 import torch
-from loguru import logger
 
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -14,6 +13,7 @@ except ImportError:
     Qwen3ForCausalLM = None
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
 
 class Flux2Klein_TextEncoder:
     def __init__(self, config):
@@ -35,7 +35,7 @@ class Flux2Klein_TextEncoder:
             text_encoder_path = self.config.get("text_encoder_path", os.path.join(model_path, "text_encoder"))
             tokenizer_path = self.config.get("tokenizer_path", os.path.join(model_path, "tokenizer"))
             tokenizer_kwargs = {}
-        
+
         if self.cpu_offload:
             self.text_encoder = Qwen3ForCausalLM.from_pretrained(text_encoder_path, torch_dtype=GET_DTYPE(), device_map="cpu", **kwargs)
         else:
