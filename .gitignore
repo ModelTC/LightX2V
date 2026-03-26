@@ -30,3 +30,4 @@ app/.gradio/
 *.pkl
 save_results/*
 *.egg-info/
+diffusers/
