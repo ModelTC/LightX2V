@@ -31,6 +31,8 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
 )
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  # noqa E402
 from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8  # noqa E402
+from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8  # noqa E402
+
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
 from lightx2v.utils.envs import *  # noqa E402
 from lightx2v.utils.registry_factory import (  # noqa E402
@@ -226,8 +228,10 @@ class T5Attention(nn.Module):
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
                 linear_cls = NpuQuantLinearInt8
+            elif quant_scheme == "int8-iluvatar":
+                linear_cls = IluvatarQuantLinearInt8
             else:
-                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
@@ -309,8 +313,10 @@ class T5FeedForward(nn.Module):
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
                 linear_cls = NpuQuantLinearInt8
+            elif quant_scheme == "int8-iluvatar":
+                linear_cls = IluvatarQuantLinearInt8
             else:
-                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
         # layers

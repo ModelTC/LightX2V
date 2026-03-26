@@ -24,6 +24,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
+from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8
 
 __all__ = [
     "XLMRobertaCLIP",
@@ -91,8 +92,10 @@ class SelfAttention(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-iluvatar":
+                linear_cls = IluvatarQuantLinearInt8
             else:
-                NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
@@ -181,8 +184,10 @@ class AttentionBlock(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-iluvatar":
+                linear_cls = IluvatarQuantLinearInt8
             else:
-                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
