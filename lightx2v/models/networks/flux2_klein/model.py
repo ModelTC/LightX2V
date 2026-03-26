@@ -47,6 +47,16 @@ class Flux2KleinTransformerModel(BaseTransformerModel):
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True, txt_ids=None, img_ids=None):
         self.scheduler.infer_condition = infer_condition
 
+        input_image_latents = getattr(self.scheduler, "input_image_latents", None)
+        input_image_ids = getattr(self.scheduler, "input_image_ids", None)
+
+        orig_seq_len = latents_input.shape[1]
+
+        if input_image_latents is not None:
+            latents_input = torch.cat([latents_input, input_image_latents], dim=1)
+            if img_ids is not None and input_image_ids is not None:
+                img_ids = torch.cat([img_ids, input_image_ids], dim=1)
+
         pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,
             hidden_states=latents_input,
@@ -61,6 +71,7 @@ class Flux2KleinTransformerModel(BaseTransformerModel):
         )
 
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.timestep)
+        noise_pred = noise_pred[:, :orig_seq_len, :]
 
         return noise_pred
 

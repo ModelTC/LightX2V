@@ -112,3 +112,63 @@ class Flux2KleinScheduler(BaseScheduler):
         t = self.timesteps[self.step_index]
         latents = self.scheduler.step(self.noise_pred, t, self.latents, return_dict=False)[0]
         self.latents = latents
+
+    def _encode_image(self, image):
+        image = image.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        encoder_output = self.vae.encode_vae_image(image)
+
+        if hasattr(encoder_output, "latent_dist"):
+            image_latents = encoder_output.latent_dist.mode()
+        else:
+            image_latents = encoder_output.latents
+
+        batch_size, num_channels_latents, height, width = image_latents.shape
+        image_latents = image_latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
+        image_latents = image_latents.permute(0, 1, 3, 5, 2, 4)
+        image_latents = image_latents.reshape(batch_size, num_channels_latents * 4, height // 2, width // 2)
+
+        bn = self.vae.vae.bn
+        latents_bn_mean = bn.running_mean.view(1, -1, 1, 1).to(image_latents.device, image_latents.dtype)
+        latents_bn_std = torch.sqrt(bn.running_var.view(1, -1, 1, 1) + self.vae.vae.config.batch_norm_eps).to(image_latents.device, image_latents.dtype)
+        image_latents = (image_latents - latents_bn_mean) / latents_bn_std
+
+        return image_latents
+
+    def _prepare_image_ids(self, image_latents: list[torch.Tensor], scale: int = 10):
+        t_coords = [scale + scale * t for t in torch.arange(0, len(image_latents))]
+        t_coords = [t.view(-1) for t in t_coords]
+
+        image_latent_ids = []
+        for x, t in zip(image_latents, t_coords):
+            x = x.squeeze(0)
+            _, height, width = x.shape
+            x_ids = torch.cartesian_prod(t, torch.arange(height), torch.arange(width), torch.arange(1))
+            image_latent_ids.append(x_ids)
+
+        image_latent_ids = torch.cat(image_latent_ids, dim=0)
+        image_latent_ids = image_latent_ids.unsqueeze(0)
+        return image_latent_ids
+
+    def _pack_latents(self, latents):
+        batch_size, num_channels, height, width = latents.shape
+        latents = latents.reshape(batch_size, num_channels, height * width).permute(0, 2, 1)
+        return latents
+
+    def prepare_i2i(self, input_info, input_image, vae):
+        self.vae = vae
+        # prepare sets up standard variables like manual seed, latents and timesteps
+        self.prepare(input_info)
+
+        batch_size = input_image.shape[0] if input_image.ndim == 4 else 1
+
+        image_latents = self._encode_image(input_image)
+
+        image_latent_ids = self._prepare_image_ids([image_latents], scale=10)
+
+        packed = self._pack_latents(image_latents).squeeze(0)
+
+        packed_latents = packed.unsqueeze(0).repeat(batch_size, 1, 1).to(AI_DEVICE, dtype=self.dtype)
+        image_latent_ids = image_latent_ids.repeat(batch_size, 1, 1).to(AI_DEVICE)
+
+        self.input_image_latents = packed_latents
+        self.input_image_ids = image_latent_ids

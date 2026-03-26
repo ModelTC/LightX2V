@@ -52,8 +52,14 @@ class Flux2KleinRunner(DefaultRunner):
         logger.info("Initializing Flux2Klein modules...")
         self.load_model()
         self.model.set_scheduler(self.scheduler)
-        self.run_dit = self._run_dit_local
-        self.run_input_encoder = self._run_input_encoder_local_t2i
+
+        task = self.config.get("task", "t2i")
+        if task == "i2i":
+            self.run_input_encoder = self._run_input_encoder_local_i2i
+            self.run_dit = self._run_dit_local_i2i
+        else:
+            self.run_input_encoder = self._run_input_encoder_local_t2i
+            self.run_dit = self._run_dit_local
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
@@ -64,6 +70,54 @@ class Flux2KleinRunner(DefaultRunner):
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
+        }
+
+    @ProfilingContext4DebugL2("Run Encoders I2I")
+    def _run_input_encoder_local_i2i(self):
+        prompt = self.input_info.prompt
+        text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
+
+        image_path = self.input_info.image_path
+        from PIL import Image
+
+        if isinstance(image_path, str):
+            input_image = Image.open(image_path).convert("RGB")
+        else:
+            input_image = image_path
+
+        vae_scale_factor = self.config.get("vae_scale_factor", 16)
+        from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
+
+        image_processor = Flux2ImageProcessor(vae_scale_factor=vae_scale_factor)
+
+        if not isinstance(input_image, list):
+            input_image = [input_image]
+
+        condition_images = []
+        for img in input_image:
+            image_processor.check_image_input(img)
+            image_width, image_height = img.size
+            if image_width * image_height > 1024 * 1024:
+                img = image_processor._resize_to_target_area(img, 1024 * 1024)
+                image_width, image_height = img.size
+
+            multiple_of = vae_scale_factor
+            image_width = (image_width // multiple_of) * multiple_of
+            image_height = (image_height // multiple_of) * multiple_of
+            img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
+            condition_images.append(img)
+            self.input_info.auto_width = image_width
+            self.input_info.auto_height = image_height
+
+        # Single image for now based on LightX2V pipeline structure
+        image_tensor = condition_images[0].to(AI_DEVICE)
+
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        return {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": {"image_tensor": image_tensor},
         }
 
     # Copied from diffusers/pipelines/flux2/pipeline_flux2.py _prepare_text_ids
@@ -115,6 +169,18 @@ class Flux2KleinRunner(DefaultRunner):
         latents, generator = self.run(total_steps)
         return latents, generator
 
+    @ProfilingContext4DebugL2("Run DiT I2I")
+    def _run_dit_local_i2i(self, total_steps=None):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
+
+        input_image_tensor = self.inputs["image_encoder_output"]["image_tensor"]
+        self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae)
+
+        latents, generator = self.run(total_steps)
+        return latents, generator
+
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
@@ -136,8 +202,13 @@ class Flux2KleinRunner(DefaultRunner):
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def set_target_shape(self):
-        width = self.config.get("target_width", 1024)
-        height = self.config.get("target_height", 1024)
+        task = self.config.get("task", "t2i")
+        if task == "i2i" and hasattr(self.input_info, "auto_width") and self.input_info.auto_width:
+            width = self.input_info.auto_width
+            height = self.input_info.auto_height
+        else:
+            width = self.config.get("target_width", 1024)
+            height = self.config.get("target_height", 1024)
 
         vae_scale_factor = self.config["vae_scale_factor"]
         height = 2 * (int(height) // (vae_scale_factor * 2))
