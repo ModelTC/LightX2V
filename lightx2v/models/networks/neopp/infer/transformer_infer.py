@@ -38,9 +38,9 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         _cache_key = "cond" if self.scheduler.infer_condition else "uncond"
         if not hasattr(self, "_seqlen_cache"):
             self._seqlen_cache = {}
-        if self._seqlen_cache.get(_cache_key, {}).get("key") != (seq_len_q, seq_len_k):
+        if self._seqlen_cache.get(_cache_key, {}).get("seqlens") != (seq_len_q, seq_len_k):
             self._seqlen_cache[_cache_key] = {
-                "key": (seq_len_q, seq_len_k),
+                "seqlens": (seq_len_q, seq_len_k),
                 "cu_q": torch.tensor([0, seq_len_q], dtype=torch.int32, device=hidden_states.device),
                 "cu_k": torch.tensor([0, seq_len_k], dtype=torch.int32, device=hidden_states.device),
             }
