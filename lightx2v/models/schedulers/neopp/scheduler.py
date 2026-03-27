@@ -7,7 +7,7 @@ from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-class NeoppScheduler(BaseScheduler):
+class NeoppMoeScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.time_schedule = self.config.get("time_schedule", "standard")

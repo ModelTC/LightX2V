@@ -11,7 +11,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
 
-class NeoppModel(BaseTransformerModel):
+class NeoppMoeModel(BaseTransformerModel):
     pre_weight_class = NeoppPreWeights
     transformer_weight_class = NeoppTransformerWeights
     post_weight_class = NeoppPostWeights
@@ -85,3 +85,20 @@ class NeoppModel(BaseTransformerModel):
         x = torch.einsum("nhwpqc->nchpwq", x)
         images = x.reshape(shape=(x.shape[0], 3, h * patch_size, w * patch_size))
         return images
+
+
+class NeoppDenseModel(BaseTransformerModel):
+    pre_weight_class = NeoppPreWeights
+    transformer_weight_class = NeoppTransformerWeights
+    post_weight_class = NeoppPostWeights
+
+    def __init__(self, model_path, config, device):
+        super().__init__(model_path, config, device)
+        self.preserved_keys = ["fm_modules", "mot_gen"]
+        self._init_infer_class()
+        self._init_infer()
+        self._init_weights()
+        self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
+        self.cfg_scale = self.config.get("cfg_scale", 7.0)
+        self.patch_size = self.config.get("patch_size", 16)
+        self.merge_size = 2

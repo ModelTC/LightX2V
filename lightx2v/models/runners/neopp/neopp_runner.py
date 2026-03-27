@@ -1,9 +1,9 @@
 import torch
 from PIL import Image
 
-from lightx2v.models.networks.neopp.model import NeoppModel
+from lightx2v.models.networks.neopp.model import NeoppMoeModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.neopp.scheduler import NeoppScheduler
+from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -26,7 +26,7 @@ class NeoppRunner(DefaultRunner):
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
 
     def init_scheduler(self):
-        self.scheduler = NeoppScheduler(self.config)
+        self.scheduler = NeoppMoeScheduler(self.config)
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
@@ -38,7 +38,7 @@ class NeoppRunner(DefaultRunner):
         MoT: Mixture-of-Transformer-Experts (MoT) architecture
         https://arxiv.org/abs/2505.14683
         """
-        model = NeoppModel(self.config["model_path"], self.config, self.init_device)
+        model = NeoppMoeModel(self.config["model_path"], self.config, self.init_device)
         return model
 
     def _build_inv_freq(self, half_head_dim, theta):
@@ -100,10 +100,16 @@ class NeoppRunner(DefaultRunner):
 
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        self.inputs = self.run_input_encoder(
-            "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
-            "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
-        )
+        if self.config.get("version", "moe") == "moe":
+            self.inputs = self.run_input_encoder(
+                "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
+                "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
+            )
+        else:
+            self.inputs = self.run_input_encoder(
+                "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_cond_kv.pt",
+                "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_uncond_kv.pt",
+            )
         gen_result = self.run_main()
         return gen_result
 

@@ -23,7 +23,7 @@ class NeoppTransformerWeights(WeightModule):
         blocks = WeightModuleList(
             NeoppDecoderLayerWeights(
                 block_index=i,
-                llm_config=llm_config,
+                config=self.config,
                 mm_type=self.mm_type,
                 attn_type=self.attn_type,
             )
@@ -43,7 +43,7 @@ class NeoppTransformerWeights(WeightModule):
 
 
 class NeoppDecoderLayerWeights(WeightModule):
-    def __init__(self, block_index, llm_config, mm_type, attn_type="flash_attn2"):
+    def __init__(self, block_index, config, mm_type, attn_type="flash_attn2"):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}"
 
@@ -52,7 +52,7 @@ class NeoppDecoderLayerWeights(WeightModule):
             RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.input_layernorm_mot_gen.weight", eps=1e-6),
         )
 
-        attn = NeoppAttentionWeights(block_index, llm_config, mm_type, attn_type)
+        attn = NeoppAttentionWeights(block_index, mm_type, attn_type)
         self.add_module("self_attn", attn)
 
         self.add_module(
@@ -60,13 +60,18 @@ class NeoppDecoderLayerWeights(WeightModule):
             RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.post_attention_layernorm_mot_gen.weight", eps=1e-6),
         )
 
-        gen_num_experts = int(llm_config["gen_num_experts"])
-        mlp_mot_gen = NeoppSparseMoeWeights(block_index, mm_type, "mlp_mot_gen", gen_num_experts)
+        if config["version"] == "moe":
+            gen_num_experts = int(config["llm_config"]["gen_num_experts"])
+            mlp_mot_gen = NeoppSparseMoeWeights(block_index, mm_type, "mlp_mot_gen", gen_num_experts)
+        elif config["version"] == "dense":
+            mlp_mot_gen = NeoppMlpWeights(block_index, mm_type)
+        else:
+            raise ValueError(f"Unsupported version: {config['version']}")
         self.add_module("mlp_mot_gen", mlp_mot_gen)
 
 
 class NeoppAttentionWeights(WeightModule):
-    def __init__(self, block_index, llm_config, mm_type, attn_type="flash_attn2"):
+    def __init__(self, block_index, mm_type, attn_type="flash_attn2"):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.self_attn"
 
@@ -124,6 +129,15 @@ class NeoppMoeSingleExpertWeights(WeightModule):
     def __init__(self, block_index, mm_type, subname, expert_index):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.{subname}.experts.{expert_index}"
+        self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight"))
+        self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight"))
+        self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight"))
+
+
+class NeoppMlpWeights(WeightModule):
+    def __init__(self, block_index, mm_type):
+        super().__init__()
+        prefix = f"language_model.model.layers.{block_index}.mlp_mot_gen"
         self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight"))
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight"))
         self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight"))
