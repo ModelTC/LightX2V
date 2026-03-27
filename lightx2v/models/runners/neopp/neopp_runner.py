@@ -14,7 +14,7 @@ from lightx2v.utils.utils import *
 class NeoppRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.patch_size = 16
+        self.patch_size = self.config.get("patch_size", 16)
         self.merge_size = 2
         self.noise_scale_mode = self.config.get("noise_scale_mode", "resolution")
         self.noise_scale = self.config.get("noise_scale", 1.0)
