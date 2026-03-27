@@ -9,10 +9,10 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.distributed as dist
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from torch import nn
 from torch.nn import functional as F
 
-from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 

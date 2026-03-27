@@ -1,9 +1,9 @@
 import os
 
 import torch
+from diffusers.utils.loading_utils import load_image
 from torchvision.transforms import v2
 
-from diffusers.utils.loading_utils import load_image
 from lightx2v.models.input_encoders.hf.wan.matrix_game2.clip import CLIPModel
 from lightx2v.models.input_encoders.hf.wan.matrix_game2.conditions import Bench_actions_gta_drive, Bench_actions_templerun, Bench_actions_universal
 from lightx2v.models.networks.wan.matrix_game2_model import WanSFMtxg2Model

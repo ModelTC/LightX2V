@@ -7,13 +7,13 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from einops import rearrange
-from torch import Tensor, nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.autoencoders.vae import BaseOutput, DiagonalGaussianDistribution
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
+from einops import rearrange
+from torch import Tensor, nn
+
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)

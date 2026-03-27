@@ -15,9 +15,8 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 try:
-    from transformers import Qwen2VLProcessor
-
     from diffusers.image_processor import VaeImageProcessor
+    from transformers import Qwen2VLProcessor
 except ImportError:
     VaeImageProcessor = None
     Qwen2VLProcessor = None

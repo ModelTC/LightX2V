@@ -1,9 +1,9 @@
 import os
 
 import torch
-
 from diffusers.models import AutoencoderKLFlux2
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
+
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 

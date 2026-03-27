@@ -6,9 +6,9 @@ except ModuleNotFoundError:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from einops import rearrange
 
-from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 

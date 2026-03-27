@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-
 from diffusers.models.transformers.transformer_flux2 import Flux2PosEmbed
 
 from .module_io import Flux2KleinPreInferModuleOutput

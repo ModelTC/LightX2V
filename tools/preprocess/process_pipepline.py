@@ -6,9 +6,8 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from loguru import logger
-
 from diffusers import FluxKontextPipeline
+from loguru import logger
 
 try:
     import moviepy.editor as mpy
