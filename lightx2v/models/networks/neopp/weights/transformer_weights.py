@@ -3,7 +3,7 @@ from flashinfer.fused_moe.core import get_cutlass_fused_moe_module
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401
-from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightDualNorm3DRope
+from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFusedQKNorm3DRope
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
@@ -79,12 +79,13 @@ class NeoppAttentionWeights(WeightModule):
         self.add_module("o_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.o_proj_mot_gen.weight"))
 
         self.add_module(
-            "q_norm",
-            RMSWeightDualNorm3DRope(f"{prefix}.q_norm_mot_gen.weight", f"{prefix}.q_norm_hw_mot_gen.weight"),
-        )
-        self.add_module(
-            "k_norm",
-            RMSWeightDualNorm3DRope(f"{prefix}.k_norm_mot_gen.weight", f"{prefix}.k_norm_hw_mot_gen.weight"),
+            "qk_norm",
+            RMSWeightFusedQKNorm3DRope(
+                f"{prefix}.q_norm_mot_gen.weight",
+                f"{prefix}.q_norm_hw_mot_gen.weight",
+                f"{prefix}.k_norm_mot_gen.weight",
+                f"{prefix}.k_norm_hw_mot_gen.weight",
+            ),
         )
 
         self.add_module("cross_attn", ATTN_WEIGHT_REGISTER[attn_type]())

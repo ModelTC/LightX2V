@@ -5,7 +5,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import fused_norm_3drope, rms_norm_kernel
+from lightx2v.common.ops.norm.triton_ops import fused_norm_3drope, fused_qk_norm_3drope, rms_norm_kernel
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -417,6 +417,73 @@ class RMSWeightOnePass(RMSWeight):
         return rms_norm_kernel(input_tensor, (self._get_actual_weight()), self.eps)
 
 
+class RMSWeightFusedQKNorm3DRope:
+    """
+    Holds two pairs of dual-RMSNorm weights (Q and K) and applies
+    fused QK dual-RMSNorm + 3D Neox-RoPE on Q and K in a single kernel launch.
+
+    Used in NeoppAttentionWeights to replace separate q_norm and k_norm.
+    """
+
+    def __init__(
+        self,
+        q_weight_name_t,
+        q_weight_name_hw,
+        k_weight_name_t,
+        k_weight_name_hw,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        self.q_weight_name_t = q_weight_name_t
+        self.q_weight_name_hw = q_weight_name_hw
+        self.k_weight_name_t = k_weight_name_t
+        self.k_weight_name_hw = k_weight_name_hw
+        self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
+        self._w_qt = None
+        self._w_qhw = None
+        self._w_kt = None
+        self._w_khw = None
+        self.eps = eps
+
+    def load(self, weight_dict):
+        self._w_qt = weight_dict[self.q_weight_name_t]
+        self._w_qhw = weight_dict[self.q_weight_name_hw]
+        self._w_kt = weight_dict[self.k_weight_name_t]
+        self._w_khw = weight_dict[self.k_weight_name_hw]
+
+    def apply(self, q, k, cos_sin):
+        """In-place fused dual-RMSNorm + 3D Neox-RoPE on Q and K in a single kernel launch.
+
+        q : [seq, num_heads, head_dim]    bfloat16
+        k : [seq, num_kv_heads, head_dim] bfloat16
+        """
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+        fused_qk_norm_3drope(
+            q,
+            k,
+            self._w_qt,
+            self._w_qhw,
+            self._w_kt,
+            self._w_khw,
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            eps=self.eps,
+        )
+
+
 class RMSWeightDualNorm3DRope:
     """
     Holds a pair of fp32_variance_qwen RMSNorm weights (t-segment + hw-segment)
@@ -425,17 +492,32 @@ class RMSWeightDualNorm3DRope:
     Used in NeoppAttentionWeights for the Q and K projections.
     """
 
-    def __init__(self, weight_name_t, weight_name_hw, eps=1e-6):
-        self.norm_t = RMSWeightFP32Qwen(weight_name_t, eps=eps)
-        self.norm_hw = RMSWeightFP32Qwen(weight_name_hw, eps=eps)
+    def __init__(
+        self,
+        weight_name_t,
+        weight_name_hw,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        self.weight_name_t = weight_name_t
+        self.weight_name_hw = weight_name_hw
+        self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
         self._w_t = None
         self._w_hw = None
+        self.eps = eps
 
     def load(self, weight_dict):
-        self.norm_t.load(weight_dict)
-        self.norm_hw.load(weight_dict)
-        self._w_t = self.norm_t._get_actual_weight()
-        self._w_hw = self.norm_hw._get_actual_weight()
+        self._w_t = weight_dict[self.weight_name_t]
+        self._w_hw = weight_dict[self.weight_name_hw]
 
     def apply(self, x, cos_sin):
         """In-place fused dual-RMSNorm + 3D Neox-RoPE on x: [seq, num_heads, head_dim]."""
@@ -450,5 +532,5 @@ class RMSWeightDualNorm3DRope:
             sin_h,
             cos_w,
             sin_w,
-            eps=self.norm_t.eps,
+            eps=self.eps,
         )

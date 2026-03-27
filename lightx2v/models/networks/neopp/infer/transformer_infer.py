@@ -82,8 +82,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         key_states = attn_w.k_proj_mot_gen.apply(hidden_states)
         key_states = key_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
 
-        attn_w.q_norm.apply(query_states, cos_sin)
-        attn_w.k_norm.apply(key_states, cos_sin)
+        attn_w.qk_norm.apply(query_states, key_states, cos_sin)
 
         value_states = attn_w.v_proj_mot_gen.apply(hidden_states)
         value_states = value_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
