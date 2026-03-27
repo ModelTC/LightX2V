@@ -35,10 +35,17 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
         seq_len_q = hidden_states.shape[0]
         seq_len_k = past_key_values.shape[2] + seq_len_q
-        if not hasattr(self, "_cached_seqlens") or self._cached_seqlens != (seq_len_q, seq_len_k):
-            self._cu_seqlens_q = torch.tensor([0, seq_len_q], dtype=torch.int32, device=hidden_states.device)
-            self._cu_seqlens_k = torch.tensor([0, seq_len_k], dtype=torch.int32, device=hidden_states.device)
-            self._cached_seqlens = (seq_len_q, seq_len_k)
+        _cache_key = "cond" if self.scheduler.infer_condition else "uncond"
+        if not hasattr(self, "_seqlen_cache"):
+            self._seqlen_cache = {}
+        if self._seqlen_cache.get(_cache_key, {}).get("key") != (seq_len_q, seq_len_k):
+            self._seqlen_cache[_cache_key] = {
+                "key": (seq_len_q, seq_len_k),
+                "cu_q": torch.tensor([0, seq_len_q], dtype=torch.int32, device=hidden_states.device),
+                "cu_k": torch.tensor([0, seq_len_k], dtype=torch.int32, device=hidden_states.device),
+            }
+        self._cu_seqlens_q = self._seqlen_cache[_cache_key]["cu_q"]
+        self._cu_seqlens_k = self._seqlen_cache[_cache_key]["cu_k"]
         self._max_seqlen_q = seq_len_q
         self._max_seqlen_k = seq_len_k
 
