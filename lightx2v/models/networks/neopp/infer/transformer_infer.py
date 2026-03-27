@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
 
 
@@ -33,6 +34,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         self.scaling = self.head_dim**-0.5
         self.num_experts_per_tok = llm_config["num_experts_per_tok"]
         self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
+        self.kv_cache = KVCacheManager()
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, inputs):
@@ -54,20 +56,22 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         self._max_seqlen_q = seq_len_q
         self._max_seqlen_k = seq_len_k
 
+        self.kv_cache.prepare(past_key_values, seq_len_q, self.num_layers, self.scheduler.infer_condition)
+
         # with ProfilingContext4DebugL1("Decoder Blocks"):
         for layer_idx, block_weight in enumerate(weights.blocks):
-            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, past_key_values)
+            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin)
 
         hidden_states = weights.norm_mot_gen.apply(hidden_states)
         hidden_states = self._fm_head(weights.fm_head, hidden_states)
         return hidden_states.unsqueeze(0)
 
     # @ProfilingContext4DebugL1("Decoder Layer")
-    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin, past_key_values):
+    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin):
         residual = hidden_states
         hidden_states = block_weight.input_layernorm_mot_gen.apply(hidden_states)
 
-        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin, past_key_values)
+        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
@@ -78,7 +82,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         return hidden_states
 
     # @ProfilingContext4DebugL1("Self Attn")
-    def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin, past_key_values):
+    def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin):
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
 
         query_states = attn_w.q_proj_mot_gen.apply(hidden_states)
@@ -107,11 +111,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         query_states = torch.cat([query_states_t, query_states_h, query_states_w], dim=-1)
         key_states = torch.cat([key_states_t, key_states_h, key_states_w], dim=-1)
 
-        past_k = past_key_values[layer_idx, 0]  # [past_seq, num_kv_heads, head_dim]
-        past_v = past_key_values[layer_idx, 1]
-
-        key_states = torch.cat([past_k, key_states], dim=0)  # [total_seq, num_kv_heads, head_dim]
-        value_states = torch.cat([past_v, value_states], dim=0)
+        key_states, value_states = self.kv_cache.update(layer_idx, key_states, value_states)
 
         attn_output = self._compute_attn(attn_w, query_states, key_states, value_states)
 
