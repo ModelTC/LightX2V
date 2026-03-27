@@ -22,8 +22,8 @@ class NeoppModel(BaseTransformerModel):
         self._init_infer_class()
         self._init_infer()
         self._init_weights()
-        self.cfg_interval = (0.1, 1.0)
-        self.cfg_scale = 7
+        self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
+        self.cfg_scale = self.config.get("cfg_scale", 7.0)
         self.patch_size = self.config.get("patch_size", 16)
         self.merge_size = 2
 
