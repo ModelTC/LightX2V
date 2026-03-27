@@ -18,4 +18,4 @@ python -m lightx2v.infer \
 --prompt "a photo of two trucks" \
 --target_shape 768 1376 \
 --negative_prompt "" \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_neopp_t2i.png
+--save_result_path ${lightx2v_path}/save_results/output_lightx2v_neopp_t2i_1k.png
