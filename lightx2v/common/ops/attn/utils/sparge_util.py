@@ -17,12 +17,11 @@ limitations under the License.
 import torch
 import triton
 import triton.language as tl
-from spas_sage_attn.utils import get_vanilla_qk_quant
 
 try:
     import spas_sage_attn._fused as fused
     import spas_sage_attn._qattn as qattn
-    from spas_sage_attn.utils import block_map_lut_triton, get_vanilla_qk_quant
+    from spas_sage_attn.utils import get_vanilla_qk_quant
 except ImportError:
     logger.warning("spas_sage_attn is not installed.")
 
@@ -34,7 +33,7 @@ except ImportError:
 
 
 def hyperparameter_check(hyper, H, device):
-    if type(hyper) == float or type(hyper) == int:
+    if type(hyper) is float or type(hyper) is int:
         hyper = torch.full((H,), float(hyper), device=device)
     elif isinstance(hyper, torch.Tensor):
         assert len(hyper.shape) <= 1, "Hyperparameter tensor must be 1D"

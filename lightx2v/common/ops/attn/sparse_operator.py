@@ -1,4 +1,5 @@
 import torch
+from loguru import logger
 
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE

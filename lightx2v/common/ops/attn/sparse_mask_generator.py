@@ -34,7 +34,7 @@ class GeneralMaskGenerator(ABC):
 class SlaMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
-        sparsity_ratio = self.sparse_setting.get("sla_sparsity_ratio", 0.8)
+        sparsity_ratio = self.sparse_setting.get("sparsity_ratio", 0.8)
         self.topk_ratio = 1 - sparsity_ratio
 
     def __call__(self, q, k):
@@ -50,7 +50,7 @@ class SlaMaskGenerator(GeneralMaskGenerator):
 class SpargeMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
-        sparsity_ratio = self.sparse_setting.get("sparge_sparsity_ratio", 0.8)
+        sparsity_ratio = self.sparse_setting.get("sparsity_ratio", 0.8)
         self.topk_ratio = 1 - sparsity_ratio
 
     def __call__(self, q, k):
