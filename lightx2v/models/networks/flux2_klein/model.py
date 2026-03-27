@@ -10,7 +10,6 @@ from lightx2v.models.networks.flux2_klein.weights.post_weights import Flux2Klein
 from lightx2v.models.networks.flux2_klein.weights.pre_weights import Flux2KleinPreWeights
 from lightx2v.models.networks.flux2_klein.weights.transformer_weights import Flux2KleinTransformerWeights
 from lightx2v.utils.custom_compiler import compiled_method
-from lightx2v.utils.envs import *
 
 
 class Flux2KleinTransformerModel(BaseTransformerModel):

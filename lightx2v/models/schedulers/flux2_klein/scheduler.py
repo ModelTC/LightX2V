@@ -21,7 +21,8 @@ def get_timestep_embedding(
     scale: float = 1,
     max_period: int = 10000,
 ) -> torch.Tensor:
-    assert len(timesteps.shape) == 1, "Timesteps should be a 1D tensor"
+    if len(timesteps.shape) != 1:
+        raise ValueError("Timesteps should be a 1D tensor")
 
     half_dim = embedding_dim // 2
     exponent = -math.log(max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32, device=timesteps.device)

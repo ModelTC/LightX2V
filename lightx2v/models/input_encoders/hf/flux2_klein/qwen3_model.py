@@ -1,4 +1,3 @@
-import gc
 import os
 
 import torch
@@ -92,8 +91,8 @@ class Flux2Klein_TextEncoder:
 
         if self.cpu_offload:
             self.text_encoder.to(torch.device("cpu"))
-            torch_device_module.empty_cache()
-            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         embedding_list = [prompt_embeds[i] for i in range(batch_size)]
         return embedding_list, {}

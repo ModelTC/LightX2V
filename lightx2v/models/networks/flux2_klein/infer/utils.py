@@ -51,9 +51,6 @@ def apply_rope_with_torch(
     freqs_cis: Tuple[torch.Tensor, torch.Tensor],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Apply rotary position embedding using PyTorch.
-
-    Follows the diffusers implementation for LongCat/Flux.
-
     Args:
         xq: Query tensor [L, H, D]
         xk: Key tensor [L, H, D]

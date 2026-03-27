@@ -8,12 +8,6 @@ from .utils import apply_rope_with_flashinfer, apply_rope_with_torch
 
 
 class Flux2KleinTransformerInfer(BaseTransformerInfer):
-    """Transformer inference for LongCat Image model.
-
-    Handles both double-stream blocks (10 layers) and single-stream blocks (20 layers).
-    Computes modulation parameters from timestep embedding for each block.
-    """
-
     def __init__(self, config):
         self.config = config
         self.infer_conditional = True
@@ -226,7 +220,8 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         heads = self.config["num_attention_heads"]
         head_dim = self.config["attention_head_dim"]
 
-        assert encoder_hidden_states is None, "Encoder hidden states already cat in hidden states for single-stream blocks in Flux2-Klein, should be None here"
+        if encoder_hidden_states is not None:
+            raise ValueError("Encoder hidden states already cat in hidden states for single-stream blocks in Flux2-Klein, should be None here")
 
         residual = hidden_states
 
