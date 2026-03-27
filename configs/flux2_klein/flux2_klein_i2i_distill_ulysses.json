@@ -10,5 +10,9 @@
     "tokenizer_max_length": 512,
     "target_width": 1024,
     "target_height": 1024,
-    "rope_type": "torch"
+    "rope_type": "torch",
+    "parallel": {
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
+    }
 }

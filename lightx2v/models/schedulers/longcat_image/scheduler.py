@@ -6,9 +6,9 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from torch import nn
 
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE

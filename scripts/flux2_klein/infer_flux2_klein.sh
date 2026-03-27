@@ -1,11 +1,11 @@
 #!/bin/bash
-lightx2v_path=/mnt/afs1/wangshankun/LightX2V
+lightx2v_path=
 model_path="/data/temp/FLUX.2-klein-base-9B"
 export CUDA_VISIBLE_DEVICES=0
 
 source ${lightx2v_path}/scripts/base/base.sh
 
-python -m debugpy --listen 0.0.0.0:15678 --wait-for-client -m lightx2v.infer \
+python -m lightx2v.infer \
     --model_cls flux2_klein \
     --task t2i \
     --model_path $model_path \

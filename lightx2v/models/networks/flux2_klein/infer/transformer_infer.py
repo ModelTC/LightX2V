@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
@@ -25,10 +26,12 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
             self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
+            self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
 
         # RoPE function selection
@@ -131,16 +134,33 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
 
         # Use registered attention module
-        attn_output = block_weights.calculate.apply(
-            q=query,
-            k=key,
-            v=value,
-            cu_seqlens_q=cu_seqlens,
-            cu_seqlens_kv=cu_seqlens,
-            max_seqlen_q=total_len,
-            max_seqlen_kv=total_len,
-            model_cls="flux2_klein",
-        )
+        if self.seq_p_group is not None:
+            txt_len = encoder_hidden_states.shape[0]
+            attn_output = block_weights.calculate_parallel.apply(
+                q=query,
+                k=key,
+                v=value,
+                slice_qkv_len=txt_len,
+                cu_seqlens_qkv=cu_seqlens,
+                attention_module=block_weights.calculate,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                use_fp4_comm=self.seq_p_fp4_comm,
+                enable_head_parallel=self.enable_head_parallel,
+                img_first=False,
+                model_cls="flux2_klein",
+            )
+        else:
+            attn_output = block_weights.calculate.apply(
+                q=query,
+                k=key,
+                v=value,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_kv=cu_seqlens,
+                max_seqlen_q=total_len,
+                max_seqlen_kv=total_len,
+                model_cls="flux2_klein",
+            )
 
         # Split back to text and image
         txt_len = encoder_hidden_states.shape[0]
@@ -185,6 +205,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         temb_mod,
         image_rotary_emb,
+        num_txt_tokens=0,
     ):
         """Inference for a single single-stream transformer block.
 
@@ -235,16 +256,32 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
 
-        attn_output = block_weights.calculate.apply(
-            q=query,
-            k=key,
-            v=value,
-            cu_seqlens_q=cu_seqlens,
-            cu_seqlens_kv=cu_seqlens,
-            max_seqlen_q=total_len,
-            max_seqlen_kv=total_len,
-            model_cls="flux2_klein",
-        )
+        if self.seq_p_group is not None:
+            attn_output = block_weights.calculate_parallel.apply(
+                q=query,
+                k=key,
+                v=value,
+                slice_qkv_len=num_txt_tokens,
+                cu_seqlens_qkv=cu_seqlens,
+                attention_module=block_weights.calculate,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                use_fp4_comm=self.seq_p_fp4_comm,
+                enable_head_parallel=self.enable_head_parallel,
+                img_first=False,
+                model_cls="flux2_klein",
+            )
+        else:
+            attn_output = block_weights.calculate.apply(
+                q=query,
+                k=key,
+                v=value,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_kv=cu_seqlens,
+                max_seqlen_q=total_len,
+                max_seqlen_kv=total_len,
+                model_cls="flux2_klein",
+            )
 
         # SwiGLU MLP activation
         mlp_1, mlp_2 = mlp_hidden_states.chunk(2, dim=-1)
@@ -283,6 +320,48 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
 
         num_txt_tokens = encoder_hidden_states.shape[0]
 
+        if self.seq_p_group is not None and image_rotary_emb is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+
+            if isinstance(image_rotary_emb, tuple):
+                # For torch rope_type: (cos, sin) tuple
+                freqs_cos, freqs_sin = image_rotary_emb
+
+                # Split text and image portions
+                txt_cos = freqs_cos[:num_txt_tokens]
+                img_cos = freqs_cos[num_txt_tokens:]
+                txt_sin = freqs_sin[:num_txt_tokens]
+                img_sin = freqs_sin[num_txt_tokens:]
+
+                # Pad and chunk only the image portion
+                seqlen = img_cos.shape[0]
+                padding_size = (world_size - (seqlen % world_size)) % world_size
+                if padding_size > 0:
+                    img_cos = F.pad(img_cos, (0, 0, 0, padding_size))
+                    img_sin = F.pad(img_sin, (0, 0, 0, padding_size))
+                img_cos = torch.chunk(img_cos, world_size, dim=0)[cur_rank]
+                img_sin = torch.chunk(img_sin, world_size, dim=0)[cur_rank]
+
+                # Concatenate text and image portions back
+                freqs_cos = torch.cat([txt_cos, img_cos], dim=0)
+                freqs_sin = torch.cat([txt_sin, img_sin], dim=0)
+                image_rotary_emb = (freqs_cos, freqs_sin)
+            else:
+                # For flashinfer rope_type: concatenated tensor
+                txt_emb = image_rotary_emb[:num_txt_tokens]
+                img_emb = image_rotary_emb[num_txt_tokens:]
+
+                # Pad and chunk only the image portion
+                seqlen = img_emb.shape[0]
+                padding_size = (world_size - (seqlen % world_size)) % world_size
+                if padding_size > 0:
+                    img_emb = F.pad(img_emb, (0, 0, 0, padding_size))
+                img_emb = torch.chunk(img_emb, world_size, dim=0)[cur_rank]
+
+                # Concatenate text and image portions back
+                image_rotary_emb = torch.cat([txt_emb, img_emb], dim=0)
+
         # Compute modulations from timestep embedding using weight modules
         # timestep shape: [D] (already embedded by pre_infer)
         # modulation_* will be tensors of shape [3*inner_dim] or [6*inner_dim]
@@ -312,6 +391,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
                 None,
                 single_stream_mod,
                 image_rotary_emb,
+                num_txt_tokens=num_txt_tokens,
             )
         hidden_states = hidden_states[num_txt_tokens:, ...]
         return hidden_states

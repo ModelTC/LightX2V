@@ -97,6 +97,12 @@ class Flux2KleinDoubleBlockWeights(WeightModule):
         # Attention calculation module
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
+        if self.config.get("seq_parallel", False):
+            self.add_module(
+                "calculate_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
+
         # Image FFN
         self.add_module(
             "ff_net_0",
@@ -181,6 +187,12 @@ class Flux2KleinSingleBlockWeights(WeightModule):
 
         # Attention calculation module
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
+
+        if self.config.get("seq_parallel", False):
+            self.add_module(
+                "calculate_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():

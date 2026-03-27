@@ -1,9 +1,12 @@
 from contextlib import nullcontext
 from typing import List, Literal, Optional, Tuple, Union
 
-import diffusers
 import torch
 import torch.nn as nn
+from einops import rearrange
+from torch import Tensor
+
+import diffusers
 from diffusers.models.attention_processor import Attention, SpatialNorm
 from diffusers.models.autoencoders.vae import DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.downsampling import Downsample2D
@@ -14,9 +17,6 @@ from diffusers.models.unets.unet_2d_blocks import DownEncoderBlock2D, UpDecoderB
 from diffusers.models.upsampling import Upsample2D
 from diffusers.utils import is_torch_version
 from diffusers.utils.accelerate_utils import apply_forward_hook
-from einops import rearrange
-from torch import Tensor
-
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 

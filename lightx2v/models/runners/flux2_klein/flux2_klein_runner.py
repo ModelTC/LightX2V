@@ -176,6 +176,7 @@ class Flux2KleinRunner(DefaultRunner):
             self.model.set_scheduler(self.scheduler)
 
         input_image_tensor = self.inputs["image_encoder_output"]["image_tensor"]
+
         self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae)
 
         latents, generator = self.run(total_steps)
