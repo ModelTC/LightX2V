@@ -65,7 +65,7 @@ class NeoppRunner(DefaultRunner):
         past_key_values_cond = torch.load(to_x2v_cond_kv_path).transpose(2, 3)  # [layers, 2, past_seq, num_kv_heads, head_dim]
         past_key_values_uncond = torch.load(to_x2v_uncond_kv_path).transpose(2, 3)
 
-        with ProfilingContext4DebugL1("load_input_encoder"):
+        with ProfilingContext4DebugL1("run_input_encoder"):
             input_len_cond = past_key_values_cond.shape[-3]
             input_len_uncond = past_key_values_uncond.shape[-3]
 
