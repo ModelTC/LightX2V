@@ -1,7 +1,6 @@
 import os
 
 import torch
-from loguru import logger
 
 try:
     import spas_sage_attn

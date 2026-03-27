@@ -8,7 +8,8 @@ from .kernels.sla_kernel_ar import _attention_ar
 from .template import AttnWeightTemplate
 from .utils.sla_util import get_block_map, get_cuda_arch
 from .utils.sla_util_blhd import get_block_map_blhd
-from .utils.sparge_util import block_map_ordinal_lut_triton, block_map_incremental_lut_triton, sage2_block_sparse_attn
+from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
+
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
 except ImportError:

@@ -3,10 +3,10 @@ import torch
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-from .utils.sla_util import get_cuda_arch
-
 from .kernels.sla_kernel import _attention
-from .utils.sparge_util import block_map_ordinal_lut_triton, block_map_incremental_lut_triton, sage2_block_sparse_attn
+from .utils.sla_util import get_cuda_arch
+from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
+
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
 except ImportError:

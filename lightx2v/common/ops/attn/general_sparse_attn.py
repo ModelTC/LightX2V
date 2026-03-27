@@ -20,7 +20,7 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
         self._setup_mask_generator()
 
         logger.info(
-                f"GeneralSparseAttnWeight: sparse_setting={self.sparse_setting}, operator_setting={self.operator_setting}, operator={self.sparse_operator}, mask_generator={self.sparse_mask_generator}, attnmap_frame_num={self.attnmap_frame_num}"
+            f"GeneralSparseAttnWeight: sparse_setting={self.sparse_setting}, operator_setting={self.operator_setting}, operator={self.sparse_operator}, mask_generator={self.sparse_mask_generator}, attnmap_frame_num={self.attnmap_frame_num}"
         )
 
     def _setup_operator(self):

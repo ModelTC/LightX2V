@@ -25,7 +25,7 @@ try:
     from spas_sage_attn.utils import block_map_lut_triton, get_vanilla_qk_quant
 except ImportError:
     logger.warning("spas_sage_attn is not installed.")
- 
+
 SAGE2PP_ENABLED = True
 try:
     from spas_sage_attn._qattn import qk_int8_sv_f8_accum_f16_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold
@@ -46,6 +46,7 @@ def hyperparameter_check(hyper, H, device):
         print(hyper)
         raise ValueError("Hyperparameter must be a float or a tensor")
     return hyper
+
 
 @triton.jit
 def triton_block_map_to_incremental_lut_kernel(map_ptr, lut_ptr, valid_block_num_ptr, num_block_k):
@@ -70,6 +71,7 @@ def triton_block_map_to_incremental_lut_kernel(map_ptr, lut_ptr, valid_block_num
 
     tl.store(valid_block_num_ptr, valid_block_num)
 
+
 def block_map_incremental_lut_triton(block_map):
     assert block_map.dim() == 4
     assert block_map.is_contiguous()
@@ -83,6 +85,7 @@ def block_map_incremental_lut_triton(block_map):
 
     return lut, valid_block_num
 
+
 @triton.jit
 def triton_block_map_to_ordinal_lut_kernel(map_ptr, lut_ptr, valid_block_num_ptr, num_block_k):
     b, h, q = tl.program_id(0), tl.program_id(1), tl.program_id(2)
@@ -92,7 +95,7 @@ def triton_block_map_to_ordinal_lut_kernel(map_ptr, lut_ptr, valid_block_num_ptr
     map_ptr = map_ptr + b * H * Q * num_block_k + h * Q * num_block_k + q * num_block_k
     lut_ptr = lut_ptr + b * H * Q * num_block_k + h * Q * num_block_k + q * num_block_k
     valid_block_num_ptr = valid_block_num_ptr + b * H * Q + h * Q + q
-    
+
     valid_block_num = 0
 
     for i in range(num_block_k):
@@ -103,6 +106,7 @@ def triton_block_map_to_ordinal_lut_kernel(map_ptr, lut_ptr, valid_block_num_ptr
             valid_block_num += 1
 
     tl.store(valid_block_num_ptr, valid_block_num)
+
 
 def block_map_ordinal_lut_triton(block_map):
     assert block_map.dim() == 4
@@ -117,23 +121,24 @@ def block_map_ordinal_lut_triton(block_map):
 
     return lut, valid_block_num
 
+
 @triton.jit
 def triton_bmm_pool_sim_simmean(x_ptr, pool_ptr, sim_ptr, simthreshd1, N: tl.constexpr, D: tl.constexpr, BS: tl.constexpr):
     b, h, nb = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     B, H, NB = tl.num_programs(0), tl.num_programs(1), tl.num_programs(2)
 
     block_offset = b * H * N * D + h * N * D + nb * BS * D
-    xmask = (nb*BS + tl.arange(0, BS)[:, None]) < N
+    xmask = (nb * BS + tl.arange(0, BS)[:, None]) < N
     x_ptrs = x_ptr + block_offset + tl.arange(0, BS)[:, None] * D + tl.arange(0, D)[None, :]
-    x = tl.load(x_ptrs, mask = xmask)
-    BS_ = BS if (N - nb*BS) >= BS else (N - nb*BS)
+    x = tl.load(x_ptrs, mask=xmask)
+    BS_ = BS if (N - nb * BS) >= BS else (N - nb * BS)
 
     cur_h1 = tl.load(simthreshd1 + h)
     x_fp32 = x.to(tl.float32)
-    pool = (tl.sum(x_fp32, axis=0) / BS_)
+    pool = tl.sum(x_fp32, axis=0) / BS_
     x_norm = tl.sqrt(tl.sum(x_fp32 * x_fp32, axis=1, keep_dims=True))
     x = (x / x_norm).to(tl.float16)  # norm at D dim
-    
+
     grams = tl.dot(x, tl.trans(x))
     sum_value = tl.sum(grams).to(tl.float32)
     cur_sim = (sum_value / (BS_ * BS_)) > cur_h1
@@ -142,7 +147,8 @@ def triton_bmm_pool_sim_simmean(x_ptr, pool_ptr, sim_ptr, simthreshd1, N: tl.con
     tl.store(pool_ptr + pool_block_offset + tl.arange(0, D), pool)
     sim_offset = b * H * NB + h * NB + nb
     tl.store(sim_ptr + sim_offset, cur_sim)
-    
+
+
 def get_pool_sim_triton_simmean(x, block_size, simthreshd1):
     x = x.contiguous()
     B, H, N, D = x.shape
@@ -153,6 +159,7 @@ def get_pool_sim_triton_simmean(x, block_size, simthreshd1):
     # Launch kernel
     triton_bmm_pool_sim_simmean[grid](x, pool, sim_blocks, simthreshd1, N=N, D=D, BS=block_size)
     return pool, sim_blocks
+
 
 @triton.jit
 def triton_fill_block_map_kernel(final_map, num_to_select, sorted_indices, NK: tl.constexpr):
@@ -165,7 +172,8 @@ def triton_fill_block_map_kernel(final_map, num_to_select, sorted_indices, NK: t
     for i in range(cur_num_to_select):
         cur_idx = tl.load(cur_sorted_idx_ptr + i)
         tl.store(cur_final_map_ptr + cur_idx, 1)
-    
+
+
 def fill_block_map_triton(final_map, num_to_select, sorted_indices):
     final_map = final_map.contiguous()
     num_to_select = num_to_select.contiguous()
@@ -174,6 +182,7 @@ def fill_block_map_triton(final_map, num_to_select, sorted_indices):
     grid = (B, H, Q)
     triton_fill_block_map_kernel[grid](final_map, num_to_select, sorted_indices, K)
     return final_map
+
 
 @triton.jit
 def triton_fill_causal_mask(mask, BqdivBk):
@@ -184,15 +193,15 @@ def triton_fill_causal_mask(mask, BqdivBk):
     else:
         tl.store(mask + q * K + k, 1)
 
-def fill_causal_mask_triton(mask, BqdivBk:float):
+
+def fill_causal_mask_triton(mask, BqdivBk: float):
     assert mask.dim() == 2
     triton_fill_causal_mask[mask.shape](mask, BqdivBk)
     return mask
 
 
 def get_block_map_meansim(q, k, is_causal=False, BLKQ=128, BLKK=64, simthreshd1=0.1, cdfthreshd=0.9, topk=None, return_lut=False, attention_sink=False):
-    assert (cdfthreshd is None and topk is not None) \
-        or (cdfthreshd is not None and topk is None), "Only one of cdfthreshd and topk can be set."
+    assert (cdfthreshd is None and topk is not None) or (cdfthreshd is not None and topk is None), "Only one of cdfthreshd and topk can be set."
 
     Headnum = q.size(1)
     simthreshd1 = hyperparameter_check(simthreshd1, Headnum, q.device)
@@ -235,12 +244,13 @@ def get_block_map_meansim(q, k, is_causal=False, BLKQ=128, BLKK=64, simthreshd1=
 
     if attention_sink:
         final_map[:, :, :, 0] = 1
-    
+
     if not return_lut:
         return final_map
     else:
         lut, valid_block_num = block_map_incremental_lut_triton(final_map)
         return lut, valid_block_num
+
 
 def sage2_block_sparse_attn(q, k, v, lut, valid_block_num, BLKQ, BLKK, arch):
     headdim = q.size(-1)
@@ -277,4 +287,3 @@ def sage2_block_sparse_attn(q, k, v, lut, valid_block_num, BLKQ, BLKK, arch):
                     q_int8, k_int8, v_fp8, o_s, lut, valid_block_num, pvthreshold, q_scale, k_scale, v_scale, 1, False, 1, scale, 0
                 )
     return o_s
-

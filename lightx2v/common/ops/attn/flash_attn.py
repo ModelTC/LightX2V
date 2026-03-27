@@ -2,7 +2,7 @@ import torch
 from loguru import logger
 
 from .utils.sla_util import get_block_map
-from .utils.sparge_util import get_block_map_meansim, block_map_ordinal_lut_triton
+from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
 
 try:
     import flash_attn  # noqa: F401
@@ -98,6 +98,7 @@ class FlashAttn3Weight(AttnWeightTemplate):
         ).reshape(bs * max_seqlen_q, -1)
         return x
 
+
 @ATTN_WEIGHT_REGISTER("flash_attn4")
 class FlashAttn4Weight(AttnWeightTemplate):
     def __init__(self):
@@ -127,6 +128,7 @@ class FlashAttn4Weight(AttnWeightTemplate):
         )
         x = x.reshape(bs * max_seqlen_q, -1)
         return x
+
 
 @ATTN_WEIGHT_REGISTER("spas_flash_attn4")
 class SparseFlashAttn4Weight(AttnWeightTemplate):
@@ -185,4 +187,3 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
 
         x = x.reshape(bs * max_seqlen_q, -1)
         return x
-

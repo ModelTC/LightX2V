@@ -3,10 +3,9 @@ from loguru import logger
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
-from .utils.sla_util import get_block_map, get_cuda_arch
-from .utils.sparge_util import get_block_map_meansim, block_map_ordinal_lut_triton, block_map_incremental_lut_triton, sage2_block_sparse_attn
-
 from .template import AttnWeightTemplate
+from .utils.sla_util import get_block_map, get_cuda_arch
+from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, get_block_map_meansim, sage2_block_sparse_attn
 
 try:
     from sageattn3_sparse import sage3_block_sparse_attn
@@ -113,7 +112,7 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
             self.BLKQ, self.BLKK = 64, 128
         else:
             self.BLKQ, self.BLKK = 128, 64
- 
+
     def apply(
         self,
         q,
@@ -143,6 +142,7 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
         x = sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.BLKQ, self.BLKK, self.arch)
         x = x.transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x
+
 
 @ATTN_WEIGHT_REGISTER("spas_sage_attn3")
 class SparseSageAttn3Weight(AttnWeightTemplate):
@@ -184,4 +184,3 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
         x = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
         x = x.transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x
-
