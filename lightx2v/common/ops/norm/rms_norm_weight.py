@@ -5,7 +5,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
+from lightx2v.common.ops.norm.triton_ops import fused_norm_3drope, rms_norm_kernel
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -415,3 +415,40 @@ class RMSWeightOnePass(RMSWeight):
 
     def apply(self, input_tensor):
         return rms_norm_kernel(input_tensor, (self._get_actual_weight()), self.eps)
+
+
+class RMSWeightDualNorm3DRope:
+    """
+    Holds a pair of fp32_variance_qwen RMSNorm weights (t-segment + hw-segment)
+    and applies fused dual-RMSNorm + 3D Neox-RoPE in-place on Q or K.
+
+    Used in NeoppAttentionWeights for the Q and K projections.
+    """
+
+    def __init__(self, weight_name_t, weight_name_hw, eps=1e-6):
+        self.norm_t = RMSWeightFP32Qwen(weight_name_t, eps=eps)
+        self.norm_hw = RMSWeightFP32Qwen(weight_name_hw, eps=eps)
+        self._w_t = None
+        self._w_hw = None
+
+    def load(self, weight_dict):
+        self.norm_t.load(weight_dict)
+        self.norm_hw.load(weight_dict)
+        self._w_t = self.norm_t._get_actual_weight()
+        self._w_hw = self.norm_hw._get_actual_weight()
+
+    def apply(self, x, cos_sin):
+        """In-place fused dual-RMSNorm + 3D Neox-RoPE on x: [seq, num_heads, head_dim]."""
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+        fused_norm_3drope(
+            x,
+            self._w_t,
+            self._w_hw,
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            eps=self.norm_t.eps,
+        )

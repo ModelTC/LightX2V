@@ -4,7 +4,6 @@ from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_m
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
-from lightx2v.models.networks.neopp.infer.triton_norm_rope import fused_norm_3drope
 from lightx2v.utils.profiler import *
 
 
@@ -70,37 +69,14 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
     # @ProfilingContext4DebugL1("Self Attn")
     def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin):
-        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
-
         query_states = attn_w.q_proj_mot_gen.apply(hidden_states)
         query_states = query_states.view(-1, self.num_heads, self.head_dim)  # [seq, num_heads, head_dim]
-        fused_norm_3drope(
-            query_states,
-            attn_w.q_norm_mot_gen._get_actual_weight(),
-            attn_w.q_norm_hw_mot_gen._get_actual_weight(),
-            cos_t,
-            sin_t,
-            cos_h,
-            sin_h,
-            cos_w,
-            sin_w,
-            eps=attn_w.q_norm_mot_gen.eps,
-        )
 
         key_states = attn_w.k_proj_mot_gen.apply(hidden_states)
         key_states = key_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
-        fused_norm_3drope(
-            key_states,
-            attn_w.k_norm_mot_gen._get_actual_weight(),
-            attn_w.k_norm_hw_mot_gen._get_actual_weight(),
-            cos_t,
-            sin_t,
-            cos_h,
-            sin_h,
-            cos_w,
-            sin_w,
-            eps=attn_w.k_norm_mot_gen.eps,
-        )
+
+        attn_w.q_norm.apply(query_states, cos_sin)
+        attn_w.k_norm.apply(key_states, cos_sin)
 
         value_states = attn_w.v_proj_mot_gen.apply(hidden_states)
         value_states = value_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
