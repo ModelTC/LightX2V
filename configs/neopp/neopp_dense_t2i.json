@@ -1,4 +1,5 @@
 {
+    "version": "dense",
     "infer_steps": 50,
     "attn_type": "flash_attn3",
     "cfg_scale": 4.0,
