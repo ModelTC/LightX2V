@@ -3,7 +3,21 @@ import torch
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+from .utils.sla_util import get_cuda_arch
+
 from .kernels.sla_kernel import _attention
+from .utils.sparge_util import block_map_ordinal_lut_triton, block_map_incremental_lut_triton, sage2_block_sparse_attn
+try:
+    from flash_attn.cute import flash_attn_func as flash_attn_func_v4
+except ImportError:
+    logger.info("flash_attn.cute not found, please install flashattention4 first")
+    flash_attn_func_v4 = None
+
+try:
+    from sageattn3_sparse import sage3_block_sparse_attn
+except ImportError:
+    logger.info("sageattn3_sparse not found, please install sageattn3_sparse first")
+    sage3_block_sparse_attn = None
 
 try:
     from magi_attention.functional import flex_flash_attn_func as magi_ffa_func
@@ -23,9 +37,10 @@ except ImportError:
 
 @SPARSE_OPERATOR_REGISTER("sla_triton_operator")
 class SlaTritonOperator:
-    def __init__(self):
+    def __init__(self, operator_setting={}):
         self.q_block_size = 128
         self.k_block_size = 128
+        self.operator_setting = operator_setting
 
     def __call__(
         self,
@@ -54,11 +69,123 @@ class SlaTritonOperator:
         return out
 
 
-@SPARSE_OPERATOR_REGISTER("magi_operator")
-class MagiOperator:
-    def __init__(self):
+@SPARSE_OPERATOR_REGISTER("spas_sage2_operator")
+class SparseSageAttentionV2Operator:
+    def __init__(self, operator_setting={}):
+        self.operator_setting = operator_setting
+
+        self.arch = get_cuda_arch(torch.cuda.current_device())
+        if self.arch == "sm90":
+            self.q_block_size, self.k_block_size = 64, 128
+        else:
+            self.q_block_size, self.k_block_size = 128, 64
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
+
+        # (B, H, Q_block_num, K_block_num)
+        lut, valid_block_num = block_map_incremental_lut_triton(mask)
+        out = sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.q_block_size, self.k_block_size, self.arch)
+        out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("spas_sage3_operator")
+class SparseSageAttentionV3Operator:
+    def __init__(self, operator_setting={}):
         self.q_block_size = 128
         self.k_block_size = 128
+        self.operator_setting = operator_setting
+        self.per_block_mean = self.operator_setting.get("per_block_mean", False)
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
+
+        # (B, H, Q_block_num, K_block_num)
+        lut, valid_block_num = block_map_ordinal_lut_triton(mask)
+        out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
+        out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("spas_fa4_operator")
+class SparseFlashAttentionV4Operator:
+    def __init__(self, operator_setting={}):
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
+
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        mask,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        # (L, H, D) -> (B, L, H, D)
+        q = q.unsqueeze(0)
+        k = k.unsqueeze(0)
+        v = v.unsqueeze(0)
+
+        # (B, H, Q_block_num, K_block_num)
+        full_block_idx, full_block_cnt = block_map_ordinal_lut_triton(mask)
+        mask_block_cnt = torch.zeros_like(full_block_cnt)
+        mask_block_idx = torch.zeros_like(full_block_idx)
+
+        out, _ = flash_attn_func_v4(
+            q=q,
+            k=k,
+            v=v,
+            mask_block_cnt=mask_block_cnt,
+            mask_block_idx=mask_block_idx,
+            full_block_cnt=full_block_cnt,
+            full_block_idx=full_block_idx,
+            block_size=(self.q_block_size, self.k_block_size),
+        )
+
+        out = out.reshape(max_seqlen_q, -1)
+        return out
+
+
+@SPARSE_OPERATOR_REGISTER("magi_operator")
+class MagiOperator:
+    def __init__(self, operator_setting={}):
+        self.q_block_size = 128
+        self.k_block_size = 128
+        self.operator_setting = operator_setting
 
     def generate_qk_ranges(self, mask, q_block_size, k_block_size, seqlen):
         # mask: [H, Q_block_num, K_block_num]
@@ -116,9 +243,10 @@ class MagiOperator:
 
 @SPARSE_OPERATOR_REGISTER("flex_block_operator")
 class FlexBlockOperator:
-    def __init__(self):
+    def __init__(self, operator_setting={}):
         self.q_block_size = 128
         self.k_block_size = 128
+        self.operator_setting = operator_setting
 
     def __call__(
         self,
@@ -159,9 +287,10 @@ class FlashinferOperator:
     sparse_wrapper = None
     mask = None
 
-    def __init__(self):
-        self.q_block_size = 128
-        self.k_block_size = 128
+    def __init__(self, q_block_size=128, k_block_size=128, operator_setting={}):
+        self.q_block_size = q_block_size
+        self.k_block_size = k_block_size
+        self.operator_setting = operator_setting
         if FlashinferOperator.sparse_wrapper is None:
             float_workspace_buffer = torch.empty(1024 * 1024 * 1024, dtype=torch.uint8, device=AI_DEVICE)
             FlashinferOperator.sparse_wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(float_workspace_buffer, backend="fa2")

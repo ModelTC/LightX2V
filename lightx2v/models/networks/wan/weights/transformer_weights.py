@@ -372,8 +372,42 @@ class WanSelfAttention(WeightModule):
             sla_config = self.config.get("sla_attn_setting", {})
             if "sparsity_ratio" in sla_config:
                 attention_weights_cls.sparsity_ratio = sla_config["sparsity_ratio"]
+            if "per_block_mean" in sla_config:
+                attention_weights_cls.per_block_mean = sla_config["per_block_mean"]
             if "operator" in sla_config:
                 attention_weights_cls.operator = sla_config["operator"]
+
+        # spas_sage_attn2 setting
+        if self.config["self_attn_1_type"] == "sparge_attn":
+            sparge_config = self.config.get("sparge_attn_setting", {})
+            if "sparsity_ratio" in sparge_config:
+                attention_weights_cls.sparsity_ratio = sparge_config["sparsity_ratio"]
+
+        # spas_sage_attn2 setting
+        if self.config["self_attn_1_type"] == "spas_sage_attn2":
+            spas_sage2_config = self.config.get("spas_sage_attn2_setting", {})
+            if "sparsity_ratio" in spas_sage2_config:
+                attention_weights_cls.sparsity_ratio = spas_sage2_config["sparsity_ratio"]
+            if "sparse_mode" in spas_sage2_config:
+                attention_weights_cls.sparse_mode = spas_sage2_config["sparse_mode"]
+
+        # spas_sage_attn3 setting
+        if self.config["self_attn_1_type"] == "spas_sage_attn3":
+            spas_sage3_config = self.config.get("spas_sage_attn3_setting", {})
+            if "sparsity_ratio" in spas_sage3_config:
+                attention_weights_cls.sparsity_ratio = spas_sage3_config["sparsity_ratio"]
+            if "per_block_mean" in spas_sage3_config:
+                attention_weights_cls.per_block_mean = spas_sage3_config["per_block_mean"]
+            if "sparse_mode" in spas_sage3_config:
+                attention_weights_cls.sparse_mode = spas_sage3_config["sparse_mode"]
+
+        # spas_flash_attn4 setting
+        if self.config["self_attn_1_type"] == "spas_flash_attn4":
+            spas_fa4_config = self.config.get("spas_flash_attn4_setting", {})
+            if "sparsity_ratio" in spas_fa4_config:
+                attention_weights_cls.sparsity_ratio = spas_fa4_config["sparsity_ratio"]
+            if "sparse_mode" in spas_fa4_config:
+                attention_weights_cls.sparse_mode = spas_fa4_config["sparse_mode"]
 
         # general_sparse_attn setting
         if self.config["self_attn_1_type"] == "general_sparse_attn":
@@ -386,6 +420,8 @@ class WanSelfAttention(WeightModule):
                 attention_weights_cls.sparse_operator = general_sparse_attn_setting["sparse_operator"]
             if "sparse_setting" in general_sparse_attn_setting:
                 attention_weights_cls.sparse_setting = general_sparse_attn_setting["sparse_setting"]
+            if "operator_setting" in general_sparse_attn_setting:
+                attention_weights_cls.operator_setting = general_sparse_attn_setting["operator_setting"]
 
         self.add_module("self_attn_1", attention_weights_cls())
 

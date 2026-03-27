@@ -9,6 +9,7 @@ from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER
 from .nbhd_attn import generate_nbhd_mask
 from .svg_attn import diagonal_band_mask_from_sparsity, get_attention_mask, wan_hidden_states_placement, wan_sparse_head_placement
 from .utils.sla_util import get_block_map
+from .utils.sparge_util import get_block_map_meansim
 
 
 class GeneralMaskGenerator(ABC):
@@ -41,6 +42,23 @@ class SlaMaskGenerator(GeneralMaskGenerator):
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
         sparse_map, lut, topk = get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
+        # return: [B, H, Q_block_num, K_block_num]
+        return sparse_map
+
+
+@SPARSE_MASK_GENERATOR_REGISTER("sparge_mask_generator")
+class SpargeMaskGenerator(GeneralMaskGenerator):
+    def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
+        super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
+        sparsity_ratio = self.sparse_setting.get("sparge_sparsity_ratio", 0.8)
+        self.topk_ratio = 1 - sparsity_ratio
+
+    def __call__(self, q, k):
+        # (L, H, D) -> (B, H, L, D)
+        q = q.unsqueeze(0).transpose(1, 2).contiguous()
+        k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        smooth_k = k - k.mean(dim=-2, keepdim=True)
+        sparse_map = get_block_map_meansim(q, smooth_k, cdfthreshd=None, topk=self.topk_ratio, return_lut=False, BLKQ=self.q_block_size, BLKK=self.k_block_size)
         # return: [B, H, Q_block_num, K_block_num]
         return sparse_map
 
