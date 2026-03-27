@@ -10,6 +10,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
@@ -122,6 +123,8 @@ class LightX2VPipeline:
                 self.prompt_template_encode_start_idx = 34
         elif self.model_cls in ["z_image"]:
             self.model_cls = "z_image"
+        elif self.model_cls in ["flux2_klein"]:
+            self.model_cls = "flux2_klein"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 
