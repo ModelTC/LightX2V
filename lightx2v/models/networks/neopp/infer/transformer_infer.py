@@ -4,21 +4,8 @@ from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_m
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
+from lightx2v.models.networks.neopp.infer.triton_norm_rope import fused_norm_3drope
 from lightx2v.utils.profiler import *
-
-
-def rotate_half(x):
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin):
-    cos = cos.squeeze(0).unsqueeze(1)  # [seq, 1, head_dim] — broadcast over num_heads
-    sin = sin.squeeze(0).unsqueeze(1)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
 
 
 class NeoppTransformerInfer(BaseTransformerInfer):
@@ -87,29 +74,36 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
         query_states = attn_w.q_proj_mot_gen.apply(hidden_states)
         query_states = query_states.view(-1, self.num_heads, self.head_dim)  # [seq, num_heads, head_dim]
-        query_states_t, query_states_hw = query_states.chunk(2, dim=-1)
-
-        query_states_t = attn_w.q_norm_mot_gen.apply(query_states_t)  # [seq, num_heads, head_dim//2]
-        query_states_hw = attn_w.q_norm_hw_mot_gen.apply(query_states_hw)
-        query_states_h, query_states_w = query_states_hw.chunk(2, dim=-1)
+        fused_norm_3drope(
+            query_states,
+            attn_w.q_norm_mot_gen._get_actual_weight(),
+            attn_w.q_norm_hw_mot_gen._get_actual_weight(),
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            eps=attn_w.q_norm_mot_gen.eps,
+        )
 
         key_states = attn_w.k_proj_mot_gen.apply(hidden_states)
         key_states = key_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
-        key_states_t, key_states_hw = key_states.chunk(2, dim=-1)
-
-        key_states_t = attn_w.k_norm_mot_gen.apply(key_states_t)
-        key_states_hw = attn_w.k_norm_hw_mot_gen.apply(key_states_hw)
-        key_states_h, key_states_w = key_states_hw.chunk(2, dim=-1)
+        fused_norm_3drope(
+            key_states,
+            attn_w.k_norm_mot_gen._get_actual_weight(),
+            attn_w.k_norm_hw_mot_gen._get_actual_weight(),
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            eps=attn_w.k_norm_mot_gen.eps,
+        )
 
         value_states = attn_w.v_proj_mot_gen.apply(hidden_states)
         value_states = value_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
-
-        query_states_t, key_states_t = apply_rotary_pos_emb(query_states_t, key_states_t, cos_t, sin_t)
-        query_states_h, key_states_h = apply_rotary_pos_emb(query_states_h, key_states_h, cos_h, sin_h)
-        query_states_w, key_states_w = apply_rotary_pos_emb(query_states_w, key_states_w, cos_w, sin_w)
-
-        query_states = torch.cat([query_states_t, query_states_h, query_states_w], dim=-1)
-        key_states = torch.cat([key_states_t, key_states_h, key_states_w], dim=-1)
 
         key_states, value_states = self.kv_cache.update(layer_idx, key_states, value_states)
 

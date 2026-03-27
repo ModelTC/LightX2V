@@ -40,9 +40,13 @@ class KVCacheManager:
         if is_condition:
             if self._kv_buf_cond_key != buf_key:
                 self._kv_buf_cond = torch.empty(
-                    num_layers, 2, past_seq + seq_len_q,
-                    past_key_values.shape[3], past_key_values.shape[4],
-                    dtype=past_key_values.dtype, device=past_key_values.device,
+                    num_layers,
+                    2,
+                    past_seq + seq_len_q,
+                    past_key_values.shape[3],
+                    past_key_values.shape[4],
+                    dtype=past_key_values.dtype,
+                    device=past_key_values.device,
                 )
                 self._kv_buf_cond[:, :, :past_seq] = past_key_values
                 self._kv_buf_cond_key = buf_key
@@ -50,9 +54,13 @@ class KVCacheManager:
         else:
             if self._kv_buf_uncond_key != buf_key:
                 self._kv_buf_uncond = torch.empty(
-                    num_layers, 2, past_seq + seq_len_q,
-                    past_key_values.shape[3], past_key_values.shape[4],
-                    dtype=past_key_values.dtype, device=past_key_values.device,
+                    num_layers,
+                    2,
+                    past_seq + seq_len_q,
+                    past_key_values.shape[3],
+                    past_key_values.shape[4],
+                    dtype=past_key_values.dtype,
+                    device=past_key_values.device,
                 )
                 self._kv_buf_uncond[:, :, :past_seq] = past_key_values
                 self._kv_buf_uncond_key = buf_key
