@@ -31,7 +31,7 @@ from lightx2v.utils.input_info import init_empty_input_info, update_input_info_f
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
-from lightx2v.utils.utils import seed_all, validate_config_paths, validate_task_arguments
+from lightx2v.utils.utils import seed_all, validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
@@ -83,6 +83,7 @@ def main():
     )
 
     parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "sr"], default="t2v")
+    parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
@@ -169,14 +170,14 @@ def main():
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
 
     args = parser.parse_args()
-    validate_task_arguments(args)
+    # validate_task_arguments(args)
 
     seed_all(args.seed)
 
     # set config
     config = set_config(args)
     # init input_info
-    input_info = init_empty_input_info(args.task)
+    input_info = init_empty_input_info(args.task, args.support_tasks)
 
     if config["parallel"]:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)

@@ -18,7 +18,7 @@ pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False})
 # Load KV cache and generate
 # -------------------------------------------------
 
-pipe.runner.load_kvcache(
+pipe.runner.load_kvcache_t2i(
     "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
     "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
 )
