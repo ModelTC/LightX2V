@@ -849,9 +849,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def run_clip(self):
         infer_steps = self.model.scheduler.infer_steps
         for step_index in range(infer_steps):
-            self.model.scheduler.step_pre(step_index=step_index)
-            self.model.infer(self.inputs)
-            self.model.scheduler.step_post()
+            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+            with ProfilingContext4DebugL1("step_pre"):
+                self.model.scheduler.step_pre(step_index=step_index)
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                self.model.infer(self.inputs)
+            with ProfilingContext4DebugL1("step_post"):
+                self.model.scheduler.step_post()
 
         return self.model.scheduler.latents
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 import time
 from collections import deque
 from typing import List, Optional
@@ -7,8 +8,11 @@ from typing import List, Optional
 import numpy as np
 import torch
 
-from lightx2v.disagg.conn import REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
+from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
+from lightx2v.disagg.rdma_client import RDMAClient
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import (
     estimate_encoder_buffer_sizes,
@@ -22,10 +26,28 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class TransformerService(BaseService):
-    def __init__(self):
+    def __init__(self, config: dict):
         super().__init__()
-        self.request_port = REQUEST_POLLING_PORT + 1
-        self.req_mgr = ReqManager()
+        self.config = config
+        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
+        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
+        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
+        self._phase1_rdma_client: Optional[RDMAClient] = None
+        self._phase1_rdma_buffer: Optional[RDMABuffer] = None
+        self._phase2_rdma_client: Optional[RDMAClient] = None
+        self._phase2_rdma_buffer: Optional[RDMABuffer] = None
+        shared_slots = int(self.config.get("rdma_buffer_slots", "128"))
+        shared_slot_size = int(self.config.get("rdma_buffer_slot_size", "4096"))
+        self._phase1_server_ip = str(self.config.get("rdma_phase1_host", "127.0.0.1"))
+        self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", "5567"))
+        self._phase1_slots = shared_slots
+        self._phase1_slot_size = shared_slot_size
+        self._phase2_server_ip = str(self.config.get("rdma_phase2_host", "127.0.0.1"))
+        self._phase2_handshake_port = int(self.config.get("rdma_phase2_handshake_port", "5568"))
+        self._phase2_slots = shared_slots
+        self._phase2_slot_size = shared_slot_size
+        self._last_phase1_connect_retry_ts = 0.0
+        self._last_phase2_connect_retry_ts = 0.0
         self.transformer = None
         self.scheduler = None
         self.rdma_buffer1: dict[int, List[torch.Tensor]] = {}
@@ -34,16 +56,90 @@ class TransformerService(BaseService):
         self.data_mgr2 = DataManager(DisaggregationPhase.PHASE2, DisaggregationMode.TRANSFORMER)
         self.data_receiver: dict[int, DataReceiver] = {}
         self.data_sender: dict[int, DataSender] = {}
+        self.reporter = Reporter(
+            service_type="transformer",
+            gpu_id=self.transformer_engine_rank,
+            bind_address=f"tcp://{self.config.get('data_bootstrap_addr', '127.0.0.1')}:{MONITOR_POLLING_PORT + self.transformer_engine_rank}",
+        )
+        self._reporter_thread: Optional[threading.Thread] = threading.Thread(
+            target=self.reporter.serve_forever,
+            name="transformer-reporter",
+            daemon=True,
+        )
+        self._reporter_thread.start()
+        self.load_models()
+
+    def _ensure_phase1_request_buffer(self) -> bool:
+        if self._phase1_rdma_buffer is not None:
+            return True
+        now = time.time()
+        if now - self._last_phase1_connect_retry_ts < 1.0:
+            return False
+        self._last_phase1_connect_retry_ts = now
+
+        if self._phase1_rdma_client is None:
+            self._phase1_rdma_client = RDMAClient(local_buffer_size=self._phase1_slot_size)
+        self._phase1_rdma_client.connect_to_server(self._phase1_server_ip, self._phase1_handshake_port)
+        remote_info = self._phase1_rdma_client.remote_info
+        base_addr = int(remote_info["addr"])
+        self._phase1_rdma_buffer = RDMABuffer(
+            role="client",
+            rdma_client=self._phase1_rdma_client,
+            remote=RDMABufferDescriptor(
+                slot_addr=base_addr + 16,
+                slot_bytes=self._phase1_slots * self._phase1_slot_size,
+                slot_size=self._phase1_slot_size,
+                buffer_size=self._phase1_slots,
+                head_addr=base_addr,
+                tail_addr=base_addr + 8,
+                rkey=int(remote_info.get("rkey", 0)),
+            ),
+        )
+        return True
+
+    def _ensure_phase2_meta_buffer(self) -> bool:
+        if self._phase2_rdma_buffer is not None:
+            return True
+        now = time.time()
+        if now - self._last_phase2_connect_retry_ts < 1.0:
+            return False
+        self._last_phase2_connect_retry_ts = now
+
+        if self._phase2_rdma_client is None:
+            self._phase2_rdma_client = RDMAClient(local_buffer_size=self._phase2_slot_size)
+        self._phase2_rdma_client.connect_to_server(self._phase2_server_ip, self._phase2_handshake_port)
+        remote_info = self._phase2_rdma_client.remote_info
+        base_addr = int(remote_info["addr"])
+        self._phase2_rdma_buffer = RDMABuffer(
+            role="client",
+            rdma_client=self._phase2_rdma_client,
+            remote=RDMABufferDescriptor(
+                slot_addr=base_addr + 16,
+                slot_bytes=self._phase2_slots * self._phase2_slot_size,
+                slot_size=self._phase2_slot_size,
+                buffer_size=self._phase2_slots,
+                head_addr=base_addr,
+                tail_addr=base_addr + 8,
+                rkey=int(remote_info.get("rkey", 0)),
+            ),
+        )
+        return True
 
     def init(self, config):
         self.config = config
-        self.transformer = None
-        self.scheduler = None
+        shared_slots = int(self.config.get("rdma_buffer_slots", self._phase1_slots))
+        shared_slot_size = int(self.config.get("rdma_buffer_slot_size", 4096))
+        self._phase1_server_ip = str(self.config.get("rdma_phase1_host", self._phase1_server_ip))
+        self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", self._phase1_handshake_port))
+        self._phase1_slots = shared_slots
+        self._phase1_slot_size = shared_slot_size
+        self._phase2_server_ip = str(self.config.get("rdma_phase2_host", self._phase2_server_ip))
+        self._phase2_handshake_port = int(self.config.get("rdma_phase2_handshake_port", self._phase2_handshake_port))
+        self._phase2_slots = shared_slots
+        self._phase2_slot_size = shared_slot_size
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
-
-        self.load_models()
 
         # Set global seed if present in config, though specific process calls might reuse it
         if "seed" in self.config:
@@ -54,6 +150,20 @@ class TransformerService(BaseService):
 
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
+
+        phase_deadline = time.time() + 30.0
+        while time.time() < phase_deadline:
+            try:
+                self._ensure_phase1_request_buffer()
+                self._ensure_phase2_meta_buffer()
+            except Exception:
+                self.logger.exception("Failed to connect phase RDMA buffers, will retry")
+            if self._phase1_rdma_buffer is not None and self._phase2_rdma_buffer is not None:
+                break
+            time.sleep(0.1)
+
+        if self._phase1_rdma_buffer is None or self._phase2_rdma_buffer is None:
+            raise RuntimeError("phase RDMA buffers are not ready")
 
         buffer_sizes = estimate_encoder_buffer_sizes(self.config)
         request = AllocationRequest(
@@ -72,7 +182,8 @@ class TransformerService(BaseService):
             ib_device=None,
         )
         self.data_mgr1.init(data_args, data_bootstrap_room)
-        self.data_receiver[data_bootstrap_room] = DataReceiver(self.data_mgr1, data_bootstrap_addr, data_bootstrap_room)
+        phase1_bootstrap_addr = str(self.config.get("encoder_node_address", data_bootstrap_addr))
+        self.data_receiver[data_bootstrap_room] = DataReceiver(self.data_mgr1, phase1_bootstrap_addr, data_bootstrap_room)
         self.data_receiver[data_bootstrap_room].init()
 
         buffer_sizes = estimate_transformer_buffer_sizes(self.config)
@@ -93,6 +204,14 @@ class TransformerService(BaseService):
         )
         self.data_mgr2.init(data_args, data_bootstrap_room)
         self.data_sender[data_bootstrap_room] = DataSender(self.data_mgr2, data_bootstrap_addr, data_bootstrap_room)
+
+        self._phase2_rdma_buffer.produce(
+            {
+                "request_config": dict(self.config),
+                "transformer_node_address": self.data_mgr2.get_localhost(),
+                "transformer_session_id": self.data_mgr2.get_session_id(),
+            }
+        )
 
     def load_models(self):
         self.logger.info("Loading Transformer Models...")
@@ -377,6 +496,10 @@ class TransformerService(BaseService):
         room_ids = set(self.rdma_buffer1.keys()) | set(self.rdma_buffer2.keys())
         for room in list(room_ids):
             self.remove(room)
+        self.reporter.stop()
+        if self._reporter_thread is not None and self._reporter_thread.is_alive():
+            self._reporter_thread.join(timeout=1.0)
+        self._reporter_thread = None
         if self.data_mgr1 is not None:
             self.data_mgr1.release()
         if self.data_mgr2 is not None:
@@ -393,11 +516,21 @@ class TransformerService(BaseService):
         complete_queue: dict[int, dict] = {}
 
         while True:
-            while True:
-                config = self.req_mgr.receive_non_block(self.request_port)
-                if config is None:
-                    break
-                req_queue.append(config)
+            if self._phase1_rdma_buffer is None:
+                try:
+                    self._ensure_phase1_request_buffer()
+                except Exception:
+                    self.logger.exception("Failed to connect phase1 request RDMA buffer, will retry")
+
+            if self._phase1_rdma_buffer is not None:
+                packet = self._phase1_rdma_buffer.consume()
+                if packet is not None:
+                    if isinstance(packet, dict) and "request_config" in packet:
+                        config = dict(packet.get("request_config") or {})
+                        config["encoder_node_address"] = packet.get("encoder_node_address", config.get("encoder_node_address", "127.0.0.1"))
+                    else:
+                        config = packet
+                    req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()

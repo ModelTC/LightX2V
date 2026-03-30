@@ -435,6 +435,10 @@ class LTX2Runner(DefaultRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
+        if self.config.get("distilled_sigma_values") is not None:
+            stage1_sigmas = torch.tensor(self.config["distilled_sigma_values"], dtype=torch.float32, device=AI_DEVICE)
+            self.model.scheduler.reset_sigmas(stage1_sigmas)
+
         # Image conditioning (if any) is already prepared in run_input_encoder
         # and stored in self.video_denoise_mask and self.initial_video_latent
         self._prepare_scheduler()

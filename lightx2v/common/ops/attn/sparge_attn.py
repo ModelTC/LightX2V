@@ -12,20 +12,22 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .template import AttnWeightTemplate
 
 
-@ATTN_WEIGHT_REGISTER("spas_sage_attn")
-class SageAttnWeight(AttnWeightTemplate):
+@ATTN_WEIGHT_REGISTER("sparge_attn")
+class SpargeAttnWeight(AttnWeightTemplate):
+    sparsity_ratio = 0.8
+
     def __init__(self):
         self.config = {}
+        self.topk = 1 - self.sparsity_ratio
 
-    @classmethod
-    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, tensor_layout="HND", **kwargs):
+    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, **kwargs):
         q = q.unsqueeze(0)
         k = k.unsqueeze(0)
         v = v.unsqueeze(0)
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        attn_out = spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout)
+        attn_out = spas_sage_attn.core.spas_sage2_attn_meansim_topk_cuda(q, k, v, topk=self.topk)
         _, H, N, D = attn_out.shape
         attn_out = attn_out.permute(2, 1, 3, 0).contiguous().view(N, H * D)
         return attn_out

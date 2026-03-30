@@ -3,13 +3,11 @@
     "target_video_length": 81,
     "target_height": 480,
     "target_width": 832,
-    "self_attn_1_type": "general_sparse_attn",
-    "general_sparse_attn_setting": {
-        "sparse_mask_generator": "sla_mask_generator",
-        "sparse_setting": {
-            "sparsity_ratio": 0.8
-        },
-        "sparse_operator": "flashinfer_operator"
+    "self_attn_1_type": "spas_sage_attn3",
+    "spas_sage_attn3_setting": {
+        "sparsity_ratio": 0.8,
+        "sparse_mode": "sla_mode",
+        "per_block_mean": false
     },
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",

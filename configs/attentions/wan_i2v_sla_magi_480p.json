@@ -7,7 +7,7 @@
     "general_sparse_attn_setting": {
         "sparse_mask_generator": "sla_mask_generator",
         "sparse_setting": {
-            "sla_sparsity_ratio": 0.8
+            "sparsity_ratio": 0.8
         },
         "sparse_operator": "magi_operator"
     },
