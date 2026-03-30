@@ -23,7 +23,9 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
             self.offload_manager.swap_blocks()
         return x
 
-    def infer_phases(self, block_idx, blocks, x, pre_infer_out, lazy):
+    def infer_phases(self, block_idx, blocks, x, pre_infer_out, lazy=None):
+        if lazy is None:
+            lazy = self.lazy_load
         for phase_idx in range(self.phases_num):
             if block_idx == 0 and phase_idx == 0:
                 if lazy:

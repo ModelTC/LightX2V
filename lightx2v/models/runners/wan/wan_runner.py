@@ -7,11 +7,14 @@ import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
+from scipy.interpolate import interp1d  # type: ignore
+from scipy.spatial.transform import Rotation, Slerp  # type: ignore
 
 from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
@@ -824,3 +827,286 @@ class Wan22DenseRunner(WanRunner):
     def get_vae_encoder_output(self, img):
         z = self.vae_encoder.encode(img.unsqueeze(0).to(GET_DTYPE()))
         return z
+
+
+@RUNNER_REGISTER("lingbot_world")
+class LingbotRunner(Wan22MoeRunner):
+    def __init__(self, config):
+        with config.temporarily_unlocked():
+            if "use_image_encoder" not in config:
+                config["use_image_encoder"] = False
+            config["enable_lingbot_cam_ctrl"] = bool(config.get("enable_lingbot_cam_ctrl", True))
+        super().__init__(config)
+        model_path = str(self.config.get("model_path", "")).lower()
+        if "cam" in model_path:
+            self.control_type = "cam"
+        elif "act" in model_path:
+            self.control_type = "act"
+        else:
+            self.control_type = "cam"
+
+    def set_inputs(self, inputs):
+        super().set_inputs(inputs)
+        if "pose" in self.input_info.__dataclass_fields__:
+            self.input_info.pose = inputs.get("action_path", inputs.get("pose", ""))
+
+    def load_image_encoder(self):
+        if self.config.get("use_image_encoder", True):
+            return super().load_image_encoder()
+        return None
+
+    def load_transformer(self):
+        if self.config.get("dynamic_multimodel", False):
+            model_struct = MultiModelStruct([None, None], self.config, self.config["boundary"])
+            model_struct.low_noise_model_path = self.low_noise_model_path
+            model_struct.high_noise_model_path = self.high_noise_model_path
+            model_struct.init_device = self.init_device
+            return model_struct
+
+        high_model_kwargs = {
+            "model_path": self.high_noise_model_path,
+            "config": self.config,
+            "device": self.init_device,
+            "model_type": "wan2.2_moe_high_noise",
+        }
+        low_model_kwargs = {
+            "model_path": self.low_noise_model_path,
+            "config": self.config,
+            "device": self.init_device,
+            "model_type": "wan2.2_moe_low_noise",
+        }
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            high_noise_model = WanLingbotModel(**high_model_kwargs)
+            low_noise_model = WanLingbotModel(**low_model_kwargs)
+        else:
+            high_noise_model = build_wan_model_with_lora(
+                WanLingbotModel,
+                self.config,
+                high_model_kwargs,
+                lora_configs,
+                model_type="high_noise_model",
+            )
+            low_noise_model = build_wan_model_with_lora(
+                WanLingbotModel,
+                self.config,
+                low_model_kwargs,
+                lora_configs,
+                model_type="low_noise_model",
+            )
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+
+    @staticmethod
+    def _se3_inverse(T: torch.Tensor) -> torch.Tensor:
+        rot = T[:, :3, :3]
+        trans = T[:, :3, 3:]
+        rot_inv = rot.transpose(-1, -2)
+        trans_inv = -torch.bmm(rot_inv, trans)
+        out = torch.eye(4, device=T.device, dtype=T.dtype)[None].repeat(T.shape[0], 1, 1)
+        out[:, :3, :3] = rot_inv
+        out[:, :3, 3:] = trans_inv
+        return out
+
+    def _compute_relative_poses(self, c2ws: torch.Tensor) -> torch.Tensor:
+        ref_w2c = self._se3_inverse(c2ws[:1])
+        rel = torch.matmul(ref_w2c, c2ws)
+        rel[0] = torch.eye(4, device=c2ws.device, dtype=c2ws.dtype)
+        if rel.shape[0] > 1:
+            rel[1:] = torch.bmm(self._se3_inverse(rel[:-1]), rel[1:])
+        trans = rel[:, :3, 3]
+        max_norm = torch.norm(trans, dim=-1).max()
+        if max_norm > 0:
+            rel[:, :3, 3] = trans / max_norm
+        return rel
+
+    def _build_plucker_embedding(self, c2ws: torch.Tensor, Ks: torch.Tensor, height: int, width: int, only_rays_d: bool) -> torch.Tensor:
+        n_frames = c2ws.shape[0]
+        y_range = torch.arange(height, device=c2ws.device, dtype=c2ws.dtype)
+        x_range = torch.arange(width, device=c2ws.device, dtype=c2ws.dtype)
+        gy, gx = torch.meshgrid(y_range, x_range, indexing="ij")
+        grid = torch.stack([gx, gy], dim=-1).view(1, -1, 2).repeat(n_frames, 1, 1) + 0.5
+
+        fx, fy, cx, cy = Ks.chunk(4, dim=-1)
+        i = grid[..., 0]
+        j = grid[..., 1]
+        zs = torch.ones_like(i)
+        xs = (i - cx) / fx * zs
+        ys = (j - cy) / fy * zs
+        directions = torch.stack([xs, ys, zs], dim=-1)
+        directions = directions / directions.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        rays_d = directions @ c2ws[:, :3, :3].transpose(-1, -2)
+
+        if only_rays_d:
+            emb = rays_d
+            channels = 3
+        else:
+            rays_o = c2ws[:, :3, 3][:, None, :].expand_as(rays_d)
+            emb = torch.cat([rays_o, rays_d], dim=-1)
+            channels = 6
+        return emb.view(n_frames, height, width, channels)
+
+    @staticmethod
+    def _get_Ks_transformed(Ks: torch.Tensor, height_org: int, width_org: int, height_resize: int, width_resize: int, height_final: int, width_final: int) -> torch.Tensor:
+        fx, fy, cx, cy = Ks.chunk(4, dim=-1)
+        scale_x = width_resize / width_org
+        scale_y = height_resize / height_org
+        fx_resize = fx * scale_x
+        fy_resize = fy * scale_y
+        cx_resize = cx * scale_x
+        cy_resize = cy * scale_y
+        crop_offset_x = (width_resize - width_final) / 2
+        crop_offset_y = (height_resize - height_final) / 2
+        Ks_out = torch.zeros_like(Ks)
+        Ks_out[:, 0:1] = fx_resize
+        Ks_out[:, 1:2] = fy_resize
+        Ks_out[:, 2:3] = cx_resize - crop_offset_x
+        Ks_out[:, 3:4] = cy_resize - crop_offset_y
+        return Ks_out
+
+    @staticmethod
+    def _interp_c2ws_to_latf(c2ws_np: np.ndarray, lat_f: int) -> np.ndarray:
+        src_n = c2ws_np.shape[0]
+        if src_n == lat_f:
+            return c2ws_np
+        src_idx = np.linspace(0.0, src_n - 1, src_n)
+        tgt_idx = np.linspace(0.0, src_n - 1, lat_f)
+        src_rot = c2ws_np[:, :3, :3]
+        src_trans = c2ws_np[:, :3, 3]
+        trans_interp = interp1d(src_idx, src_trans, axis=0, kind="linear", bounds_error=False, fill_value="extrapolate")
+        tgt_trans = trans_interp(tgt_idx)
+
+        rot = Rotation.from_matrix(src_rot)
+        quats = rot.as_quat().copy()
+        for i in range(1, len(quats)):
+            if np.dot(quats[i], quats[i - 1]) < 0:
+                quats[i] = -quats[i]
+        rot = Rotation.from_quat(quats)
+        slerp = Slerp(src_idx, rot)
+        tgt_rot = slerp(tgt_idx).as_matrix()
+
+        out = np.zeros((lat_f, 4, 4), dtype=np.float32)
+        out[:, :3, :3] = tgt_rot
+        out[:, :3, 3] = tgt_trans
+        out[:, 3, 3] = 1.0
+        return out
+
+    def _build_lingbot_dit_cond_dict(self, action_path: str) -> dict:
+        if not action_path:
+            return {}
+        poses_path = os.path.join(action_path, "poses.npy")
+        intrinsics_path = os.path.join(action_path, "intrinsics.npy")
+        if not (os.path.isfile(poses_path) and os.path.isfile(intrinsics_path)):
+            logger.warning("lingbot action path missing poses.npy or intrinsics.npy: {}", action_path)
+            return {}
+
+        lat_f = self.input_info.latent_shape[1]
+        lat_h = self.input_info.latent_shape[2]
+        lat_w = self.input_info.latent_shape[3]
+        height = lat_h * self.config["vae_stride"][1]
+        width = lat_w * self.config["vae_stride"][2]
+
+        c2ws_np = np.load(poses_path).astype(np.float32)
+        if c2ws_np.ndim != 3 or c2ws_np.shape[1:] != (4, 4):
+            logger.warning("unexpected poses.npy shape: {}", c2ws_np.shape)
+            return {}
+        len_c2ws = ((len(c2ws_np) - 1) // 4) * 4 + 1
+        frame_num = min(int(self.config["target_video_length"]), len_c2ws)
+        c2ws_np = c2ws_np[:frame_num]
+        c2ws_np = self._interp_c2ws_to_latf(c2ws_np, lat_f)
+        c2ws = torch.from_numpy(c2ws_np).to(torch.device(AI_DEVICE))
+        c2ws = self._compute_relative_poses(c2ws)
+
+        Ks_np = np.load(intrinsics_path).astype(np.float32)
+        if Ks_np.ndim == 1:
+            Ks_np = Ks_np.reshape(1, -1)
+        if Ks_np.shape[0] > 1:
+            Ks_np = Ks_np[:frame_num]
+            ks_idx = np.clip(np.round(np.linspace(0, Ks_np.shape[0] - 1, lat_f)).astype(np.int64), 0, Ks_np.shape[0] - 1)
+            Ks_np = Ks_np[ks_idx]
+        else:
+            Ks_np = np.repeat(Ks_np, lat_f, axis=0)
+        Ks = torch.from_numpy(Ks_np).to(torch.device(AI_DEVICE))
+        Ks = self._get_Ks_transformed(Ks, height_org=480, width_org=832, height_resize=height, width_resize=width, height_final=height, width_final=width)
+
+        action_tensor = None
+        action_file = os.path.join(action_path, "action.npy")
+        if self.control_type == "act" and os.path.isfile(action_file):
+            action_np = np.load(action_file).astype(np.float32)
+            if action_np.ndim == 1:
+                action_np = action_np[:, None]
+            action_np = action_np[:frame_num]
+            action_np = action_np[::4]
+            if action_np.shape[0] != lat_f:
+                idx = np.clip(np.round(np.linspace(0, action_np.shape[0] - 1, lat_f)).astype(np.int64), 0, action_np.shape[0] - 1)
+                action_np = action_np[idx]
+            action_tensor = torch.from_numpy(action_np).to(torch.device(AI_DEVICE))
+
+        # Build pixel-space plucker embeddings:
+        #   [lat_f, H_pix, W_pix, base_c]
+        # Then pack with:
+        #   rearrange 'f (h c1) (w c2) c -> (f h w) (c c1 c2)'
+        # where c1 = H_pix//lat_h and c2 = W_pix//lat_w.
+        plucker_pix = self._build_plucker_embedding(c2ws, Ks, height, width, only_rays_d=action_tensor is not None)
+        base_c = plucker_pix.shape[-1]
+        pix_c1 = height // lat_h
+        pix_c2 = width // lat_w
+        action_c = None if action_tensor is None else int(action_tensor.shape[-1])
+        logger.info(
+            "[lingbot] pack: lat_f={} lat_h={} lat_w={} height={} width={} pix_c1={} pix_c2={} base_c={} action_c={}",
+            lat_f,
+            lat_h,
+            lat_w,
+            height,
+            width,
+            pix_c1,
+            pix_c2,
+            base_c,
+            action_c,
+        )
+
+        # [lat_f, lat_h, pix_c1, lat_w, pix_c2, base_c] ->
+        # [lat_f, lat_h, lat_w, base_c, pix_c1, pix_c2] ->
+        # [lat_f*lat_h*lat_w, base_c*pix_c1*pix_c2] ->
+        # [1, C_total, lat_f, lat_h, lat_w]
+        plucker_pix = plucker_pix.reshape(lat_f, lat_h, pix_c1, lat_w, pix_c2, base_c)
+        plucker_pix = plucker_pix.permute(0, 1, 3, 5, 2, 4).contiguous()
+        c2ws_plucker_tokens = plucker_pix.reshape(lat_f * lat_h * lat_w, base_c * pix_c1 * pix_c2)
+        plucker = c2ws_plucker_tokens.unsqueeze(0).reshape(1, lat_f, lat_h, lat_w, -1).permute(0, 4, 1, 2, 3).contiguous()
+
+        if action_tensor is not None:
+            # action_tensor: [lat_f, action_c], where action_c in act-mode should make total control_dim match
+            # lingbot-world (base_c=3 when only_rays_d=True).
+            action_c = action_tensor.shape[-1]
+            # Expand without building full pixel tensor:
+            # action values are constant over pixel blocks, matching lingbot-world repeat/rearrange.
+            action_pix = action_tensor[:, None, None, None, None, :].repeat(1, lat_h, pix_c1, lat_w, pix_c2, 1)
+            # [lat_f, lat_h, pix_c1, lat_w, pix_c2, action_c] ->
+            # [lat_f, lat_h, lat_w, action_c, pix_c1, pix_c2]
+            action_pix = action_pix.permute(0, 1, 3, 5, 2, 4).contiguous()
+            action_tokens = action_pix.reshape(lat_f * lat_h * lat_w, action_c * pix_c1 * pix_c2)
+            action_emb = action_tokens.unsqueeze(0).reshape(1, lat_f, lat_h, lat_w, -1).permute(0, 4, 1, 2, 3).contiguous()
+            plucker = torch.cat([plucker, action_emb], dim=1)
+
+        logger.info(
+            "[lingbot] built dit_cond_dict c2ws_plucker_emb: shape={} dtype={} (action_tensor={})",
+            tuple(plucker.shape),
+            plucker.dtype,
+            action_tensor is not None,
+        )
+        # LightX2V pipeline is mostly batch-less in internal tensors.
+        # Keep `c2ws_plucker_emb` batch-less here; WanPreInfer will unsqueeze if needed.
+        plucker_no_batch = plucker.squeeze(0).contiguous()
+        logger.info("[lingbot] c2ws_plucker_emb returned batch-less shape={}", tuple(plucker_no_batch.shape))
+        return {"c2ws_plucker_emb": plucker_no_batch.to(GET_DTYPE())}
+
+    def get_encoder_output_i2v(self, clip_encoder_out, vae_encoder_out, text_encoder_output, img=None):
+        out = super().get_encoder_output_i2v(clip_encoder_out, vae_encoder_out, text_encoder_output, img)
+        # `infer.py` passes `--action_path` CLI arg; runner also historically used `pose` as a generic path.
+        action_path = getattr(self.input_info, "action_path", "") or getattr(self.input_info, "pose", "")
+        if action_path:
+            logger.info(
+                "[lingbot] using action/pose path: {}",
+                action_path,
+            )
+            out["image_encoder_output"]["dit_cond_dict"] = self._build_lingbot_dit_cond_dict(action_path)
+        return out

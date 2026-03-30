@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 import time
 from collections import deque
 from typing import Dict, List, Optional
@@ -7,8 +8,11 @@ from typing import Dict, List, Optional
 import numpy as np
 import torch
 
-from lightx2v.disagg.conn import REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
+from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
+from lightx2v.disagg.rdma_client import RDMAClient
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import (
     estimate_encoder_buffer_sizes,
@@ -23,10 +27,28 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class EncoderService(BaseService):
-    def __init__(self):
+    def __init__(self, config: dict):
         super().__init__()
-        self.request_port = REQUEST_POLLING_PORT + 0
-        self.req_mgr = ReqManager()
+        self.config = config
+        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", "0"))
+        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", "1"))
+        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", "2"))
+        self._request_rdma_client: Optional[RDMAClient] = None
+        self._request_rdma_buffer: Optional[RDMABuffer] = None
+        self._phase1_rdma_client: Optional[RDMAClient] = None
+        self._phase1_rdma_buffer: Optional[RDMABuffer] = None
+        shared_slots = int(self.config.get("rdma_buffer_slots", "128"))
+        shared_slot_size = int(self.config.get("rdma_buffer_slot_size", "4096"))
+        self._request_server_ip = str(self.config.get("rdma_request_host", "127.0.0.1"))
+        self._request_handshake_port = int(self.config.get("rdma_request_handshake_port", "5566"))
+        self._request_slots = shared_slots
+        self._request_slot_size = shared_slot_size
+        self._phase1_server_ip = str(self.config.get("rdma_phase1_host", "127.0.0.1"))
+        self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", "5567"))
+        self._phase1_slots = shared_slots
+        self._phase1_slot_size = shared_slot_size
+        self._last_request_connect_retry_ts = 0.0
+        self._last_phase1_connect_retry_ts = 0.0
         self.text_encoder = None
         self.image_encoder = None
         self.vae_encoder = None
@@ -36,18 +58,118 @@ class EncoderService(BaseService):
         )
         self.data_sender: Dict[int, DataSender] = {}
         self._rdma_buffers: Dict[int, List[torch.Tensor]] = {}
+        self.reporter = Reporter(
+            service_type="encoder",
+            gpu_id=self.encoder_engine_rank,
+            bind_address=f"tcp://{self.config.get('data_bootstrap_addr', '127.0.0.1')}:{MONITOR_POLLING_PORT + self.encoder_engine_rank}",
+        )
+        self._reporter_thread: Optional[threading.Thread] = threading.Thread(
+            target=self.reporter.serve_forever,
+            name="encoder-reporter",
+            daemon=True,
+        )
+        self._reporter_thread.start()
+        self.load_models()
+
+    def _ensure_request_buffer(self) -> bool:
+        if self._request_rdma_buffer is not None:
+            return True
+
+        now = time.time()
+        if now - self._last_request_connect_retry_ts < 1.0:
+            return False
+        self._last_request_connect_retry_ts = now
+
+        if self._request_rdma_client is None:
+            self._request_rdma_client = RDMAClient(local_buffer_size=self._request_slot_size)
+
+        self._request_rdma_client.connect_to_server(
+            server_ip=self._request_server_ip,
+            port=self._request_handshake_port,
+        )
+
+        remote_info = self._request_rdma_client.remote_info
+        base_addr = int(remote_info["addr"])
+        descriptor = RDMABufferDescriptor(
+            slot_addr=base_addr + 16,
+            slot_bytes=self._request_slots * self._request_slot_size,
+            slot_size=self._request_slot_size,
+            buffer_size=self._request_slots,
+            head_addr=base_addr,
+            tail_addr=base_addr + 8,
+            rkey=int(remote_info.get("rkey", 0)),
+        )
+        self._request_rdma_buffer = RDMABuffer(
+            role="client",
+            rdma_client=self._request_rdma_client,
+            remote=descriptor,
+        )
+        self.logger.info(
+            "Connected request RDMA buffer: host=%s port=%s slots=%s slot_size=%s",
+            self._request_server_ip,
+            self._request_handshake_port,
+            self._request_slots,
+            self._request_slot_size,
+        )
+        return True
+
+    def _ensure_phase1_meta_buffer(self) -> bool:
+        if self._phase1_rdma_buffer is not None:
+            return True
+
+        now = time.time()
+        if now - self._last_phase1_connect_retry_ts < 1.0:
+            return False
+        self._last_phase1_connect_retry_ts = now
+
+        if self._phase1_rdma_client is None:
+            self._phase1_rdma_client = RDMAClient(local_buffer_size=self._phase1_slot_size)
+
+        self._phase1_rdma_client.connect_to_server(
+            server_ip=self._phase1_server_ip,
+            port=self._phase1_handshake_port,
+        )
+
+        remote_info = self._phase1_rdma_client.remote_info
+        base_addr = int(remote_info["addr"])
+        descriptor = RDMABufferDescriptor(
+            slot_addr=base_addr + 16,
+            slot_bytes=self._phase1_slots * self._phase1_slot_size,
+            slot_size=self._phase1_slot_size,
+            buffer_size=self._phase1_slots,
+            head_addr=base_addr,
+            tail_addr=base_addr + 8,
+            rkey=int(remote_info.get("rkey", 0)),
+        )
+        self._phase1_rdma_buffer = RDMABuffer(
+            role="client",
+            rdma_client=self._phase1_rdma_client,
+            remote=descriptor,
+        )
+        self.logger.info(
+            "Connected phase1 RDMA buffer: host=%s port=%s slots=%s slot_size=%s",
+            self._phase1_server_ip,
+            self._phase1_handshake_port,
+            self._phase1_slots,
+            self._phase1_slot_size,
+        )
+        return True
 
     def init(self, config):
         self.config = config
-        self.text_encoder = None
-        self.image_encoder = None
-        self.vae_encoder = None
+        shared_slots = int(self.config.get("rdma_buffer_slots", self._request_slots))
+        shared_slot_size = int(self.config.get("rdma_buffer_slot_size", 4096))
+        self._request_server_ip = str(self.config.get("rdma_request_host", self._request_server_ip))
+        self._request_handshake_port = int(self.config.get("rdma_request_handshake_port", self._request_handshake_port))
+        self._request_slots = shared_slots
+        self._request_slot_size = shared_slot_size
+        self._phase1_server_ip = str(self.config.get("rdma_phase1_host", self._phase1_server_ip))
+        self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", self._phase1_handshake_port))
+        self._phase1_slots = shared_slots
+        self._phase1_slot_size = shared_slot_size
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
-
-        # Load models based on config
-        self.load_models()
 
         # Seed everything if seed is in config
         if "seed" in self.config:
@@ -55,6 +177,18 @@ class EncoderService(BaseService):
 
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
+
+        phase1_deadline = time.time() + 30.0
+        while self._phase1_rdma_buffer is None and time.time() < phase1_deadline:
+            try:
+                self._ensure_phase1_meta_buffer()
+            except Exception:
+                self.logger.exception("Failed to connect phase1 RDMA buffer, will retry")
+            if self._phase1_rdma_buffer is None:
+                time.sleep(0.1)
+
+        if self._phase1_rdma_buffer is None:
+            raise RuntimeError("phase1 RDMA buffer is not ready")
 
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
@@ -77,6 +211,13 @@ class EncoderService(BaseService):
         )
         self.data_mgr.init(data_args, data_bootstrap_room)
         self.data_sender[data_bootstrap_room] = DataSender(self.data_mgr, data_bootstrap_addr, data_bootstrap_room)
+
+        phase1_meta = {
+            "request_config": dict(self.config),
+            "encoder_node_address": self.data_mgr.get_localhost(),
+            "encoder_session_id": self.data_mgr.get_session_id(),
+        }
+        self._phase1_rdma_buffer.produce(phase1_meta)
 
     def load_models(self):
         self.logger.info("Loading Encoder Models...")
@@ -342,7 +483,7 @@ class EncoderService(BaseService):
             self._rdma_buffers.pop(room, None)
         torch.cuda.empty_cache()
 
-    def release(self, room: int):
+    def remove(self, room: int):
         self.release_memory(room)
 
         self.data_sender.pop(room, None)
@@ -350,22 +491,39 @@ class EncoderService(BaseService):
         if self.data_mgr is None:
             return
 
-        self.data_mgr.release(room)
+        self.data_mgr.remove(room)
 
-    def exec_request(self, stop_event=None):
+    def release(self):
+        for room in list(self._rdma_buffers.keys()):
+            self.remove(room)
+        self.reporter.stop()
+        if self._reporter_thread is not None and self._reporter_thread.is_alive():
+            self._reporter_thread.join(timeout=1.0)
+        self._reporter_thread = None
+        if self.data_mgr is not None:
+            self.data_mgr.release()
+        self.data_sender.clear()
+        self.text_encoder = None
+        self.image_encoder = None
+        self.vae_encoder = None
+
+    def run(self, stop_event=None):
         req_queue = deque()
         exec_queue = deque()
         complete_queue: Dict[int, dict] = {}
 
         while True:
-            # config = self.req_mgr.receive(self.request_port)
-            # req_queue.append(config)
-            while True:
-                config = self.req_mgr.receive_non_block(self.request_port)
-                if config is None:
-                    break
-                self.logger.info("Received request config: %s", {k: v for k, v in config.items() if not k.endswith("_path")})
-                req_queue.append(config)
+            if self._request_rdma_buffer is None:
+                try:
+                    self._ensure_request_buffer()
+                except Exception:
+                    self.logger.exception("Failed to connect request RDMA buffer, will retry")
+
+            if self._request_rdma_buffer is not None:
+                config = self._request_rdma_buffer.consume()
+                if config is not None:
+                    self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items() if not k.endswith("_path")})
+                    req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()
@@ -375,7 +533,7 @@ class EncoderService(BaseService):
                     exec_queue.append((room, config))
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
-                    self.release(room)
+                    self.remove(room)
 
             if exec_queue:
                 room, config = exec_queue.popleft()
@@ -385,7 +543,7 @@ class EncoderService(BaseService):
                 except Exception:
                     self.logger.exception("Failed to process request for room=%s", room)
                     complete_queue.pop(room, None)
-                    self.release(room)
+                    self.remove(room)
 
             completed_rooms: List[int] = []
             for room in list(complete_queue.keys()):
@@ -403,7 +561,7 @@ class EncoderService(BaseService):
 
             for room in completed_rooms:
                 complete_queue.pop(room, None)
-                self.release(room)
+                self.remove(room)
 
             if stop_event is not None and stop_event.is_set() and not req_queue and not exec_queue and not complete_queue:
                 self.logger.info("EncoderService received stop event, exiting request loop.")
@@ -411,3 +569,5 @@ class EncoderService(BaseService):
 
             if not req_queue and not exec_queue:
                 time.sleep(0.01)
+
+        self.release()

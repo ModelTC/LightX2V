@@ -5,17 +5,15 @@ from lightx2v.models.networks.seedvr.utils.ops import slice_inputs
 
 
 def rms_norm_no_weight(x: torch.Tensor, eps: float) -> torch.Tensor:
-    x_float = x.float()
-    out = x_float * torch.rsqrt(x_float.pow(2).mean(dim=-1, keepdim=True) + eps)
-    return out.type_as(x)
+    # Keep computation in input dtype to avoid a full fp32 copy
+    var = x.pow(2).mean(dim=-1, keepdim=True)
+    return x * torch.rsqrt(var + eps)
 
 
 def layer_norm_no_weight(x: torch.Tensor, eps: float) -> torch.Tensor:
-    x_float = x.float()
-    mean = x_float.mean(dim=-1, keepdim=True)
-    var = (x_float - mean).pow(2).mean(dim=-1, keepdim=True)
-    out = (x_float - mean) * torch.rsqrt(var + eps)
-    return out.type_as(x)
+    mean = x.mean(dim=-1, keepdim=True)
+    var = (x - mean).pow(2).mean(dim=-1, keepdim=True)
+    return (x - mean) * torch.rsqrt(var + eps)
 
 
 def norm_no_weight(x: torch.Tensor, norm_type: str, eps: float) -> torch.Tensor:

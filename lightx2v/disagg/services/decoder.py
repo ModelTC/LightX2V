@@ -1,13 +1,17 @@
 import hashlib
 import json
+import threading
 import time
 from collections import deque
 from typing import Dict, List, Optional
 
 import torch
 
-from lightx2v.disagg.conn import REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
+from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
+from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
+from lightx2v.disagg.rdma_client import RDMAClient
 from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.utils import estimate_transformer_buffer_sizes, load_wan_vae_decoder
 from lightx2v.utils.envs import GET_DTYPE
@@ -16,10 +20,21 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class DecoderService(BaseService):
-    def __init__(self):
+    def __init__(self, config: dict):
         super().__init__()
-        self.request_port = REQUEST_POLLING_PORT + 2
-        self.req_mgr = ReqManager()
+        self.config = config
+        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
+        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
+        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
+        self._phase2_rdma_client: Optional[RDMAClient] = None
+        self._phase2_rdma_buffer: Optional[RDMABuffer] = None
+        shared_slots = int(self.config.get("rdma_buffer_slots", "128"))
+        shared_slot_size = int(self.config.get("rdma_buffer_slot_size", "4096"))
+        self._phase2_server_ip = str(self.config.get("rdma_phase2_host", "127.0.0.1"))
+        self._phase2_handshake_port = int(self.config.get("rdma_phase2_handshake_port", "5568"))
+        self._phase2_slots = shared_slots
+        self._phase2_slot_size = shared_slot_size
+        self._last_phase2_connect_retry_ts = 0.0
         self.vae_decoder = None
         self._rdma_buffers: Dict[int, List[torch.Tensor]] = {}
         self.data_mgr = DataManager(
@@ -27,24 +42,74 @@ class DecoderService(BaseService):
             DisaggregationMode.DECODE,
         )
         self.data_receiver: Dict[int, DataReceiver] = {}
+        self.req_mgr = ReqManager()
+        self.reporter = Reporter(
+            service_type="decoder",
+            gpu_id=self.decoder_engine_rank,
+            bind_address=f"tcp://{self.config.get('data_bootstrap_addr', '127.0.0.1')}:{MONITOR_POLLING_PORT + self.decoder_engine_rank}",
+        )
+        self._reporter_thread: Optional[threading.Thread] = threading.Thread(
+            target=self.reporter.serve_forever,
+            name="decoder-reporter",
+            daemon=True,
+        )
+        self._reporter_thread.start()
+        self.load_models()
+
+    def _ensure_phase2_request_buffer(self) -> bool:
+        if self._phase2_rdma_buffer is not None:
+            return True
+        now = time.time()
+        if now - self._last_phase2_connect_retry_ts < 1.0:
+            return False
+        self._last_phase2_connect_retry_ts = now
+
+        if self._phase2_rdma_client is None:
+            self._phase2_rdma_client = RDMAClient(local_buffer_size=self._phase2_slot_size)
+        self._phase2_rdma_client.connect_to_server(self._phase2_server_ip, self._phase2_handshake_port)
+        remote_info = self._phase2_rdma_client.remote_info
+        base_addr = int(remote_info["addr"])
+        self._phase2_rdma_buffer = RDMABuffer(
+            role="client",
+            rdma_client=self._phase2_rdma_client,
+            remote=RDMABufferDescriptor(
+                slot_addr=base_addr + 16,
+                slot_bytes=self._phase2_slots * self._phase2_slot_size,
+                slot_size=self._phase2_slot_size,
+                buffer_size=self._phase2_slots,
+                head_addr=base_addr,
+                tail_addr=base_addr + 8,
+                rkey=int(remote_info.get("rkey", 0)),
+            ),
+        )
+        return True
 
     def init(self, config):
         self.config = config
-        self.vae_decoder = None
+        shared_slots = int(self.config.get("rdma_buffer_slots", self._phase2_slots))
+        shared_slot_size = int(self.config.get("rdma_buffer_slot_size", 4096))
+        self._phase2_server_ip = str(self.config.get("rdma_phase2_host", self._phase2_server_ip))
+        self._phase2_handshake_port = int(self.config.get("rdma_phase2_handshake_port", self._phase2_handshake_port))
+        self._phase2_slots = shared_slots
+        self._phase2_slot_size = shared_slot_size
 
         self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
         self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
-
-        self.load_models()
 
         if "seed" in self.config:
             seed_all(self.config["seed"])
 
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
+
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
+
+        try:
+            self._ensure_phase2_request_buffer()
+        except Exception:
+            self.logger.exception("Failed to connect phase2 RDMA buffer, will retry")
 
         buffer_sizes = estimate_transformer_buffer_sizes(self.config)
         request = AllocationRequest(
@@ -63,7 +128,8 @@ class DecoderService(BaseService):
             ib_device=None,
         )
         self.data_mgr.init(data_args, data_bootstrap_room)
-        self.data_receiver[data_bootstrap_room] = DataReceiver(self.data_mgr, data_bootstrap_addr, data_bootstrap_room)
+        phase2_bootstrap_addr = str(self.config.get("transformer_node_address", data_bootstrap_addr))
+        self.data_receiver[data_bootstrap_room] = DataReceiver(self.data_mgr, phase2_bootstrap_addr, data_bootstrap_room)
         self.data_receiver[data_bootstrap_room].init()
 
     def load_models(self):
@@ -163,7 +229,7 @@ class DecoderService(BaseService):
             self._rdma_buffers.pop(room, None)
         torch.cuda.empty_cache()
 
-    def release(self, room: int):
+    def remove(self, room: int):
         self.release_memory(room)
 
         self.data_receiver.pop(room, None)
@@ -171,19 +237,41 @@ class DecoderService(BaseService):
         if self.data_mgr is None:
             return
 
-        self.data_mgr.release(room)
+        self.data_mgr.remove(room)
 
-    def exec_request(self, stop_event=None):
+    def release(self):
+        for room in list(self._rdma_buffers.keys()):
+            self.remove(room)
+        self.reporter.stop()
+        if self._reporter_thread is not None and self._reporter_thread.is_alive():
+            self._reporter_thread.join(timeout=1.0)
+        self._reporter_thread = None
+        if self.data_mgr is not None:
+            self.data_mgr.release()
+        self.data_receiver.clear()
+        self.vae_decoder = None
+
+    def run(self, stop_event=None):
         req_queue = deque()
         waiting_queue: Dict[int, dict] = {}
         exec_queue = deque()
 
         while True:
-            while True:
-                config = self.req_mgr.receive_non_block(self.request_port)
-                if config is None:
-                    break
-                req_queue.append(config)
+            if self._phase2_rdma_buffer is None:
+                try:
+                    self._ensure_phase2_request_buffer()
+                except Exception:
+                    self.logger.exception("Failed to connect phase2 request RDMA buffer, will retry")
+
+            if self._phase2_rdma_buffer is not None:
+                packet = self._phase2_rdma_buffer.consume()
+                if packet is not None:
+                    if isinstance(packet, dict) and "request_config" in packet:
+                        config = dict(packet.get("request_config") or {})
+                        config["transformer_node_address"] = packet.get("transformer_node_address", config.get("transformer_node_address", "127.0.0.1"))
+                    else:
+                        config = packet
+                    req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()
@@ -193,7 +281,7 @@ class DecoderService(BaseService):
                     waiting_queue[room] = config
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
-                    self.release(room)
+                    self.remove(room)
 
             ready_rooms: List[int] = []
             failed_rooms: List[int] = []
@@ -216,16 +304,41 @@ class DecoderService(BaseService):
             for room in failed_rooms:
                 waiting_queue.pop(room, None)
                 self.logger.error("DataReceiver transfer failed for room=%s", room)
-                self.release(room)
+                self.remove(room)
 
             if exec_queue:
                 room, config = exec_queue.popleft()
                 try:
-                    self.process(config)
+                    save_path = self.process(config)
+                    callback_host = str(config.get("controller_result_host", config.get("data_bootstrap_addr", "127.0.0.1")))
+                    callback_port = int(config.get("controller_result_port")) if config.get("controller_result_port") is not None else None
+                    if callback_port is not None:
+                        self.req_mgr.send(
+                            callback_host,
+                            callback_port,
+                            {
+                                "ok": True,
+                                "data_bootstrap_room": int(room),
+                                "save_path": save_path,
+                            },
+                        )
                 except Exception:
                     self.logger.exception("Failed to process request for room=%s", room)
+                    callback_host = str(config.get("controller_result_host", config.get("data_bootstrap_addr", "127.0.0.1")))
+                    callback_port = int(config.get("controller_result_port")) if config.get("controller_result_port") is not None else None
+                    if callback_port is not None:
+                        self.req_mgr.send(
+                            callback_host,
+                            callback_port,
+                            {
+                                "ok": False,
+                                "data_bootstrap_room": int(room),
+                                "save_path": None,
+                                "error": "decoder process failed",
+                            },
+                        )
                 finally:
-                    self.release(room)
+                    self.remove(room)
 
             if stop_event is not None and stop_event.is_set() and not req_queue and not waiting_queue and not exec_queue:
                 self.logger.info("DecoderService received stop event, exiting request loop.")
@@ -233,3 +346,5 @@ class DecoderService(BaseService):
 
             if not req_queue and not exec_queue:
                 time.sleep(0.01)
+
+        self.release()

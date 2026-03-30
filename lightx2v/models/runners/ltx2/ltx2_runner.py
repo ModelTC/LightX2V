@@ -306,7 +306,6 @@ class LTX2Runner(DefaultRunner):
             prompt=prompt,
             negative_prompt=neg_prompt,
         )
-
         text_encoder_output = {
             "v_context_p": v_context_p,
             "a_context_p": a_context_p,
@@ -436,6 +435,10 @@ class LTX2Runner(DefaultRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
+        if self.config.get("distilled_sigma_values") is not None:
+            stage1_sigmas = torch.tensor(self.config["distilled_sigma_values"], dtype=torch.float32, device=AI_DEVICE)
+            self.model.scheduler.reset_sigmas(stage1_sigmas)
+
         # Image conditioning (if any) is already prepared in run_input_encoder
         # and stored in self.video_denoise_mask and self.initial_video_latent
         self._prepare_scheduler()
@@ -485,10 +488,10 @@ class LTX2Runner(DefaultRunner):
                     video=self.gen_video_final,
                     fps=self.config.get("fps", 24),
                     audio=self.gen_audio_final,
-                    audio_sample_rate=self.config.get("audio_fps", 24000),
                     output_path=self.input_info.save_result_path,
                     video_chunks_number=1,
                 )
+
                 logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
             return {"video": None}
 

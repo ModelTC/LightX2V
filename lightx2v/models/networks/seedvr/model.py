@@ -152,6 +152,11 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         texts_pos = inputs["text_encoder_output"]["texts_pos"]
         texts_neg = inputs["text_encoder_output"]["texts_neg"]
 
+        if self.cpu_offload:
+            self.to_cuda()
+            texts_pos[0] = texts_pos[0].to(AI_DEVICE)
+            texts_neg[0] = texts_neg[0].to(AI_DEVICE)
+
         cfg_scale = 1.0
         cfg_rescale = 0.0
         cfg_partial = 1.0
@@ -186,4 +191,6 @@ class SeedVRNaDiTModel(BaseTransformerModel):
 
         latents_list = na_utils.unflatten(latents, latents_shapes)
         self.scheduler.latents = latents_list
+        if self.cpu_offload:
+            self.to_cpu()
         return

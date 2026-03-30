@@ -8,6 +8,8 @@ class LTX2PreWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.caption_proj_before_connector = config.get("caption_proj_before_connector", False)
+        self.cross_attention_adaln = config.get("cross_attention_adaln", False)
 
         # Video weights
         self.add_module(
@@ -41,22 +43,23 @@ class LTX2PreWeights(WeightModule):
             ),
         )
 
-        self.add_module(
-            "caption_projection_linear_1",
-            MM_WEIGHT_REGISTER["Default"](
-                "model.diffusion_model.caption_projection.linear_1.weight",
-                "model.diffusion_model.caption_projection.linear_1.bias",
-                lora_prefix="diffusion_model.caption_projection",
-            ),
-        )
-        self.add_module(
-            "caption_projection_linear_2",
-            MM_WEIGHT_REGISTER["Default"](
-                "model.diffusion_model.caption_projection.linear_2.weight",
-                "model.diffusion_model.caption_projection.linear_2.bias",
-                lora_prefix="diffusion_model.caption_projection",
-            ),
-        )
+        if not self.caption_proj_before_connector:
+            self.add_module(
+                "caption_projection_linear_1",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.caption_projection.linear_1.weight",
+                    "model.diffusion_model.caption_projection.linear_1.bias",
+                    lora_prefix="diffusion_model.caption_projection",
+                ),
+            )
+            self.add_module(
+                "caption_projection_linear_2",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.caption_projection.linear_2.weight",
+                    "model.diffusion_model.caption_projection.linear_2.bias",
+                    lora_prefix="diffusion_model.caption_projection",
+                ),
+            )
 
         # Audio weights
         self.add_module(
@@ -89,20 +92,21 @@ class LTX2PreWeights(WeightModule):
             ),
         )
 
-        self.add_module(
-            "audio_caption_projection_linear_1",
-            MM_WEIGHT_REGISTER["Default"](
-                "model.diffusion_model.audio_caption_projection.linear_1.weight",
-                "model.diffusion_model.audio_caption_projection.linear_1.bias",
-            ),
-        )
-        self.add_module(
-            "audio_caption_projection_linear_2",
-            MM_WEIGHT_REGISTER["Default"](
-                "model.diffusion_model.audio_caption_projection.linear_2.weight",
-                "model.diffusion_model.audio_caption_projection.linear_2.bias",
-            ),
-        )
+        if not self.caption_proj_before_connector:
+            self.add_module(
+                "audio_caption_projection_linear_1",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.audio_caption_projection.linear_1.weight",
+                    "model.diffusion_model.audio_caption_projection.linear_1.bias",
+                ),
+            )
+            self.add_module(
+                "audio_caption_projection_linear_2",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.audio_caption_projection.linear_2.weight",
+                    "model.diffusion_model.audio_caption_projection.linear_2.bias",
+                ),
+            )
 
         self.add_module(
             "av_ca_video_scale_shift_adaln_single_emb_linear_1",
@@ -194,3 +198,52 @@ class LTX2PreWeights(WeightModule):
                 "model.diffusion_model.av_ca_v2a_gate_adaln_single.linear.bias",
             ),
         )
+
+        if self.cross_attention_adaln:
+            # Prompt AdaLN
+            self.add_module(
+                "prompt_adaln_single_emb_timestep_embedder_linear_1",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.prompt_adaln_single.emb.timestep_embedder.linear_1.weight",
+                    "model.diffusion_model.prompt_adaln_single.emb.timestep_embedder.linear_1.bias",
+                ),
+            )
+            self.add_module(
+                "prompt_adaln_single_emb_timestep_embedder_linear_2",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.prompt_adaln_single.emb.timestep_embedder.linear_2.weight",
+                    "model.diffusion_model.prompt_adaln_single.emb.timestep_embedder.linear_2.bias",
+                ),
+            )
+
+            self.add_module(
+                "prompt_adaln_single_linear",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.prompt_adaln_single.linear.weight",
+                    "model.diffusion_model.prompt_adaln_single.linear.bias",
+                ),
+            )
+
+            # Audio Prompt AdaLN
+            self.add_module(
+                "audio_prompt_adaln_single_emb_timestep_embedder_linear_1",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.audio_prompt_adaln_single.emb.timestep_embedder.linear_1.weight",
+                    "model.diffusion_model.audio_prompt_adaln_single.emb.timestep_embedder.linear_1.bias",
+                ),
+            )
+            self.add_module(
+                "audio_prompt_adaln_single_emb_timestep_embedder_linear_2",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.audio_prompt_adaln_single.emb.timestep_embedder.linear_2.weight",
+                    "model.diffusion_model.audio_prompt_adaln_single.emb.timestep_embedder.linear_2.bias",
+                ),
+            )
+
+            self.add_module(
+                "audio_prompt_adaln_single_linear",
+                MM_WEIGHT_REGISTER["Default"](
+                    "model.diffusion_model.audio_prompt_adaln_single.linear.weight",
+                    "model.diffusion_model.audio_prompt_adaln_single.linear.bias",
+                ),
+            )

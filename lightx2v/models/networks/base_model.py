@@ -60,7 +60,8 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         self.lora_path = lora_path
         self.lora_strength = lora_strength
         self.model_type = model_type
-        self.remove_keys = []
+        if not hasattr(self, "remove_keys"):
+            self.remove_keys = []
         self.sensitive_layer = {}
 
         self.config = config
@@ -114,6 +115,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             "gguf-Q3_K_S",
             "gguf-Q3_K_M",
             "int8-npu",
+            "fp8-intel-xpu",
         ]
 
     @abstractmethod

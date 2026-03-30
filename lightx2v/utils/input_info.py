@@ -44,6 +44,8 @@ class I2VInputInfo:
     target_shape: list = field(default_factory=list)
     # WorldPlay-specific: pose/action conditioning (optional)
     pose: str = field(default_factory=lambda: None)
+    # Lingbot i2v camera/action conditioning (optional)
+    action_path: str = field(default_factory=str)
 
 
 @dataclass

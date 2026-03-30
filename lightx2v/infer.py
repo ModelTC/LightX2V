@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -56,6 +57,7 @@ def main():
             "wan2.1_sf_mtxg2",
             "seko_talk",
             "wan2.2_moe",
+            "lingbot_world",
             "wan2.2",
             "wan2.2_moe_audio",
             "wan2.2_audio",
@@ -70,6 +72,7 @@ def main():
             "worldplay_ar",
             "worldplay_bi",
             "z_image",
+            "flux2_klein",
             "ltx2",
             "bagel",
             "seedvr2",
@@ -143,6 +146,12 @@ def main():
         type=str,
         default=None,
         help="Pose string (e.g., 'w-3, right-0.5') or JSON file path for WorldPlay models.",
+    )
+    parser.add_argument(
+        "--action_path",
+        type=str,
+        default=None,
+        help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy).",
     )
     parser.add_argument(
         "--action_ckpt",

@@ -456,17 +456,21 @@ def _make_decoder_block(
             spatial_padding_mode=spatial_padding_mode,
         )
     elif block_name == "compress_time":
+        out_channels = in_channels // block_config.get("multiplier", 1)
         block = DepthToSpaceUpsample(
             dims=convolution_dimensions,
             in_channels=in_channels,
             stride=(2, 1, 1),
+            out_channels_reduction_factor=block_config.get("multiplier", 1),
             spatial_padding_mode=spatial_padding_mode,
         )
     elif block_name == "compress_space":
+        out_channels = in_channels // block_config.get("multiplier", 1)
         block = DepthToSpaceUpsample(
             dims=convolution_dimensions,
             in_channels=in_channels,
             stride=(1, 2, 2),
+            out_channels_reduction_factor=block_config.get("multiplier", 1),
             spatial_padding_mode=spatial_padding_mode,
         )
     elif block_name == "compress_all":
@@ -526,6 +530,7 @@ class VideoDecoder(nn.Module):
         causal: bool = False,
         timestep_conditioning: bool = False,
         decoder_spatial_padding_mode: PaddingModeType = PaddingModeType.REFLECT,
+        base_channels: int = 128,
     ):
         super().__init__()
 
@@ -553,15 +558,9 @@ class VideoDecoder(nn.Module):
         self.decode_noise_scale = 0.025
         self.decode_timestep = 0.05
 
-        # Compute initial feature_channels by going through blocks in reverse
-        # This determines the channel width at the start of the decoder
-        feature_channels = in_channels
-        for block_name, block_params in list(reversed(decoder_blocks)):
-            block_config = block_params if isinstance(block_params, dict) else {}
-            if block_name == "res_x_y":
-                feature_channels = feature_channels * block_config.get("multiplier", 2)
-            if block_name == "compress_all":
-                feature_channels = feature_channels * block_config.get("multiplier", 1)
+        # LTX VAE decoder architecture uses 3 upsampler blocks with multiplier equals to 2.
+        # Hence the total feature_channels is multiplied by 8 (2^3).
+        feature_channels = base_channels * 8
 
         self.conv_in = make_conv_nd(
             dims=convolution_dimensions,

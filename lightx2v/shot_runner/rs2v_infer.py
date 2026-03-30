@@ -38,7 +38,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         audio_per_frame = audio_sr // target_fps
 
         # 获取用户输入信息
-        clip_input_info = init_input_info_from_args(rs2v.config["task"], args, infer_steps=3, video_duration=20)
+        clip_input_info = init_input_info_from_args(rs2v.config["task"], args)
         # 从默认配置中补全输入信息
         clip_input_info = self.check_input_info(clip_input_info, rs2v.config)
 
@@ -202,6 +202,8 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
+    parser.add_argument("--infer_steps", type=int, default=4, help="Number of inference steps")
+    parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
     args = parser.parse_args()
 
     seed_all(args.seed)
