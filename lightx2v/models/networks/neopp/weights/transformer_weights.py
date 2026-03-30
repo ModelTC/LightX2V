@@ -142,6 +142,15 @@ class NeoppMlpWeights(WeightModule):
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight"))
         self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight"))
 
+    # def load(self, weight_dict):
+    #     super().load(weight_dict)
+    #     self._build_flashinfer_weights()
+
+    # def _build_flashinfer_weights(self):
+    #     gate_w = self.gate_proj._get_actual_weight()  # [hidden_size, intermediate_size]
+    #     up_w = self.up_proj._get_actual_weight()      # [hidden_size, intermediate_size]
+    #     self._fi_gate_up_weight = torch.cat([gate_w, up_w], dim=1).contiguous()
+
 
 class NeoppFmHeadWeights(WeightModule):
     def __init__(self, mm_type):

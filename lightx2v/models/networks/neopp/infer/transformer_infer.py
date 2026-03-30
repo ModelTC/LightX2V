@@ -1,5 +1,7 @@
 import torch
 import torch.nn.functional as F
+
+# from flashinfer.activation import silu_and_mul as flashinfer_silu_and_mul
 from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
@@ -146,3 +148,8 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         gate_states = mlp_w.gate_proj.apply(hidden_states)
         intermediate_states = F.silu(gate_states) * up_states
         return mlp_w.down_proj.apply(intermediate_states)
+
+    # def _dense_mlp(self, mlp_w, hidden_states):
+    #     gate_up_states = torch.mm(hidden_states, mlp_w._fi_gate_up_weight)
+    #     intermediate_states = flashinfer_silu_and_mul(gate_up_states)
+    #     return mlp_w.down_proj.apply(intermediate_states)
