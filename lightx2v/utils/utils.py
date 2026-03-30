@@ -704,62 +704,6 @@ def check_path_exists(path: str) -> None:
             raise FileNotFoundError(f"File does not exist: {path}")
 
 
-def validate_task_arguments(args: "argparse.Namespace") -> None:
-    """
-    Validate arguments based on the task type.
-
-    Args:
-        args: Parsed arguments from argparse
-
-    Raises:
-        AssertionError: If required arguments are missing or invalid for the task
-    """
-    # Check model_path exists
-    model_path = getattr(args, "model_path", None)
-    if model_path:
-        check_path_exists(model_path)
-
-    task = args.task
-
-    # Define required file paths for each task
-    task_requirements = {
-        "i2i": {"required_paths": ["image_path"], "description": "Image-to-Image task requires --image_path"},
-        "i2v": {"required_paths": ["image_path"], "description": "Image-to-Video task requires --image_path"},
-        "flf2v": {"required_paths": ["image_path", "last_frame_path"], "description": "First-Last-Frame-to-Video task requires --image_path and --last_frame_path"},
-        "s2v": {"required_paths": ["image_path", "audio_path"], "description": "Speech-to-Video task requires --image_path and --audio_path"},
-        "rs2v": {"required_paths": ["image_path", "audio_path"], "description": "Ref-speech-to-Video task requires --image_path and --audio_path"},
-        "vace": {"required_paths": ["src_ref_images"], "description": "Video Appearance Change Editing task requires --src_ref_images"},
-        "animate": {"required_paths": ["image_path"], "description": "Animate task requires --image_path"},
-        "t2v": {"required_paths": [], "description": "Text-to-Video task"},
-        "t2i": {"required_paths": [], "description": "Text-to-Image task"},
-        "i2av": {"required_paths": ["image_path"], "description": "Image-to-Audio-Video task requires --image_path"},
-    }
-
-    if task not in task_requirements:
-        logger.warning(f"Unknown task type: {task}, skipping validation")
-        return
-
-    requirements = task_requirements[task]
-
-    # Check required paths
-    for path_arg in requirements["required_paths"]:
-        path_value = getattr(args, path_arg, "")
-
-        # Check if path is provided
-        if not path_value:
-            raise ValueError(f"{requirements['description']}: --{path_arg} cannot be empty")
-
-        # For comma-separated paths (like i2i with multiple images)
-        if "," in path_value:
-            paths = [p.strip() for p in path_value.split(",")]
-            for path in paths:
-                check_path_exists(path)
-        else:
-            check_path_exists(path_value)
-
-    logger.info(f"✓ Task '{task}' arguments validated successfully")
-
-
 def validate_config_paths(config: dict) -> None:
     """
     Validate checkpoint paths in config dictionary.
