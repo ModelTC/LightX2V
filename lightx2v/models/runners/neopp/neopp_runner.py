@@ -24,6 +24,8 @@ class NeoppRunner(DefaultRunner):
         head_dim = llm_config["head_dim"]
         self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
+        self.past_key_values_cond = None
+        self.past_key_values_uncond = None
 
     def init_scheduler(self):
         self.scheduler = NeoppMoeScheduler(self.config)
@@ -61,13 +63,10 @@ class NeoppRunner(DefaultRunner):
         w_image = idx % token_w
         return torch.stack([t_image, h_image, w_image], dim=0)
 
-    def run_input_encoder(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
-        past_key_values_cond = torch.load(to_x2v_cond_kv_path).transpose(2, 3)  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        past_key_values_uncond = torch.load(to_x2v_uncond_kv_path).transpose(2, 3)
-
+    def run_input_encoder(self):
         with ProfilingContext4DebugL1("run_input_encoder"):
-            input_len_cond = past_key_values_cond.shape[-3]
-            input_len_uncond = past_key_values_uncond.shape[-3]
+            input_len_cond = self.past_key_values_cond.shape[-3]
+            input_len_uncond = self.past_key_values_uncond.shape[-3]
 
             token_h = self.input_info.target_shape[0] // (self.patch_size * self.merge_size)
             token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
@@ -86,8 +85,8 @@ class NeoppRunner(DefaultRunner):
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
             return {
-                "past_key_values_cond": past_key_values_cond,
-                "past_key_values_uncond": past_key_values_uncond,
+                "past_key_values_cond": self.past_key_values_cond,
+                "past_key_values_uncond": self.past_key_values_uncond,
                 "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
                 "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
             }
@@ -100,18 +99,33 @@ class NeoppRunner(DefaultRunner):
 
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        if self.config.get("version", "moe") == "moe":
-            self.inputs = self.run_input_encoder(
-                "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
-                "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
-            )
-        else:
-            self.inputs = self.run_input_encoder(
-                "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_cond_kv.pt",
-                "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_uncond_kv.pt",
-            )
+        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+            if self.config.get("version", "moe") == "moe":
+                self.load_kvcache(
+                    "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
+                    "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
+                )
+            else:
+                self.load_kvcache(
+                    "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_cond_kv.pt",
+                    "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_uncond_kv.pt",
+                )
+        assert self.past_key_values_cond is not None and self.past_key_values_uncond is not None, "KV cache should be loaded"
+        self.inputs = self.run_input_encoder()
         gen_result = self.run_main()
+        self.clear_kvcache()
         return gen_result
+
+    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
+        self.past_key_values_cond = torch.load(to_x2v_cond_kv_path).transpose(2, 3)
+        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path).transpose(2, 3)
+        logger.info(f"Loaded KV cache from {to_x2v_cond_kv_path} and {to_x2v_uncond_kv_path}")
+        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+
+    def clear_kvcache(self):
+        self.past_key_values_cond = None
+        self.past_key_values_uncond = None
 
     def init_run(self):
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape)

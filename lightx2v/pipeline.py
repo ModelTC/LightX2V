@@ -404,10 +404,10 @@ class LightX2VPipeline:
     @torch.no_grad()
     def generate(
         self,
-        seed,
-        prompt,
-        negative_prompt,
-        save_result_path,
+        seed=42,
+        prompt="",
+        negative_prompt="",
+        save_result_path="lightx2v_gen_result.png",
         image_path=None,
         video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
@@ -455,3 +455,8 @@ class LightX2VPipeline:
     def _init_parallel(self):
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(dist.get_rank())
+
+    def modify_config(self, config_modify):
+        logger.info(f"modify config: {config_modify}")
+        with self.runner.config.temporarily_unlocked():
+            self.runner.config.update(config_modify)

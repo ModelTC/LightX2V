@@ -1,5 +1,6 @@
 {
     "version": "dense",
+    "load_kv_cache_in_pipeline_for_debug": true,
     "infer_steps": 50,
     "attn_type": "flash_attn3",
     "cfg_scale": 4.0,
