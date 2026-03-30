@@ -1,0 +1,26 @@
+{
+    "infer_steps": 50,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": 5,
+    "sample_shift": 5,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "fps": 16,
+    "disagg_mode": "decoder",
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 0,
+        "encoder_engine_rank": 0,
+        "transformer_engine_rank": 1,
+        "decoder_engine_rank": 2,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE"
+    }
+}
