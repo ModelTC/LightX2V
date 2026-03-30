@@ -528,7 +528,7 @@ class DefaultRunner(BaseRunner):
             logger.error(f"Failed to switch LoRA: {e}")
             return False
 
-    def __del__(self):
+    def __del__(self, _empty_cache=getattr(torch_device_module, "empty_cache", None), _gc_collect=gc.collect):
         if hasattr(self, "model"):
             del self.model
         if hasattr(self, "text_encoders"):
@@ -539,5 +539,6 @@ class DefaultRunner(BaseRunner):
             del self.vae_encoder
         if hasattr(self, "vae_decoder"):
             del self.vae_decoder
-        torch_device_module.empty_cache()
-        gc.collect()
+
+        _empty_cache()
+        _gc_collect()

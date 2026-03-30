@@ -954,3 +954,336 @@ def rms_norm_kernel(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-6):
             BLOCK_SIZE_SEQ=BLOCK_SIZE_SEQ,
         )
     return y
+
+
+# ---------------------------------------------------------------------------
+# Fused dual-RMSNorm + 3D Neox-RoPE  (NeoPP Q/K, in-place, bfloat16)
+# ---------------------------------------------------------------------------
+
+
+@triton.jit
+def _fused_norm_3drope_kernel(
+    x_ptr,
+    w_t_ptr,
+    w_hw_ptr,
+    cos_t_ptr,
+    sin_t_ptr,
+    cos_h_ptr,
+    sin_h_ptr,
+    cos_w_ptr,
+    sin_w_ptr,
+    num_heads,
+    eps,
+    HEAD_DIM: tl.constexpr,
+    HALF: tl.constexpr,
+    QUARTER: tl.constexpr,
+    EIGHTH: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    s = pid // num_heads
+    h = pid % num_heads
+
+    base = (s * num_heads + h) * HEAD_DIM
+    offs_q = tl.arange(0, QUARTER)
+    offs_e = tl.arange(0, EIGHTH)
+
+    # t-segment [0:HALF] — two QUARTER chunks
+    xt1 = tl.load(x_ptr + base + offs_q).to(tl.float32)
+    xt2 = tl.load(x_ptr + base + QUARTER + offs_q).to(tl.float32)
+
+    var_t = (tl.sum(xt1 * xt1) + tl.sum(xt2 * xt2)) * (1.0 / HALF) + eps
+    irms_t = tl.rsqrt(var_t)
+
+    wt1 = tl.load(w_t_ptr + offs_q).to(tl.float32)
+    wt2 = tl.load(w_t_ptr + QUARTER + offs_q).to(tl.float32)
+    xt1 = xt1 * irms_t * wt1
+    xt2 = xt2 * irms_t * wt2
+
+    c_t = tl.load(cos_t_ptr + s * HALF + offs_q).to(tl.float32)
+    s_t = tl.load(sin_t_ptr + s * HALF + offs_q).to(tl.float32)
+    new_xt1 = xt1 * c_t - xt2 * s_t
+    new_xt2 = xt2 * c_t + xt1 * s_t
+
+    # hw-segment [HALF:HEAD_DIM] — four EIGHTH chunks
+    xh1 = tl.load(x_ptr + base + HALF + offs_e).to(tl.float32)
+    xh2 = tl.load(x_ptr + base + HALF + EIGHTH + offs_e).to(tl.float32)
+    xw1 = tl.load(x_ptr + base + HALF + QUARTER + offs_e).to(tl.float32)
+    xw2 = tl.load(x_ptr + base + HALF + QUARTER + EIGHTH + offs_e).to(tl.float32)
+
+    var_hw = (tl.sum(xh1 * xh1) + tl.sum(xh2 * xh2) + tl.sum(xw1 * xw1) + tl.sum(xw2 * xw2)) * (1.0 / HALF) + eps
+    irms_hw = tl.rsqrt(var_hw)
+
+    wh1 = tl.load(w_hw_ptr + offs_e).to(tl.float32)
+    wh2 = tl.load(w_hw_ptr + EIGHTH + offs_e).to(tl.float32)
+    ww1 = tl.load(w_hw_ptr + QUARTER + offs_e).to(tl.float32)
+    ww2 = tl.load(w_hw_ptr + QUARTER + EIGHTH + offs_e).to(tl.float32)
+    xh1 = xh1 * irms_hw * wh1
+    xh2 = xh2 * irms_hw * wh2
+    xw1 = xw1 * irms_hw * ww1
+    xw2 = xw2 * irms_hw * ww2
+
+    c_h = tl.load(cos_h_ptr + s * QUARTER + offs_e).to(tl.float32)
+    s_h = tl.load(sin_h_ptr + s * QUARTER + offs_e).to(tl.float32)
+    new_xh1 = xh1 * c_h - xh2 * s_h
+    new_xh2 = xh2 * c_h + xh1 * s_h
+
+    c_w = tl.load(cos_w_ptr + s * QUARTER + offs_e).to(tl.float32)
+    s_w = tl.load(sin_w_ptr + s * QUARTER + offs_e).to(tl.float32)
+    new_xw1 = xw1 * c_w - xw2 * s_w
+    new_xw2 = xw2 * c_w + xw1 * s_w
+
+    tl.store(x_ptr + base + offs_q, new_xt1.to(tl.bfloat16))
+    tl.store(x_ptr + base + QUARTER + offs_q, new_xt2.to(tl.bfloat16))
+    tl.store(x_ptr + base + HALF + offs_e, new_xh1.to(tl.bfloat16))
+    tl.store(x_ptr + base + HALF + EIGHTH + offs_e, new_xh2.to(tl.bfloat16))
+    tl.store(x_ptr + base + HALF + QUARTER + offs_e, new_xw1.to(tl.bfloat16))
+    tl.store(x_ptr + base + HALF + QUARTER + EIGHTH + offs_e, new_xw2.to(tl.bfloat16))
+
+
+# ---------------------------------------------------------------------------
+# Fused QK dual-RMSNorm + 3D Neox-RoPE  (NeoPP, in-place, bfloat16)
+# Processes Q and K tensors in a single kernel launch.
+# ---------------------------------------------------------------------------
+
+
+@triton.jit
+def _fused_qk_norm_3drope_kernel(
+    q_ptr,
+    k_ptr,
+    w_qt_ptr,
+    w_qhw_ptr,
+    w_kt_ptr,
+    w_khw_ptr,
+    cos_t_ptr,
+    sin_t_ptr,
+    cos_h_ptr,
+    sin_h_ptr,
+    cos_w_ptr,
+    sin_w_ptr,
+    q_num_heads,
+    k_num_heads,
+    q_total,
+    eps,
+    HEAD_DIM: tl.constexpr,
+    HALF: tl.constexpr,
+    QUARTER: tl.constexpr,
+    EIGHTH: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs_q = tl.arange(0, QUARTER)
+    offs_e = tl.arange(0, EIGHTH)
+
+    if pid < q_total:
+        s = pid // q_num_heads
+        h = pid % q_num_heads
+        base = (s * q_num_heads + h) * HEAD_DIM
+
+        xt1 = tl.load(q_ptr + base + offs_q).to(tl.float32)
+        xt2 = tl.load(q_ptr + base + QUARTER + offs_q).to(tl.float32)
+        var_t = (tl.sum(xt1 * xt1) + tl.sum(xt2 * xt2)) * (1.0 / HALF) + eps
+        irms_t = tl.rsqrt(var_t)
+        wt1 = tl.load(w_qt_ptr + offs_q).to(tl.float32)
+        wt2 = tl.load(w_qt_ptr + QUARTER + offs_q).to(tl.float32)
+        xt1 = xt1 * irms_t * wt1
+        xt2 = xt2 * irms_t * wt2
+        c_t = tl.load(cos_t_ptr + s * HALF + offs_q).to(tl.float32)
+        s_t = tl.load(sin_t_ptr + s * HALF + offs_q).to(tl.float32)
+        new_xt1 = xt1 * c_t - xt2 * s_t
+        new_xt2 = xt2 * c_t + xt1 * s_t
+
+        xh1 = tl.load(q_ptr + base + HALF + offs_e).to(tl.float32)
+        xh2 = tl.load(q_ptr + base + HALF + EIGHTH + offs_e).to(tl.float32)
+        xw1 = tl.load(q_ptr + base + HALF + QUARTER + offs_e).to(tl.float32)
+        xw2 = tl.load(q_ptr + base + HALF + QUARTER + EIGHTH + offs_e).to(tl.float32)
+        var_hw = (tl.sum(xh1 * xh1) + tl.sum(xh2 * xh2) + tl.sum(xw1 * xw1) + tl.sum(xw2 * xw2)) * (1.0 / HALF) + eps
+        irms_hw = tl.rsqrt(var_hw)
+        wh1 = tl.load(w_qhw_ptr + offs_e).to(tl.float32)
+        wh2 = tl.load(w_qhw_ptr + EIGHTH + offs_e).to(tl.float32)
+        ww1 = tl.load(w_qhw_ptr + QUARTER + offs_e).to(tl.float32)
+        ww2 = tl.load(w_qhw_ptr + QUARTER + EIGHTH + offs_e).to(tl.float32)
+        xh1 = xh1 * irms_hw * wh1
+        xh2 = xh2 * irms_hw * wh2
+        xw1 = xw1 * irms_hw * ww1
+        xw2 = xw2 * irms_hw * ww2
+        c_h = tl.load(cos_h_ptr + s * QUARTER + offs_e).to(tl.float32)
+        s_h = tl.load(sin_h_ptr + s * QUARTER + offs_e).to(tl.float32)
+        new_xh1 = xh1 * c_h - xh2 * s_h
+        new_xh2 = xh2 * c_h + xh1 * s_h
+        c_w = tl.load(cos_w_ptr + s * QUARTER + offs_e).to(tl.float32)
+        s_w = tl.load(sin_w_ptr + s * QUARTER + offs_e).to(tl.float32)
+        new_xw1 = xw1 * c_w - xw2 * s_w
+        new_xw2 = xw2 * c_w + xw1 * s_w
+
+        tl.store(q_ptr + base + offs_q, new_xt1.to(tl.bfloat16))
+        tl.store(q_ptr + base + QUARTER + offs_q, new_xt2.to(tl.bfloat16))
+        tl.store(q_ptr + base + HALF + offs_e, new_xh1.to(tl.bfloat16))
+        tl.store(q_ptr + base + HALF + EIGHTH + offs_e, new_xh2.to(tl.bfloat16))
+        tl.store(q_ptr + base + HALF + QUARTER + offs_e, new_xw1.to(tl.bfloat16))
+        tl.store(q_ptr + base + HALF + QUARTER + EIGHTH + offs_e, new_xw2.to(tl.bfloat16))
+    else:
+        k_pid = pid - q_total
+        s = k_pid // k_num_heads
+        h = k_pid % k_num_heads
+        base = (s * k_num_heads + h) * HEAD_DIM
+
+        xt1 = tl.load(k_ptr + base + offs_q).to(tl.float32)
+        xt2 = tl.load(k_ptr + base + QUARTER + offs_q).to(tl.float32)
+        var_t = (tl.sum(xt1 * xt1) + tl.sum(xt2 * xt2)) * (1.0 / HALF) + eps
+        irms_t = tl.rsqrt(var_t)
+        wt1 = tl.load(w_kt_ptr + offs_q).to(tl.float32)
+        wt2 = tl.load(w_kt_ptr + QUARTER + offs_q).to(tl.float32)
+        xt1 = xt1 * irms_t * wt1
+        xt2 = xt2 * irms_t * wt2
+        c_t = tl.load(cos_t_ptr + s * HALF + offs_q).to(tl.float32)
+        s_t = tl.load(sin_t_ptr + s * HALF + offs_q).to(tl.float32)
+        new_xt1 = xt1 * c_t - xt2 * s_t
+        new_xt2 = xt2 * c_t + xt1 * s_t
+
+        xh1 = tl.load(k_ptr + base + HALF + offs_e).to(tl.float32)
+        xh2 = tl.load(k_ptr + base + HALF + EIGHTH + offs_e).to(tl.float32)
+        xw1 = tl.load(k_ptr + base + HALF + QUARTER + offs_e).to(tl.float32)
+        xw2 = tl.load(k_ptr + base + HALF + QUARTER + EIGHTH + offs_e).to(tl.float32)
+        var_hw = (tl.sum(xh1 * xh1) + tl.sum(xh2 * xh2) + tl.sum(xw1 * xw1) + tl.sum(xw2 * xw2)) * (1.0 / HALF) + eps
+        irms_hw = tl.rsqrt(var_hw)
+        wh1 = tl.load(w_khw_ptr + offs_e).to(tl.float32)
+        wh2 = tl.load(w_khw_ptr + EIGHTH + offs_e).to(tl.float32)
+        ww1 = tl.load(w_khw_ptr + QUARTER + offs_e).to(tl.float32)
+        ww2 = tl.load(w_khw_ptr + QUARTER + EIGHTH + offs_e).to(tl.float32)
+        xh1 = xh1 * irms_hw * wh1
+        xh2 = xh2 * irms_hw * wh2
+        xw1 = xw1 * irms_hw * ww1
+        xw2 = xw2 * irms_hw * ww2
+        c_h = tl.load(cos_h_ptr + s * QUARTER + offs_e).to(tl.float32)
+        s_h = tl.load(sin_h_ptr + s * QUARTER + offs_e).to(tl.float32)
+        new_xh1 = xh1 * c_h - xh2 * s_h
+        new_xh2 = xh2 * c_h + xh1 * s_h
+        c_w = tl.load(cos_w_ptr + s * QUARTER + offs_e).to(tl.float32)
+        s_w = tl.load(sin_w_ptr + s * QUARTER + offs_e).to(tl.float32)
+        new_xw1 = xw1 * c_w - xw2 * s_w
+        new_xw2 = xw2 * c_w + xw1 * s_w
+
+        tl.store(k_ptr + base + offs_q, new_xt1.to(tl.bfloat16))
+        tl.store(k_ptr + base + QUARTER + offs_q, new_xt2.to(tl.bfloat16))
+        tl.store(k_ptr + base + HALF + offs_e, new_xh1.to(tl.bfloat16))
+        tl.store(k_ptr + base + HALF + EIGHTH + offs_e, new_xh2.to(tl.bfloat16))
+        tl.store(k_ptr + base + HALF + QUARTER + offs_e, new_xw1.to(tl.bfloat16))
+        tl.store(k_ptr + base + HALF + QUARTER + EIGHTH + offs_e, new_xw2.to(tl.bfloat16))
+
+
+def fused_qk_norm_3drope(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    w_qt: torch.Tensor,
+    w_qhw: torch.Tensor,
+    w_kt: torch.Tensor,
+    w_khw: torch.Tensor,
+    cos_t: torch.Tensor,
+    sin_t: torch.Tensor,
+    cos_h: torch.Tensor,
+    sin_h: torch.Tensor,
+    cos_w: torch.Tensor,
+    sin_w: torch.Tensor,
+    eps: float = 1e-6,
+) -> None:
+    """
+    In-place fused dual-RMSNorm + 3D Neox-RoPE on Q and K in a single kernel launch.
+    q      : [seq, num_heads, head_dim]    bfloat16, contiguous
+    k      : [seq, num_kv_heads, head_dim] bfloat16, contiguous
+    w_qt   : [head_dim//2]  Q RMSNorm weight for t-segment
+    w_qhw  : [head_dim//2]  Q RMSNorm weight for hw-segment
+    w_kt   : [head_dim//2]  K RMSNorm weight for t-segment
+    w_khw  : [head_dim//2]  K RMSNorm weight for hw-segment
+    """
+    assert q.dtype == torch.bfloat16 and q.is_contiguous()
+    assert k.dtype == torch.bfloat16 and k.is_contiguous()
+    seq, num_heads, head_dim = q.shape
+    _, num_kv_heads, _ = k.shape
+    half = head_dim // 2
+    quarter = head_dim // 4
+    eighth = head_dim // 8
+    q_total = seq * num_heads
+
+    cos_t_sq = cos_t.squeeze(0).contiguous()
+    sin_t_sq = sin_t.squeeze(0).contiguous()
+    cos_h_sq = cos_h.squeeze(0).contiguous()
+    sin_h_sq = sin_h.squeeze(0).contiguous()
+    cos_w_sq = cos_w.squeeze(0).contiguous()
+    sin_w_sq = sin_w.squeeze(0).contiguous()
+
+    total = seq * num_heads + seq * num_kv_heads
+    with torch.cuda.device(q.device):
+        _fused_qk_norm_3drope_kernel[(total,)](
+            q,
+            k,
+            w_qt,
+            w_qhw,
+            w_kt,
+            w_khw,
+            cos_t_sq,
+            sin_t_sq,
+            cos_h_sq,
+            sin_h_sq,
+            cos_w_sq,
+            sin_w_sq,
+            q_num_heads=num_heads,
+            k_num_heads=num_kv_heads,
+            q_total=q_total,
+            eps=eps,
+            HEAD_DIM=head_dim,
+            HALF=half,
+            QUARTER=quarter,
+            EIGHTH=eighth,
+        )
+
+
+def fused_norm_3drope(
+    x: torch.Tensor,
+    w_t: torch.Tensor,
+    w_hw: torch.Tensor,
+    cos_t: torch.Tensor,
+    sin_t: torch.Tensor,
+    cos_h: torch.Tensor,
+    sin_h: torch.Tensor,
+    cos_w: torch.Tensor,
+    sin_w: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    In-place fused dual-RMSNorm + 3D Neox-RoPE on Q or K.
+    x      : [seq, num_heads, head_dim]  bfloat16, contiguous
+    w_t    : [head_dim//2]   RMSNorm weight for t-segment
+    w_hw   : [head_dim//2]   RMSNorm weight for hw-segment
+    cos_t  : [1, seq, head_dim//2]   (cat(freqs,freqs), unique part [:head_dim//4])
+    cos_h/w: [1, seq, head_dim//4]   (unique part [:head_dim//8])
+    """
+    assert x.dtype == torch.bfloat16 and x.is_contiguous()
+    seq, num_heads, head_dim = x.shape
+    half = head_dim // 2
+    quarter = head_dim // 4
+    eighth = head_dim // 8
+
+    cos_t_sq = cos_t.squeeze(0).contiguous()
+    sin_t_sq = sin_t.squeeze(0).contiguous()
+    cos_h_sq = cos_h.squeeze(0).contiguous()
+    sin_h_sq = sin_h.squeeze(0).contiguous()
+    cos_w_sq = cos_w.squeeze(0).contiguous()
+    sin_w_sq = sin_w.squeeze(0).contiguous()
+
+    _fused_norm_3drope_kernel[(seq * num_heads,)](
+        x,
+        w_t,
+        w_hw,
+        cos_t_sq,
+        sin_t_sq,
+        cos_h_sq,
+        sin_h_sq,
+        cos_w_sq,
+        sin_w_sq,
+        num_heads=num_heads,
+        eps=eps,
+        HEAD_DIM=head_dim,
+        HALF=half,
+        QUARTER=quarter,
+        EIGHTH=eighth,
+    )
+    return x
