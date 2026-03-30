@@ -75,6 +75,7 @@ class DataPoll:
 
 RequestPoolType = Dict[int, List[int]]
 WaitingPoolType = Dict[int, Tuple[str, list[int]]]
+MONITOR_POLLING_PORT = 7788
 REQUEST_POLLING_PORT = 12788
 DATASENDER_POLLING_PORT = 17788
 DATARECEIVER_POLLING_PORT = 27788
