@@ -1,7 +1,7 @@
 import torch
 from PIL import Image
 
-from lightx2v.models.networks.neopp.model import NeoppMoeModel, NeoppDenseModel
+from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
@@ -38,10 +38,7 @@ class NeoppRunner(DefaultRunner):
         MoT: Mixture-of-Transformer-Experts (MoT) architecture
         https://arxiv.org/abs/2505.14683
         """
-        if self.config.get("version", "moe") == "moe":
-            model = NeoppMoeModel(self.config["model_path"], self.config, self.init_device)
-        else:
-            model = NeoppDenseModel(self.config["model_path"], self.config, self.init_device)
+        model = NeoppModel(self.config["model_path"], self.config, self.init_device)
         return model
 
     def _build_inv_freq(self, half_head_dim, theta):

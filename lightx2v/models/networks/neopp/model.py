@@ -3,7 +3,7 @@ import torch
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.neopp.infer.post_infer import NeoppPostInfer
 from lightx2v.models.networks.neopp.infer.pre_infer import NeoppPreInfer
-from lightx2v.models.networks.neopp.infer.transformer_infer import NeoppTransformerInfer, NeoppDenseTransformerInfer
+from lightx2v.models.networks.neopp.infer.transformer_infer import NeoppTransformerInfer
 from lightx2v.models.networks.neopp.weights.post_weights import NeoppPostWeights
 from lightx2v.models.networks.neopp.weights.pre_weights import NeoppPreWeights
 from lightx2v.models.networks.neopp.weights.transformer_weights import NeoppTransformerWeights
@@ -11,7 +11,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
 
-class NeoppMoeModel(BaseTransformerModel):
+class NeoppModel(BaseTransformerModel):
     pre_weight_class = NeoppPreWeights
     transformer_weight_class = NeoppTransformerWeights
     post_weight_class = NeoppPostWeights
@@ -85,17 +85,3 @@ class NeoppMoeModel(BaseTransformerModel):
         x = torch.einsum("nhwpqc->nchpwq", x)
         images = x.reshape(shape=(x.shape[0], 3, h * patch_size, w * patch_size))
         return images
-
-
-class NeoppDenseModel(NeoppMoeModel):
-    pre_weight_class = NeoppPreWeights
-    transformer_weight_class = NeoppTransformerWeights
-    post_weight_class = NeoppPostWeights
-
-    def __init__(self, model_path, config, device):
-        super().__init__(model_path, config, device)
-
-    def _init_infer_class(self):
-        self.pre_infer_class = NeoppPreInfer
-        self.transformer_infer_class = NeoppDenseTransformerInfer
-        self.post_infer_class = NeoppPostInfer
