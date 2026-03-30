@@ -10,6 +10,7 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
     sparse_mask_generator = None
     sparse_operator = None
     sparse_setting = {}
+    operator_setting = {}
     attnmap_frame_num = None
 
     def __init__(self):
@@ -19,11 +20,11 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
         self._setup_mask_generator()
 
         logger.info(
-            f"GeneralSparseAttnWeight: sparse_setting={self.sparse_setting}, operator={self.sparse_operator}, mask_generator={self.sparse_mask_generator}, attnmap_frame_num={self.attnmap_frame_num}"
+            f"GeneralSparseAttnWeight: sparse_setting={self.sparse_setting}, operator_setting={self.operator_setting}, operator={self.sparse_operator}, mask_generator={self.sparse_mask_generator}, attnmap_frame_num={self.attnmap_frame_num}"
         )
 
     def _setup_operator(self):
-        self.operator = SPARSE_OPERATOR_REGISTER[self.sparse_operator]()
+        self.operator = SPARSE_OPERATOR_REGISTER[self.sparse_operator](self.operator_setting)
 
     def _setup_mask_generator(self):
         self.mask_generator = SPARSE_MASK_GENERATOR_REGISTER[self.sparse_mask_generator](self.operator.q_block_size, self.operator.k_block_size, self.sparse_setting, self.attnmap_frame_num)

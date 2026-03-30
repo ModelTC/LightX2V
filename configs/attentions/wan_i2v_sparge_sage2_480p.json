@@ -5,11 +5,11 @@
     "target_width": 832,
     "self_attn_1_type": "general_sparse_attn",
     "general_sparse_attn_setting": {
-        "sparse_mask_generator": "sla_mask_generator",
+        "sparse_mask_generator": "sparge_mask_generator",
         "sparse_setting": {
             "sparsity_ratio": 0.8
         },
-        "sparse_operator": "flashinfer_operator"
+        "sparse_operator": "spas_sage2_operator"
     },
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
