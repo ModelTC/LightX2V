@@ -3,7 +3,7 @@ import torch
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.neopp.infer.post_infer import NeoppPostInfer
 from lightx2v.models.networks.neopp.infer.pre_infer import NeoppPreInfer
-from lightx2v.models.networks.neopp.infer.transformer_infer import NeoppTransformerInfer
+from lightx2v.models.networks.neopp.infer.transformer_infer import NeoppTransformerInfer, NeoppDenseTransformerInfer
 from lightx2v.models.networks.neopp.weights.post_weights import NeoppPostWeights
 from lightx2v.models.networks.neopp.weights.pre_weights import NeoppPreWeights
 from lightx2v.models.networks.neopp.weights.transformer_weights import NeoppTransformerWeights
@@ -87,18 +87,15 @@ class NeoppMoeModel(BaseTransformerModel):
         return images
 
 
-class NeoppDenseModel(BaseTransformerModel):
+class NeoppDenseModel(NeoppMoeModel):
     pre_weight_class = NeoppPreWeights
     transformer_weight_class = NeoppTransformerWeights
     post_weight_class = NeoppPostWeights
 
     def __init__(self, model_path, config, device):
         super().__init__(model_path, config, device)
-        self.preserved_keys = ["fm_modules", "mot_gen"]
-        self._init_infer_class()
-        self._init_infer()
-        self._init_weights()
-        self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
-        self.cfg_scale = self.config.get("cfg_scale", 7.0)
-        self.patch_size = self.config.get("patch_size", 16)
-        self.merge_size = 2
+
+    def _init_infer_class(self):
+        self.pre_infer_class = NeoppPreInfer
+        self.transformer_infer_class = NeoppDenseTransformerInfer
+        self.post_infer_class = NeoppPostInfer

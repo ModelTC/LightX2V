@@ -18,8 +18,9 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         self.head_dim = llm_config["head_dim"]
         self.num_key_value_groups = self.num_heads // self.num_kv_heads
         self.scaling = self.head_dim**-0.5
-        self.num_experts_per_tok = llm_config["num_experts_per_tok"]
-        self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
+        if config["version"] == "moe":
+            self.num_experts_per_tok = llm_config["num_experts_per_tok"]
+            self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
         self.kv_cache = KVCacheManager()
 
     @torch.no_grad()
@@ -135,3 +136,43 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         hidden_states = F.gelu(hidden_states)
         hidden_states = fm_head_w.fm_head_2.apply(hidden_states)
         return hidden_states
+
+
+class NeoppDenseTransformerInfer(NeoppTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        llm_config = config["llm_config"]
+        self.num_layers = llm_config["num_hidden_layers"]
+        self.hidden_size = llm_config["hidden_size"]
+        self.num_heads = llm_config["num_attention_heads"]
+        self.num_kv_heads = llm_config["num_key_value_heads"]
+        self.head_dim = llm_config["head_dim"]
+        self.num_key_value_groups = self.num_heads // self.num_kv_heads
+        self.scaling = self.head_dim**-0.5
+        # self.num_experts_per_tok = llm_config["num_experts_per_tok"]
+        # self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
+        self.kv_cache = KVCacheManager()
+    
+    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin):
+        residual = hidden_states
+        hidden_states = block_weight.input_layernorm_mot_gen.apply(hidden_states)
+
+        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin)
+        hidden_states = residual + hidden_states
+
+        residual = hidden_states
+        gen_hidden = block_weight.post_attention_layernorm_mot_gen.apply(hidden_states)
+        
+        # Dense MLP instead of Sparse MoE
+        up_states = block_weight.mlp_mot_gen.up_proj.apply(gen_hidden)
+        gate_states = block_weight.mlp_mot_gen.gate_proj.apply(gen_hidden)
+        
+        # act_fn is SiLU
+        intermediate_states = F.silu(gate_states) * up_states
+        gen_hidden = block_weight.mlp_mot_gen.down_proj.apply(intermediate_states)
+        
+        hidden_states = residual + gen_hidden
+
+        return hidden_states
+    
