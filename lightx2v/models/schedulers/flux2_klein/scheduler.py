@@ -81,7 +81,7 @@ class Flux2KleinScheduler(BaseScheduler):
         else:
             self.txt_ids = None
 
-        self.latents = randn_tensor(input_info.target_shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
+        self.latents = randn_tensor(input_info.latent_shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
 
         self.set_timesteps()
 
@@ -151,25 +151,34 @@ class Flux2KleinScheduler(BaseScheduler):
         return image_latent_ids
 
     def _pack_latents(self, latents):
-        batch_size, num_channels, height, width = latents.shape
-        latents = latents.reshape(batch_size, num_channels, height * width).permute(0, 2, 1)
-        return latents
+        if isinstance(latents, list):
+            packed_list = []
+            for lat in latents:
+                batch_size, num_channels, height, width = lat.shape
+                packed = lat.reshape(batch_size, num_channels, height * width).permute(0, 2, 1)
+                packed_list.append(packed)
+            return torch.cat(packed_list, dim=1)
+        else:
+            batch_size, num_channels, height, width = latents.shape
+            latents = latents.reshape(batch_size, num_channels, height * width).permute(0, 2, 1)
+            return latents
 
     def prepare_i2i(self, input_info, input_image, vae):
         self.vae = vae
         # prepare sets up standard variables like manual seed, latents and timesteps
         self.prepare(input_info)
 
-        batch_size = input_image.shape[0] if input_image.ndim == 4 else 1
+        image_latents = []
+        for img in input_image:
+            imagge_latent = self._encode_image(img)
+            image_latents.append(imagge_latent)
 
-        image_latents = self._encode_image(input_image)
-
-        image_latent_ids = self._prepare_image_ids([image_latents], scale=10)
+        image_latent_ids = self._prepare_image_ids(image_latents, scale=10)
 
         packed = self._pack_latents(image_latents).squeeze(0)
 
-        packed_latents = packed.unsqueeze(0).repeat(batch_size, 1, 1).to(AI_DEVICE, dtype=self.dtype)
-        image_latent_ids = image_latent_ids.repeat(batch_size, 1, 1).to(AI_DEVICE)
+        packed_latents = packed.unsqueeze(0).repeat(1, 1, 1).to(AI_DEVICE, dtype=self.dtype)
+        image_latent_ids = image_latent_ids.repeat(1, 1, 1).to(AI_DEVICE)
 
         self.input_image_latents = packed_latents
         self.input_image_ids = image_latent_ids

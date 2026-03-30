@@ -1,4 +1,5 @@
 import gc
+import math
 import os
 
 import torch
@@ -12,6 +13,16 @@ from lightx2v.models.video_encoders.hf.flux2_klein.vae import Flux2KleinVAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def calculate_dimensions(target_area, ratio):
+    width = math.sqrt(target_area * ratio)
+    height = width / ratio
+
+    width = round(width / 32) * 32
+    height = round(height / 32) * 32
+
+    return width, height, None
 
 
 @RUNNER_REGISTER("flux2_klein")
@@ -81,11 +92,18 @@ class Flux2KleinRunner(DefaultRunner):
         from PIL import Image
 
         if isinstance(image_path, str):
-            input_image = Image.open(image_path).convert("RGB")
+            # Handle both file and directory paths
+            if os.path.isdir(image_path):
+                # Load all image files from directory, sorted by name
+                image_files = sorted([os.path.join(image_path, f) for f in os.listdir(image_path) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"))])
+                input_image = [Image.open(img_file).convert("RGB") for img_file in image_files]
+            else:
+                # Single image file
+                input_image = Image.open(image_path).convert("RGB")
         else:
             input_image = image_path
 
-        vae_scale_factor = self.config.get("vae_scale_factor", 16)
+        vae_scale_factor = self.config.get("vae_scale_factor", 8)
         from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
         image_processor = Flux2ImageProcessor(vae_scale_factor=vae_scale_factor)
@@ -101,23 +119,24 @@ class Flux2KleinRunner(DefaultRunner):
                 img = image_processor._resize_to_target_area(img, 1024 * 1024)
                 image_width, image_height = img.size
 
-            multiple_of = vae_scale_factor
+            import debugpy
+
+            debugpy.breakpoint()
+            multiple_of = vae_scale_factor * 2
             image_width = (image_width // multiple_of) * multiple_of
             image_height = (image_height // multiple_of) * multiple_of
             img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
-            condition_images.append(img)
-            self.input_info.auto_width = image_width
-            self.input_info.auto_height = image_height
-
-        # Single image for now based on LightX2V pipeline structure
-        image_tensor = condition_images[0].to(AI_DEVICE)
+            condition_images.append(img.to(AI_DEVICE))
+            if not hasattr(self.input_info, "auto_width"):
+                self.input_info.auto_width = image_width
+                self.input_info.auto_height = image_height
 
         torch.cuda.empty_cache()
         gc.collect()
 
         return {
             "text_encoder_output": text_encoder_output,
-            "image_encoder_output": {"image_tensor": image_tensor},
+            "image_encoder_output": {"image_tensor": condition_images},
         }
 
     # Copied from diffusers/pipelines/flux2/pipeline_flux2.py _prepare_text_ids
@@ -202,34 +221,74 @@ class Flux2KleinRunner(DefaultRunner):
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
+    def get_custom_shape(self):
+        default_aspect_ratios = {
+            "16:9": [1344, 768],
+            "9:16": [768, 1344],
+            "1:1": [1024, 1024],
+            "4:3": [1152, 864],
+            "3:4": [864, 1152],
+            "3:2": [1216, 832],
+            "2:3": [832, 1216],
+        }
+        as_maps = self.config.get("aspect_ratios", {})
+        as_maps.update(default_aspect_ratios)
+        max_size = self.config.get("max_custom_size", 1664)
+        min_size = self.config.get("min_custom_size", 256)
+
+        if len(self.input_info.target_shape) == 2:
+            height, width = self.input_info.target_shape
+            height = int(height)
+            width = int(width)
+            if width > max_size or height > max_size:
+                scale = max_size / max(width, height)
+                width, height = int(width * scale), int(height * scale)
+                logger.warning(f"Custom shape is too large, scaled to {width}x{height}")
+            width, height = max(width, min_size), max(height, min_size)
+            logger.info(f"Flux2Klein Image Runner got custom shape: {width}x{height}")
+            return (width, height)
+
+        if self.input_info.aspect_ratio and not self.config.get("_auto_resize", False):
+            if self.input_info.aspect_ratio in as_maps:
+                logger.info(f"Flux2Klein Image Runner got aspect ratio: {self.input_info.aspect_ratio}")
+                width, height = as_maps[self.input_info.aspect_ratio]
+                return (width, height)
+            logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
+
+        width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
+        return (width, height)
+
     def set_target_shape(self):
+        multiple_of = self.config.get("vae_scale_factor", 8) * 2
+
         task = self.config.get("task", "t2i")
-        if task == "i2i" and hasattr(self.input_info, "auto_width") and self.input_info.auto_width:
+        if task == "i2i" and hasattr(self.input_info, "auto_width"):
             width = self.input_info.auto_width
             height = self.input_info.auto_height
         else:
-            width = self.config.get("target_width", 1024)
-            height = self.config.get("target_height", 1024)
+            custom_shape = self.get_custom_shape()
+            if custom_shape is not None:
+                width, height = custom_shape
+            else:
+                calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
+                width = calculated_width // multiple_of * multiple_of
+                height = calculated_height // multiple_of * multiple_of
 
-        vae_scale_factor = self.config["vae_scale_factor"]
-        height = 2 * (int(height) // (vae_scale_factor * 2))
-        width = 2 * (int(width) // (vae_scale_factor * 2))
+            self.input_info.auto_width = width
+            self.input_info.auto_height = height
 
-        # Strictly follow Flux2KleinPipeline:
-        # transformer input channels must match model x_embedder.in_features.
-        in_channels = getattr(self.model, "in_channels", None)
-        if in_channels is None:
-            in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
+        self.input_info.target_shape = (height, width)
+        logger.info(f"Flux2Klein Image Runner set target shape: {width}x{height}")
 
-        # input latents are packed as `in_channels` (not pre-4-packed channels)
-        # the old hardcode 16*4=64 is incorrect if model expects 128.
+        multiple_of = self.config.get("vae_scale_factor", 8) * 2
+
         packed_batch = 1
-        packed_channels = in_channels
-        packed_h = height // 2
-        packed_w = width // 2
+        packed_h = height // multiple_of
+        packed_w = width // multiple_of
+        packed_channels = 128
 
-        self.num_channels_latents = packed_channels // 4 if packed_channels % 4 == 0 else packed_channels
-        self.input_info.target_shape = (packed_batch, packed_h * packed_w, packed_channels)
+        self.num_channels_latents = packed_channels
+        self.input_info.latent_shape = (packed_batch, packed_h * packed_w, packed_channels)
         self.input_info.latent_image_ids = self._prepare_latent_ids(packed_batch, packed_h, packed_w).to(AI_DEVICE)
 
     def set_img_shapes(self):
@@ -259,11 +318,11 @@ class Flux2KleinRunner(DefaultRunner):
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        self.set_target_shape()
-        self.set_img_shapes()
-
         self.inputs = self.run_input_encoder()
         logger.info(f"input_info: {self.input_info}")
+
+        self.set_target_shape()
+        self.set_img_shapes()
 
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
