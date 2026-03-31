@@ -26,6 +26,12 @@ class Reporter:
         )
         self._context = zmq.Context.instance()
         self._stop_event = threading.Event()
+        self._metrics_lock = threading.Lock()
+        self._extra_metrics_provider: Optional[Callable[[], Dict[str, Any]]] = None
+
+    def set_extra_metrics_provider(self, provider: Optional[Callable[[], Dict[str, Any]]]):
+        with self._metrics_lock:
+            self._extra_metrics_provider = provider
 
     def _query_gpu_metrics(self) -> Dict[str, Any]:
         cmd = [
@@ -55,6 +61,13 @@ class Reporter:
         try:
             metrics.update(self._query_gpu_metrics())
             metrics["status"] = "ok"
+
+            with self._metrics_lock:
+                provider = self._extra_metrics_provider
+            if provider is not None:
+                extra_metrics = provider()
+                if isinstance(extra_metrics, dict):
+                    metrics.update(extra_metrics)
         except Exception as exc:
             metrics["status"] = "error"
             metrics["error"] = str(exc)

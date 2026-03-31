@@ -480,6 +480,15 @@ class DataManager:
             if self.transfer_event is not None:
                 self.transfer_event.set()
 
+    def get_backlog_counts(self) -> Dict[str, int]:
+        with self.pool_lock:
+            waiting_pool_size = len(self.waiting_pool) if hasattr(self, "waiting_pool") else 0
+            return {
+                "request_pool": len(self.request_pool),
+                "waiting_pool": waiting_pool_size,
+                "request_status": len(self.request_status),
+            }
+
     def check_status(self, bootstrap_room: int):
         with self.pool_lock:
             if (
