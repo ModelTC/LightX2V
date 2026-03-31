@@ -8,6 +8,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("neopp")
@@ -164,16 +165,16 @@ class NeoppRunner(DefaultRunner):
         return gen_result
 
     def load_kvcache_t2i(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_kv_path).transpose(2, 3)
-        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path).transpose(2, 3)
+        self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
         logger.info(f"Loaded KV cache from {to_x2v_cond_kv_path} and {to_x2v_uncond_kv_path}")
         logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
         logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
 
     def load_kvcache_i2i(self, to_x2v_cond_path, to_x2v_text_uncond_path, to_x2v_img_uncond_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_path).transpose(2, 3)
-        self.past_key_values_text_uncond = torch.load(to_x2v_text_uncond_path).transpose(2, 3)
-        self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path).transpose(2, 3)
+        self.past_key_values_cond = torch.load(to_x2v_cond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+        self.past_key_values_text_uncond = torch.load(to_x2v_text_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+        self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
         logger.info(f"Loaded i2i KV caches: cond={self.past_key_values_cond.shape}, text_uncond={self.past_key_values_text_uncond.shape}, img_uncond={self.past_key_values_img_uncond.shape}")
 
     def clear_kvcache(self):
