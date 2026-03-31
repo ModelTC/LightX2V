@@ -9,7 +9,7 @@ from loguru import logger
 
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader
-from lightx2v.utils.input_info import init_input_info_from_args
+from lightx2v.utils.input_info import UNSET, calculate_target_video_length_from_duration, init_input_info_from_args
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
 from lightx2v.utils.va_controller import VAController
@@ -40,6 +40,21 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         clip_input_info = init_input_info_from_args(rs2v.config["task"], args)
         # 从默认配置中补全输入信息
         clip_input_info = self.check_input_info(clip_input_info, rs2v.config)
+
+        # Auto-calculate target_video_length from video_duration if not explicitly provided
+        if clip_input_info.target_video_length is None or clip_input_info.target_video_length == UNSET:
+            if clip_input_info.video_duration is not None and clip_input_info.video_duration != UNSET:
+                # Calculate for the first segment (max 5s)
+                segment_duration = min(clip_input_info.video_duration, 5.0)
+                clip_input_info.target_video_length = calculate_target_video_length_from_duration(segment_duration, target_fps)
+                logger.info(
+                    f"Auto-calculated target_video_length={clip_input_info.target_video_length} "
+                    f"from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)"
+                )
+            else:
+                # Fallback to config default
+                clip_input_info.target_video_length = rs2v.config.get("target_video_length", 81)
+
         target_video_length = clip_input_info.target_video_length
 
         gen_video_list = []
@@ -128,6 +143,24 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
             pipe = rs2v
             pipe.check_stop()
+
+            # Calculate actual target_video_length for this segment based on audio length
+            if is_last and pad_len > 0:
+                # For the last segment with padding, calculate actual video frames needed
+                actual_audio_samples = audio_clip.shape[1] - pad_len
+                actual_video_frames = int(np.ceil(actual_audio_samples / audio_per_frame))
+                # Apply the formula to ensure VAE stride constraint
+                segment_target_video_length = calculate_target_video_length_from_duration(actual_video_frames / target_fps, target_fps)
+                clip_input_info.target_video_length = segment_target_video_length
+                logger.info(
+                    f"Segment {idx}: Last segment with pad_len={pad_len}, "
+                    f"actual_video_frames={actual_video_frames}, "
+                    f"calculated target_video_length={segment_target_video_length}"
+                )
+            else:
+                # For first/middle segments, use the original target_video_length
+                cur_clip_len = target_video_length if is_first else (target_video_length + 3)
+                clip_input_info.target_video_length = cur_clip_len
 
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
