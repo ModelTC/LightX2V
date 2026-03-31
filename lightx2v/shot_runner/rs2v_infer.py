@@ -155,8 +155,8 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
             if clip_input_info.return_result_tensor:
-                gen_video_list.append(video_seg.clone())
-                cut_audio_list.append(audio_seg)
+                gen_video_list.append(video_seg.clone().cpu().float())
+                cut_audio_list.append(audio_seg.cpu())
             elif self.va_controller.recorder is not None:
                 video_seg = torch.clamp(video_seg, -1, 1).to(torch.float).cpu()
                 video_seg = vae_to_comfyui_image_inplace(video_seg)
