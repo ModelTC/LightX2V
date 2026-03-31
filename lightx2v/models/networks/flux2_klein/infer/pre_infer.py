@@ -1,6 +1,11 @@
 import torch
 import torch.nn.functional as F
-from diffusers.models.transformers.transformer_flux2 import Flux2PosEmbed
+
+try:
+    from diffusers.models.transformers.transformer_flux2 import Flux2PosEmbed
+except (ImportError, ModuleNotFoundError):
+    # Fallback for older diffusers versions without transformer_flux2
+    Flux2PosEmbed = None
 
 from .module_io import Flux2KleinPreInferModuleOutput
 
@@ -19,6 +24,12 @@ class Flux2KleinPreInfer:
         self.config = config
         self.attention_kwargs = {}
         self.cpu_offload = config.get("cpu_offload", False)
+
+        if Flux2PosEmbed is None:
+            raise ImportError(
+                "Flux2PosEmbed is not available. Please upgrade diffusers to a version that supports transformer_flux2: "
+                "pip install --upgrade diffusers"
+            )
 
         rope_theta = config.get("rope_theta", 2000)
         axes_dims_rope = config.get("axes_dims_rope", (32, 32, 32, 32))
