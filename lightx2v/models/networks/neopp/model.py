@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.neopp.infer.post_infer import NeoppPostInfer
@@ -59,23 +60,62 @@ class NeoppModel(BaseTransformerModel):
         return z
 
     def _infer_t2i(self, inputs, pre_infer_out):
-        v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
         t = self.scheduler.timesteps[self.scheduler.step_index]
-        if t > self.cfg_interval[0] and t < self.cfg_interval[1] and self.cfg_scale > 1:
-            v_pred_uncond = self._infer_pass(inputs, pre_infer_out, "uncond")
-            return v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
-        return v_pred_condition
+        use_cfg = t > self.cfg_interval[0] and t < self.cfg_interval[1] and self.cfg_scale > 1
+
+        if self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+            cfg_p_rank = dist.get_rank(cfg_p_group)
+
+            if use_cfg:
+                v_pred = self._infer_pass(inputs, pre_infer_out, "cond" if cfg_p_rank == 0 else "uncond")
+                v_pred_list = [torch.zeros_like(v_pred) for _ in range(2)]
+                dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
+                return v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+            else:
+                return self._infer_pass(inputs, pre_infer_out, "cond")
+        else:
+            v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
+            if use_cfg:
+                v_pred_uncond = self._infer_pass(inputs, pre_infer_out, "uncond")
+                return v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
+            return v_pred_condition
 
     def _infer_i2i(self, inputs, pre_infer_out):
-        v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
         t = self.scheduler.timesteps[self.scheduler.step_index]
-        if t > self.cfg_interval[0] and t < self.cfg_interval[1]:
-            v_pred_text_uncond = self._infer_pass(inputs, pre_infer_out, "text_uncond") if self.cfg_scale > 1 else 0
-            v_pred_img_uncond = self._infer_pass(inputs, pre_infer_out, "img_uncond") if self.img_cfg_scale > 1 else 0
+        use_cfg = t > self.cfg_interval[0] and t < self.cfg_interval[1]
 
-            v_pred_text = v_pred_text_uncond + self.cfg_scale * (v_pred_condition - v_pred_text_uncond)
-            return v_pred_img_uncond + self.img_cfg_scale * (v_pred_text - v_pred_img_uncond)
-        return v_pred_condition
+        if self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            assert dist.get_world_size(cfg_p_group) == 3, "cfg_p_world_size must be equal to 3 for i2i"
+            cfg_p_rank = dist.get_rank(cfg_p_group)
+
+            if use_cfg:
+                if cfg_p_rank == 0:
+                    v_pred = self._infer_pass(inputs, pre_infer_out, "cond")
+                elif cfg_p_rank == 1:
+                    v_pred = self._infer_pass(inputs, pre_infer_out, "text_uncond") if self.cfg_scale > 1 else torch.zeros_like(pre_infer_out.z)
+                else:  # cfg_p_rank == 2
+                    v_pred = self._infer_pass(inputs, pre_infer_out, "img_uncond") if self.img_cfg_scale > 1 else torch.zeros_like(pre_infer_out.z)
+                v_pred_list = [torch.zeros_like(v_pred) for _ in range(3)]
+                dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                v_pred_condition = v_pred_list[0]
+                v_pred_text_uncond = v_pred_list[1] if self.cfg_scale > 1 else 0
+                v_pred_img_uncond = v_pred_list[2] if self.img_cfg_scale > 1 else 0
+                v_pred_text = v_pred_text_uncond + self.cfg_scale * (v_pred_condition - v_pred_text_uncond)
+                return v_pred_img_uncond + self.img_cfg_scale * (v_pred_text - v_pred_img_uncond)
+            else:
+                return self._infer_pass(inputs, pre_infer_out, "cond")
+        else:
+            v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
+            if use_cfg:
+                v_pred_text_uncond = self._infer_pass(inputs, pre_infer_out, "text_uncond") if self.cfg_scale > 1 else 0
+                v_pred_img_uncond = self._infer_pass(inputs, pre_infer_out, "img_uncond") if self.img_cfg_scale > 1 else 0
+                v_pred_text = v_pred_text_uncond + self.cfg_scale * (v_pred_condition - v_pred_text_uncond)
+                return v_pred_img_uncond + self.img_cfg_scale * (v_pred_text - v_pred_img_uncond)
+            return v_pred_condition
 
     def _infer_pass(self, inputs, pre_infer_out, pass_name):
         """Run one forward pass. pass_name: 'cond' | 'uncond' | 'text_uncond' | 'img_uncond'"""
@@ -85,7 +125,7 @@ class NeoppModel(BaseTransformerModel):
         return v_pred
 
     def _infer_cond_uncond(self, inputs, pre_infer_out, infer_condition=True):
-        return self._infer_pass(inputs, pre_infer_out, "cond" if infer_condition else "uncond")
+        pass
 
     def _seq_parallel_post_process(self, pre_infer_out):
         pass
