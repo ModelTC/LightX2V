@@ -361,6 +361,7 @@ def init_empty_input_info(task, support_tasks=[]):
 @dataclass
 class SekoTalkInputs:
     infer_steps: int | Any = UNSET
+    target_video_length: int | Any = UNSET
     seed: int | Any = UNSET
     prompt: str | Any = UNSET
     prompt_enhanced: str | Any = UNSET

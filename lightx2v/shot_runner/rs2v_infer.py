@@ -32,7 +32,6 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
     def generate(self, args):
         rs2v = self.clip_generators["rs2v_clip"]
         # 获取此clip模型的配置信息
-        target_video_length = rs2v.config.get("target_video_length", 81)
         target_fps = rs2v.config.get("target_fps", 16)
         audio_sr = rs2v.config.get("audio_sr", 16000)
         audio_per_frame = audio_sr // target_fps
@@ -41,6 +40,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         clip_input_info = init_input_info_from_args(rs2v.config["task"], args)
         # 从默认配置中补全输入信息
         clip_input_info = self.check_input_info(clip_input_info, rs2v.config)
+        target_video_length = clip_input_info.target_video_length
 
         gen_video_list = []
         cut_audio_list = []
@@ -203,7 +203,9 @@ def main():
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--infer_steps", type=int, default=4, help="Number of inference steps")
+    parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
+
     args = parser.parse_args()
 
     seed_all(args.seed)

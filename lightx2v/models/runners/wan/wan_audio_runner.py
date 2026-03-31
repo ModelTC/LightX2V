@@ -391,7 +391,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
 
-        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+        if hasattr(self.input_info, "target_video_length"):
+            target_video_length = self.input_info.target_video_length
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
+        else:
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+
         target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
 
         logger.info(f"[wan_audio] target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
@@ -504,9 +509,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
-
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        prev_frames = torch.zeros((1, 3, self.config["target_video_length"], tgt_h, tgt_w), device=AI_DEVICE)
+        if hasattr(self.input_info, "target_video_length"):
+            target_video_length = self.input_info.target_video_length
+        else:
+            target_video_length = self.config["target_video_length"]
+        prev_frames = torch.zeros((1, 3, target_video_length, tgt_h, tgt_w), device=AI_DEVICE)
 
         if prev_video is not None:
             # Extract and process last frames
@@ -826,10 +834,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.audio_encoder = self.load_audio_encoder()
             self.audio_adapter = self.load_audio_adapter()
 
-    def get_latent_shape_with_lat_hw(self, latent_h, latent_w):
+    def get_latent_shape_with_lat_hw(self, latent_h, latent_w, target_video_length=None):
+        target_video_length = target_video_length if target_video_length is not None else self.config["target_video_length"]
+        self.input_info.latent_freams = latent_h
         latent_shape = [
             self.config.get("num_channels_latents", 16),
-            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            (target_video_length - 1) // self.config["vae_stride"][0] + 1,
             latent_h,
             latent_w,
         ]
@@ -861,6 +871,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def run_clip_main(self):
         self.scheduler.set_audio_adapter(self.audio_adapter)
+
         self.model.scheduler.prepare(
             seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.input_info.infer_steps, image_encoder_output=self.inputs["image_encoder_output"]
         )
