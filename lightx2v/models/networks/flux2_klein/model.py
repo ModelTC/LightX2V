@@ -49,9 +49,7 @@ class Flux2KleinTransformerModel(BaseTransformerModel):
         input_image_ids = getattr(self.scheduler, "input_image_ids", None)
 
         orig_seq_len = latents_input.shape[1]
-        import debugpy
 
-        debugpy.breakpoint()
         if input_image_latents is not None:
             latents_input = torch.cat([latents_input, input_image_latents], dim=1)
             if img_ids is not None and input_image_ids is not None:

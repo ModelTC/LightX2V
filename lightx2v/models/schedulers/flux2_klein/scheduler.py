@@ -87,14 +87,14 @@ class Flux2KleinScheduler(BaseScheduler):
 
     def set_timesteps(self):
         """Set timesteps for the scheduler."""
-        sigmas = np.linspace(1.0, 1 / self.infer_steps, self.infer_steps)
+        self.sigmas = np.linspace(1.0, 1 / self.infer_steps, self.infer_steps)
         image_seq_len = self.latents.shape[1]
         mu = compute_empirical_mu(image_seq_len=image_seq_len, num_steps=self.infer_steps)
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,
             self.infer_steps,
             AI_DEVICE,
-            sigmas=sigmas,
+            sigmas=self.sigmas,
             mu=mu,
         )
         self.timesteps = timesteps
@@ -165,13 +165,23 @@ class Flux2KleinScheduler(BaseScheduler):
 
     def prepare_i2i(self, input_info, input_image, vae):
         self.vae = vae
-        # prepare sets up standard variables like manual seed, latents and timesteps
         self.prepare(input_info)
 
         image_latents = []
         for img in input_image:
             imagge_latent = self._encode_image(img)
             image_latents.append(imagge_latent)
+
+        if "task_variant" in self.config:
+            self.task_variant = self.config["task_variant"]
+            if self.task_variant == "edit":  # 取出第一个融入latents
+                ref_img_latent = image_latents[0]
+                image_latents = image_latents[1:]
+
+                ref_img_latent = self._pack_latents(ref_img_latent).squeeze(0)
+                ref_img_latent = ref_img_latent.unsqueeze(0).to(AI_DEVICE, dtype=self.dtype)
+
+                self.latents = (1 - self.sigmas[0]) * ref_img_latent + self.sigmas[0] * self.latents
 
         image_latent_ids = self._prepare_image_ids(image_latents, scale=10)
 

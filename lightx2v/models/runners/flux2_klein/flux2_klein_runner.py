@@ -92,13 +92,11 @@ class Flux2KleinRunner(DefaultRunner):
         from PIL import Image
 
         if isinstance(image_path, str):
-            # Handle both file and directory paths
             if os.path.isdir(image_path):
                 # Load all image files from directory, sorted by name
                 image_files = sorted([os.path.join(image_path, f) for f in os.listdir(image_path) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"))])
                 input_image = [Image.open(img_file).convert("RGB") for img_file in image_files]
             else:
-                # Single image file
                 input_image = Image.open(image_path).convert("RGB")
         else:
             input_image = image_path
@@ -119,9 +117,6 @@ class Flux2KleinRunner(DefaultRunner):
                 img = image_processor._resize_to_target_area(img, 1024 * 1024)
                 image_width, image_height = img.size
 
-            import debugpy
-
-            debugpy.breakpoint()
             multiple_of = vae_scale_factor * 2
             image_width = (image_width // multiple_of) * multiple_of
             image_height = (image_height // multiple_of) * multiple_of
