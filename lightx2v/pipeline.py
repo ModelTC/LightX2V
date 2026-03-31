@@ -447,8 +447,8 @@ class LightX2VPipeline:
         seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
         self.runner.run_pipeline(input_info)
-        logger.info("Video generated successfully!")
-        logger.info(f"Video Saved in {save_result_path}")
+        logger.info("Generated successfully!")
+        logger.info(f"Saved in {save_result_path}")
 
     def _init_runner(self, config):
         torch.set_grad_enabled(False)

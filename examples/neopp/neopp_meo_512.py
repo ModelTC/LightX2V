@@ -10,7 +10,7 @@ pipe = LightX2VPipeline(
     task="t2i",
 )
 
-pipe.create_generator(config_json="../../configs/neopp/neopp_moe_t2i.json")
+pipe.create_generator(config_json="../../configs/neopp/neopp_moe.json")
 pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False})
 
 

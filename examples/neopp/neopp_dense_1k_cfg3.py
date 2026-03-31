@@ -1,3 +1,5 @@
+import torch.distributed as dist
+
 from lightx2v import LightX2VPipeline
 
 # -------------------------------------------------
@@ -10,7 +12,7 @@ pipe = LightX2VPipeline(
     support_tasks=["t2i", "i2i"],
 )
 
-pipe.create_generator(config_json="../../configs/neopp/neopp_dense.json")
+pipe.create_generator(config_json="../../configs/neopp/neopp_dense_cfg3.json")
 pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False})
 
 
@@ -43,3 +45,7 @@ pipe.generate(
     save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_i2i_1k.png",
     target_shape=[1024, 1024],  # Height, Width
 )
+
+
+if dist.is_initialized():
+    dist.destroy_process_group()

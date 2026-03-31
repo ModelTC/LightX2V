@@ -65,12 +65,18 @@ class NeoppModel(BaseTransformerModel):
 
         if self.config.get("cfg_parallel", False):
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-            assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+            # assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
             cfg_p_rank = dist.get_rank(cfg_p_group)
 
+            cfg_p_world_size = dist.get_world_size(cfg_p_group)
             if use_cfg:
-                v_pred = self._infer_pass(inputs, pre_infer_out, "cond" if cfg_p_rank == 0 else "uncond")
-                v_pred_list = [torch.zeros_like(v_pred) for _ in range(2)]
+                if cfg_p_rank == 0:
+                    v_pred = self._infer_pass(inputs, pre_infer_out, "cond")
+                elif cfg_p_rank == 1:
+                    v_pred = self._infer_pass(inputs, pre_infer_out, "uncond")
+                elif cfg_p_rank == 2:
+                    v_pred = torch.zeros_like(pre_infer_out.z)
+                v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
                 dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
                 v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
                 return v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
@@ -89,16 +95,22 @@ class NeoppModel(BaseTransformerModel):
 
         if self.config.get("cfg_parallel", False):
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-            assert dist.get_world_size(cfg_p_group) == 3, "cfg_p_world_size must be equal to 3 for i2i"
+            # assert dist.get_world_size(cfg_p_group) == 3, "cfg_p_world_size must be equal to 3 for i2i"
             cfg_p_rank = dist.get_rank(cfg_p_group)
 
             if use_cfg:
                 if cfg_p_rank == 0:
                     v_pred = self._infer_pass(inputs, pre_infer_out, "cond")
                 elif cfg_p_rank == 1:
-                    v_pred = self._infer_pass(inputs, pre_infer_out, "text_uncond") if self.cfg_scale > 1 else torch.zeros_like(pre_infer_out.z)
-                else:  # cfg_p_rank == 2
-                    v_pred = self._infer_pass(inputs, pre_infer_out, "img_uncond") if self.img_cfg_scale > 1 else torch.zeros_like(pre_infer_out.z)
+                    if self.cfg_scale > 1:
+                        v_pred = self._infer_pass(inputs, pre_infer_out, "text_uncond")
+                    else:
+                        v_pred = torch.zeros_like(pre_infer_out.z)
+                elif cfg_p_rank == 2:
+                    if self.img_cfg_scale > 1:
+                        v_pred = self._infer_pass(inputs, pre_infer_out, "img_uncond")
+                    else:
+                        v_pred = torch.zeros_like(pre_infer_out.z)
                 v_pred_list = [torch.zeros_like(v_pred) for _ in range(3)]
                 dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
                 v_pred_condition = v_pred_list[0]
