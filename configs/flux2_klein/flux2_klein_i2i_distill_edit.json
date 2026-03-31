@@ -1,6 +1,7 @@
 {
     "model_cls": "flux2_klein",
     "task": "i2i",
+    "task_variant": "edit",
     "infer_steps": 4,
     "sample_guide_scale": 1.0,
     "vae_scale_factor": 16,

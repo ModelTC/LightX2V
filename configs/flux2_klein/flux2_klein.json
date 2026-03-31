@@ -8,7 +8,5 @@
     "enable_cfg": true,
     "patch_size": 2,
     "tokenizer_max_length": 512,
-    "target_width": 1024,
-    "target_height": 1024,
-    "rope_type": "torch"
+    "rope_type": "flashinfer"
 }
