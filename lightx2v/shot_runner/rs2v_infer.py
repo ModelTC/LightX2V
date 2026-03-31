@@ -152,15 +152,41 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                 # Apply the formula to ensure VAE stride constraint
                 segment_target_video_length = calculate_target_video_length_from_duration(actual_video_frames / target_fps, target_fps)
                 clip_input_info.target_video_length = segment_target_video_length
+
+                # Recalculate latent_shape for this segment
+                # latent_shape = [C, T, H, W] where T = (target_video_length - 1) // vae_stride[0] + 1
+                if hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
+                    original_latent_shape = clip_input_info.latent_shape
+                    # Update only the temporal dimension (index 1)
+                    new_latent_t = (segment_target_video_length - 1) // rs2v.config["vae_stride"][0] + 1
+                    clip_input_info.latent_shape = [
+                        original_latent_shape[0],  # C
+                        new_latent_t,              # T
+                        original_latent_shape[2],  # H
+                        original_latent_shape[3],  # W
+                    ]
+
                 logger.info(
                     f"Segment {idx}: Last segment with pad_len={pad_len}, "
                     f"actual_video_frames={actual_video_frames}, "
-                    f"calculated target_video_length={segment_target_video_length}"
+                    f"calculated target_video_length={segment_target_video_length}, "
+                    f"latent_shape={clip_input_info.latent_shape}"
                 )
             else:
                 # For first/middle segments, use the original target_video_length
                 cur_clip_len = target_video_length if is_first else (target_video_length + 3)
                 clip_input_info.target_video_length = cur_clip_len
+
+                # Recalculate latent_shape for non-first segments
+                if not is_first and hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
+                    original_latent_shape = clip_input_info.latent_shape
+                    new_latent_t = (cur_clip_len - 1) // rs2v.config["vae_stride"][0] + 1
+                    clip_input_info.latent_shape = [
+                        original_latent_shape[0],
+                        new_latent_t,
+                        original_latent_shape[2],
+                        original_latent_shape[3],
+                    ]
 
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
