@@ -169,8 +169,8 @@ class Flux2KleinScheduler(BaseScheduler):
 
         image_latents = []
         for img in input_image:
-            imagge_latent = self._encode_image(img)
-            image_latents.append(imagge_latent)
+            image_latent = self._encode_image(img)
+            image_latents.append(image_latent)
 
         if "task_variant" in self.config:
             self.task_variant = self.config["task_variant"]
@@ -180,7 +180,6 @@ class Flux2KleinScheduler(BaseScheduler):
 
                 ref_img_latent = self._pack_latents(ref_img_latent).squeeze(0)
                 ref_img_latent = ref_img_latent.unsqueeze(0).to(AI_DEVICE, dtype=self.dtype)
-
                 self.latents = (1 - self.sigmas[0]) * ref_img_latent + self.sigmas[0] * self.latents
 
         image_latent_ids = self._prepare_image_ids(image_latents, scale=10)
