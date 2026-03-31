@@ -288,6 +288,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             dict: Dictionary of tensors
         """
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+        preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None  # None means all keys are preserved, otherwise only keys in preserve_keys are preserved
 
         if self.device.type != "cpu" and dist.is_initialized():
             device = dist.get_rank()
@@ -298,7 +299,7 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()
-                if not any(remove_key in key for remove_key in remove_keys)
+                if not any(remove_key in key for remove_key in remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
             }
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):

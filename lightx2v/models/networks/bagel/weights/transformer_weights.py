@@ -44,11 +44,11 @@ class Qwen2MoTDecoderLayer(WeightModule):
         # input_layernorm
         self.add_module(
             "input_layernorm",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.input_layernorm.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.input_layernorm.weight"),
         )
         self.add_module(
             "input_layernorm_moe_gen",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.input_layernorm_moe_gen.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.input_layernorm_moe_gen.weight"),
         )
         # mlp
         mlp = Qwen2MLP(
@@ -78,11 +78,11 @@ class Qwen2MoTDecoderLayer(WeightModule):
         # post_attention_layernorm
         self.add_module(
             "post_attention_layernorm",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.post_attention_layernorm.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.post_attention_layernorm.weight"),
         )
         self.add_module(
             "post_attention_layernorm_moe_gen",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.post_attention_layernorm_moe_gen.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.post_attention_layernorm_moe_gen.weight"),
         )
         # self attn
         attn = PackedAttentionMoT(block_index=block_index, task=task, mm_type=mm_type, config=config)
@@ -145,11 +145,11 @@ class PackedAttentionMoT(WeightModule):
         )
         self.add_module(
             "q_norm",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.self_attn.q_norm.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.self_attn.q_norm.weight"),
         )
         self.add_module(
             "q_norm_moe_gen",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.self_attn.q_norm_moe_gen.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.self_attn.q_norm_moe_gen.weight"),
         )
         self.add_module(
             "q_proj_moe_gen",
@@ -168,11 +168,11 @@ class PackedAttentionMoT(WeightModule):
         )
         self.add_module(
             "k_norm",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.self_attn.k_norm.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.self_attn.k_norm.weight"),
         )
         self.add_module(
             "k_norm_moe_gen",
-            RMS_WEIGHT_REGISTER["fp32_variance"](f"language_model.model.layers.{block_index}.self_attn.k_norm_moe_gen.weight"),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"language_model.model.layers.{block_index}.self_attn.k_norm_moe_gen.weight"),
         )
         self.add_module(
             "k_proj_moe_gen",

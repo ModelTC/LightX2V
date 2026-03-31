@@ -31,6 +31,7 @@ class AccessFlag:
     LOCAL_WRITE = e.IBV_ACCESS_LOCAL_WRITE
     REMOTE_WRITE = e.IBV_ACCESS_REMOTE_WRITE
     REMOTE_READ = e.IBV_ACCESS_REMOTE_READ
+    REMOTE_ATOMIC = e.IBV_ACCESS_REMOTE_ATOMIC
 
 
 class RDMAServer:
@@ -74,7 +75,11 @@ class RDMAServer:
 
         # 关键：注册一块内存用于被远程访问
         # buffer_size 可配置，允许远程写入 (REMOTE_WRITE) 和远程读取 (REMOTE_READ)
-        self.mr = MR(self.pd, self.buffer_size, AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ)
+        self.mr = MR(
+            self.pd,
+            self.buffer_size,
+            AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ | AccessFlag.REMOTE_ATOMIC,
+        )
 
         # 初始化缓冲区数据 (例如全为 0)
         zeros = b"\x00" * self.buffer_size
@@ -185,7 +190,7 @@ class RDMAServer:
     def _modify_qp_to_rts(self, qp, remote_info, local_psn):
         # Follow the standard RC flow: INIT -> RTR -> RTS.
         init_attr = QPAttr(port_num=self.port_num)
-        init_attr.qp_access_flags = AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ
+        init_attr.qp_access_flags = AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ | AccessFlag.REMOTE_ATOMIC
         qp.to_init(init_attr)
 
         rtr_attr = QPAttr(port_num=self.port_num)

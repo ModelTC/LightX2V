@@ -3,7 +3,19 @@
 set -euo pipefail
 
 SCRIPT_NAME="run_wan_t2v_service.sh"
-PORTS=(7788 7789 7790 12788 12789 12790 17788 17789 17790 27788 27789 27790)
+
+list_port=(5566 7788 12788 17788 27788)
+
+n=10
+list_n=($(seq 0 $((n-1))))
+
+PORTS=(5555 12787)
+
+for a in "${list_port[@]}"; do
+    for b in "${list_n[@]}"; do
+        PORTS+=($((a + b)))
+    done
+done
 
 kill_pid_gracefully() {
     local pid="$1"
