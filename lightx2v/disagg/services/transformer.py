@@ -3,7 +3,7 @@ import json
 import threading
 import time
 from collections import deque
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import torch
@@ -61,6 +61,13 @@ class TransformerService(BaseService):
             gpu_id=self.transformer_engine_rank,
             bind_address=f"tcp://{self.config.get('data_bootstrap_addr', '127.0.0.1')}:{MONITOR_POLLING_PORT + self.transformer_engine_rank}",
         )
+        self._queue_metrics_lock = threading.Lock()
+        self._queue_metrics: dict[str, Any] = {
+            "queue_sizes": {},
+            "queue_total_pending": 0,
+            "all_queues_empty": True,
+        }
+        self.reporter.set_extra_metrics_provider(self._get_queue_metrics)
         self._reporter_thread: Optional[threading.Thread] = threading.Thread(
             target=self.reporter.serve_forever,
             name="transformer-reporter",
@@ -68,6 +75,36 @@ class TransformerService(BaseService):
         )
         self._reporter_thread.start()
         self.load_models()
+
+    def _get_queue_metrics(self) -> dict[str, Any]:
+        with self._queue_metrics_lock:
+            queue_sizes = dict(self._queue_metrics.get("queue_sizes", {}))
+            return {
+                "queue_sizes": queue_sizes,
+                "queue_total_pending": int(self._queue_metrics.get("queue_total_pending", 0)),
+                "all_queues_empty": bool(self._queue_metrics.get("all_queues_empty", True)),
+            }
+
+    def _update_queue_metrics(
+        self,
+        queue_sizes: dict[str, int],
+        phase1_transfer_sizes: Optional[dict[str, int]] = None,
+        phase2_transfer_sizes: Optional[dict[str, int]] = None,
+    ):
+        merged_sizes = {k: int(v) for k, v in queue_sizes.items()}
+        if phase1_transfer_sizes is not None:
+            for key, value in phase1_transfer_sizes.items():
+                merged_sizes[f"phase1_{key}"] = int(value)
+        if phase2_transfer_sizes is not None:
+            for key, value in phase2_transfer_sizes.items():
+                merged_sizes[f"phase2_{key}"] = int(value)
+        total_pending = sum(max(v, 0) for v in merged_sizes.values())
+        with self._queue_metrics_lock:
+            self._queue_metrics = {
+                "queue_sizes": merged_sizes,
+                "queue_total_pending": total_pending,
+                "all_queues_empty": total_pending == 0,
+            }
 
     def _ensure_phase1_request_buffer(self) -> bool:
         if self._phase1_rdma_buffer is not None:
@@ -137,9 +174,6 @@ class TransformerService(BaseService):
         self._phase2_handshake_port = int(self.config.get("rdma_phase2_handshake_port", self._phase2_handshake_port))
         self._phase2_slots = shared_slots
         self._phase2_slot_size = shared_slot_size
-        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
-        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
-        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
 
         # Set global seed if present in config, though specific process calls might reuse it
         if "seed" in self.config:
@@ -516,20 +550,40 @@ class TransformerService(BaseService):
         complete_queue: dict[int, dict] = {}
 
         while True:
+            phase1_transfer_sizes = self.data_mgr1.get_backlog_counts() if self.data_mgr1 is not None else {"request_pool": 0, "waiting_pool": 0}
+            phase2_transfer_sizes = self.data_mgr2.get_backlog_counts() if self.data_mgr2 is not None else {"request_pool": 0, "waiting_pool": 0}
+            self._update_queue_metrics(
+                {
+                    "req_queue": len(req_queue),
+                    "waiting_queue": len(waiting_queue),
+                    "exec_queue": len(exec_queue),
+                    "complete_queue": len(complete_queue),
+                },
+                {
+                    "request_pool": int(phase1_transfer_sizes.get("request_pool", 0)),
+                    "waiting_pool": int(phase1_transfer_sizes.get("waiting_pool", 0)),
+                },
+                {
+                    "request_pool": int(phase2_transfer_sizes.get("request_pool", 0)),
+                    "waiting_pool": int(phase2_transfer_sizes.get("waiting_pool", 0)),
+                },
+            )
+
             if self._phase1_rdma_buffer is None:
                 try:
                     self._ensure_phase1_request_buffer()
                 except Exception:
                     self.logger.exception("Failed to connect phase1 request RDMA buffer, will retry")
 
-            if self._phase1_rdma_buffer is not None:
+            if self._phase1_rdma_buffer is not None and len(req_queue) + len(waiting_queue) < 2:
                 packet = self._phase1_rdma_buffer.consume()
                 if packet is not None:
                     if isinstance(packet, dict) and "request_config" in packet:
                         config = dict(packet.get("request_config") or {})
-                        config["encoder_node_address"] = packet.get("encoder_node_address", config.get("encoder_node_address", "127.0.0.1"))
+                        config["encoder_node_address"] = packet.get("encoder_node_address", "127.0.0.1")
                     else:
                         config = packet
+                    self.logger.info("%s Received request config from RDMA buffer: %s", self.transformer_engine_rank, {k: v for k, v in config.items()})
                     req_queue.append(config)
 
             if req_queue:
