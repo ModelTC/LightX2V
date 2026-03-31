@@ -29,12 +29,15 @@ class QPType:
 class WROpcode:
     RDMA_WRITE = e.IBV_WR_RDMA_WRITE
     RDMA_READ = e.IBV_WR_RDMA_READ
+    ATOMIC_FETCH_AND_ADD = e.IBV_WR_ATOMIC_FETCH_AND_ADD
+    ATOMIC_CMP_AND_SWP = e.IBV_WR_ATOMIC_CMP_AND_SWP
 
 
 class AccessFlag:
     LOCAL_WRITE = e.IBV_ACCESS_LOCAL_WRITE
     REMOTE_WRITE = e.IBV_ACCESS_REMOTE_WRITE
     REMOTE_READ = e.IBV_ACCESS_REMOTE_READ
+    REMOTE_ATOMIC = e.IBV_ACCESS_REMOTE_ATOMIC
 
 
 class RDMAClient:
@@ -100,7 +103,7 @@ class RDMAClient:
     def _modify_qp_to_rts(self):
         # Follow the standard RC flow: INIT -> RTR -> RTS.
         init_attr = QPAttr(port_num=self.port_num)
-        init_attr.qp_access_flags = AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ
+        init_attr.qp_access_flags = AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ | AccessFlag.REMOTE_ATOMIC
         self.qp.to_init(init_attr)
 
         rtr_attr = QPAttr(port_num=self.port_num)
@@ -208,16 +211,60 @@ class RDMAClient:
                 self.remote_info["rkey"] = old_rkey
 
     def rdma_faa(self, remote_addr, add_value, rkey=None):
-        """Best-effort FAA semantics via read-modify-write.
-
-        NOTE: This is not a true remote atomic verb; it is a compatibility shim
-        until atomic WR support is implemented.
-        """
+        """Execute true remote atomic fetch-and-add and return previous value."""
         with self._io_lock:
-            old = self.rdma_read_from(int(remote_addr), 8, rkey=rkey)
+            self._ensure_local_mr_capacity(8)
+
+            # The original remote value will be written into this local buffer.
+            self.local_mr.write(b"\x00" * 8, 8, 0)
+
+            sge = SGE(self.local_mr.buf, 8, self.local_mr.lkey)
+            wr = WR(
+                wr_id=125,
+                opcode=WROpcode.ATOMIC_FETCH_AND_ADD,
+                num_sge=1,
+                sg=[sge],
+                send_flags=e.IBV_SEND_SIGNALED,
+            )
+
+            target_rkey = int(self.remote_info["rkey"] if rkey is None else rkey)
+            add_u64 = int(add_value) & ((1 << 64) - 1)
+            wr.set_wr_atomic(target_rkey, int(remote_addr), add_u64, 0)
+
+            self.qp.post_send(wr)
+            self._poll_cq()
+
+            old = self.local_mr.read(8, 0)
             old_v = int.from_bytes(old, byteorder="little", signed=False)
-            new_v = (old_v + int(add_value)) & ((1 << 64) - 1)
-            self.rdma_write_to(int(remote_addr), new_v.to_bytes(8, byteorder="little", signed=False), rkey=rkey)
+            return old_v
+
+    def rdma_cas(self, remote_addr, compare_value, swap_value, rkey=None):
+        """Execute true remote atomic compare-and-swap and return previous value."""
+        with self._io_lock:
+            self._ensure_local_mr_capacity(8)
+
+            # The original remote value will be written into this local buffer.
+            self.local_mr.write(b"\x00" * 8, 8, 0)
+
+            sge = SGE(self.local_mr.buf, 8, self.local_mr.lkey)
+            wr = WR(
+                wr_id=126,
+                opcode=WROpcode.ATOMIC_CMP_AND_SWP,
+                num_sge=1,
+                sg=[sge],
+                send_flags=e.IBV_SEND_SIGNALED,
+            )
+
+            target_rkey = int(self.remote_info["rkey"] if rkey is None else rkey)
+            compare_u64 = int(compare_value) & ((1 << 64) - 1)
+            swap_u64 = int(swap_value) & ((1 << 64) - 1)
+            wr.set_wr_atomic(target_rkey, int(remote_addr), compare_u64, swap_u64)
+
+            self.qp.post_send(wr)
+            self._poll_cq()
+
+            old = self.local_mr.read(8, 0)
+            old_v = int.from_bytes(old, byteorder="little", signed=False)
             return old_v
 
     def _poll_cq(self):
@@ -245,10 +292,28 @@ class RDMAClient:
 #     cli.connect_to_server('127.0.0.1') # 替换为服务器 IP
 
 #     # 执行单边写
-#     msg = b"Hello RDMA!"
-#     cli.rdma_write(msg)
-#     print("Write done.")
+#     # msg = b"Hello RDMA!"
+#     # cli.rdma_write(msg)
+#     # print("Write done.")
+
+#     # # 执行单边读
+#     # data = cli.rdma_read(len(msg))
+#     # print("Read data:", data)
+
+#     # 执行单边写（rdma_write 需要 bytes-like 数据）
+#     value = 123
+#     payload = int(value).to_bytes(8, byteorder="little", signed=False)
+#     cli.rdma_write(payload)
+#     print(f"Write done. value={value}")
 
 #     # 执行单边读
-#     data = cli.rdma_read(len(msg))
-#     print("Read data:", data)
+#     data = cli.rdma_read(8)
+#     read_value = int.from_bytes(data, byteorder="little", signed=False)
+#     print(f"Read data: raw={data} parsed={read_value}")
+
+#     old_value = cli.rdma_faa(remote_addr=cli.remote_info["addr"], add_value=10)
+#     print(f"FAA old value: {old_value}")
+
+#     data = cli.rdma_read(8)
+#     faa_read_value = int.from_bytes(data, byteorder="little", signed=False)
+#     print(f"Read data after FAA: raw={data} parsed={faa_read_value}")

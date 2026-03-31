@@ -23,7 +23,7 @@ try:
     import spas_sage_attn._qattn as qattn
     from spas_sage_attn.utils import get_vanilla_qk_quant
 except ImportError:
-    logger.warning("spas_sage_attn is not installed.")
+    print("spas_sage_attn is not installed.")
 
 SAGE2PP_ENABLED = True
 try:
