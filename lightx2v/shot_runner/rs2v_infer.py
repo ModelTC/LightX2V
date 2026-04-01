@@ -213,10 +213,9 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                 video_seg = gen_clip_video[:, :, :segment_actual_video_frames]
                 audio_seg = audio_clip[:, : segment_actual_video_frames * audio_per_frame].sum(dim=0)
             else:
-                video_pad_len = pad_len // audio_per_frame
-                audio_pad_len = video_pad_len * audio_per_frame
-                video_seg = gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len]
-                audio_seg = audio_clip[:, : audio_clip.shape[1] - audio_pad_len].sum(dim=0)
+                video_seg = gen_clip_video
+                audio_seg = audio_clip.sum(dim=0)
+
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
             if clip_input_info.return_result_tensor or not clip_input_info.stream_save_video:
