@@ -69,6 +69,47 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
 
+    def set_config(self, config_modify):
+        """Apply per-request overrides and mirror flat disagg HTTP fields into ``disagg_config``."""
+        super().set_config(config_modify)
+        if not isinstance(config_modify, dict):
+            return
+        dc = self.config.get("disagg_config")
+        if not isinstance(dc, dict):
+            return
+        with self.config.temporarily_unlocked():
+            if config_modify.get("data_bootstrap_room") is not None:
+                try:
+                    self.config["data_bootstrap_room"] = int(config_modify["data_bootstrap_room"])
+                except (TypeError, ValueError):
+                    pass
+            if config_modify.get("disagg_bootstrap_room") is not None:
+                try:
+                    v = int(config_modify["disagg_bootstrap_room"])
+                    dc["bootstrap_room"] = v
+                    self.config["data_bootstrap_room"] = v
+                except (TypeError, ValueError):
+                    pass
+            if config_modify.get("disagg_decoder_bootstrap_room") is not None:
+                try:
+                    dc["decoder_bootstrap_room"] = int(config_modify["disagg_decoder_bootstrap_room"])
+                except (TypeError, ValueError):
+                    pass
+            if config_modify.get("disagg_phase1_receiver_engine_rank") is not None:
+                try:
+                    self.config["disagg_phase1_receiver_engine_rank"] = int(config_modify["disagg_phase1_receiver_engine_rank"])
+                except (TypeError, ValueError):
+                    pass
+            for flat, key in (
+                ("disagg_phase1_receiver_engine_rank", "receiver_engine_rank"),
+                ("disagg_phase2_sender_engine_rank", "receiver_engine_rank"),
+            ):
+                if config_modify.get(flat) is not None:
+                    try:
+                        dc[key] = int(config_modify[flat])
+                    except (TypeError, ValueError):
+                        pass
+
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         disagg_mode = self.config.get("disagg_mode")
