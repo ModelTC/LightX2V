@@ -17,7 +17,6 @@ limitations under the License.
 import torch
 import triton
 import triton.language as tl
-from loguru import logger
 
 try:
     import spas_sage_attn._fused as fused
