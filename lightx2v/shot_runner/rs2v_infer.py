@@ -47,10 +47,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                 # Calculate for the first segment (max 5s)
                 segment_duration = min(clip_input_info.video_duration, 5.0)
                 clip_input_info.target_video_length = calculate_target_video_length_from_duration(segment_duration, target_fps)
-                logger.info(
-                    f"Auto-calculated target_video_length={clip_input_info.target_video_length} "
-                    f"from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)"
-                )
+                logger.info(f"Auto-calculated target_video_length={clip_input_info.target_video_length} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
             else:
                 # Fallback to config default
                 clip_input_info.target_video_length = rs2v.config.get("target_video_length", 81)
@@ -161,7 +158,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                     new_latent_t = (segment_target_video_length - 1) // rs2v.config["vae_stride"][0] + 1
                     clip_input_info.latent_shape = [
                         original_latent_shape[0],  # C
-                        new_latent_t,              # T
+                        new_latent_t,  # T
                         original_latent_shape[2],  # H
                         original_latent_shape[3],  # W
                     ]
