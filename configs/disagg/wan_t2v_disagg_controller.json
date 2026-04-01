@@ -16,6 +16,7 @@
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 0,
+        "ranks" : 8,
         "encoder_engine_rank": 0,
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,

@@ -1,8 +1,10 @@
 import json
 import uuid
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict, Optional
 
+from PIL import Image
 from loguru import logger
 
 from ...media import is_base64_audio, is_base64_image, save_base64_audio, save_base64_image
@@ -30,18 +32,61 @@ class BaseGenerationService(ABC):
             return task_type in self.get_task_type().split(",")
         return False
 
-    async def _process_image_path(self, image_path: str, task_data: Dict[str, Any]) -> None:
+    async def _resolve_image_path(self, image_path: str) -> str:
         if not image_path:
-            return
+            return ""
 
         if image_path.startswith("http"):
             downloaded_path = await self.file_service.download_image(image_path)
-            task_data["image_path"] = str(downloaded_path)
+            return str(downloaded_path)
         elif is_base64_image(image_path):
             saved_path = save_base64_image(image_path, str(self.file_service.input_image_dir))
-            task_data["image_path"] = str(saved_path)
+            return str(saved_path)
         else:
-            task_data["image_path"] = image_path
+            return image_path
+
+    async def _process_image_path(self, image_path: str, task_data: Dict[str, Any]) -> None:
+        task_data["image_path"] = await self._resolve_image_path(image_path)
+
+    async def _process_image_mask_path(self, image_mask_path: str, task_data: Dict[str, Any]) -> None:
+        if not image_mask_path:
+            return
+
+        task_data["image_mask_path"] = await self._resolve_image_path(image_mask_path)
+
+    def _pack_image_and_mask_as_dir(self, task_data: Dict[str, Any]) -> None:
+        image_path = task_data.get("image_path", "")
+        image_mask_path = task_data.get("image_mask_path", "")
+        if not image_path or not image_mask_path:
+            return
+
+        image_file = Path(image_path)
+        mask_file = Path(image_mask_path)
+        if not image_file.exists() or not image_file.is_file():
+            raise RuntimeError(f"Invalid image_path for mask mode: {image_path}")
+        if not mask_file.exists() or not mask_file.is_file():
+            raise RuntimeError(f"Invalid image_mask_path for mask mode: {image_mask_path}")
+
+        image_pair_dir = self.file_service.input_image_dir / f"mask_pair_{uuid.uuid4().hex[:8]}"
+        image_pair_dir.mkdir(parents=True, exist_ok=True)
+
+        base_name = image_file.stem or "image"
+        image_dst = image_pair_dir / f"{base_name}.png"
+        mask_dst = image_pair_dir / f"{base_name}_mask.png"
+        with Image.open(image_file) as image_obj:
+            image_rgb = image_obj.convert("RGB")
+            target_size = image_rgb.size
+            image_rgb.save(image_dst)
+
+        with Image.open(mask_file) as mask_obj:
+            mask_rgb = mask_obj.convert("RGB")
+            if mask_rgb.size != target_size:
+                # Keep mask aligned with the reference image size for edit-mode latent shapes.
+                mask_rgb = mask_rgb.resize(target_size, Image.NEAREST)
+            mask_rgb.save(mask_dst)
+
+        task_data["image_path"] = str(image_pair_dir)
+        task_data["image_mask_path"] = ""
 
     async def _process_audio_path(self, audio_path: str, task_data: Dict[str, Any]) -> None:
         if not audio_path:
@@ -108,6 +153,12 @@ class BaseGenerationService(ABC):
             if hasattr(message, "image_path") and message.image_path:
                 await self._process_image_path(message.image_path, task_data)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
+
+            if hasattr(message, "image_mask_path") and message.image_mask_path:
+                await self._process_image_mask_path(message.image_mask_path, task_data)
+                logger.info(f"Task {message.task_id} image mask path: {task_data.get('image_mask_path')}")
+                self._pack_image_and_mask_as_dir(task_data)
+                logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
 
             if hasattr(message, "audio_path") and message.audio_path:
                 await self._process_audio_path(message.audio_path, task_data)

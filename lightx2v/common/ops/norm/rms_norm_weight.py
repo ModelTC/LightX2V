@@ -5,7 +5,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import rms_norm_kernel
+from lightx2v.common.ops.norm.triton_ops import fused_norm_3drope, fused_qk_norm_3drope, rms_norm_kernel
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -306,22 +306,52 @@ class RMSWeightFP32(RMSWeight):
             lora_path,
         )
 
-    def apply(self, input_tensor, moe_gen=False):
+    def apply(self, input_tensor):
         input_dtype = input_tensor.dtype
-        if moe_gen:
-            hidden_states = input_tensor.to(torch.float32)
-            variance = hidden_states.pow(2).mean(-1, keepdim=True)
-            hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
-            return self.weight * hidden_states.to(input_dtype)
-        else:
-            variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-            hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
-            if self.weight.dtype in [torch.float16, torch.bfloat16]:
-                hidden_states = hidden_states.to(self.weight.dtype)
-            if self.weight is not None:
-                hidden_states = hidden_states * self.weight
-            hidden_states = hidden_states.to(input_dtype)
-            return hidden_states
+        variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = input_tensor * torch.rsqrt(variance + self.eps)
+
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
+        if self.weight is not None:
+            hidden_states = hidden_states * (self._get_actual_weight())
+        hidden_states = hidden_states.to(input_dtype)
+
+        return hidden_states
+
+
+@RMS_WEIGHT_REGISTER("fp32_variance_qwen")
+class RMSWeightFP32Qwen(RMSWeight):
+    def __init__(
+        self,
+        weight_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            eps,
+            lora_prefix,
+            lora_path,
+        )
+
+    def apply(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+        return self.weight * hidden_states.to(input_dtype)
 
 
 @RMS_WEIGHT_REGISTER("self_forcing")
@@ -385,3 +415,122 @@ class RMSWeightOnePass(RMSWeight):
 
     def apply(self, input_tensor):
         return rms_norm_kernel(input_tensor, (self._get_actual_weight()), self.eps)
+
+
+class RMSWeightFusedQKNorm3DRope:
+    """
+    Holds two pairs of dual-RMSNorm weights (Q and K) and applies
+    fused QK dual-RMSNorm + 3D Neox-RoPE on Q and K in a single kernel launch.
+
+    Used in NeoppAttentionWeights to replace separate q_norm and k_norm.
+    """
+
+    def __init__(
+        self,
+        q_weight_name_t,
+        q_weight_name_hw,
+        k_weight_name_t,
+        k_weight_name_hw,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        self.q_weight_name_t = q_weight_name_t
+        self.q_weight_name_hw = q_weight_name_hw
+        self.k_weight_name_t = k_weight_name_t
+        self.k_weight_name_hw = k_weight_name_hw
+        self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
+        self._w_qt = None
+        self._w_qhw = None
+        self._w_kt = None
+        self._w_khw = None
+        self.eps = eps
+
+    def load(self, weight_dict):
+        self._w_qt = weight_dict[self.q_weight_name_t]
+        self._w_qhw = weight_dict[self.q_weight_name_hw]
+        self._w_kt = weight_dict[self.k_weight_name_t]
+        self._w_khw = weight_dict[self.k_weight_name_hw]
+
+    def apply(self, q, k, cos_sin):
+        """In-place fused dual-RMSNorm + 3D Neox-RoPE on Q and K in a single kernel launch.
+
+        q : [seq, num_heads, head_dim]    bfloat16
+        k : [seq, num_kv_heads, head_dim] bfloat16
+        """
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+        fused_qk_norm_3drope(
+            q,
+            k,
+            self._w_qt,
+            self._w_qhw,
+            self._w_kt,
+            self._w_khw,
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            eps=self.eps,
+        )
+
+
+class RMSWeightDualNorm3DRope:
+    """
+    Holds a pair of fp32_variance_qwen RMSNorm weights (t-segment + hw-segment)
+    and applies fused dual-RMSNorm + 3D Neox-RoPE in-place on Q or K.
+
+    Used in NeoppAttentionWeights for the Q and K projections.
+    """
+
+    def __init__(
+        self,
+        weight_name_t,
+        weight_name_hw,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        eps=1e-6,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        self.weight_name_t = weight_name_t
+        self.weight_name_hw = weight_name_hw
+        self.create_cuda_buffer = create_cuda_buffer
+        self.create_cpu_buffer = create_cpu_buffer
+        self.lazy_load = lazy_load
+        self.lazy_load_file = lazy_load_file
+        self._w_t = None
+        self._w_hw = None
+        self.eps = eps
+
+    def load(self, weight_dict):
+        self._w_t = weight_dict[self.weight_name_t]
+        self._w_hw = weight_dict[self.weight_name_hw]
+
+    def apply(self, x, cos_sin):
+        """In-place fused dual-RMSNorm + 3D Neox-RoPE on x: [seq, num_heads, head_dim]."""
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+        fused_norm_3drope(
+            x,
+            self._w_t,
+            self._w_hw,
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            eps=self.eps,
+        )

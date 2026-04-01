@@ -48,7 +48,7 @@ class BaseRunner(ABC):
         Returns:
             Tuple[vae_encoder, vae_decoder]: VAE encoder and decoder instances
         """
-        pass
+        return None, None
 
     def run_image_encoder(self, img):
         """Run image encoder

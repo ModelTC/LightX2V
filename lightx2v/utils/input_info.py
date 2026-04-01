@@ -1,5 +1,5 @@
 import inspect
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields, make_dataclass
 from typing import Any
 
 import torch
@@ -301,42 +301,67 @@ class WorldPlayT2VInputInfo:
     action: torch.Tensor = field(default_factory=lambda: None)
 
 
-def init_empty_input_info(task):
-    if task == "t2v":
-        return T2VInputInfo()
-    elif task == "i2v":
-        return I2VInputInfo()
-    elif task == "sr":
-        return SRInputInfo()  # SR uses dedicated SRInputInfo
-    elif task == "flf2v":
-        return Flf2vInputInfo()
-    elif task == "vace":
-        return VaceInputInfo()
-    elif task == "s2v":
-        return S2VInputInfo()
-    elif task == "rs2v":
-        return RS2VInputInfo()
-    elif task == "animate":
-        return AnimateInputInfo()
-    elif task == "t2i":
-        return T2IInputInfo()
-    elif task == "i2i":
-        return I2IInputInfo()
-    elif task == "t2av":
-        return T2AVInputInfo()
-    elif task == "i2av":
-        return I2AVInputInfo()
-    elif task == "worldplay_i2v":
-        return WorldPlayI2VInputInfo()
-    elif task == "worldplay_t2v":
-        return WorldPlayT2VInputInfo()
-    else:
-        raise ValueError(f"Unsupported task: {task}")
+task_dict = {
+    "t2v": T2VInputInfo,
+    "i2v": I2VInputInfo,
+    "sr": SRInputInfo,
+    "flf2v": Flf2vInputInfo,
+    "vace": VaceInputInfo,
+    "s2v": S2VInputInfo,
+    "rs2v": RS2VInputInfo,
+    "animate": AnimateInputInfo,
+    "t2i": T2IInputInfo,
+    "i2i": I2IInputInfo,
+    "t2av": T2AVInputInfo,
+    "i2av": I2AVInputInfo,
+    "worldplay_i2v": WorldPlayI2VInputInfo,
+    "worldplay_t2v": WorldPlayT2VInputInfo,
+}
+
+
+def init_empty_input_info(task, support_tasks=[]):
+    if len(support_tasks) == 0:
+        support_tasks = [task]
+    assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
+
+    if len(support_tasks) == 1:
+        support_task = support_tasks[0]
+        if support_task not in task_dict:
+            raise ValueError(f"Unsupported task: {support_task}")
+        return task_dict[support_task]()
+
+    merged_fields = []
+    merged_field_names = set()
+
+    for support_task in support_tasks:
+        if support_task not in task_dict:
+            raise ValueError(f"Unsupported task: {support_task}")
+
+        support_input_info_cls = task_dict[support_task]
+        for support_field in fields(support_input_info_cls):
+            if support_field.name in merged_field_names:
+                continue
+            merged_field_names.add(support_field.name)
+
+            if support_field.default_factory is not MISSING:
+                merged_fields.append((support_field.name, support_field.type, field(default_factory=support_field.default_factory)))
+            elif support_field.default is not MISSING:
+                merged_fields.append((support_field.name, support_field.type, field(default=support_field.default)))
+            else:
+                merged_fields.append((support_field.name, support_field.type, field(default=None)))
+
+    if not merged_fields:
+        raise ValueError("support_tasks must not be empty")
+
+    merged_cls_name = "Merged" + "".join(task.upper() for task in support_tasks) + "InputInfo"
+    merged_input_info_cls = make_dataclass(merged_cls_name, merged_fields)
+    return merged_input_info_cls()
 
 
 @dataclass
 class SekoTalkInputs:
     infer_steps: int | Any = UNSET
+    target_video_length: int | Any = UNSET
     seed: int | Any = UNSET
     prompt: str | Any = UNSET
     prompt_enhanced: str | Any = UNSET
@@ -364,6 +389,8 @@ class SekoTalkInputs:
     # flags for first and last clip
     is_first: bool | Any = UNSET
     is_last: bool | Any = UNSET
+    # if save video by stream
+    stream_save_video: bool | Any = UNSET
 
     @classmethod
     def from_args(cls, args, **overrides):

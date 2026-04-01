@@ -1,0 +1,17 @@
+{
+    "model_cls": "flux2_klein",
+    "task": "i2i",
+    "task_variant": "edit",
+    "infer_steps": 4,
+    "sample_guide_scale": 1.0,
+    "vae_scale_factor": 16,
+    "feature_caching": "None",
+    "enable_cfg": false,
+    "patch_size": 2,
+    "tokenizer_max_length": 512,
+    "rope_type": "flashinfer",
+    "parallel": {
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
+    }
+}

@@ -7,8 +7,14 @@ import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
-from scipy.interpolate import interp1d  # type: ignore
-from scipy.spatial.transform import Rotation, Slerp  # type: ignore
+
+try:
+    from scipy.interpolate import interp1d  # type: ignore
+    from scipy.spatial.transform import Rotation, Slerp  # type: ignore
+except ImportError:
+    interp1d = None
+    Rotation = None
+    Slerp = None
 
 from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel

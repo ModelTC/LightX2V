@@ -35,6 +35,12 @@ class ImageGenerationService(BaseGenerationService):
                 await self._process_image_path(message.image_path, task_data)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
 
+            if hasattr(message, "image_mask_path") and message.image_mask_path:
+                await self._process_image_mask_path(message.image_mask_path, task_data)
+                logger.info(f"Task {message.task_id} image mask path: {task_data.get('image_mask_path')}")
+                self._pack_image_and_mask_as_dir(task_data)
+                logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
+
             self._prepare_output_path(message.save_result_path, task_data)
             task_data["seed"] = message.seed
 
