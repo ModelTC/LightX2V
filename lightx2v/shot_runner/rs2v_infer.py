@@ -8,10 +8,10 @@ import torchaudio as ta
 from loguru import logger
 
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
-from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader
+from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.input_info import init_input_info_from_args
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
+from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
 from lightx2v.utils.va_controller import VAController
 
 
@@ -114,8 +114,10 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         rs2v.input_info = clip_input_info
         rs2v.inputs_static = rs2v._run_input_encoder_local_rs2v_static()
 
-        self.va_controller = VAController(rs2v)
-        logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
+        self.va_controller = None
+        if clip_input_info.stream_save_video:
+            self.va_controller = VAController(rs2v)
+            logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
         idx = 0
         while True:
@@ -154,7 +156,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             audio_seg = audio_clip[:, : audio_clip.shape[1] - audio_pad_len].sum(dim=0)
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
-            if clip_input_info.return_result_tensor:
+            if clip_input_info.return_result_tensor or not clip_input_info.stream_save_video:
                 gen_video_list.append(video_seg.clone().cpu().float())
                 cut_audio_list.append(audio_seg.cpu())
             elif self.va_controller.recorder is not None:
@@ -162,12 +164,21 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                 video_seg = vae_to_comfyui_image_inplace(video_seg)
                 self.va_controller.pub_livestream(video_seg, audio_seg, None)
 
-        if not clip_input_info.return_result_tensor:
+        if not clip_input_info.return_result_tensor and clip_input_info.stream_save_video:
             return None, None, None
 
         gen_lvideo = torch.cat(gen_video_list, dim=2).float()
         gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
         merge_audio = torch.cat(cut_audio_list, dim=0).numpy().astype(np.float32)
+
+        if is_main_process() and clip_input_info.save_result_path:
+            out_path = os.path.join("./", "video_merge.mp4")
+            audio_file = os.path.join("./", "audio_merge.wav")
+
+            save_to_video(gen_lvideo, out_path, 16)
+            save_audio(merge_audio, audio_file, out_path, output_path=clip_input_info.save_result_path)
+            os.remove(out_path)
+            os.remove(audio_file)
 
         return gen_lvideo, merge_audio, audio_sr
 
@@ -205,6 +216,7 @@ def main():
     parser.add_argument("--infer_steps", type=int, default=4, help="Number of inference steps")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
+    parser.add_argument("--stream_save_video", action="store_true", help="Whether to save video by stream")
 
     args = parser.parse_args()
 

@@ -389,6 +389,8 @@ class SekoTalkInputs:
     # flags for first and last clip
     is_first: bool | Any = UNSET
     is_last: bool | Any = UNSET
+    # if save video by stream
+    stream_save_video: bool | Any = UNSET
 
     @classmethod
     def from_args(cls, args, **overrides):
