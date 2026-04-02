@@ -29,6 +29,10 @@ class ApiServer:
         def redirect_to_docs():
             return RedirectResponse(url="/docs")
 
+        @self.app.get("/health")
+        def health_check():
+            return {"status": "ok"}
+
         api_router = create_api_router()
         self.app.include_router(api_router)
 
