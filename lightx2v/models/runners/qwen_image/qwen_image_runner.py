@@ -400,13 +400,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
                 width, height = int(width * scale), int(height * scale)
-                logger.warning(
-                    f"Config target_height/target_width scaled to {width}x{height} (max_custom_size={max_size})"
-                )
+                logger.warning(f"Config target_height/target_width scaled to {width}x{height} (max_custom_size={max_size})")
             width, height = max(width, min_size), max(height, min_size)
-            logger.info(
-                f"Qwen Image Runner got shape from config target_height/target_width: {width}x{height}"
-            )
+            logger.info(f"Qwen Image Runner got shape from config target_height/target_width: {width}x{height}")
             return (width, height)
 
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)

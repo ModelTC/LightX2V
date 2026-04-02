@@ -236,7 +236,10 @@ class RDMABuffer:
             self._rdma_faa(self.descriptor.tail_addr, -1)
             logger.error(
                 "Ring buffer full: old_tail=%d cur_head=%d used=%d buffer_size=%d",
-                old_tail, cur_head, used, self.buffer_size,
+                old_tail,
+                cur_head,
+                used,
+                self.buffer_size,
             )
             raise BufferError("ring buffer is full")
 
@@ -277,7 +280,8 @@ class RDMABuffer:
                 logger.warning("RDMA buffer rollback failed on empty consume: %s", exc)
             logger.debug(
                 "Consume race lost: old_head=%d cur_tail=%d (rolled back)",
-                old_head, cur_tail,
+                old_head,
+                cur_tail,
             )
             return None
 

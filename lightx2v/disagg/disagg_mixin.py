@@ -312,9 +312,7 @@ class DisaggMixin:
     def _disagg_build_request_config_snapshot(self) -> Dict[str, Any]:
         """Payload for phase1/phase2 ring: per-request fields for workers."""
         disagg_cfg = dict(self.config.get("disagg_config", {}) or {})
-        room = int(
-            self.config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", self._disagg_bootstrap_room))
-        )
+        room = int(self.config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", self._disagg_bootstrap_room)))
         payload: Dict[str, Any] = {
             "data_bootstrap_room": room,
             "task": self.config.get("task"),
@@ -840,9 +838,7 @@ class DisaggMixin:
             time.sleep(0.01)
 
         if getattr(self, "_disagg_decentralized", False):
-            self._disagg_encoder_teardown_room(
-                int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
-            )
+            self._disagg_encoder_teardown_room(int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0))))
 
     # ------------------------------------------------------------------ #
     #  Transformer role: receive and deserialize
