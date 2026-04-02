@@ -121,6 +121,7 @@ class S2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
@@ -148,6 +149,7 @@ class RS2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
@@ -356,6 +358,28 @@ def init_empty_input_info(task, support_tasks=[]):
     merged_cls_name = "Merged" + "".join(task.upper() for task in support_tasks) + "InputInfo"
     merged_input_info_cls = make_dataclass(merged_cls_name, merged_fields)
     return merged_input_info_cls()
+
+
+def calculate_target_video_length_from_duration(duration_seconds: float, fps: int = 16) -> int:
+    """Calculate target_video_length from video duration using the formula:
+    target_video_length = (fps * seconds + 3) // 4 * 4 + 1
+
+    This ensures the result satisfies the VAE stride constraint: (n-1) % 4 == 0
+
+    Args:
+        duration_seconds: Video duration in seconds
+        fps: Target frames per second (default 16)
+
+    Returns:
+        Frame count that satisfies VAE stride constraint
+
+    Examples:
+        1s: (16*1 + 3) // 4 * 4 + 1 = 17 frames
+        3s: (16*3 + 3) // 4 * 4 + 1 = 49 frames
+        5s: (16*5 + 3) // 4 * 4 + 1 = 81 frames
+    """
+    target_video_length = (int(fps * duration_seconds) + 3) // 4 * 4 + 1
+    return target_video_length
 
 
 @dataclass

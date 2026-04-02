@@ -9,7 +9,7 @@ from loguru import logger
 
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
-from lightx2v.utils.input_info import init_input_info_from_args
+from lightx2v.utils.input_info import UNSET, calculate_target_video_length_from_duration, init_input_info_from_args
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
 from lightx2v.utils.va_controller import VAController
@@ -40,6 +40,19 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         clip_input_info = init_input_info_from_args(rs2v.config["task"], args)
         # 从默认配置中补全输入信息
         clip_input_info = self.check_input_info(clip_input_info, rs2v.config)
+        target_video_length = clip_input_info.target_video_length
+
+        # Auto-calculate target_video_length from video_duration if not explicitly provided
+        if clip_input_info.target_video_length is None or clip_input_info.target_video_length == UNSET:
+            if clip_input_info.video_duration is not None and clip_input_info.video_duration != UNSET:
+                # Calculate for the first segment (max 5s)
+                segment_duration = min(clip_input_info.video_duration, 5.0)
+                clip_input_info.target_video_length = calculate_target_video_length_from_duration(segment_duration, target_fps)
+                logger.info(f"Auto-calculated target_video_length={clip_input_info.target_video_length} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
+            else:
+                # Fallback to config default
+                clip_input_info.target_video_length = rs2v.config.get("target_video_length", 81)
+
         target_video_length = clip_input_info.target_video_length
 
         gen_video_list = []
@@ -131,6 +144,52 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             pipe = rs2v
             pipe.check_stop()
 
+            # Calculate actual target_video_length for this segment based on audio length
+            segment_actual_video_frames = None  # Track for last-segment trimming
+            if is_last and pad_len > 0:
+                # For the last segment with padding, calculate actual video frames needed
+                actual_audio_samples = audio_clip.shape[1] - pad_len
+                actual_video_frames = int(np.ceil(actual_audio_samples / audio_per_frame))
+                segment_actual_video_frames = actual_video_frames
+                # Apply the formula to ensure VAE stride constraint
+                segment_target_video_length = calculate_target_video_length_from_duration(actual_video_frames / target_fps, target_fps)
+                clip_input_info.target_video_length = segment_target_video_length
+
+                # Recalculate latent_shape for this segment
+                # latent_shape = [C, T, H, W] where T = (target_video_length - 1) // vae_stride[0] + 1
+                if hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
+                    original_latent_shape = clip_input_info.latent_shape
+                    # Update only the temporal dimension (index 1)
+                    new_latent_t = (segment_target_video_length - 1) // rs2v.config["vae_stride"][0] + 1
+                    clip_input_info.latent_shape = [
+                        original_latent_shape[0],  # C
+                        new_latent_t,  # T
+                        original_latent_shape[2],  # H
+                        original_latent_shape[3],  # W
+                    ]
+
+                logger.info(
+                    f"Segment {idx}: Last segment with pad_len={pad_len}, "
+                    f"actual_video_frames={actual_video_frames}, "
+                    f"calculated target_video_length={segment_target_video_length}, "
+                    f"latent_shape={clip_input_info.latent_shape}"
+                )
+            else:
+                # For first/middle segments, use the original target_video_length
+                cur_clip_len = target_video_length if is_first else (target_video_length + 3)
+                clip_input_info.target_video_length = cur_clip_len
+
+                # Recalculate latent_shape for non-first segments
+                if not is_first and hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
+                    original_latent_shape = clip_input_info.latent_shape
+                    new_latent_t = (cur_clip_len - 1) // rs2v.config["vae_stride"][0] + 1
+                    clip_input_info.latent_shape = [
+                        original_latent_shape[0],
+                        new_latent_t,
+                        original_latent_shape[2],
+                        original_latent_shape[3],
+                    ]
+
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
             clip_input_info.ref_state = ref_state_sq[idx % len(ref_state_sq)]
@@ -149,15 +208,18 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             gen_clip_video, audio_clip, gen_latents = rs2v.run_clip_main()
             logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
 
-            video_pad_len = pad_len // audio_per_frame
-            audio_pad_len = video_pad_len * audio_per_frame
-            video_seg = gen_clip_video[:, :, : gen_clip_video.shape[2] - video_pad_len]
-            # Since audio_clip is now multidimensional (N, T), slice on dim 1 and sum on dim 0 to merge tracks
-            audio_seg = audio_clip[:, : audio_clip.shape[1] - audio_pad_len].sum(dim=0)
+            if segment_actual_video_frames is not None:
+                # Last segment: trim to exact actual frames needed
+                video_seg = gen_clip_video[:, :, :segment_actual_video_frames]
+                audio_seg = audio_clip[:, : segment_actual_video_frames * audio_per_frame].sum(dim=0)
+            else:
+                video_seg = gen_clip_video
+                audio_seg = audio_clip.sum(dim=0)
+
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
             if clip_input_info.return_result_tensor or not clip_input_info.stream_save_video:
-                gen_video_list.append(video_seg.clone().cpu().float())
+                gen_video_list.append(video_seg.clone().cpu())
                 cut_audio_list.append(audio_seg.cpu())
             elif self.va_controller.recorder is not None:
                 video_seg = torch.clamp(video_seg, -1, 1).to(torch.float).cpu()
