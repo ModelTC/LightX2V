@@ -327,15 +327,11 @@ class LongCatImageTransformerWeights(WeightModule):
     def register_offload_buffers(self, config):
         if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block":
             # Create 2 cuda buffer blocks for double_blocks
-            self.offload_double_block_cuda_buffers = WeightModuleList(
-                [LongCatImageDoubleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)]
-            )
+            self.offload_double_block_cuda_buffers = WeightModuleList([LongCatImageDoubleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)])
             self.add_module("offload_double_block_cuda_buffers", self.offload_double_block_cuda_buffers)
 
             # Create 2 cuda buffer blocks for single_blocks
-            self.offload_single_block_cuda_buffers = WeightModuleList(
-                [LongCatImageSingleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)]
-            )
+            self.offload_single_block_cuda_buffers = WeightModuleList([LongCatImageSingleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)])
             self.add_module("offload_single_block_cuda_buffers", self.offload_single_block_cuda_buffers)
 
     def to_cuda(self, non_blocking=True):

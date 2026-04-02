@@ -2,9 +2,9 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.longcat_image.infer.offload.transformer_infer import LongCatImageOffloadTransformerInfer
 from lightx2v.models.networks.longcat_image.infer.post_infer import LongCatImagePostInfer
 from lightx2v.models.networks.longcat_image.infer.pre_infer import LongCatImagePreInfer
-from lightx2v.models.networks.longcat_image.infer.offload.transformer_infer import LongCatImageOffloadTransformerInfer
 from lightx2v.models.networks.longcat_image.infer.transformer_infer import LongCatImageTransformerInfer
 from lightx2v.models.networks.longcat_image.weights.post_weights import LongCatImagePostWeights
 from lightx2v.models.networks.longcat_image.weights.pre_weights import LongCatImagePreWeights
@@ -52,12 +52,8 @@ class LongCatImageTransformerModel(BaseTransformerModel):
 
     def _init_offload_manager(self):
         """Initialize offload managers for double and single block buffers."""
-        self.transformer_infer.offload_manager_double.init_cuda_buffer(
-            blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers
-        )
-        self.transformer_infer.offload_manager_single.init_cuda_buffer(
-            blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers
-        )
+        self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
+        self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
