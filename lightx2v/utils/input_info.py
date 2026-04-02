@@ -121,6 +121,7 @@ class S2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
@@ -148,6 +149,7 @@ class RS2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)

@@ -169,6 +169,7 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
+    parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument("--video_path", type=str, default=None, help="input video path(for sr/v2v task)")
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")

@@ -23,6 +23,7 @@ from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
@@ -315,8 +316,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if expected_frames < int(self.video_duration * target_fps):
             logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
 
-        # Segment audio
-        audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, self.config.get("target_video_length", 81), self.prev_frame_length)
+        # Segment audio (CLI / input_info wins over config_json; target_video_length is not merged into config)
+        target_video_length = self.config.get("target_video_length", 81)
+        ii = getattr(self, "input_info", None)
+        if ii is not None and hasattr(ii, "target_video_length"):
+            tvl = ii.target_video_length
+            if tvl is not None and tvl is not UNSET and tvl > 0:
+                target_video_length = tvl
+        audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, target_video_length, self.prev_frame_length)
 
         # Mask latent for multi-person s2v
         if mask_files is not None:
