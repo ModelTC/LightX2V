@@ -72,6 +72,32 @@ class DistributedInferenceService:
                 "message": f"Task processing failed: {str(e)}",
             }
 
+    async def submit_tensor_infer_async(self, task_data: dict) -> Optional[dict]:
+        if not self.is_running or not self.worker:
+            logger.error("Inference service is not started")
+            return None
+
+        if self.worker.rank != 0:
+            return None
+
+        try:
+            if self.worker.processing:
+                logger.info("Waiting for previous task to complete before tensor infer request")
+
+            self.worker.processing = True
+            result = await self.worker.process_tensor_request(task_data)
+            self.worker.processing = False
+            return result
+        except Exception as e:
+            self.worker.processing = False
+            logger.error(f"Failed to process tensor infer request: {str(e)}")
+            return {
+                "task_id": task_data.get("task_id", "unknown"),
+                "status": "failed",
+                "error": str(e),
+                "message": f"Tensor infer processing failed: {str(e)}",
+            }
+
     def server_metadata(self):
         assert hasattr(self, "args"), "Distributed inference service has not been started. Call start_distributed_inference() first."
         return {"nproc_per_node": self.worker.world_size, "model_cls": self.args.model_cls, "model_path": self.args.model_path}
