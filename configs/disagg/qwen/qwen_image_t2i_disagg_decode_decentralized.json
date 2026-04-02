@@ -1,0 +1,28 @@
+{
+    "task": "t2i",
+    "model_cls": "qwen_image",
+    "disagg_mode": "decode",
+    "infer_steps": 50,
+    "vae_scale_factor": 8,
+    "vae_z_dim": 16,
+    "vae_stride": [1, 8, 8],
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 0,
+        "sender_engine_rank": 1,
+        "receiver_engine_rank": 4,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE",
+        "decentralized_queue": true,
+        "encoder_engine_rank": 0,
+        "transformer_engine_rank": 1,
+        "decoder_engine_rank": 4,
+        "rdma_phase1_host": "127.0.0.1",
+        "rdma_phase1_handshake_port": 5567,
+        "rdma_phase2_host": "127.0.0.1",
+        "rdma_phase2_handshake_port": 5568,
+        "rdma_buffer_slots": 128,
+        "rdma_buffer_slot_size": 4096
+    }
+}
