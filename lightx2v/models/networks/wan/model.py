@@ -197,3 +197,90 @@ class WanModel(BaseTransformerModel):
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
                 self.transformer_weights.non_block_weights_to_cpu()
+
+    @torch.no_grad()
+    def infer_tensor_once(self, latents, timestep, context, context_null=None):
+        """
+        Run one WAN forward pass from explicit tensors.
+
+        Args:
+            latents: noisy latents, shape [C,F,H,W] or [1,F,C,H,W].
+            timestep: timestep tensor (scalar / [1] / [1,F]); first value is used.
+            context: conditional text embeddings, shape [L,D] or [1,L,D].
+            context_null: optional unconditional text embeddings, same shape as context.
+        Returns:
+            noise prediction tensor with shape [C,F,H,W].
+        """
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and "wan2.2_moe" not in self.config["model_cls"]:
+                self.to_cuda()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
+
+        if latents.ndim == 5:
+            # [B,F,C,H,W] -> [C,F,H,W], only batch size 1 is supported.
+            if latents.shape[0] != 1:
+                raise ValueError(f"Expected batch size 1 for 5D latents, got shape {tuple(latents.shape)}")
+            latents = latents.squeeze(0).permute(1, 0, 2, 3).contiguous()
+        elif latents.ndim != 4:
+            raise ValueError(f"Expected latents ndim in [4,5], got {latents.ndim}")
+
+        if context.ndim == 2:
+            context = context.unsqueeze(0)
+        if context.ndim != 3:
+            raise ValueError(f"Expected context ndim in [2,3], got {context.ndim}")
+
+        if context_null is None:
+            context_null = context
+        elif context_null.ndim == 2:
+            context_null = context_null.unsqueeze(0)
+
+        timestep = timestep.flatten()
+        if timestep.numel() == 0:
+            raise ValueError("Empty timestep tensor")
+        timestep = timestep[:1].to(torch.int64).contiguous()
+
+        self.scheduler.prepare(seed=0, latent_shape=[1, 1, 1, 1], image_encoder_output={})
+        self.scheduler.latents = latents.to(AI_DEVICE)
+        self.scheduler.timestep_input = timestep.to(AI_DEVICE)
+
+        inputs = {
+            "text_encoder_output": {
+                "context": context.to(AI_DEVICE),
+                "context_null": context_null.to(AI_DEVICE),
+            },
+            "image_encoder_output": {},
+        }
+
+        def _convert_flow_pred_to_x0(flow_pred, xt, timestep_tensor):
+            original_dtype = flow_pred.dtype
+            flow_pred, xt, sigmas, timesteps = map(
+                lambda x: x.double().to(flow_pred.device),
+                [flow_pred, xt, self.scheduler.sigmas, self.scheduler.timesteps],
+            )
+            timestep_id = torch.argmin((timesteps.unsqueeze(0) - timestep_tensor.unsqueeze(1)).abs(), dim=1)
+            sigma_t = sigmas[timestep_id].reshape(-1, 1, 1, 1)
+            x0_pred = xt - sigma_t * flow_pred
+            return x0_pred.to(original_dtype)
+
+        timestep_for_x0 = timestep.flatten()[:1]
+        if self.config.get("enable_cfg", False):
+            noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
+            noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
+            pred_x0_cond = _convert_flow_pred_to_x0(noise_pred_cond, self.scheduler.latents, timestep_for_x0)
+            pred_x0_uncond = _convert_flow_pred_to_x0(noise_pred_uncond, self.scheduler.latents, timestep_for_x0)
+            noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            pred_x0 = pred_x0_uncond + self.scheduler.sample_guide_scale * (pred_x0_cond - pred_x0_uncond)
+        else:
+            noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            pred_x0 = _convert_flow_pred_to_x0(noise_pred, self.scheduler.latents, timestep_for_x0)
+
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and "wan2.2_moe" not in self.config["model_cls"]:
+                self.to_cpu()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cpu()
+                self.transformer_weights.non_block_weights_to_cpu()
+
+        return noise_pred, pred_x0

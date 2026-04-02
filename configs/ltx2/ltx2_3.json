@@ -14,7 +14,7 @@
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "use_tiling_vae": false,
-    "dit_original_ckpt": "Lightricks/LTX-2.3ltx-2.3-22b-dev.safetensors",
+    "dit_original_ckpt": "/data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors",
     "caption_proj_before_connector": true,
     "cross_attention_adaln": true,
     "apply_gated_attention": true,

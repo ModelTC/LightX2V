@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import os
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict
 
@@ -122,6 +124,95 @@ class TorchrunInferenceWorker:
                 }
         else:
             return None
+
+    @staticmethod
+    def _decode_tensor_base64(tensor_b64: str, device: str | torch.device) -> torch.Tensor:
+        tensor_bytes = base64.b64decode(tensor_b64)
+        buffer = BytesIO(tensor_bytes)
+        return torch.load(buffer, map_location=device)
+
+    @staticmethod
+    def _encode_tensor_base64(tensor: torch.Tensor) -> str:
+        buffer = BytesIO()
+        torch.save(tensor.detach().cpu(), buffer)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    @staticmethod
+    def _lookup_sigma_from_scheduler(scheduler, timestep_tensor: torch.Tensor, target_device: torch.device, target_dtype: torch.dtype) -> torch.Tensor:
+        # Match Self-Forcing wan_wrapper logic: nearest timestep id -> scheduler.sigmas[timestep_id]
+        timesteps = scheduler.timesteps.to(target_device, dtype=torch.float64)
+        sigmas = scheduler.sigmas.to(target_device, dtype=torch.float64)
+        t = timestep_tensor.flatten().to(target_device, dtype=torch.float64)
+        timestep_id = torch.argmin((timesteps.unsqueeze(0) - t.unsqueeze(1)).abs(), dim=1)
+        sigma_t = sigmas[timestep_id].to(target_dtype)
+        return sigma_t
+
+    def _ensure_tensor_infer_scheduler_ready(self) -> None:
+        scheduler = self.runner.model.scheduler
+        if getattr(scheduler, "timesteps", None) is not None and getattr(scheduler, "sigmas", None) is not None:
+            return
+        # We only need scheduler metadata here, so use a tiny latent shape.
+        scheduler.prepare(
+            seed=0,
+            latent_shape=[16, 1, 2, 2],
+            image_encoder_output={},
+        )
+
+    async def process_tensor_request(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        if self.world_size > 1:
+            return {
+                "task_id": task_data.get("task_id", "unknown"),
+                "status": "failed",
+                "error": "tensor infer endpoint currently supports WORLD_SIZE=1 only",
+                "message": "tensor infer endpoint currently supports WORLD_SIZE=1 only",
+            }
+
+        try:
+            if not hasattr(self.runner, "model"):
+                raise RuntimeError("Runner model is not initialized")
+
+            if not hasattr(self.runner.model, "infer_tensor_once"):
+                raise RuntimeError(f"Current model class does not support tensor infer: {type(self.runner.model).__name__}")
+
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            self._ensure_tensor_infer_scheduler_ready()
+            noisy_tensor = self._decode_tensor_base64(task_data["noisy_tensor"], device=device)
+            context_tensor = self._decode_tensor_base64(task_data["context_tensor"], device=device)
+            timestep_tensor = self._decode_tensor_base64(task_data["timestep_tensor"], device=device)
+
+            context_null_tensor = None
+            if task_data.get("context_null_tensor"):
+                context_null_tensor = self._decode_tensor_base64(task_data["context_null_tensor"], device=device)
+
+            return_pred_x0 = bool(task_data.get("return_pred_x0", False))
+
+            noise_pred, pred_x0 = self.runner.model.infer_tensor_once(
+                latents=noisy_tensor,
+                timestep=timestep_tensor,
+                context=context_tensor,
+                context_null=context_null_tensor,
+            )
+            if not return_pred_x0:
+                pred_x0 = None
+
+            return {
+                "task_id": task_data.get("task_id", "unknown"),
+                "status": "success",
+                "noise_pred_tensor": self._encode_tensor_base64(noise_pred),
+                "pred_x0_tensor": self._encode_tensor_base64(pred_x0) if pred_x0 is not None else "",
+                "message": "Tensor infer completed",
+                "error": "",
+            }
+        except Exception as e:
+            logger.exception(f"Rank {self.rank} tensor inference failed: {e}")
+            return {
+                "task_id": task_data.get("task_id", "unknown"),
+                "status": "failed",
+                "noise_pred_tensor": "",
+                "pred_x0_tensor": "",
+                "message": f"Tensor infer failed: {e}",
+                "error": str(e),
+            }
 
     def switch_lora(self, lora_name: str, lora_strength: float):
         try:

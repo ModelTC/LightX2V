@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from loguru import logger
 
-from ...schema import TaskResponse, VideoTaskRequest
+from ...schema import TaskResponse, VideoTaskRequest, WanTensorInferRequest, WanTensorInferResponse
 from ...task_manager import task_manager
 from ..deps import get_services, validate_url_async
 
@@ -106,4 +106,33 @@ async def create_video_task_form(
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create video form task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tensor_infer", response_model=WanTensorInferResponse)
+async def tensor_infer_wan(message: WanTensorInferRequest):
+    services = get_services()
+    assert services.inference_service is not None, "Inference service is not initialized"
+
+    try:
+        payload = {
+            "task_id": message.task_id,
+            "noisy_tensor": message.noisy_tensor,
+            "context_tensor": message.context_tensor,
+            "timestep_tensor": message.timestep_tensor,
+            "context_null_tensor": message.context_null_tensor,
+            "return_pred_x0": message.return_pred_x0,
+        }
+        result = await services.inference_service.submit_tensor_infer_async(payload)
+        if result is None:
+            raise HTTPException(status_code=500, detail="Tensor infer request failed")
+
+        if result.get("status") != "success":
+            raise HTTPException(status_code=500, detail=result.get("error", "Tensor infer failed"))
+
+        return WanTensorInferResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to process tensor infer request: {e}")
         raise HTTPException(status_code=500, detail=str(e))

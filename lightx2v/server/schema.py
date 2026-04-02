@@ -72,6 +72,23 @@ class TaskResponse(BaseModel):
     save_result_path: str
 
 
+class WanTensorInferRequest(BaseTaskRequest):
+    noisy_tensor: str = Field(..., description="Base64-encoded torch tensor, shape [1,F,C,H,W] or [C,F,H,W]")
+    context_tensor: str = Field(..., description="Base64-encoded torch tensor, shape [1,L,D] or [L,D]")
+    timestep_tensor: str = Field(..., description="Base64-encoded torch tensor, scalar or [1] / [1,F]")
+    context_null_tensor: str = Field("", description="Optional base64 tensor for unconditional context")
+    return_pred_x0: bool = Field(False, description="Whether to also return pred_x0")
+
+
+class WanTensorInferResponse(BaseModel):
+    task_id: str
+    status: str
+    noise_pred_tensor: str = Field("", description="Base64-encoded torch tensor")
+    pred_x0_tensor: str = Field("", description="Base64-encoded torch tensor")
+    message: str = Field("", description="Execution message")
+    error: str = Field("", description="Error message when status=failed")
+
+
 class StopTaskResponse(BaseModel):
     stop_status: str
     reason: str
