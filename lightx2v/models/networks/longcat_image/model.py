@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.longcat_image.infer.offload.transformer_infer import LongCatImageOffloadTransformerInfer
 from lightx2v.models.networks.longcat_image.infer.post_infer import LongCatImagePostInfer
 from lightx2v.models.networks.longcat_image.infer.pre_infer import LongCatImagePreInfer
 from lightx2v.models.networks.longcat_image.infer.transformer_infer import LongCatImageTransformerInfer
@@ -23,7 +24,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
     transformer_weight_class = LongCatImageTransformerWeights
     post_weight_class = LongCatImagePostWeights
 
-    def __init__(self, config, model_path, device):
+    def __init__(self, model_path, config, device):
         super().__init__(model_path, config, device)
         # Use transformer_in_channels to avoid conflict with VAE's in_channels
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
@@ -35,7 +36,10 @@ class LongCatImageTransformerModel(BaseTransformerModel):
         self._init_infer()
 
     def _init_infer_class(self):
-        self.transformer_infer_class = LongCatImageTransformerInfer
+        if self.cpu_offload and self.offload_granularity == "block":
+            self.transformer_infer_class = LongCatImageOffloadTransformerInfer
+        else:
+            self.transformer_infer_class = LongCatImageTransformerInfer
         self.pre_infer_class = LongCatImagePreInfer
         self.post_infer_class = LongCatImagePostInfer
 
@@ -43,8 +47,13 @@ class LongCatImageTransformerModel(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
-        if hasattr(self.transformer_infer, "offload_manager"):
+        if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
             self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        """Initialize offload managers for double and single block buffers."""
+        self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
+        self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
@@ -77,7 +86,11 @@ class LongCatImageTransformerModel(BaseTransformerModel):
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
-            self.to_cuda()
+            if self.offload_granularity == "model":
+                self.to_cuda()
+            elif self.offload_granularity == "block":
+                self.pre_weight.to_cuda()
+                self.post_weight.to_cuda()
 
         latents = self.scheduler.latents
 
@@ -129,3 +142,10 @@ class LongCatImageTransformerModel(BaseTransformerModel):
             # ==================== No CFG Processing ====================
             noise_pred = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
             self.scheduler.noise_pred = noise_pred
+
+        if self.cpu_offload:
+            if self.offload_granularity == "model":
+                self.to_cpu()
+            elif self.offload_granularity == "block":
+                self.pre_weight.to_cpu()
+                self.post_weight.to_cpu()
