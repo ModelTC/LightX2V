@@ -28,102 +28,161 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
     def __init__(self, clip_configs):
         super().__init__(clip_configs)
 
-    @torch.no_grad()
-    def generate(self, args):
-        rs2v = self.clip_generators["rs2v_clip"]
-        # 获取此clip模型的配置信息
-        target_fps = rs2v.config.get("target_fps", 16)
-        audio_sr = rs2v.config.get("audio_sr", 16000)
-        audio_per_frame = audio_sr // target_fps
-
-        # 获取用户输入信息
-        clip_input_info = init_input_info_from_args(rs2v.config["task"], args)
-        # 从默认配置中补全输入信息
-        clip_input_info = self.check_input_info(clip_input_info, rs2v.config)
-        target_video_length = clip_input_info.target_video_length
-
-        # Auto-calculate target_video_length from video_duration if not explicitly provided
-        if clip_input_info.target_video_length is None or clip_input_info.target_video_length == UNSET:
-            if clip_input_info.video_duration is not None and clip_input_info.video_duration != UNSET:
-                # Calculate for the first segment (max 5s)
-                segment_duration = min(clip_input_info.video_duration, 5.0)
-                clip_input_info.target_video_length = calculate_target_video_length_from_duration(segment_duration, target_fps)
-                logger.info(f"Auto-calculated target_video_length={clip_input_info.target_video_length} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
-            else:
-                # Fallback to config default
-                clip_input_info.target_video_length = rs2v.config.get("target_video_length", 81)
-
-        target_video_length = clip_input_info.target_video_length
-
-        gen_video_list = []
-        cut_audio_list = []
-        video_duration = clip_input_info.video_duration
-
-        def get_audio_files_from_audio_path(audio_path):
-            if os.path.isdir(audio_path):
-                audio_files = []
-                mask_files = []
-                audio_config_path = os.path.join(audio_path, "config.json")
-                assert os.path.exists(audio_config_path), "config.json not found in audio_path"
-                with open(audio_config_path, "r") as f:
-                    audio_config = json.load(f)
-                for talk_object in audio_config["talk_objects"]:
-                    audio_files.append(os.path.join(audio_path, talk_object["audio"]))
-                    mask_files.append(os.path.join(audio_path, talk_object["mask"]))
-            else:
-                audio_files = [audio_path]
-                mask_files = None
-            return audio_files, mask_files
-
-        def load_audio(audio_path, target_sr):
-            arr, ori_sr = ta.load(audio_path)
-            arr = arr.mean(0)
-            if ori_sr != target_sr:
-                arr = ta.functional.resample(arr, ori_sr, target_sr)
-            return arr
-
-        audio_files, mask_files = get_audio_files_from_audio_path(clip_input_info.audio_path)
-        clip_input_info.audio_num = len(audio_files)
-
-        if len(audio_files) == 1:
-            audio_array = load_audio(audio_files[0], audio_sr)
-            audio_array = audio_array.unsqueeze(0)
+    @staticmethod
+    def _parse_audio_path(audio_path):
+        if os.path.isdir(audio_path):
+            audio_config_path = os.path.join(audio_path, "config.json")
+            assert os.path.exists(audio_config_path), "config.json not found in audio_path"
+            with open(audio_config_path, "r") as f:
+                audio_config = json.load(f)
+            audio_files = [os.path.join(audio_path, obj["audio"]) for obj in audio_config["talk_objects"]]
+            mask_files = [os.path.join(audio_path, obj["mask"]) for obj in audio_config["talk_objects"]]
         else:
-            audio_arrays = []
-            max_len = 0
-            for a_file in audio_files:
-                arr = load_audio(a_file, audio_sr)
-                audio_arrays.append(arr)
-                max_len = max(max_len, arr.numel())
-            num_files = len(audio_arrays)
-            audio_array = torch.zeros(num_files, max_len, dtype=torch.float32)
-            for i, arr in enumerate(audio_arrays):
-                length = arr.numel()
-                audio_array[i, :length] = arr
+            audio_files = [audio_path]
+            mask_files = None
+        return audio_files, mask_files
+
+    @staticmethod
+    def _load_single_audio(audio_path, target_sr):
+        arr, ori_sr = ta.load(audio_path)
+        arr = arr.mean(0)
+        if ori_sr != target_sr:
+            arr = ta.functional.resample(arr, ori_sr, target_sr)
+        return arr
+
+    @classmethod
+    def _load_audio_array(cls, audio_files, audio_sr, video_duration):
+        if len(audio_files) == 1:
+            audio_array = cls._load_single_audio(audio_files[0], audio_sr).unsqueeze(0)
+        else:
+            arrays = [cls._load_single_audio(f, audio_sr) for f in audio_files]
+            max_len = max(a.numel() for a in arrays)
+            audio_array = torch.zeros(len(arrays), max_len, dtype=torch.float32)
+            for i, arr in enumerate(arrays):
+                audio_array[i, : arr.numel()] = arr
 
         if video_duration is not None and video_duration > 0:
             max_samples = int(video_duration * audio_sr)
             if audio_array.shape[1] > max_samples:
                 audio_array = audio_array[:, :max_samples]
 
-        if mask_files is not None:
-            mask_latents = [rs2v.process_single_mask(mask_file) for mask_file in mask_files]
-            person_mask_latens = torch.cat(mask_latents, dim=0)
+        return audio_array
+
+    @staticmethod
+    def _load_mask_latents(rs2v, mask_files):
+        if mask_files is None:
+            return None
+        latents = [rs2v.process_single_mask(f) for f in mask_files]
+        return torch.cat(latents, dim=0)
+
+    @staticmethod
+    def _calc_total_clips(total_samples, audio_per_frame, target_video_length):
+        total_frames = int(np.ceil(total_samples / audio_per_frame))
+        if total_frames <= target_video_length:
+            return 1
+        remaining = total_frames - target_video_length
+        return 1 + int(np.ceil(remaining / (target_video_length + 3)))
+
+    @staticmethod
+    def _update_latent_shape(clip_input_info, target_len, vae_stride):
+        if hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
+            s = clip_input_info.latent_shape
+            new_t = (target_len - 1) // vae_stride + 1
+            clip_input_info.latent_shape = [s[0], new_t, s[2], s[3]]
+
+    def _compute_segment_params(self, idx, audio_clip, pad_len, target_video_length, target_fps, audio_per_frame, vae_stride, clip_input_info):
+        """Compute per-segment parameters (target_video_length, latent_shape, trimmed audio_clip).
+
+        Returns:
+            (is_first, is_last, segment_actual_video_frames, audio_clip)
+        """
+        is_first = idx == 0
+        is_last = pad_len > 0
+        segment_actual_video_frames = None
+
+        if is_last:
+            actual_audio_samples = audio_clip.shape[1] - pad_len
+            actual_video_frames = int(np.ceil(actual_audio_samples / audio_per_frame))
+            segment_actual_video_frames = actual_video_frames
+
+            seg_target_len = calculate_target_video_length_from_duration(actual_video_frames / target_fps, target_fps)
+            clip_input_info.target_video_length = seg_target_len
+            self._update_latent_shape(clip_input_info, seg_target_len, vae_stride)
+
+            logger.info(
+                f"Segment {idx}: Last segment with pad_len={pad_len}, "
+                f"actual_video_frames={actual_video_frames}, "
+                f"calculated target_video_length={seg_target_len}, "
+                f"latent_shape={clip_input_info.latent_shape}"
+            )
+            audio_clip = audio_clip[:, : clip_input_info.target_video_length * audio_per_frame]
         else:
-            person_mask_latens = None
+            cur_clip_len = target_video_length if is_first else (target_video_length + 3)
+            clip_input_info.target_video_length = cur_clip_len
+            if not is_first:
+                self._update_latent_shape(clip_input_info, cur_clip_len, vae_stride)
+
+        return is_first, is_last, segment_actual_video_frames, audio_clip
+
+    @staticmethod
+    def _trim_segment(gen_clip_video, audio_clip, segment_actual_video_frames, audio_per_frame):
+        if segment_actual_video_frames is not None:
+            video_seg = gen_clip_video[:, :, :segment_actual_video_frames]
+            audio_seg = audio_clip[:, : segment_actual_video_frames * audio_per_frame].sum(dim=0)
+        else:
+            video_seg = gen_clip_video
+            audio_seg = audio_clip.sum(dim=0)
+        return video_seg, audio_seg
+
+    @staticmethod
+    def _merge_and_save(gen_video_list, cut_audio_list, target_fps, save_result_path):
+        gen_lvideo = torch.cat(gen_video_list, dim=2).float()
+        gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
+        merge_audio = torch.cat(cut_audio_list, dim=0).numpy().astype(np.float32)
+
+        if is_main_process() and save_result_path:
+            out_path = os.path.join("./", "video_merge.mp4")
+            audio_file = os.path.join("./", "audio_merge.wav")
+            save_to_video(gen_lvideo, out_path, target_fps)
+            save_audio(merge_audio, audio_file, out_path, output_path=save_result_path)
+            os.remove(out_path)
+            os.remove(audio_file)
+
+        return gen_lvideo, merge_audio
+
+    @torch.no_grad()
+    def generate(self, args):
+        rs2v = self.clip_generators["rs2v_clip"]
+
+        target_fps = rs2v.config.get("target_fps", 16)
+        audio_sr = rs2v.config.get("audio_sr", 16000)
+        audio_per_frame = audio_sr // target_fps
+        vae_stride = rs2v.config["vae_stride"][0]
+
+        clip_input_info = init_input_info_from_args(rs2v.config["task"], args)
+        clip_input_info = self.check_input_info(clip_input_info, rs2v.config)
+
+        if clip_input_info.target_video_length is None or clip_input_info.target_video_length == UNSET:
+            if clip_input_info.video_duration is not None and clip_input_info.video_duration != UNSET:
+                segment_duration = min(clip_input_info.video_duration, 5.0)
+                clip_input_info.target_video_length = calculate_target_video_length_from_duration(segment_duration, target_fps)
+                logger.info(f"Auto-calculated target_video_length={clip_input_info.target_video_length} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
+            else:
+                clip_input_info.target_video_length = rs2v.config.get("target_video_length", 81)
+
+        target_video_length = clip_input_info.target_video_length
+        base_seed = clip_input_info.seed
+
+        audio_files, mask_files = self._parse_audio_path(clip_input_info.audio_path)
+        clip_input_info.audio_num = len(audio_files)
+
+        audio_array = self._load_audio_array(audio_files, audio_sr, clip_input_info.video_duration)
+        person_mask_latens = self._load_mask_latents(rs2v, mask_files)
 
         audio_reader = RS2V_SlidingWindowReader(audio_array, first_clip_len=target_video_length, clip_len=target_video_length + 3, sr=audio_sr, fps=target_fps)
+        total_clips = self._calc_total_clips(audio_array.shape[1], audio_per_frame, target_video_length)
+        ref_state_seq = get_reference_state_sequence(target_video_length - 3, target_fps)
 
-        total_frames = int(np.ceil(audio_array.shape[1] / audio_per_frame))
-        if total_frames <= target_video_length:
-            total_clips = 1
-        else:
-            remaining = total_frames - target_video_length
-            total_clips = 1 + int(np.ceil(remaining / (target_video_length + 3)))
-
-        ref_state_sq = get_reference_state_sequence(target_video_length - 3, target_fps)
-
-        # 预先运行输入编码的静态部分 (处理ref image的vae编码和文本编码)
         rs2v.input_info = clip_input_info
         rs2v.inputs_static = rs2v._run_input_encoder_local_rs2v_static()
 
@@ -132,90 +191,33 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             self.va_controller = VAController(rs2v)
             logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
-        idx = 0
-        while True:
-            audio_clip, pad_len = audio_reader.next_frame()
+        gen_video_list = []
+        cut_audio_list = []
+
+        for idx, (audio_clip, pad_len) in enumerate(iter(audio_reader.next_frame, (None, 0))):
             if audio_clip is None:
                 break
+            rs2v.check_stop()
 
-            is_first = True if idx == 0 else False
-            is_last = True if pad_len > 0 else False
-
-            pipe = rs2v
-            pipe.check_stop()
-
-            # Calculate actual target_video_length for this segment based on audio length
-            segment_actual_video_frames = None  # Track for last-segment trimming
-            if is_last and pad_len > 0:
-                # For the last segment with padding, calculate actual video frames needed
-                actual_audio_samples = audio_clip.shape[1] - pad_len
-                actual_video_frames = int(np.ceil(actual_audio_samples / audio_per_frame))
-                segment_actual_video_frames = actual_video_frames
-                # Apply the formula to ensure VAE stride constraint
-                segment_target_video_length = calculate_target_video_length_from_duration(actual_video_frames / target_fps, target_fps)
-                clip_input_info.target_video_length = segment_target_video_length
-
-                # Recalculate latent_shape for this segment
-                # latent_shape = [C, T, H, W] where T = (target_video_length - 1) // vae_stride[0] + 1
-                if hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
-                    original_latent_shape = clip_input_info.latent_shape
-                    # Update only the temporal dimension (index 1)
-                    new_latent_t = (segment_target_video_length - 1) // rs2v.config["vae_stride"][0] + 1
-                    clip_input_info.latent_shape = [
-                        original_latent_shape[0],  # C
-                        new_latent_t,  # T
-                        original_latent_shape[2],  # H
-                        original_latent_shape[3],  # W
-                    ]
-
-                logger.info(
-                    f"Segment {idx}: Last segment with pad_len={pad_len}, "
-                    f"actual_video_frames={actual_video_frames}, "
-                    f"calculated target_video_length={segment_target_video_length}, "
-                    f"latent_shape={clip_input_info.latent_shape}"
-                )
-            else:
-                # For first/middle segments, use the original target_video_length
-                cur_clip_len = target_video_length if is_first else (target_video_length + 3)
-                clip_input_info.target_video_length = cur_clip_len
-
-                # Recalculate latent_shape for non-first segments
-                if not is_first and hasattr(clip_input_info, "latent_shape") and clip_input_info.latent_shape is not None:
-                    original_latent_shape = clip_input_info.latent_shape
-                    new_latent_t = (cur_clip_len - 1) // rs2v.config["vae_stride"][0] + 1
-                    clip_input_info.latent_shape = [
-                        original_latent_shape[0],
-                        new_latent_t,
-                        original_latent_shape[2],
-                        original_latent_shape[3],
-                    ]
+            is_first, is_last, segment_actual_frames, audio_clip = self._compute_segment_params(idx, audio_clip, pad_len, target_video_length, target_fps, audio_per_frame, vae_stride, clip_input_info)
 
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
-            clip_input_info.ref_state = ref_state_sq[idx % len(ref_state_sq)]
-            clip_input_info.seed = clip_input_info.seed + idx
+            clip_input_info.ref_state = ref_state_seq[idx % len(ref_state_seq)]
+            clip_input_info.seed = base_seed + idx
             clip_input_info.audio_clip = audio_clip
-            idx = idx + 1
-            if self.progress_callback:
-                self.progress_callback(idx, total_clips)
-
-            rs2v.input_info = clip_input_info
             clip_input_info.person_mask_latens = person_mask_latens
 
-            # 使用动态输入获取当前 clip 控制参数
+            if self.progress_callback:
+                self.progress_callback(idx + 1, total_clips)
+
+            rs2v.input_info = clip_input_info
             rs2v.inputs = rs2v._run_input_encoder_local_rs2v_dynamic()
-
             gen_clip_video, audio_clip, gen_latents = rs2v.run_clip_main()
-            logger.info(f"Generated rs2v clip {idx}, pad_len {pad_len}, gen_clip_video shape: {gen_clip_video.shape}, audio_clip shape: {audio_clip.shape} gen_latents shape: {gen_latents.shape}")
 
-            if segment_actual_video_frames is not None:
-                # Last segment: trim to exact actual frames needed
-                video_seg = gen_clip_video[:, :, :segment_actual_video_frames]
-                audio_seg = audio_clip[:, : segment_actual_video_frames * audio_per_frame].sum(dim=0)
-            else:
-                video_seg = gen_clip_video
-                audio_seg = audio_clip.sum(dim=0)
+            logger.info(f"Generated rs2v clip {idx + 1}, pad_len={pad_len}, gen_clip_video={gen_clip_video.shape}, audio_clip={audio_clip.shape}, gen_latents={gen_latents.shape}")
 
+            video_seg, audio_seg = self._trim_segment(gen_clip_video, audio_clip, segment_actual_frames, audio_per_frame)
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
             if clip_input_info.return_result_tensor or not clip_input_info.stream_save_video:
@@ -229,23 +231,10 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         if not clip_input_info.return_result_tensor and clip_input_info.stream_save_video:
             return None, None, None
 
-        gen_lvideo = torch.cat(gen_video_list, dim=2).float()
-        gen_lvideo = torch.clamp(gen_lvideo, -1, 1)
-        merge_audio = torch.cat(cut_audio_list, dim=0).numpy().astype(np.float32)
-
-        if is_main_process() and clip_input_info.save_result_path:
-            out_path = os.path.join("./", "video_merge.mp4")
-            audio_file = os.path.join("./", "audio_merge.wav")
-
-            save_to_video(gen_lvideo, out_path, 16)
-            save_audio(merge_audio, audio_file, out_path, output_path=clip_input_info.save_result_path)
-            os.remove(out_path)
-            os.remove(audio_file)
-
+        gen_lvideo, merge_audio = self._merge_and_save(gen_video_list, cut_audio_list, target_fps, clip_input_info.save_result_path)
         return gen_lvideo, merge_audio, audio_sr
 
     def run_pipeline(self, input_info):
-        # input_info = self.update_input_info(input_info)
         try:
             gen_lvideo, merge_audio, audio_sr = self.generate(input_info)
         finally:
