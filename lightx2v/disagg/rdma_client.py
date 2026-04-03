@@ -77,7 +77,11 @@ class RDMAClient:
 
     def connect_to_server(self, server_ip="127.0.0.1", port=5566):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((server_ip, port))
+        try:
+            sock.connect((server_ip, port))
+        except Exception:
+            sock.close()
+            raise
 
         # 1. 接收 Server 信息 (包含 rkey 和 addr)
         data = sock.recv(4096)
@@ -85,9 +89,9 @@ class RDMAClient:
         print(f"[Client] Got Server Info: Addr={hex(self.remote_info['addr'])}, RKey={self.remote_info['rkey']}")
 
         # 2. 发送我的信息给 Server
-        gid = self.ctx.query_gid(port_num=self.port_num, index=self.gid_index)
+        gid = self.ctx.query_gid(self.port_num, self.gid_index)
         my_info = {
-            "lid": self.ctx.query_port(port_num=self.port_num).lid,
+            "lid": self.ctx.query_port(self.port_num).lid,
             "qpn": self.qp.qp_num,
             "psn": self.local_psn,
             "gid": str(gid),
@@ -235,7 +239,7 @@ class RDMAClient:
             self._poll_cq()
 
             old = self.local_mr.read(8, 0)
-            old_v = int.from_bytes(old, byteorder="little", signed=False)
+            old_v = int.from_bytes(old, byteorder="big", signed=False)
             return old_v
 
     def rdma_cas(self, remote_addr, compare_value, swap_value, rkey=None):
@@ -243,7 +247,6 @@ class RDMAClient:
         with self._io_lock:
             self._ensure_local_mr_capacity(8)
 
-            # The original remote value will be written into this local buffer.
             self.local_mr.write(b"\x00" * 8, 8, 0)
 
             sge = SGE(self.local_mr.buf, 8, self.local_mr.lkey)
@@ -264,7 +267,7 @@ class RDMAClient:
             self._poll_cq()
 
             old = self.local_mr.read(8, 0)
-            old_v = int.from_bytes(old, byteorder="little", signed=False)
+            old_v = int.from_bytes(old, byteorder="big", signed=False)
             return old_v
 
     def _poll_cq(self):

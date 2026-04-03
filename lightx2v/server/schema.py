@@ -28,6 +28,14 @@ class BaseTaskRequest(BaseModel):
     target_shape: list[int] = Field([], description="Return video or image shape")
     lora_name: Optional[str] = Field(None, description="LoRA filename to load from lora_dir, None to disable LoRA")
     lora_strength: float = Field(1.0, description="LoRA strength")
+    # Optional Mooncake / disagg overrides (merged into runner.config per request)
+    data_bootstrap_room: Optional[int] = Field(None, description="Per-request Mooncake bootstrap room (disagg)")
+    disagg_phase1_receiver_engine_rank: Optional[int] = Field(
+        None,
+        description="Transformer receiver rank for phase1 send (decentralized / multi-transformer)",
+    )
+    disagg_bootstrap_room: Optional[int] = Field(None, description="Alias for data_bootstrap_room in some clients")
+    disagg_decoder_bootstrap_room: Optional[int] = Field(None, description="Phase2 Mooncake room override")
 
     def __init__(self, **data):
         super().__init__(**data)

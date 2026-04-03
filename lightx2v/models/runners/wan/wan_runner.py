@@ -16,6 +16,7 @@ except ImportError:
     Rotation = None
     Slerp = None
 
+from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
@@ -70,7 +71,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 
 
 @RUNNER_REGISTER("wan2.1")
-class WanRunner(DefaultRunner):
+class WanRunner(DisaggMixin, DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
         self.vae_cls = WanVAE
@@ -229,6 +230,10 @@ class WanRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
+        super().init_scheduler()
+        if self.config.get("disagg_mode") == "decode":
+            return
+
         if self.config["feature_caching"] == "NoCaching":
             scheduler_class = WanScheduler
         elif self.config["feature_caching"] == "TaylorSeer":
@@ -242,6 +247,119 @@ class WanRunner(DefaultRunner):
             self.scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
         else:
             self.scheduler = scheduler_class(self.config)
+
+    def init_modules(self):
+        if self.config.get("disagg_mode"):
+            self.init_disagg(self.config)
+        super().init_modules()
+
+    @ProfilingContext4DebugL2("Load models")
+    def load_model(self):
+        disagg_mode = self.config.get("disagg_mode")
+        if disagg_mode == "encoder":
+            logger.info("[Disagg] Loading models for ENCODER role (Wan)...")
+            self.model = None
+            self.text_encoders = self.load_text_encoder()
+            self.image_encoder = self.load_image_encoder()
+            self.vae_encoder, self.vae_decoder = self.load_vae()
+            self.vfi_model = None
+            self.vsr_model = None
+        elif disagg_mode == "transformer":
+            logger.info("[Disagg] Loading models for TRANSFORMER role (Wan)...")
+            self.model = self.load_transformer()
+            self.text_encoders = None
+            self.image_encoder = None
+            # Skip VAE if a dedicated Decoder service handles Phase 2
+            if self.config.get("disagg_config", {}).get("decoder_engine_rank") is not None:
+                self.vae_encoder, self.vae_decoder = None, None
+            else:
+                self.vae_encoder, self.vae_decoder = self.load_vae()
+            self.vfi_model = None
+            self.vsr_model = None
+        elif disagg_mode == "decode":
+            logger.info("[Disagg] Loading models for DECODE role (Wan)...")
+            self.model = None
+            self.text_encoders = None
+            self.image_encoder = None
+            self.vae_encoder = None
+            self.vae_decoder = self.load_vae_decoder()
+            self.vfi_model = None
+            self.vsr_model = None
+        else:
+            super().load_model()
+
+    def _run_transformer_role(self):
+        """Run DiT; send latents to Phase 2 Decoder if configured, else VAE-decode locally."""
+        self.init_run()
+        for segment_idx in range(self.video_segment_num):
+            logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
+            self.check_stop()
+            self.init_run_segment(segment_idx)
+            latents = self.run_segment(segment_idx)
+            if self._disagg_p2_sender is not None:
+                self.send_transformer_outputs(latents)
+                self.end_run()
+                return None
+            else:
+                if self.config.get("use_stream_vae", False):
+                    frames = []
+                    for frame_segment in self.run_vae_decoder_stream(latents):
+                        frames.append(frame_segment)
+                    self.gen_video = torch.cat(frames, dim=2)
+                else:
+                    self.gen_video = self.run_vae_decoder(latents)
+                self.end_run_segment(segment_idx)
+        gen_video_final = self.process_images_after_vae_decoder()
+        self.end_run()
+        return gen_video_final
+
+    @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["WanRunner"])
+    def run_pipeline(self, input_info):
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_count.inc()
+        self.input_info = input_info
+        disagg_mode = self.config.get("disagg_mode")
+
+        if disagg_mode == "decode":
+            # Decoder role: receive DiT latents, run VAE, save video
+            latents = self.receive_transformer_outputs()
+            self.gen_video = self.run_vae_decoder(latents)
+            self.gen_video_final = self.gen_video
+            gen_video_final = self.process_images_after_vae_decoder()
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            return gen_video_final
+
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+
+        if disagg_mode == "encoder":
+            # Encoder role: run encoders, send outputs
+            self.inputs = self.run_input_encoder()
+            latent_shape = list(self.input_info.latent_shape)
+            self.send_encoder_outputs(self.inputs, latent_shape)
+            logger.info("[Disagg] Encoder role completed.")
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            return None
+
+        if disagg_mode == "transformer":
+            # Transformer role: receive encoder outputs, run DiT, send or decode
+            self.inputs = self.receive_encoder_outputs()
+            latent_shape = self.inputs.get("latent_shape")
+            if latent_shape:
+                self.input_info.latent_shape = latent_shape
+            gen_video_final = self._run_transformer_role()
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            return gen_video_final
+
+        # Local mode
+        self.inputs = self.run_input_encoder()
+        gen_video_final = self.run_main()
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_success.inc()
+        return gen_video_final
 
     @ProfilingContext4DebugL1(
         "Run Text Encoder",
