@@ -77,9 +77,9 @@ def rope_apply_with_indices(x, grid_sizes, freqs, indices):
         freq_t = freq_parts[0][:, indices, :]  # [n, f, c_t]
         cos_sin = torch.cat(
             [
-                freq_t.permute(1, 0, 2).unsqueeze(2).unsqueeze(3).expand(-1, -1, h, w, -1),
-                freq_parts[1][:, :h, :].permute(1, 0, 2).unsqueeze(0).unsqueeze(3).expand(f, -1, -1, w, -1),
-                freq_parts[2][:, :w, :].permute(1, 0, 2).unsqueeze(0).unsqueeze(2).expand(f, -1, h, -1, -1),
+                freq_t.permute(1, 0, 2).view(f, 1, 1, n, -1).expand(f, h, w, n, -1),
+                freq_parts[1][:, :h, :].permute(1, 0, 2).view(1, h, 1, n, -1).expand(f, h, w, n, -1),
+                freq_parts[2][:, :w, :].permute(1, 0, 2).view(1, 1, w, n, -1).expand(f, h, w, n, -1),
             ],
             dim=-1,
         ).reshape(f * h * w, n, -1)
