@@ -1,7 +1,6 @@
 {
     "model_cls": "wan2.2_matrix_game3",
     "task": "i2v",
-    "model_path": "",
     "sub_model_folder": "base_distilled_model",
     "use_base_model": false,
 
