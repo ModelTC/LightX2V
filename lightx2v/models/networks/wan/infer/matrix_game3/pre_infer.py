@@ -1,0 +1,170 @@
+import torch
+import torch.nn.functional as F
+
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
+from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
+from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
+from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+class WanMtxg3PreInferOutput:
+    """Container for MG3 pre-inference outputs passed to the transformer."""
+
+    __slots__ = [
+        "x", "embed", "embed0", "grid_sizes", "cos_sin", "context",
+        "plucker_emb", "mouse_cond", "keyboard_cond",
+        "mouse_cond_memory", "keyboard_cond_memory",
+        "memory_length", "memory_latent_idx", "predict_latent_idx",
+    ]
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class WanMtxg3PreInfer(WanPreInfer):
+    """Pre-inference for Matrix-Game-3.0.
+
+    Builds:
+    - Patch embeddings + plucker camera embeddings
+    - Text embeddings (no CLIP image encoder — MG3 uses direct text conditioning)
+    - Time embeddings
+    - Passes through conditioning signals (keyboard, mouse, plucker, memory)
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.use_memory = True
+        self.sigma_theta = config.get("sigma_theta", 0.0)
+
+        # Build RoPE frequencies with optional sigma_theta head-specific theta
+        d = config["dim"] // config["num_heads"]
+        num_heads = config["num_heads"]
+        if self.sigma_theta > 0:
+            self.freqs = self._build_sigma_theta_freqs(d, num_heads, self.sigma_theta)
+        else:
+            self.freqs = torch.cat(
+                [
+                    self.rope_params(2048, d - 4 * (d // 6)),
+                    self.rope_params(2048, 2 * (d // 6)),
+                    self.rope_params(2048, 2 * (d // 6)),
+                ],
+                dim=1,
+            ).to(torch.device(AI_DEVICE))
+
+    def _build_sigma_theta_freqs(self, d, num_heads, sigma_theta):
+        """Build head-specific RoPE with sigma_theta perturbation as in official MG3."""
+        c = d // 2
+        c_t = c - 2 * (c // 3)
+        c_h = c // 3
+        c_w = c // 3
+        max_seq_len = 2048
+
+        rope_epsilon = torch.linspace(-1, 1, num_heads, dtype=torch.float64)
+        theta_base = 10000.0
+        theta_hat = theta_base * (1 + sigma_theta * rope_epsilon)
+
+        def build_freqs(seq_len, c_part):
+            exp = torch.arange(c_part, dtype=torch.float64) / c_part
+            omega = 1.0 / torch.pow(theta_hat.unsqueeze(1), exp.unsqueeze(0))
+            pos = torch.arange(seq_len, dtype=torch.float64)
+            angles = pos.view(1, -1, 1) * omega.unsqueeze(1)
+            return torch.polar(torch.ones_like(angles), angles)
+
+        freqs_t = build_freqs(max_seq_len, c_t)
+        freqs_h = build_freqs(max_seq_len, c_h)
+        freqs_w = build_freqs(max_seq_len, c_w)
+        return torch.cat([freqs_t, freqs_h, freqs_w], dim=2).to(torch.device(AI_DEVICE))
+
+    def set_scheduler(self, scheduler):
+        self.scheduler = scheduler
+
+    @torch.no_grad()
+    def infer(self, weights, inputs, kv_start=0, kv_end=0):
+        """Build pre-inference outputs for the MG3.0 transformer."""
+        x = self.scheduler.latents
+        t = self.scheduler.timestep_input
+
+        # Text context (MG3 uses text conditioning only, no CLIP image encoder)
+        if self.scheduler.infer_condition:
+            context = inputs["text_encoder_output"]["context"]
+        else:
+            context = inputs["text_encoder_output"]["context_null"]
+
+        # Patch embedding
+        x = weights.patch_embedding.apply(x.unsqueeze(0))
+        grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
+        x = x.flatten(2).transpose(1, 2).contiguous()
+
+        # Time embedding
+        embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            embed = weights.time_embedding_0.apply(embed.to(self.sensitive_layer_dtype))
+        else:
+            embed = weights.time_embedding_0.apply(embed)
+        embed = torch.nn.functional.silu(embed)
+        embed = weights.time_embedding_2.apply(embed)
+        embed0 = torch.nn.functional.silu(embed)
+        embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
+
+        # Text embedding
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            out = weights.text_embedding_0.apply(context.squeeze(0).to(self.sensitive_layer_dtype))
+        else:
+            out = weights.text_embedding_0.apply(context.squeeze(0))
+        out = torch.nn.functional.gelu(out, approximate="tanh")
+        context = weights.text_embedding_2.apply(out)
+
+        # Grid sizes and RoPE
+        grid_sizes = GridOutput(
+            tensor=torch.tensor(
+                [[grid_sizes_t, grid_sizes_h, grid_sizes_w]],
+                dtype=torch.int32,
+                device=x.device,
+            ),
+            tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
+        )
+
+        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
+            freqs = self.freqs.clone()
+            self.grid_sizes = grid_sizes.tuple
+            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+
+        # Extract conditioning signals from the runner's inputs
+        mg3_cond = inputs.get("mg3_conditions", {})
+        plucker_emb = mg3_cond.get("plucker_emb", None)
+        mouse_cond = mg3_cond.get("mouse_cond", None)
+        keyboard_cond = mg3_cond.get("keyboard_cond", None)
+        mouse_cond_memory = mg3_cond.get("mouse_cond_memory", None)
+        keyboard_cond_memory = mg3_cond.get("keyboard_cond_memory", None)
+        memory_length = mg3_cond.get("memory_length", 0)
+        memory_latent_idx = mg3_cond.get("memory_latent_idx", None)
+        predict_latent_idx = mg3_cond.get("predict_latent_idx", None)
+
+        # Process plucker embedding through the global camera layers
+        if plucker_emb is not None:
+            plucker_emb = weights.patch_embedding_wancamctrl.apply(plucker_emb.squeeze(0))
+            plucker_hidden = weights.c2ws_hidden_states_layer2.apply(
+                torch.nn.functional.silu(
+                    weights.c2ws_hidden_states_layer1.apply(plucker_emb)
+                )
+            )
+            plucker_emb = plucker_emb + plucker_hidden
+
+        return WanMtxg3PreInferOutput(
+            embed=embed,
+            grid_sizes=grid_sizes,
+            x=x.squeeze(0),
+            embed0=embed0.squeeze(0),
+            context=context,
+            cos_sin=self.cos_sin,
+            plucker_emb=plucker_emb,
+            mouse_cond=mouse_cond,
+            keyboard_cond=keyboard_cond,
+            mouse_cond_memory=mouse_cond_memory,
+            keyboard_cond_memory=keyboard_cond_memory,
+            memory_length=memory_length,
+            memory_latent_idx=memory_latent_idx,
+            predict_latent_idx=predict_latent_idx,
+        )
