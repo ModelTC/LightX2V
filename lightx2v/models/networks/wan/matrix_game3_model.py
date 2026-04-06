@@ -5,8 +5,8 @@ import torch
 from safetensors import safe_open
 
 from lightx2v.models.networks.wan.infer.matrix_game3.pre_infer import WanMtxg3PreInfer
+from lightx2v.models.networks.wan.infer.matrix_game3.post_infer import WanMtxg3PostInfer
 from lightx2v.models.networks.wan.infer.matrix_game3.transformer_infer import WanMtxg3TransformerInfer
-from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.matrix_game3.pre_weights import WanMtxg3PreWeights
 from lightx2v.models.networks.wan.weights.matrix_game3.transformer_weights import WanMtxg3TransformerWeights
@@ -45,7 +45,7 @@ class WanMtxg3Model(WanModel):
                 self.config[k] = model_config[k]
 
         self.pre_infer_class = WanMtxg3PreInfer
-        self.post_infer_class = WanPostInfer
+        self.post_infer_class = WanMtxg3PostInfer
         self.transformer_infer_class = WanMtxg3TransformerInfer
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):

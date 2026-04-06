@@ -93,6 +93,40 @@ class WanMtxg3PreInfer(WanPreInfer):
         else:
             context = inputs["text_encoder_output"]["context_null"]
 
+        # Matrix-Game-3 conditions are staged in the standard LightX2V
+        # `image_encoder_output["dit_cond_dict"]` container by the runner.
+        image_encoder_output = inputs.get("image_encoder_output", {})
+        dit_cond_dict = image_encoder_output.get("dit_cond_dict") or {}
+
+        if self.scheduler.infer_condition:
+            plucker_emb = dit_cond_dict.get("plucker_emb_with_memory", dit_cond_dict.get("c2ws_plucker_emb", None))
+            mouse_cond = dit_cond_dict.get("mouse_cond", None)
+            keyboard_cond = dit_cond_dict.get("keyboard_cond", None)
+            x_memory = dit_cond_dict.get("x_memory", None)
+            timestep_memory = dit_cond_dict.get("timestep_memory", None)
+            mouse_cond_memory = dit_cond_dict.get("mouse_cond_memory", None)
+            keyboard_cond_memory = dit_cond_dict.get("keyboard_cond_memory", None)
+            memory_latent_idx = dit_cond_dict.get("memory_latent_idx", None)
+        else:
+            plucker_emb = dit_cond_dict.get("c2ws_plucker_emb", None)
+            mouse_source = dit_cond_dict.get("mouse_cond", None)
+            keyboard_source = dit_cond_dict.get("keyboard_cond", None)
+            mouse_cond = torch.ones_like(mouse_source) if mouse_source is not None else None
+            keyboard_cond = -torch.ones_like(keyboard_source) if keyboard_source is not None else None
+            x_memory = None
+            timestep_memory = None
+            mouse_cond_memory = None
+            keyboard_cond_memory = None
+            memory_latent_idx = None
+        predict_latent_idx = dit_cond_dict.get("predict_latent_idx", None)
+
+        memory_length = 0
+        if x_memory is not None:
+            memory_length = int(x_memory.shape[2])
+            x = torch.cat([x_memory.squeeze(0).to(device=x.device, dtype=x.dtype), x], dim=1)
+            if timestep_memory is not None:
+                t = torch.cat([timestep_memory.squeeze(0).to(device=t.device, dtype=t.dtype), t], dim=0)
+
         # Patch embedding
         x = weights.patch_embedding.apply(x.unsqueeze(0))
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
@@ -133,17 +167,6 @@ class WanMtxg3PreInfer(WanPreInfer):
         # MG3 transformer apply indexed RoPE itself.
         self.grid_sizes = grid_sizes.tuple
         self.cos_sin = None
-
-        # Extract conditioning signals from the runner's inputs
-        mg3_cond = inputs.get("mg3_conditions", {})
-        plucker_emb = mg3_cond.get("plucker_emb", None)
-        mouse_cond = mg3_cond.get("mouse_cond", None)
-        keyboard_cond = mg3_cond.get("keyboard_cond", None)
-        mouse_cond_memory = mg3_cond.get("mouse_cond_memory", None)
-        keyboard_cond_memory = mg3_cond.get("keyboard_cond_memory", None)
-        memory_length = mg3_cond.get("memory_length", 0)
-        memory_latent_idx = mg3_cond.get("memory_latent_idx", None)
-        predict_latent_idx = mg3_cond.get("predict_latent_idx", None)
 
         # Process plucker embedding through the global camera layers
         if plucker_emb is not None:

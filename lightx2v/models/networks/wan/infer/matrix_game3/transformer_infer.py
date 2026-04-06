@@ -26,6 +26,7 @@ except ImportError:
         FLASH_ATTN_3_AVAILABLE = False
 
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.matrix_game2.posemb_layers import apply_rotary_emb, get_nd_rotary_pos_embed
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -106,6 +107,62 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         super().__init__(config)
         self.action_config = config.get("action_config", {})
         self.action_blocks = set(self.action_config.get("blocks", []))
+        self.vae_time_compression_ratio = int(self.action_config.get("vae_time_compression_ratio", 4))
+        self.windows_size = int(self.action_config.get("windows_size", 3))
+        self.action_patch_size = list(self.action_config.get("patch_size", [1, 2, 2]))
+        self.action_rope_theta = float(self.action_config.get("rope_theta", 256))
+        self.enable_mouse = bool(self.action_config.get("enable_mouse", True))
+        self.enable_keyboard = bool(self.action_config.get("enable_keyboard", True))
+        self.action_heads_num = int(self.action_config.get("heads_num", 16))
+        self.mouse_hidden_dim = int(self.action_config.get("mouse_hidden_dim", 1024))
+        self.keyboard_hidden_dim = int(self.action_config.get("keyboard_hidden_dim", 1024))
+        self.mouse_qk_dim_list = list(self.action_config.get("mouse_qk_dim_list", [8, 28, 28]))
+        self.rope_dim_list = list(self.action_config.get("rope_dim_list", [8, 28, 28]))
+
+    def _get_action_rotary_pos_embed(self, video_length, head_dim, rope_dim_list=None):
+        target_ndim = 3
+        latents_size = [video_length, self.action_patch_size[1], self.action_patch_size[2]]
+
+        if isinstance(self.action_patch_size, int):
+            rope_sizes = [s // self.action_patch_size for s in latents_size]
+            patch_t = self.action_patch_size
+        else:
+            rope_sizes = [s // self.action_patch_size[idx] for idx, s in enumerate(latents_size)]
+            patch_t = self.action_patch_size[0]
+
+        if len(rope_sizes) != target_ndim:
+            rope_sizes = [1] * (target_ndim - len(rope_sizes)) + rope_sizes
+
+        if rope_dim_list is None:
+            rope_dim_list = [head_dim // target_ndim for _ in range(target_ndim)]
+        assert sum(rope_dim_list) == head_dim, "sum(rope_dim_list) should equal the action attention head dim"
+
+        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(
+            rope_dim_list,
+            rope_sizes,
+            theta=self.action_rope_theta,
+            use_real=True,
+            theta_rescale_factor=1,
+        )
+        usable = video_length * rope_sizes[1] * rope_sizes[2] // patch_t
+        return freqs_cos[-usable:], freqs_sin[-usable:]
+
+    def _run_flash_attention(self, q, k, v, causal=False):
+        if FLASH_ATTN_3_AVAILABLE:
+            try:
+                return flash_attn_interface.flash_attn_func(q, k, v, causal=causal)
+            except TypeError:
+                return flash_attn_interface.flash_attn_func(q, k, v)
+        if "flash_attn_func" in globals():
+            try:
+                return flash_attn_func(q, k, v, causal=causal)
+            except TypeError:
+                return flash_attn_func(q, k, v)
+
+        q_pt = q.transpose(1, 2)
+        k_pt = k.transpose(1, 2)
+        v_pt = v.transpose(1, 2)
+        return torch.nn.functional.scaled_dot_product_attention(q_pt, k_pt, v_pt, is_causal=causal).transpose(1, 2).contiguous()
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
@@ -320,93 +377,190 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         return x
 
     def _infer_action_module(self, phase, x, pre_infer_out):
-        """ActionModule forward: keyboard + mouse conditioning via cross-attention.
-
-        This implements the official MG3 ActionModule logic in the LightX2V
-        weight/infer separation style. The module:
-        1. Processes mouse condition through mouse_mlp
-        2. Applies temporal self-attention with QKV (t_qkv)
-        3. Projects back via proj_mouse
-        4. Processes keyboard condition through keyboard_embed
-        5. Applies keyboard cross-attention
-        6. Projects back via proj_keyboard
-        """
-        grid_sizes = pre_infer_out.grid_sizes
-        f, h, w = grid_sizes.tuple
-        S = h * w
+        """ActionModule forward aligned with the official MG3 implementation."""
+        tt, th, tw = pre_infer_out.grid_sizes.tuple
+        spatial_tokens = th * tw
+        pad_t = self.vae_time_compression_ratio * self.windows_size
 
         mouse_cond = pre_infer_out.mouse_cond
         keyboard_cond = pre_infer_out.keyboard_cond
+        mouse_cond_memory = pre_infer_out.mouse_cond_memory
+        keyboard_cond_memory = pre_infer_out.keyboard_cond_memory
 
-        x_in = x.unsqueeze(0)  # [1, FHW, C]
+        x_in = x.unsqueeze(0)  # [1, T*S, C]
+        hidden_states = x_in
+        memory_length = 0
 
-        # --- Mouse conditioning ---
-        if mouse_cond is not None:
-            hidden_states = rearrange(x_in, "B (T S) C -> (B S) T C", T=f, S=S)
+        if self.enable_mouse and mouse_cond is not None:
+            batch_size, num_frames, mouse_dim = mouse_cond.shape
+            assert (((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0) or (
+                num_frames % self.vae_time_compression_ratio == 0
+            )
+            if ((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0:
+                num_feats = int((num_frames - 1) / self.vae_time_compression_ratio) + 1
+                mouse_cond = torch.cat([mouse_cond[:, 0:1, :].repeat(1, pad_t, 1), mouse_cond], dim=1)
+            else:
+                num_feats = num_frames // self.vae_time_compression_ratio
+                mouse_cond = torch.cat(
+                    [mouse_cond[:, 0:1, :].repeat(1, pad_t - self.vae_time_compression_ratio, 1), mouse_cond],
+                    dim=1,
+                )
 
-            # Mouse MLP
-            mouse_input = torch.cat([hidden_states, mouse_cond.expand(S, -1, -1) if mouse_cond.shape[0] == 1 else mouse_cond], dim=-1)
-            mouse_out = phase.mouse_mlp_0.apply(mouse_input.reshape(-1, mouse_input.shape[-1]))
-            mouse_out = torch.nn.functional.gelu(mouse_out, approximate="tanh")
-            mouse_out = phase.mouse_mlp_2.apply(mouse_out)
-            mouse_out = phase.mouse_mlp_3.apply(mouse_out)
-            mouse_out = mouse_out.reshape(S, f, -1)
+            mouse_groups = [
+                mouse_cond[
+                    :,
+                    self.vae_time_compression_ratio * (i - self.windows_size) + pad_t : i * self.vae_time_compression_ratio + pad_t,
+                    :,
+                ]
+                for i in range(num_feats)
+            ]
+            mouse_groups = torch.stack(mouse_groups, dim=1)
+            if mouse_cond_memory is not None:
+                memory_length = mouse_cond_memory.shape[1]
+                mouse_memory = mouse_cond_memory.unsqueeze(2).repeat(1, 1, pad_t, 1)
+                mouse_groups = torch.cat([mouse_memory, mouse_groups], dim=1)
 
-            # Mouse temporal self-attention with QKV
-            mouse_qkv = phase.t_qkv.apply(mouse_out.reshape(-1, mouse_out.shape[-1]))
-            mouse_qkv = mouse_qkv.reshape(S, f, 3, self.num_heads, self.head_dim)
+            hidden_states_mouse = rearrange(x_in, "B (T S) C -> (B S) T C", T=tt, S=spatial_tokens)
+            mouse_groups = mouse_groups.unsqueeze(-1).repeat(1, 1, 1, 1, spatial_tokens)
+            mouse_groups = rearrange(mouse_groups, "b t window d s -> (b s) t (window d)")
+            if mouse_groups.shape[1] != tt:
+                raise ValueError(
+                    f"matrix-game-3 mouse condition window mismatch: expected latent T={tt}, got {mouse_groups.shape[1]}"
+                )
+
+            mouse_input = torch.cat([hidden_states_mouse, mouse_groups], dim=-1)
+            mouse_hidden = phase.mouse_mlp_0.apply(mouse_input.reshape(-1, mouse_input.shape[-1]))
+            mouse_hidden = torch.nn.functional.gelu(mouse_hidden, approximate="tanh")
+            mouse_hidden = phase.mouse_mlp_2.apply(mouse_hidden)
+            mouse_hidden = phase.mouse_mlp_3.apply(mouse_hidden)
+            mouse_hidden = mouse_hidden.reshape(batch_size * spatial_tokens, tt, -1)
+
+            mouse_head_dim = self.mouse_hidden_dim // self.action_heads_num
+            mouse_qkv = phase.t_qkv.apply(mouse_hidden.reshape(-1, mouse_hidden.shape[-1]))
+            mouse_qkv = mouse_qkv.reshape(batch_size * spatial_tokens, tt, 3, self.action_heads_num, mouse_head_dim)
             q_m, k_m, v_m = mouse_qkv.permute(2, 0, 1, 3, 4).unbind(0)
 
-            # QK norm (RMSNorm)
-            q_m = phase.img_attn_q_norm.apply(q_m.reshape(-1, self.head_dim)).reshape(S, f, self.num_heads, self.head_dim)
-            k_m = phase.img_attn_k_norm.apply(k_m.reshape(-1, self.head_dim)).reshape(S, f, self.num_heads, self.head_dim)
+            q_m = phase.img_attn_q_norm.apply(q_m.reshape(-1, mouse_head_dim)).reshape(
+                batch_size * spatial_tokens, tt, self.action_heads_num, mouse_head_dim
+            )
+            k_m = phase.img_attn_k_norm.apply(k_m.reshape(-1, mouse_head_dim)).reshape(
+                batch_size * spatial_tokens, tt, self.action_heads_num, mouse_head_dim
+            )
 
-            # Flash attention
-            if FLASH_ATTN_3_AVAILABLE:
-                mouse_attn = flash_attn_interface.flash_attn_func(q_m, k_m, v_m)
+            if memory_length > 0:
+                freqs_memory = self._get_action_rotary_pos_embed(memory_length, mouse_head_dim, self.mouse_qk_dim_list)
+                q_mem, k_mem = apply_rotary_emb(q_m[:, :memory_length], k_m[:, :memory_length], freqs_memory, head_first=False)
+                q_m[:, :memory_length] = q_mem
+                k_m[:, :memory_length] = k_mem
+
+                pred_length = tt - memory_length
+                if pred_length > 0:
+                    freqs_pred = self._get_action_rotary_pos_embed(pred_length, mouse_head_dim, self.mouse_qk_dim_list)
+                    q_pred, k_pred = apply_rotary_emb(q_m[:, memory_length:], k_m[:, memory_length:], freqs_pred, head_first=False)
+                    q_m[:, memory_length:] = q_pred
+                    k_m[:, memory_length:] = k_pred
             else:
-                mouse_attn = flash_attn_func(q_m, k_m, v_m)
+                freqs = self._get_action_rotary_pos_embed(tt, mouse_head_dim, self.mouse_qk_dim_list)
+                q_m, k_m = apply_rotary_emb(q_m, k_m, freqs, head_first=False)
 
-            mouse_attn = rearrange(mouse_attn, "(B S) T h d -> B (T S) (h d)", B=1, S=S)
-            mouse_proj = phase.proj_mouse.apply(mouse_attn.squeeze(0)).unsqueeze(0)
-            x_in = x_in + mouse_proj
+            mouse_attn = self._run_flash_attention(q_m, k_m, v_m, causal=False)
+            mouse_attn = rearrange(mouse_attn, "(b s) t h d -> b (t s) (h d)", b=batch_size, s=spatial_tokens)
+            mouse_proj = phase.proj_mouse.apply(mouse_attn.reshape(-1, mouse_attn.shape[-1])).reshape(
+                batch_size, tt * spatial_tokens, -1
+            )
+            hidden_states = x_in + mouse_proj
+        else:
+            hidden_states = x_in
 
-        # --- Keyboard conditioning ---
-        if keyboard_cond is not None:
-            # Keyboard embed
-            kb_emb = phase.keyboard_embed_0.apply(keyboard_cond.reshape(-1, keyboard_cond.shape[-1]))
-            kb_emb = torch.nn.functional.silu(kb_emb)
-            kb_emb = phase.keyboard_embed_2.apply(kb_emb)
-            kb_emb = kb_emb.reshape(keyboard_cond.shape[0], keyboard_cond.shape[1], -1)
-
-            # Keyboard cross-attention: query from hidden states, key/value from keyboard
-            mouse_q = phase.mouse_attn_q.apply(x_in.squeeze(0)).unsqueeze(0)
-            keyboard_kv = phase.keyboard_attn_kv.apply(kb_emb.reshape(-1, kb_emb.shape[-1]))
-            keyboard_kv = keyboard_kv.reshape(1, -1, keyboard_kv.shape[-1])
-
-            HD = mouse_q.shape[-1]
-            D = HD // self.num_heads
-            q_k = mouse_q.view(1, -1, self.num_heads, D)
-            kv_split = keyboard_kv.view(1, -1, 2, self.num_heads, D)
-            k_k, v_k = kv_split.permute(2, 0, 1, 3, 4).unbind(0)
-
-            # QK norm
-            q_k_flat = q_k.reshape(-1, D)
-            k_k_flat = k_k.reshape(-1, D)
-            q_k = phase.key_attn_q_norm.apply(q_k_flat).reshape(1, -1, self.num_heads, D)
-            k_k = phase.key_attn_k_norm.apply(k_k_flat).reshape(1, -1, self.num_heads, D)
-
-            # Flash attention
-            if FLASH_ATTN_3_AVAILABLE:
-                kb_attn = flash_attn_interface.flash_attn_func(q_k, k_k, v_k)
+        if self.enable_keyboard and keyboard_cond is not None:
+            batch_size, num_frames, _ = keyboard_cond.shape
+            assert (((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0) or (
+                num_frames % self.vae_time_compression_ratio == 0
+            )
+            if ((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0:
+                num_feats = int((num_frames - 1) / self.vae_time_compression_ratio) + 1
+                keyboard_cond = torch.cat([keyboard_cond[:, 0:1, :].repeat(1, pad_t, 1), keyboard_cond], dim=1)
             else:
-                kb_attn = flash_attn_func(q_k, k_k, v_k)
+                num_feats = num_frames // self.vae_time_compression_ratio
+                keyboard_cond = torch.cat(
+                    [keyboard_cond[:, 0:1, :].repeat(1, pad_t - self.vae_time_compression_ratio, 1), keyboard_cond],
+                    dim=1,
+                )
 
-            kb_attn = rearrange(kb_attn, "B L H D -> B L (H D)")
-            kb_proj = phase.proj_keyboard.apply(kb_attn.squeeze(0)).unsqueeze(0)
-            x_in = x_in + kb_proj
+            keyboard_hidden = phase.keyboard_embed_0.apply(keyboard_cond.reshape(-1, keyboard_cond.shape[-1]))
+            keyboard_hidden = torch.nn.functional.silu(keyboard_hidden)
+            keyboard_hidden = phase.keyboard_embed_2.apply(keyboard_hidden)
+            keyboard_hidden = keyboard_hidden.reshape(batch_size, keyboard_cond.shape[1], -1)
 
-        return x_in.squeeze(0)
+            keyboard_groups = [
+                keyboard_hidden[
+                    :,
+                    self.vae_time_compression_ratio * (i - self.windows_size) + pad_t : i * self.vae_time_compression_ratio + pad_t,
+                    :,
+                ]
+                for i in range(num_feats)
+            ]
+            keyboard_groups = torch.stack(keyboard_groups, dim=1)
+            if keyboard_cond_memory is not None:
+                memory_length = keyboard_cond_memory.shape[1]
+                keyboard_memory = phase.keyboard_embed_0.apply(keyboard_cond_memory.reshape(-1, keyboard_cond_memory.shape[-1]))
+                keyboard_memory = torch.nn.functional.silu(keyboard_memory)
+                keyboard_memory = phase.keyboard_embed_2.apply(keyboard_memory)
+                keyboard_memory = keyboard_memory.reshape(batch_size, memory_length, -1)
+                keyboard_memory = keyboard_memory.unsqueeze(2).repeat(1, 1, pad_t, 1)
+                keyboard_groups = torch.cat([keyboard_memory, keyboard_groups], dim=1)
+
+            if keyboard_groups.shape[1] != tt:
+                raise ValueError(
+                    f"matrix-game-3 keyboard condition window mismatch: expected latent T={tt}, got {keyboard_groups.shape[1]}"
+                )
+
+            keyboard_groups = keyboard_groups.reshape(batch_size, keyboard_groups.shape[1], -1)
+            mouse_q = phase.mouse_attn_q.apply(hidden_states.reshape(-1, hidden_states.shape[-1])).reshape(
+                batch_size, tt * spatial_tokens, -1
+            )
+            keyboard_kv = phase.keyboard_attn_kv.apply(keyboard_groups.reshape(-1, keyboard_groups.shape[-1]))
+            keyboard_kv = keyboard_kv.reshape(batch_size, keyboard_groups.shape[1], -1)
+
+            keyboard_head_dim = self.keyboard_hidden_dim // self.action_heads_num
+            q_k = mouse_q.view(batch_size, -1, self.action_heads_num, keyboard_head_dim)
+            kv = keyboard_kv.view(batch_size, -1, 2, self.action_heads_num, keyboard_head_dim)
+            k_k, v_k = kv.permute(2, 0, 1, 3, 4).unbind(0)
+
+            q_k = phase.key_attn_q_norm.apply(q_k.reshape(-1, keyboard_head_dim)).reshape(
+                batch_size, -1, self.action_heads_num, keyboard_head_dim
+            )
+            k_k = phase.key_attn_k_norm.apply(k_k.reshape(-1, keyboard_head_dim)).reshape(
+                batch_size, -1, self.action_heads_num, keyboard_head_dim
+            )
+
+            q_k = rearrange(q_k, "b (t s) h d -> (b s) t h d", s=spatial_tokens)
+            if memory_length > 0:
+                freqs_memory = self._get_action_rotary_pos_embed(memory_length, keyboard_head_dim, self.mouse_qk_dim_list)
+                q_mem, k_mem = apply_rotary_emb(q_k[:, :memory_length], k_k[:, :memory_length], freqs_memory, head_first=False)
+                q_k[:, :memory_length] = q_mem
+                k_k[:, :memory_length] = k_mem
+
+                pred_length = tt - memory_length
+                if pred_length > 0:
+                    freqs_pred = self._get_action_rotary_pos_embed(pred_length, keyboard_head_dim, self.mouse_qk_dim_list)
+                    q_pred, k_pred = apply_rotary_emb(q_k[:, memory_length:], k_k[:, memory_length:], freqs_pred, head_first=False)
+                    q_k[:, memory_length:] = q_pred
+                    k_k[:, memory_length:] = k_pred
+            else:
+                freqs = self._get_action_rotary_pos_embed(tt, keyboard_head_dim, self.rope_dim_list)
+                q_k, k_k = apply_rotary_emb(q_k, k_k, freqs, head_first=False)
+
+            k_k = k_k.repeat(spatial_tokens, 1, 1, 1)
+            v_k = v_k.repeat(spatial_tokens, 1, 1, 1)
+            kb_attn = self._run_flash_attention(q_k, k_k, v_k, causal=False)
+            kb_attn = rearrange(kb_attn, "(b s) t h d -> b (t s) (h d)", b=batch_size, s=spatial_tokens)
+            kb_proj = phase.proj_keyboard.apply(kb_attn.reshape(-1, kb_attn.shape[-1])).reshape(
+                batch_size, tt * spatial_tokens, -1
+            )
+            hidden_states = hidden_states + kb_proj
+
+        return hidden_states.squeeze(0)
 
     @property
     def freqs(self):
