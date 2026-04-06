@@ -96,6 +96,11 @@ def _expand_path_candidates(path_value: Any) -> list[Path]:
     return candidates
 
 
+def _append_unique_path(paths: list[Path], candidate: Path):
+    if candidate not in paths:
+        paths.append(candidate)
+
+
 @RUNNER_REGISTER("wan2.2_matrix_game3")
 class WanMatrixGame3Runner(Wan22DenseRunner):
     """Runner-only Matrix-Game-3 adapter on top of the existing Wan2.2 lifecycle.
@@ -229,8 +234,37 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 "Please set config['matrix_game3_official_root'] to the official source root directory."
             )
 
+        auto_candidates: list[Path] = []
         for relative_path in _MATRIX_GAME3_OFFICIAL_ROOT_RELATIVE_CANDIDATES:
-            resolved = self._resolve_official_root_candidate(_PROJECT_ROOT / relative_path)
+            _append_unique_path(auto_candidates, _PROJECT_ROOT / relative_path)
+        _append_unique_path(auto_candidates, _PROJECT_ROOT)
+
+        path_hints = [
+            self.config.get("model_path"),
+            self.config.get("config_json"),
+            self.input_info.image_path if getattr(self, "input_info", None) is not None else None,
+        ]
+        for path_hint in path_hints:
+            if not path_hint:
+                continue
+            for candidate in _expand_path_candidates(path_hint):
+                looks_like_file = candidate.is_file() or candidate.suffix.lower() in {
+                    ".json",
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp",
+                    ".bmp",
+                    ".gif",
+                    ".npy",
+                }
+                current = candidate.parent if looks_like_file else candidate
+                for ancestor in (current, *current.parents):
+                    _append_unique_path(auto_candidates, ancestor)
+                    _append_unique_path(auto_candidates, ancestor / "Matrix-Game-3")
+
+        for candidate in auto_candidates:
+            resolved = self._resolve_official_root_candidate(candidate)
             if resolved is not None:
                 return resolved
 
