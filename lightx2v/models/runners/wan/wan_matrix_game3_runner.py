@@ -16,11 +16,13 @@ from loguru import logger
 
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import GET_DTYPE, torch_device_module
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import GET_RECORDER_MODE, ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import best_output_size
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
