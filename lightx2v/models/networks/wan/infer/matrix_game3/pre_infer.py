@@ -13,6 +13,7 @@ class WanMtxg3PreInferOutput:
 
     __slots__ = [
         "x", "embed", "embed0", "grid_sizes", "cos_sin", "context",
+        "freqs",
         "plucker_emb", "mouse_cond", "keyboard_cond",
         "mouse_cond_memory", "keyboard_cond_memory",
         "memory_length", "memory_latent_idx", "predict_latent_idx",
@@ -126,10 +127,12 @@ class WanMtxg3PreInfer(WanPreInfer):
             tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
         )
 
-        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
-            freqs = self.freqs.clone()
-            self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+        # MG3 can use head-specific 3D RoPE frequencies when `sigma_theta > 0`.
+        # The shared LightX2V `prepare_cos_sin()` only handles the standard 2D
+        # RoPE table, so MG3 keeps passing raw `freqs` downstream and lets the
+        # MG3 transformer apply indexed RoPE itself.
+        self.grid_sizes = grid_sizes.tuple
+        self.cos_sin = None
 
         # Extract conditioning signals from the runner's inputs
         mg3_cond = inputs.get("mg3_conditions", {})
@@ -159,6 +162,7 @@ class WanMtxg3PreInfer(WanPreInfer):
             embed0=embed0.squeeze(0),
             context=context,
             cos_sin=self.cos_sin,
+            freqs=self.freqs,
             plucker_emb=plucker_emb,
             mouse_cond=mouse_cond,
             keyboard_cond=keyboard_cond,

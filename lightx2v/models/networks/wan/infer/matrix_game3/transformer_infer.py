@@ -110,6 +110,7 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
+        self.freqs = pre_infer_out.freqs
         self.reset_infer_states()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
@@ -266,22 +267,22 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             q = torch.cat([q_memory.squeeze(0), q_pred.squeeze(0)], dim=0)
             k = torch.cat([k_memory.squeeze(0), k_pred.squeeze(0)], dim=0)
         else:
-            # No memory — standard RoPE or indexed RoPE
+            # No memory — MG3 official behavior still uses indexed RoPE.
+            q_unsq = q.unsqueeze(0)
+            k_unsq = k.unsqueeze(0)
+            grid_sizes_t = torch.tensor(
+                [[grid_sizes.tuple[0], grid_sizes.tuple[1], grid_sizes.tuple[2]]],
+                dtype=torch.long, device=q.device,
+            )
             if predict_latent_idx is not None:
-                q_unsq = q.unsqueeze(0)
-                k_unsq = k.unsqueeze(0)
-                grid_sizes_t = torch.tensor(
-                    [[grid_sizes.tuple[0], grid_sizes.tuple[1], grid_sizes.tuple[2]]],
-                    dtype=torch.long, device=q.device,
-                )
                 if isinstance(predict_latent_idx, tuple) and len(predict_latent_idx) == 2:
                     pred_indices = list(range(predict_latent_idx[0], predict_latent_idx[1]))
                 else:
                     pred_indices = predict_latent_idx
-                q = rope_apply_with_indices(q_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
-                k = rope_apply_with_indices(k_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
             else:
-                q, k = self.apply_rope_func(q, k, cos_sin)
+                pred_indices = list(range(grid_sizes.tuple[0]))
+            q = rope_apply_with_indices(q_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
+            k = rope_apply_with_indices(k_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
 
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
