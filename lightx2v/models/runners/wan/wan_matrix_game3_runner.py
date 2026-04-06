@@ -32,6 +32,13 @@ _MATRIX_GAME3_OFFICIAL_ROOT_RELATIVE_CANDIDATES = (
 )
 _MATRIX_GAME3_CONFIG_ROOT_RELATIVE = Path("Matrix-Game-3.0")
 _MATRIX_GAME3_OFFICIAL_PACKAGE = "_lightx2v_matrix_game3_official"
+_MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT = (
+    "Vibrant colors, overexposure, static, blurred details, subtitles, style, artwork, "
+    "painting, still image, overall grayness, worst quality, low quality, JPEG compression "
+    "residue, ugly, mutilated, extra fingers, poorly drawn hands, poorly drawn faces, "
+    "deformed, disfigured, malformed limbs, fused fingers, still image, cluttered background, "
+    "three legs, crowded background, walking backwards"
+)
 
 
 @dataclass
@@ -189,6 +196,15 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         if "pose" in self.input_info.__dataclass_fields__:
             self.input_info.pose = inputs.get("pose", inputs.get("action_path", ""))
 
+    def run_text_encoder(self, input_info):
+        # Official Matrix-Game-3 base inference uses a non-empty default negative
+        # prompt for CFG. If the caller leaves `--negative_prompt` empty, reuse the
+        # official default so the unconditional branch matches the reference path.
+        if self.config.get("enable_cfg", False) and not getattr(input_info, "negative_prompt", ""):
+            input_info.negative_prompt = self.config.get("sample_neg_prompt", _MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT)
+            logger.info("[matrix-game-3] negative_prompt not provided; falling back to the official sample_neg_prompt for CFG.")
+        return super().run_text_encoder(input_info)
+
     def load_transformer(self):
         from lightx2v.models.networks.wan.matrix_game3_model import WanMtxg3Model
 
@@ -322,6 +338,7 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             self.config["num_channels_latents"] = int(model_config.get("in_dim", self.config.get("num_channels_latents", 48)))
             self.config["vae_stride"] = tuple(self.config.get("vae_stride", (4, 16, 16)))
             self.config["patch_size"] = tuple(model_config.get("patch_size", self.config.get("patch_size", (1, 2, 2))))
+            self.config["sample_neg_prompt"] = self.config.get("sample_neg_prompt", _MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT)
 
         action_config = self.config.get("action_config", {})
         self.keyboard_dim_in = int(self.config.get("keyboard_dim_in", action_config.get("keyboard_dim_in", 6)))
