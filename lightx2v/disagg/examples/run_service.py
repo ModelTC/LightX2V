@@ -49,6 +49,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Service role. auto = infer from config_json.disagg_mode",
     )
+    parser.add_argument(
+        "--engine_rank",
+        type=int,
+        default=None,
+        help="Override engine rank for encoder/transformer/decoder service.",
+    )
     return parser
 
 
@@ -109,6 +115,10 @@ def main():
     args = _build_parser().parse_args()
     config, raw_cfg = _build_runtime_config(args)
     service_mode = _resolve_service_mode(args, raw_cfg)
+
+    if args.engine_rank is not None and service_mode in {"encoder", "transformer", "decoder"}:
+        rank_key = f"{service_mode}_engine_rank"
+        config[rank_key] = int(args.engine_rank)
 
     seed_all(args.seed)
     logger.info("Starting disagg service mode={}", service_mode)

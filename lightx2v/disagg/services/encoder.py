@@ -3,7 +3,7 @@ import json
 import threading
 import time
 from collections import deque
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -63,6 +63,13 @@ class EncoderService(BaseService):
             gpu_id=self.encoder_engine_rank,
             bind_address=f"tcp://{self.config.get('data_bootstrap_addr', '127.0.0.1')}:{MONITOR_POLLING_PORT + self.encoder_engine_rank}",
         )
+        self._queue_metrics_lock = threading.Lock()
+        self._queue_metrics: dict[str, Any] = {
+            "queue_sizes": {},
+            "queue_total_pending": 0,
+            "all_queues_empty": True,
+        }
+        self.reporter.set_extra_metrics_provider(self._get_queue_metrics)
         self._reporter_thread: Optional[threading.Thread] = threading.Thread(
             target=self.reporter.serve_forever,
             name="encoder-reporter",
@@ -70,6 +77,28 @@ class EncoderService(BaseService):
         )
         self._reporter_thread.start()
         self.load_models()
+
+    def _get_queue_metrics(self) -> dict[str, Any]:
+        with self._queue_metrics_lock:
+            queue_sizes = dict(self._queue_metrics.get("queue_sizes", {}))
+            return {
+                "queue_sizes": queue_sizes,
+                "queue_total_pending": int(self._queue_metrics.get("queue_total_pending", 0)),
+                "all_queues_empty": bool(self._queue_metrics.get("all_queues_empty", True)),
+            }
+
+    def _update_queue_metrics(self, queue_sizes: dict[str, int], transfer_sizes: Optional[dict[str, int]] = None):
+        merged_sizes = {k: int(v) for k, v in queue_sizes.items()}
+        if transfer_sizes is not None:
+            for key, value in transfer_sizes.items():
+                merged_sizes[f"transfer_{key}"] = int(value)
+        total_pending = sum(max(v, 0) for v in merged_sizes.values())
+        with self._queue_metrics_lock:
+            self._queue_metrics = {
+                "queue_sizes": merged_sizes,
+                "queue_total_pending": total_pending,
+                "all_queues_empty": total_pending == 0,
+            }
 
     def _ensure_request_buffer(self) -> bool:
         if self._request_rdma_buffer is not None:
@@ -167,9 +196,6 @@ class EncoderService(BaseService):
         self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", self._phase1_handshake_port))
         self._phase1_slots = shared_slots
         self._phase1_slot_size = shared_slot_size
-        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", 0))
-        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", 1))
-        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
 
         # Seed everything if seed is in config
         if "seed" in self.config:
@@ -513,6 +539,19 @@ class EncoderService(BaseService):
         complete_queue: Dict[int, dict] = {}
 
         while True:
+            transfer_sizes = self.data_mgr.get_backlog_counts() if self.data_mgr is not None else {"request_pool": 0, "waiting_pool": 0}
+            self._update_queue_metrics(
+                {
+                    "req_queue": len(req_queue),
+                    "exec_queue": len(exec_queue),
+                    "complete_queue": len(complete_queue),
+                },
+                {
+                    "request_pool": int(transfer_sizes.get("request_pool", 0)),
+                    "waiting_pool": int(transfer_sizes.get("waiting_pool", 0)),
+                },
+            )
+
             if self._request_rdma_buffer is None:
                 try:
                     self._ensure_request_buffer()
@@ -522,7 +561,7 @@ class EncoderService(BaseService):
             if self._request_rdma_buffer is not None:
                 config = self._request_rdma_buffer.consume()
                 if config is not None:
-                    self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items() if not k.endswith("_path")})
+                    self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
                     req_queue.append(config)
 
             if req_queue:

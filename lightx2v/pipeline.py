@@ -66,9 +66,10 @@ def dict_like(cls):
 class LightX2VPipeline:
     def __init__(
         self,
-        task,
-        model_path,
-        model_cls,
+        task="",
+        model_path="",
+        model_cls="",
+        support_tasks=[],
         sf_model_path=None,
         dit_original_ckpt=None,
         low_noise_original_ckpt=None,
@@ -76,6 +77,7 @@ class LightX2VPipeline:
         transformer_model_name=None,
     ):
         self.task = task
+        self.support_tasks = support_tasks
         self.model_path = model_path
         self.model_cls = model_cls
         self.sf_model_path = sf_model_path
@@ -131,8 +133,6 @@ class LightX2VPipeline:
             self.model_cls = "flux2_klein"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
-
-        self.input_info = init_empty_input_info(self.task)
 
     def create_generator(
         self,
@@ -412,6 +412,7 @@ class LightX2VPipeline:
         prompt="",
         negative_prompt="",
         save_result_path="lightx2v_gen_result.png",
+        task=None,
         image_path=None,
         action_path=None,
         video_path=None,  # For SR task (video super-resolution)
@@ -444,13 +445,16 @@ class LightX2VPipeline:
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
         self.image_strength = image_strength
+        if task is not None:
+            self.task = task
+            self.modify_config({"task": self.task})
 
-        input_info = init_empty_input_info(self.task)
+        input_info = init_empty_input_info(self.task, self.support_tasks)
         seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
         self.runner.run_pipeline(input_info)
-        logger.info("Video generated successfully!")
-        logger.info(f"Video Saved in {save_result_path}")
+        logger.info("Generated successfully!")
+        logger.info(f"Saved in {save_result_path}")
 
     def _init_runner(self, config):
         torch.set_grad_enabled(False)

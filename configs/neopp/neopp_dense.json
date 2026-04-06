@@ -5,5 +5,6 @@
     "attn_type": "flash_attn3",
     "cfg_scale": 4.0,
     "timestep_shift": 3.0,
-    "cfg_interval": [-1, 2]
+    "cfg_interval": [-1, 2],
+    "enable_cfg": true
 }
