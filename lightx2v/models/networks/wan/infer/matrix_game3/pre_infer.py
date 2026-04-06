@@ -87,6 +87,18 @@ class WanMtxg3PreInfer(WanPreInfer):
         x = self.scheduler.latents
         t = self.scheduler.timestep_input
 
+        # Official MG3 feeds a per-token timestep map where the fixed conditioning
+        # latent slots are forced to zero. LightX2V's generic Wan scheduler only
+        # builds that map for plain `wan2.2`, so the MG3 adapter reconstructs it
+        # here when the scheduler exposes a scalar timestep.
+        if t.numel() == 1:
+            mask = getattr(self.scheduler, "mask", None)
+            if mask is not None:
+                timestep_scalar = t.reshape(1).to(device=x.device, dtype=x.dtype)
+                t = (mask[0][:, ::2, ::2].to(device=x.device, dtype=x.dtype) * timestep_scalar).flatten()
+            else:
+                t = t.reshape(-1).to(device=x.device, dtype=x.dtype)
+
         # Text context (MG3 uses text conditioning only, no CLIP image encoder)
         if self.scheduler.infer_condition:
             context = inputs["text_encoder_output"]["context"]
@@ -125,7 +137,7 @@ class WanMtxg3PreInfer(WanPreInfer):
             memory_length = int(x_memory.shape[2])
             x = torch.cat([x_memory.squeeze(0).to(device=x.device, dtype=x.dtype), x], dim=1)
             if timestep_memory is not None:
-                t = torch.cat([timestep_memory.squeeze(0).to(device=t.device, dtype=t.dtype), t], dim=0)
+                t = torch.cat([timestep_memory.squeeze(0).to(device=x.device, dtype=x.dtype), t.to(device=x.device, dtype=x.dtype)], dim=0)
 
         # Patch embedding
         x = weights.patch_embedding.apply(x.unsqueeze(0))

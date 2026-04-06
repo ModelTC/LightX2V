@@ -105,6 +105,9 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
 
     def __init__(self, config):
         super().__init__(config)
+        # Official Matrix-Game-3 blocks are always instantiated with
+        # `use_memory=True`, which slightly changes the cross-attention residual path.
+        self.use_memory = True
         self.action_config = config.get("action_config", {})
         self.action_blocks = set(self.action_config.get("blocks", []))
         self.vae_time_compression_ratio = int(self.action_config.get("vae_time_compression_ratio", 4))
@@ -218,7 +221,14 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
 
         # --- Phase 2: Cross-Attention ---
         cross_phase = block.compute_phases[2]
-        norm3_out = cross_phase.norm3.apply(x)
+        # Match the official MG3 block semantics:
+        # when `use_memory=True`, norm3 is applied in-place on the residual stream
+        # before cross-attention, so the action/ffn branches see the normalized x.
+        if pre_infer_out.mouse_cond is not None or self.use_memory:
+            x = cross_phase.norm3.apply(x)
+            norm3_out = x
+        else:
+            norm3_out = cross_phase.norm3.apply(x)
         n, d = self.num_heads, self.head_dim
         q = cross_phase.cross_attn_norm_q.apply(cross_phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
         k = cross_phase.cross_attn_norm_k.apply(cross_phase.cross_attn_k.apply(pre_infer_out.context)).view(-1, n, d)
