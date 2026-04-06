@@ -21,6 +21,7 @@ from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # n
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
@@ -99,9 +100,11 @@ class LightX2VPipeline:
             self.vae_stride = (4, 8, 8)
             if self.model_cls.startswith("wan2.2"):
                 self.use_image_encoder = False
-        elif self.model_cls in ["wan2.2"]:
+        elif self.model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 48
+            if self.model_cls == "wan2.2_matrix_game3":
+                self.use_image_encoder = False
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
@@ -320,6 +323,7 @@ class LightX2VPipeline:
             "seko_talk",
             "wan2.2_moe",
             "wan2.2",
+            "wan2.2_matrix_game3",
             "wan2.2_moe_audio",
             "wan2.2_audio",
             "wan2.2_moe_distill",
@@ -409,6 +413,7 @@ class LightX2VPipeline:
         negative_prompt="",
         save_result_path="lightx2v_gen_result.png",
         image_path=None,
+        action_path=None,
         video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
         last_frame_path=None,
@@ -425,6 +430,7 @@ class LightX2VPipeline:
         # image_strength can be a scalar (float/int) or a list matching the number of images
         self.seed = seed
         self.image_path = image_path
+        self.action_path = action_path
         self.video_path = video_path  # For SR task
         self.sr_ratio = sr_ratio
         self.last_frame_path = last_frame_path

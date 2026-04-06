@@ -19,6 +19,7 @@ from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # n
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
@@ -60,6 +61,7 @@ def main():
             "wan2.2_moe",
             "lingbot_world",
             "wan2.2",
+            "wan2.2_matrix_game3",
             "wan2.2_moe_audio",
             "wan2.2_audio",
             "wan2.2_moe_distill",
