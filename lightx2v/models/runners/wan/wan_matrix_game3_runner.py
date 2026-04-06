@@ -130,6 +130,12 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             config["num_channels_latents"] = int(config.get("num_channels_latents", 48))
             config["vae_stride"] = tuple(config.get("vae_stride", (4, 16, 16)))
             config["patch_size"] = tuple(config.get("patch_size", (1, 2, 2)))
+            # Load the official MG3 sub-model config before the parent runner
+            # constructs the scheduler. The shared Wan scheduler expects fields
+            # like `dim` and `num_heads` to already exist in `self.config`.
+            self.config = config
+            self.matrix_game3_model_cls = original_model_cls
+            self._load_matrix_game3_model_config()
         super().__init__(config)
 
         self.matrix_game3_model_cls = original_model_cls
@@ -168,7 +174,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         self._mg3_generated_latent_history: list[torch.Tensor] = []
         self._mg3_tail_latents: Optional[torch.Tensor] = None
         self._mg3_noise_generator: Optional[torch.Generator] = None
-        self._load_matrix_game3_model_config()
 
     def set_inputs(self, inputs):
         super().set_inputs(inputs)
