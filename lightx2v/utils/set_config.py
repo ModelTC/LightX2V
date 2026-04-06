@@ -115,6 +115,11 @@ def auto_calc_config(config):
                     model_config = json.load(f)
                 config.update(model_config)
 
+    # Some upstream/offical configs use `num_inference_steps`, while the shared
+    # LightX2V scheduler stack expects `infer_steps`.
+    if "infer_steps" not in config and "num_inference_steps" in config:
+        config["infer_steps"] = config["num_inference_steps"]
+
     if config["task"] in ["i2v", "s2v", "rs2v"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
