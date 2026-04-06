@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
@@ -182,6 +183,36 @@ class WanMtxg3PreInfer(WanPreInfer):
 
         # Process plucker embedding through the global camera layers
         if plucker_emb is not None:
+            # Match the official MG3 implementation: plucker embeddings arrive as
+            # [B, C, F, H, W] (or an equivalent list form), must be patchified into
+            # [B, L, C'] tokens, and only then can they pass through the global
+            # camera-control linear projection.
+            if torch.is_tensor(plucker_emb):
+                plucker_items = [u.unsqueeze(0) for u in plucker_emb]
+            else:
+                plucker_items = [u.unsqueeze(0) if u.dim() == 4 else u for u in plucker_emb]
+
+            patch_t, patch_h, patch_w = self.config.get("patch_size", (1, 2, 2))
+            plucker_emb = [
+                rearrange(
+                    item,
+                    "1 c (f c1) (h c2) (w c3) -> 1 (f h w) (c c1 c2 c3)",
+                    c1=patch_t,
+                    c2=patch_h,
+                    c3=patch_w,
+                )
+                for item in plucker_items
+            ]
+            plucker_emb = torch.cat(plucker_emb, dim=1)
+            if plucker_emb.size(1) < x.size(1):
+                plucker_emb = torch.cat(
+                    [
+                        plucker_emb,
+                        plucker_emb.new_zeros(plucker_emb.size(0), x.size(1) - plucker_emb.size(1), plucker_emb.size(2)),
+                    ],
+                    dim=1,
+                )
+
             plucker_emb = weights.patch_embedding_wancamctrl.apply(plucker_emb.squeeze(0))
             plucker_hidden = weights.c2ws_hidden_states_layer2.apply(
                 torch.nn.functional.silu(
