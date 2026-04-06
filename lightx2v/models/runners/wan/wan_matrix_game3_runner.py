@@ -506,6 +506,18 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         raw_controls = self._load_control_payload(action_path)
         raw_total_frames = self._infer_raw_total_frames(raw_controls)
         self._mg3_num_iterations, self._mg3_expected_total_frames = self._get_expected_total_frames(raw_total_frames)
+
+        # Match the official Matrix-Game-3 demo pipeline: when the user does not
+        # provide an external action file, fall back to the benchmark universal
+        # action sequence instead of a fully static zero-control clip.
+        if not raw_controls:
+            modules = self._get_official_modules()
+            logger.warning(
+                "[matrix-game-3] action_path missing or empty; falling back to official Bench_actions_universal({}).",
+                self._mg3_expected_total_frames,
+            )
+            raw_controls = self._normalize_payload_keys(modules["conditions"].Bench_actions_universal(self._mg3_expected_total_frames))
+
         self._mg3_keyboard_all, self._mg3_mouse_all, self._mg3_extrinsics_all, self._mg3_intrinsics_all = self._build_noninteractive_controls(raw_controls)
 
     def _infer_raw_total_frames(self, payload: dict[str, Any]) -> Optional[int]:
