@@ -26,6 +26,7 @@ class NeoppModel(BaseTransformerModel):
         self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
         self.cfg_scale = self.config.get("cfg_scale", 7.0)
         self.img_cfg_scale = self.config.get("img_cfg_scale", 1.5)
+        self.cfg_norm = self.config.get("cfg_norm", "global")
         self.patch_size = self.config.get("patch_size", 16)
         self.merge_size = 2
 
@@ -86,7 +87,24 @@ class NeoppModel(BaseTransformerModel):
             v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
             if use_cfg:
                 v_pred_uncond = self._infer_pass(inputs, pre_infer_out, "uncond")
-                return v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
+                v_pred = v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
+                if self.cfg_norm == "global":
+                    logger.info(f"cfg_norm is global, applying global normalization")
+                    norm_v_condition = torch.norm(v_pred_condition, dim=(1, 2), keepdim=True)
+                    norm_v_cfg = torch.norm(v_pred, dim=(1, 2), keepdim=True)
+                    scale = (norm_v_condition / (norm_v_cfg + 1e-8)).clamp(min=0, max=1.0)
+                    v_pred = v_pred * scale
+                elif self.cfg_norm == "channel":
+                    logger.info(f"cfg_norm is channel, applying channel normalization")
+                    norm_v_condition = torch.norm(v_pred_condition, dim=-1, keepdim=True)
+                    norm_v_cfg = torch.norm(v_pred, dim=-1, keepdim=True)
+                    scale = (norm_v_condition / (norm_v_cfg + 1e-8)).clamp(min=0, max=1.0)
+                    v_pred = v_pred * scale
+                elif self.cfg_norm == "none":
+                    logger.info(f"cfg_norm is none, no normalization will be applied")
+                else:
+                    raise ValueError(f"Invalid cfg_norm: {self.cfg_norm}")
+                return v_pred
             return v_pred_condition
 
     def _infer_i2i(self, inputs, pre_infer_out):
