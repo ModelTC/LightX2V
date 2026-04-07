@@ -70,45 +70,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
 
     def set_config(self, config_modify):
-        """Apply per-request overrides and mirror flat disagg HTTP fields into ``disagg_config``."""
+        """Apply per-request overrides and optionally sync disagg fields."""
         super().set_config(config_modify)
-        if not isinstance(config_modify, dict):
-            return
-        dc = self.config.get("disagg_config")
-        if not isinstance(dc, dict):
-            return
-        with self.config.temporarily_unlocked():
-            if config_modify.get("data_bootstrap_room") is not None:
-                try:
-                    self.config["data_bootstrap_room"] = int(config_modify["data_bootstrap_room"])
-                except (TypeError, ValueError):
-                    pass
-            if config_modify.get("disagg_bootstrap_room") is not None:
-                try:
-                    v = int(config_modify["disagg_bootstrap_room"])
-                    dc["bootstrap_room"] = v
-                    self.config["data_bootstrap_room"] = v
-                except (TypeError, ValueError):
-                    pass
-            if config_modify.get("disagg_decoder_bootstrap_room") is not None:
-                try:
-                    dc["decoder_bootstrap_room"] = int(config_modify["disagg_decoder_bootstrap_room"])
-                except (TypeError, ValueError):
-                    pass
-            if config_modify.get("disagg_phase1_receiver_engine_rank") is not None:
-                try:
-                    self.config["disagg_phase1_receiver_engine_rank"] = int(config_modify["disagg_phase1_receiver_engine_rank"])
-                except (TypeError, ValueError):
-                    pass
-            for flat, key in (
-                ("disagg_phase1_receiver_engine_rank", "receiver_engine_rank"),
-                ("disagg_phase2_sender_engine_rank", "receiver_engine_rank"),
-            ):
-                if config_modify.get(flat) is not None:
-                    try:
-                        dc[key] = int(config_modify[flat])
-                    except (TypeError, ValueError):
-                        pass
+        self.apply_disagg_request_overrides(config_modify)
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -393,18 +357,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        cfg_h = self.config.get("target_height")
-        cfg_w = self.config.get("target_width")
-        if cfg_h is not None and cfg_w is not None:
-            height, width = int(cfg_h), int(cfg_w)
-            if width > max_size or height > max_size:
-                scale = max_size / max(width, height)
-                width, height = int(width * scale), int(height * scale)
-                logger.warning(f"Config target_height/target_width scaled to {width}x{height} (max_custom_size={max_size})")
-            width, height = max(width, min_size), max(height, min_size)
-            logger.info(f"Qwen Image Runner got shape from config target_height/target_width: {width}x{height}")
-            return (width, height)
-
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
             logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
@@ -479,86 +431,73 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def run_image_encoder(self):
         pass
 
-    @ProfilingContext4DebugL1("RUN pipeline")
-    def run_pipeline(self, input_info):
-        """Run full pipeline. Modes:
-        - local (no disagg_mode): run encoder → set_shape → DiT → VAE → save.
-        - disagg encoder: run encoder → set_shape → send_encoder_outputs → return.
-        - disagg transformer: receive_encoder_outputs → set_shape → DiT → VAE → save.
-        - disagg decode: receive_transformer_outputs → VAE → save.
-        """
-        self.input_info = input_info
-        disagg_mode = self.config.get("disagg_mode")
+    def _save_images(self, images, input_info, log_prefix="Image saved"):
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return
+        if input_info.return_result_tensor:
+            return
 
-        if disagg_mode == "decode":
-            # Decoder role: receive DiT latents from Transformer, decode with VAE, save image
-            latents = self.receive_transformer_outputs()
+        image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
+        image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+        if isinstance(images[0], list) and len(images[0]) > 1:
+            for idx, image in enumerate(images[0]):
+                image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                logger.info(f"{log_prefix}: {image_prefix}_{idx:05d}.{image_suffix}")
+        else:
+            image = images[0]
+            image.save(f"{image_prefix}.{image_suffix}")
+            logger.info(f"{log_prefix}: {image_prefix}.{image_suffix}")
 
-            scale_factor = self.config["vae_scale_factor"]
-            p2_meta = getattr(self, "_p2_receive_meta", {})
-            auto_height = p2_meta.get("auto_height")
-            auto_width = p2_meta.get("auto_width")
-            if auto_height is None or auto_width is None:
-                # Fallback for spatial-format latents (non-packed models)
-                latent_h = latents.shape[-2]
-                latent_w = latents.shape[-1]
-                auto_height = latent_h * scale_factor * 2
-                auto_width = latent_w * scale_factor * 2
-            self.input_info.auto_height = int(auto_height)
-            self.input_info.auto_width = int(auto_width)
-            # Compute image_shapes: number of spatial patches per image
-            h_patches = int(auto_height) // (scale_factor * 2)
-            w_patches = int(auto_width) // (scale_factor * 2)
-            self.input_info.image_shapes = [[(1, h_patches, w_patches)]]
-            images = self.run_vae_decoder(latents)
-            self.end_run()
+    def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):
+        if latents is not None:
+            del latents
+        if generator is not None:
+            del generator
+        torch_device_module.empty_cache()
+        gc.collect()
 
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                if not input_info.return_result_tensor:
-                    image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
-                    image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
-                    if isinstance(images[0], list) and len(images[0]) > 1:
-                        for idx, image in enumerate(images[0]):
-                            image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
-                            logger.info(f"[Disagg] Decode: image saved: {image_prefix}_{idx:05d}.{image_suffix}")
-                    else:
-                        image = images[0]
-                        image.save(f"{image_prefix}.{image_suffix}")
-                        logger.info(f"[Disagg] Decode: image saved: {image_prefix}.{image_suffix}")
-
-            if GET_RECORDER_MODE():
-                monitor_cli.lightx2v_worker_request_success.inc()
-            if input_info.return_result_tensor:
-                return {"images": images}
+        if input_info.return_result_tensor:
+            return {"images": images}
+        elif input_info.save_result_path is not None:
             return {"images": None}
 
-        if disagg_mode == "transformer":
-            # Disagg transformer node: receive from Mooncake, no local encoder
-            self.inputs = self.receive_encoder_outputs()
-            prompt_embeds = self.inputs.get("text_encoder_output", {}).get("prompt_embeds")
-            if prompt_embeds is not None:
-                self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
-                neg_embeds = self.inputs.get("text_encoder_output", {}).get("negative_prompt_embeds")
-                if neg_embeds is not None:
-                    self.input_info.txt_seq_lens.append(neg_embeds.shape[1])
-        else:
-            # Local mode or disagg encoder node: run encoder locally
-            self.inputs = self.run_input_encoder()
+    def _run_pipeline_local(self, input_info):
+        self.inputs = self.run_input_encoder()
+        self.set_target_shape()
+        self.set_img_shapes()
+        logger.info(f"input_info: {self.input_info}")
+        latents, generator = self.run_dit()
+        images = self.run_vae_decoder(latents)
+        self.end_run()
+        self._save_images(images, input_info, log_prefix="Image saved")
+        return self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator)
+
+    def _run_pipeline_disagg_encoder(self):
+        self.inputs = self.run_input_encoder()
+        self.set_target_shape()
+        self.set_img_shapes()
+        logger.info(f"input_info: {self.input_info}")
+        latent_shape = list(self.input_info.target_shape)
+        self.send_encoder_outputs(self.inputs, latent_shape)
+        logger.info("[Disagg] Encoder role completed. Skipping DiT run_main.")
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_success.inc()
+        return None
+
+    def _run_pipeline_disagg_transformer(self, input_info):
+        self.inputs = self.receive_encoder_outputs()
+        prompt_embeds = self.inputs.get("text_encoder_output", {}).get("prompt_embeds")
+        if prompt_embeds is not None:
+            self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
+            neg_embeds = self.inputs.get("text_encoder_output", {}).get("negative_prompt_embeds")
+            if neg_embeds is not None:
+                self.input_info.txt_seq_lens.append(neg_embeds.shape[1])
 
         self.set_target_shape()
         self.set_img_shapes()
         logger.info(f"input_info: {self.input_info}")
 
-        if disagg_mode == "encoder":
-            latent_shape = list(self.input_info.target_shape)
-            self.send_encoder_outputs(self.inputs, latent_shape)
-            logger.info("[Disagg] Encoder role completed. Skipping DiT run_main.")
-            if GET_RECORDER_MODE():
-                monitor_cli.lightx2v_worker_request_success.inc()
-            return None
-
         latents, generator = self.run_dit()
-        # 3-way disagg: send latents to Decoder, skip local VAE
         if getattr(self, "_disagg_p2_sender", None) is not None:
             self.send_transformer_outputs(latents)
             self.end_run()
@@ -568,25 +507,49 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         images = self.run_vae_decoder(latents)
         self.end_run()
+        self._save_images(images, input_info, log_prefix="Image saved")
+        return self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator)
 
-        if not dist.is_initialized() or dist.get_rank() == 0:
-            if not input_info.return_result_tensor:
-                image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
-                image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
-                if isinstance(images[0], list) and len(images[0]) > 1:
-                    for idx, image in enumerate(images[0]):
-                        image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
-                        logger.info(f"Image saved: {image_prefix}_{idx:05d}.{image_suffix}")
-                else:
-                    image = images[0]
-                    image.save(f"{image_prefix}.{image_suffix}")
-                    logger.info(f"Image saved: {image_prefix}.{image_suffix}")
+    def _run_pipeline_disagg_decode(self, input_info):
+        # Decoder role: receive DiT latents from Transformer, decode with VAE, save image
+        latents = self.receive_transformer_outputs()
 
-        del latents, generator
-        torch_device_module.empty_cache()
-        gc.collect()
+        scale_factor = self.config["vae_scale_factor"]
+        p2_meta = getattr(self, "_p2_receive_meta", {})
+        auto_height = p2_meta.get("auto_height")
+        auto_width = p2_meta.get("auto_width")
+        if auto_height is None or auto_width is None:
+            # Fallback for spatial-format latents (non-packed models)
+            latent_h = latents.shape[-2]
+            latent_w = latents.shape[-1]
+            auto_height = latent_h * scale_factor * 2
+            auto_width = latent_w * scale_factor * 2
+        self.input_info.auto_height = int(auto_height)
+        self.input_info.auto_width = int(auto_width)
+        # Compute image_shapes: number of spatial patches per image
+        h_patches = int(auto_height) // (scale_factor * 2)
+        w_patches = int(auto_width) // (scale_factor * 2)
+        self.input_info.image_shapes = [[(1, h_patches, w_patches)]]
+        images = self.run_vae_decoder(latents)
+        self.end_run()
 
+        self._save_images(images, input_info, log_prefix="[Disagg] Decode: image saved")
+
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_success.inc()
         if input_info.return_result_tensor:
             return {"images": images}
-        elif input_info.save_result_path is not None:
-            return {"images": None}
+        return {"images": None}
+
+    @ProfilingContext4DebugL1("RUN pipeline")
+    def run_pipeline(self, input_info):
+        self.input_info = input_info
+        disagg_mode = self.config.get("disagg_mode")
+
+        if disagg_mode == "decode":
+            return self._run_pipeline_disagg_decode(input_info)
+        if disagg_mode == "encoder":
+            return self._run_pipeline_disagg_encoder()
+        if disagg_mode == "transformer":
+            return self._run_pipeline_disagg_transformer(input_info)
+        return self._run_pipeline_local(input_info)

@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +42,13 @@ from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 logger = logging.getLogger(__name__)
+
+_DISAGG_PROFILING = os.environ.get("DISAGG_PROFILING", "0") == "1"
+
+
+def _prof_log(tag: str, elapsed: float):
+    if _DISAGG_PROFILING:
+        logger.info("[DisaggProf] %s: %.4fs (%.2fms)", tag, elapsed, elapsed * 1000)
 
 
 def _estimate_encoder_buffer_sizes(config) -> List[int]:
@@ -680,6 +688,7 @@ class DisaggMixin:
 
     def send_encoder_outputs(self, inputs: dict, latent_shape: list):
         """Serialize encoder outputs into RDMA buffers and send via Mooncake."""
+        _t_send_start = time.perf_counter()
         config = self.config
         disagg_cfg = config.get("disagg_config", {})
 
@@ -688,8 +697,10 @@ class DisaggMixin:
             self._ensure_disagg_phase1_queue_producer(disagg_cfg)
             if self._disagg_phase1_queue is None:
                 raise RuntimeError("[Disagg] decentralized encoder could not connect phase1 queue")
+            _t0 = time.perf_counter()
             self._disagg_encoder_setup_room(room)
             self._disagg_produce_phase1_for_encoder()
+            _prof_log("send_enc/phase1_ring_produce", time.perf_counter() - _t0)
         text_encoder_output = inputs["text_encoder_output"]
         image_encoder_output = inputs.get("image_encoder_output")
 
@@ -825,20 +836,26 @@ class DisaggMixin:
         meta_buf[: len(meta_bytes)].copy_(torch.from_numpy(np.frombuffer(meta_bytes, dtype=np.uint8).copy()))
 
         # Send
+        _t_serialize = time.perf_counter()
+        _prof_log("send_enc/serialize_buffers", _t_serialize - _t_send_start)
+
         torch.cuda.synchronize()
         buffer_ptrs = [buf.data_ptr() for buf in self._disagg_rdma_buffers]
+        _t_mooncake_start = time.perf_counter()
         self._disagg_sender.send(buffer_ptrs)
 
         # Wait for transfer completion
         while True:
             status = self._disagg_sender.poll()
             if status == DataPoll.Success:
+                _prof_log("send_enc/mooncake_transfer", time.perf_counter() - _t_mooncake_start)
                 logger.info("Disagg: encoder outputs sent successfully.")
                 break
             time.sleep(0.01)
 
         if getattr(self, "_disagg_decentralized", False):
             self._disagg_encoder_teardown_room(int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0))))
+        _prof_log("send_enc/total", time.perf_counter() - _t_send_start)
 
     # ------------------------------------------------------------------ #
     #  Transformer role: receive and deserialize
@@ -846,12 +863,14 @@ class DisaggMixin:
 
     def receive_encoder_outputs(self) -> dict:
         """Poll for data from Encoder and reconstruct standard inputs dict."""
+        _t_recv_start = time.perf_counter()
         config = self.config
 
         # Wait for data
         while True:
             status = self._disagg_receiver.poll()
             if status == DataPoll.Success:
+                _prof_log("recv_enc/mooncake_poll_wait", time.perf_counter() - _t_recv_start)
                 logger.info("Disagg: encoder outputs received successfully.")
                 break
             time.sleep(0.01)
@@ -980,6 +999,8 @@ class DisaggMixin:
         if meta:
             self._disagg_verify_integrity(meta, context, context_null, clip_encoder_out, vae_encoder_out, latent_shape, enable_cfg, task)
 
+        _prof_log("recv_enc/deserialize_total", time.perf_counter() - _t_recv_start)
+
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output,
@@ -1024,6 +1045,7 @@ class DisaggMixin:
 
     def send_transformer_outputs(self, latents: torch.Tensor):
         """Serialize DiT latents into Phase 2 RDMA buffer and send via Mooncake."""
+        _t_p2_send_start = time.perf_counter()
         if self._disagg_p2_sender is None:
             raise RuntimeError("[Disagg] Phase2 sender is not initialized. Check decoder_engine_rank in disagg_config.")
         if len(self._disagg_p2_rdma_buffers) < 2:
@@ -1061,11 +1083,15 @@ class DisaggMixin:
         meta_view[: len(meta_bytes)].copy_(torch.from_numpy(_np.frombuffer(meta_bytes, dtype=_np.uint8).copy()))
 
         torch.cuda.synchronize()
+        _prof_log("send_trans/serialize_buffers", time.perf_counter() - _t_p2_send_start)
         buffer_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
+        _t_p2_mooncake = time.perf_counter()
         self._disagg_p2_sender.send(buffer_ptrs)
         while True:
             status = self._disagg_p2_sender.poll()
             if status == DataPoll.Success:
+                _prof_log("send_trans/mooncake_transfer", time.perf_counter() - _t_p2_mooncake)
+                _prof_log("send_trans/total", time.perf_counter() - _t_p2_send_start)
                 logger.info("[Disagg] Transformer latents sent to Decoder successfully.")
                 break
             time.sleep(0.01)
@@ -1076,6 +1102,7 @@ class DisaggMixin:
 
     def receive_transformer_outputs(self) -> torch.Tensor:
         """Poll Phase 2 and reconstruct latents tensor from RDMA buffer."""
+        _t_p2_recv_start = time.perf_counter()
         if self._disagg_p2_receiver is None:
             raise RuntimeError("[Disagg] Phase2 receiver is not initialized.")
         if len(self._disagg_p2_rdma_buffers) < 2:
@@ -1084,6 +1111,7 @@ class DisaggMixin:
         while True:
             status = self._disagg_p2_receiver.poll()
             if status == DataPoll.Success:
+                _prof_log("recv_trans/mooncake_poll_wait", time.perf_counter() - _t_p2_recv_start)
                 logger.info("[Disagg] Decoder received latents from Transformer successfully.")
                 break
             time.sleep(0.01)
@@ -1128,6 +1156,7 @@ class DisaggMixin:
         # access pixel-space dimensions (auto_height/auto_width) that are not recoverable
         # from the packed latent tensor shape alone.
         self._p2_receive_meta = meta
+        _prof_log("recv_trans/deserialize_total", time.perf_counter() - _t_p2_recv_start)
         return latents
 
     # ------------------------------------------------------------------ #

@@ -313,6 +313,37 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.end_run()
         return gen_video_final
 
+    def _run_pipeline_local(self):
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+        self.inputs = self.run_input_encoder()
+        return self.run_main()
+
+    def _run_pipeline_disagg_encoder(self):
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+        self.inputs = self.run_input_encoder()
+        latent_shape = list(self.input_info.latent_shape)
+        self.send_encoder_outputs(self.inputs, latent_shape)
+        logger.info("[Disagg] Encoder role completed.")
+        return None
+
+    def _run_pipeline_disagg_transformer(self):
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+        self.inputs = self.receive_encoder_outputs()
+        latent_shape = self.inputs.get("latent_shape")
+        if latent_shape:
+            self.input_info.latent_shape = latent_shape
+        return self._run_transformer_role()
+
+    def _run_pipeline_disagg_decode(self):
+        # Decoder role: receive DiT latents, run VAE, save video
+        latents = self.receive_transformer_outputs()
+        self.gen_video = self.run_vae_decoder(latents)
+        self.gen_video_final = self.gen_video
+        return self.process_images_after_vae_decoder()
+
     @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["WanRunner"])
     def run_pipeline(self, input_info):
         if GET_RECORDER_MODE():
@@ -320,43 +351,16 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.input_info = input_info
         disagg_mode = self.config.get("disagg_mode")
 
-        if disagg_mode == "decode":
-            # Decoder role: receive DiT latents, run VAE, save video
-            latents = self.receive_transformer_outputs()
-            self.gen_video = self.run_vae_decoder(latents)
-            self.gen_video_final = self.gen_video
-            gen_video_final = self.process_images_after_vae_decoder()
-            if GET_RECORDER_MODE():
-                monitor_cli.lightx2v_worker_request_success.inc()
-            return gen_video_final
-
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
-
         if disagg_mode == "encoder":
-            # Encoder role: run encoders, send outputs
-            self.inputs = self.run_input_encoder()
-            latent_shape = list(self.input_info.latent_shape)
-            self.send_encoder_outputs(self.inputs, latent_shape)
-            logger.info("[Disagg] Encoder role completed.")
-            if GET_RECORDER_MODE():
-                monitor_cli.lightx2v_worker_request_success.inc()
-            return None
+            gen_video_final = self._run_pipeline_disagg_encoder()
+        elif disagg_mode == "transformer":
+            gen_video_final = self._run_pipeline_disagg_transformer()
+        elif disagg_mode == "decode":
+            gen_video_final = self._run_pipeline_disagg_decode()
+        else:
+            # Keep default runner pipeline behavior unchanged in local mode.
+            gen_video_final = self._run_pipeline_local()
 
-        if disagg_mode == "transformer":
-            # Transformer role: receive encoder outputs, run DiT, send or decode
-            self.inputs = self.receive_encoder_outputs()
-            latent_shape = self.inputs.get("latent_shape")
-            if latent_shape:
-                self.input_info.latent_shape = latent_shape
-            gen_video_final = self._run_transformer_role()
-            if GET_RECORDER_MODE():
-                monitor_cli.lightx2v_worker_request_success.inc()
-            return gen_video_final
-
-        # Local mode
-        self.inputs = self.run_input_encoder()
-        gen_video_final = self.run_main()
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video_final
