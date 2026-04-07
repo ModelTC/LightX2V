@@ -334,9 +334,7 @@ class LTX2Scheduler(BaseScheduler):
         # Patchifier configuration
         self.video_patch_size = config.get("video_patch_size", 1)
         self.fps = config.get("fps", 24)  # Frames per second for position calculation
-        self.video_scale_factors = tuple(
-            config.get("vae_scale_factors") or config.get("video_scale_factors", (8, 32, 32))
-        )  # (time, height, width); merged LTX config uses vae_scale_factors
+        self.video_scale_factors = tuple(config.get("vae_scale_factors") or config.get("video_scale_factors", (8, 32, 32)))  # (time, height, width); merged LTX config uses vae_scale_factors
 
         # Initialize patchifiers
         self.video_patchifier = VideoLatentPatchifier(patch_size=self.video_patch_size)
@@ -605,9 +603,7 @@ class LTX2Scheduler(BaseScheduler):
             if f != 1:
                 raise ValueError(f"guiding latent must have F=1, got F={f}")
             if h != height_v or w != width_v:
-                raise ValueError(
-                    f"guiding latent spatial shape ({h},{w}) must match video_latent_shape ({height_v},{width_v})"
-                )
+                raise ValueError(f"guiding latent spatial shape ({h},{w}) must match video_latent_shape ({height_v},{width_v})")
 
             patch_tokens = self.video_patchifier.patchify(enc)
             tk = patch_tokens.shape[0]

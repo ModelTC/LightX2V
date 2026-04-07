@@ -31,9 +31,7 @@ def _ltx2_normalize_image_strengths(image_strength, n: int) -> list[float]:
     if len(image_strength) == 1:
         return [float(image_strength[0])] * n
     if len(image_strength) != n:
-        raise ValueError(
-            f"i2av image_strength: expected 1 or {n} values (scalar or list), got length {len(image_strength)}"
-        )
+        raise ValueError(f"i2av image_strength: expected 1 or {n} values (scalar or list), got length {len(image_strength)}")
     return [float(x) for x in image_strength]
 
 
@@ -315,9 +313,7 @@ class LTX2Runner(DefaultRunner):
         for i, image_path in enumerate(image_paths):
             strength = strengths[i]
             pixel_frame_idx = pixel_frame_indices[i]
-            logger.info(
-                f"  📷 Loading image: {image_path} pixel_frame={pixel_frame_idx} strength={strength} ({i + 1}/{n})"
-            )
+            logger.info(f"  📷 Loading image: {image_path} pixel_frame={pixel_frame_idx} strength={strength} ({i + 1}/{n})")
 
             # Load and preprocess image
             image = load_image_conditioning(

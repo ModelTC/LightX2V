@@ -6,12 +6,12 @@ from typing import Optional
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
-from PIL import Image
 import safetensors
 import torch
 import torch.distributed as dist
 import torchvision
 import torchvision.transforms.functional as TF
+from PIL import Image
 from einops import rearrange
 from loguru import logger
 from torchvision.transforms import InterpolationMode
