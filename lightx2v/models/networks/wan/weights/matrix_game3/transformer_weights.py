@@ -1,6 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import (
-    WanCrossAttention,
     WanFFN,
     WanSelfAttention,
 )
@@ -39,22 +38,14 @@ class WanMtxg3TransformerWeights(WeightModule):
         block_list = []
         for i in range(self.blocks_num):
             has_action = i in action_blocks
-            block_list.append(
-                WanMtxg3TransformerBlock(
-                    i, self.task, self.mm_type, self.config, has_action=has_action
-                )
-            )
+            block_list.append(WanMtxg3TransformerBlock(i, self.task, self.mm_type, self.config, has_action=has_action))
         self.blocks = WeightModuleList(block_list)
         self.add_module("blocks", self.blocks)
 
         # Non-block weights (head)
         self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
-        self.add_module(
-            "head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias")
-        )
-        self.register_parameter(
-            "head_modulation", TENSOR_REGISTER["Default"]("head.modulation")
-        )
+        self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
+        self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
     def non_block_weights_to_cuda(self):
         self.norm.to_cuda()

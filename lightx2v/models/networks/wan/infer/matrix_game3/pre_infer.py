@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
@@ -13,11 +12,21 @@ class WanMtxg3PreInferOutput:
     """Container for MG3 pre-inference outputs passed to the transformer."""
 
     __slots__ = [
-        "x", "embed", "embed0", "grid_sizes", "cos_sin", "context",
+        "x",
+        "embed",
+        "embed0",
+        "grid_sizes",
+        "cos_sin",
+        "context",
         "freqs",
-        "plucker_emb", "mouse_cond", "keyboard_cond",
-        "mouse_cond_memory", "keyboard_cond_memory",
-        "memory_length", "memory_latent_idx", "predict_latent_idx",
+        "plucker_emb",
+        "mouse_cond",
+        "keyboard_cond",
+        "mouse_cond_memory",
+        "keyboard_cond_memory",
+        "memory_length",
+        "memory_latent_idx",
+        "predict_latent_idx",
     ]
 
     def __init__(self, **kwargs):
@@ -214,11 +223,7 @@ class WanMtxg3PreInfer(WanPreInfer):
                 )
 
             plucker_emb = weights.patch_embedding_wancamctrl.apply(plucker_emb.squeeze(0))
-            plucker_hidden = weights.c2ws_hidden_states_layer2.apply(
-                torch.nn.functional.silu(
-                    weights.c2ws_hidden_states_layer1.apply(plucker_emb)
-                )
-            )
+            plucker_hidden = weights.c2ws_hidden_states_layer2.apply(torch.nn.functional.silu(weights.c2ws_hidden_states_layer1.apply(plucker_emb)))
             plucker_emb = plucker_emb + plucker_hidden
 
         return WanMtxg3PreInferOutput(

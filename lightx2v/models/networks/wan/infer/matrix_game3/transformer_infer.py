@@ -8,8 +8,6 @@ decomposed weight/infer architecture. The block execution order is:
 This closely follows the official MG3 `WanAttentionBlock.forward()`.
 """
 
-import math
-
 import torch
 from einops import rearrange
 
@@ -25,8 +23,8 @@ except ImportError:
     except ImportError:
         FLASH_ATTN_3_AVAILABLE = False
 
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.matrix_game2.posemb_layers import apply_rotary_emb, get_nd_rotary_pos_embed
+from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -240,7 +238,9 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]], dtype=torch.int32).to(k.device)
 
         attn_out = cross_phase.cross_attn_1.apply(
-            q=q, k=k, v=v,
+            q=q,
+            k=k,
+            v=v,
             cu_seqlens_q=self.cross_attn_cu_seqlens_q,
             cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
             max_seqlen_q=q.size(0),
@@ -253,9 +253,7 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         if has_action:
             action_phase_idx = 3
             action_phase = block.compute_phases[action_phase_idx]
-            x = self._infer_action_module(
-                action_phase, x, pre_infer_out
-            )
+            x = self._infer_action_module(action_phase, x, pre_infer_out)
 
         # --- Phase 4 (or 3): FFN ---
         ffn_phase_idx = 4 if has_action else 3
@@ -304,10 +302,10 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         if memory_length > 0:
             hw = grid_sizes.tuple[1] * grid_sizes.tuple[2]
             # Split into memory and prediction parts
-            q_memory = q[:memory_length * hw].unsqueeze(0)
-            k_memory = k[:memory_length * hw].unsqueeze(0)
-            q_pred = q[memory_length * hw:].unsqueeze(0)
-            k_pred = k[memory_length * hw:].unsqueeze(0)
+            q_memory = q[: memory_length * hw].unsqueeze(0)
+            k_memory = k[: memory_length * hw].unsqueeze(0)
+            q_pred = q[memory_length * hw :].unsqueeze(0)
+            k_pred = k[memory_length * hw :].unsqueeze(0)
 
             # Build grid_sizes tensors
             f_total = grid_sizes.tuple[0]
@@ -339,7 +337,8 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             k_unsq = k.unsqueeze(0)
             grid_sizes_t = torch.tensor(
                 [[grid_sizes.tuple[0], grid_sizes.tuple[1], grid_sizes.tuple[2]]],
-                dtype=torch.long, device=q.device,
+                dtype=torch.long,
+                device=q.device,
             )
             if predict_latent_idx is not None:
                 if isinstance(predict_latent_idx, tuple) and len(predict_latent_idx) == 2:
@@ -356,7 +355,9 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             self.self_attn_cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32).to(q.device)
 
         attn_out = phase.self_attn_1.apply(
-            q=q, k=k, v=v,
+            q=q,
+            k=k,
+            v=v,
             cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
             cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
             max_seqlen_q=img_qkv_len,
@@ -403,9 +404,7 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
 
         if self.enable_mouse and mouse_cond is not None:
             batch_size, num_frames, mouse_dim = mouse_cond.shape
-            assert (((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0) or (
-                num_frames % self.vae_time_compression_ratio == 0
-            )
+            assert (((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0) or (num_frames % self.vae_time_compression_ratio == 0)
             if ((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0:
                 num_feats = int((num_frames - 1) / self.vae_time_compression_ratio) + 1
                 mouse_cond = torch.cat([mouse_cond[:, 0:1, :].repeat(1, pad_t, 1), mouse_cond], dim=1)
@@ -434,9 +433,7 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             mouse_groups = mouse_groups.unsqueeze(-1).repeat(1, 1, 1, 1, spatial_tokens)
             mouse_groups = rearrange(mouse_groups, "b t window d s -> (b s) t (window d)")
             if mouse_groups.shape[1] != tt:
-                raise ValueError(
-                    f"matrix-game-3 mouse condition window mismatch: expected latent T={tt}, got {mouse_groups.shape[1]}"
-                )
+                raise ValueError(f"matrix-game-3 mouse condition window mismatch: expected latent T={tt}, got {mouse_groups.shape[1]}")
 
             mouse_input = torch.cat([hidden_states_mouse, mouse_groups], dim=-1)
             mouse_hidden = phase.mouse_mlp_0.apply(mouse_input.reshape(-1, mouse_input.shape[-1]))
@@ -450,12 +447,8 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             mouse_qkv = mouse_qkv.reshape(batch_size * spatial_tokens, tt, 3, self.action_heads_num, mouse_head_dim)
             q_m, k_m, v_m = mouse_qkv.permute(2, 0, 1, 3, 4).unbind(0)
 
-            q_m = phase.img_attn_q_norm.apply(q_m.reshape(-1, mouse_head_dim)).reshape(
-                batch_size * spatial_tokens, tt, self.action_heads_num, mouse_head_dim
-            )
-            k_m = phase.img_attn_k_norm.apply(k_m.reshape(-1, mouse_head_dim)).reshape(
-                batch_size * spatial_tokens, tt, self.action_heads_num, mouse_head_dim
-            )
+            q_m = phase.img_attn_q_norm.apply(q_m.reshape(-1, mouse_head_dim)).reshape(batch_size * spatial_tokens, tt, self.action_heads_num, mouse_head_dim)
+            k_m = phase.img_attn_k_norm.apply(k_m.reshape(-1, mouse_head_dim)).reshape(batch_size * spatial_tokens, tt, self.action_heads_num, mouse_head_dim)
 
             if memory_length > 0:
                 freqs_memory = self._get_action_rotary_pos_embed(memory_length, mouse_head_dim, self.mouse_qk_dim_list)
@@ -475,18 +468,14 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
 
             mouse_attn = self._run_flash_attention(q_m, k_m, v_m, causal=False)
             mouse_attn = rearrange(mouse_attn, "(b s) t h d -> b (t s) (h d)", b=batch_size, s=spatial_tokens)
-            mouse_proj = phase.proj_mouse.apply(mouse_attn.reshape(-1, mouse_attn.shape[-1])).reshape(
-                batch_size, tt * spatial_tokens, -1
-            )
+            mouse_proj = phase.proj_mouse.apply(mouse_attn.reshape(-1, mouse_attn.shape[-1])).reshape(batch_size, tt * spatial_tokens, -1)
             hidden_states = x_in + mouse_proj
         else:
             hidden_states = x_in
 
         if self.enable_keyboard and keyboard_cond is not None:
             batch_size, num_frames, _ = keyboard_cond.shape
-            assert (((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0) or (
-                num_frames % self.vae_time_compression_ratio == 0
-            )
+            assert (((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0) or (num_frames % self.vae_time_compression_ratio == 0)
             if ((num_frames - 1) + self.vae_time_compression_ratio) % self.vae_time_compression_ratio == 0:
                 num_feats = int((num_frames - 1) / self.vae_time_compression_ratio) + 1
                 keyboard_cond = torch.cat([keyboard_cond[:, 0:1, :].repeat(1, pad_t, 1), keyboard_cond], dim=1)
@@ -521,14 +510,10 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
                 keyboard_groups = torch.cat([keyboard_memory, keyboard_groups], dim=1)
 
             if keyboard_groups.shape[1] != tt:
-                raise ValueError(
-                    f"matrix-game-3 keyboard condition window mismatch: expected latent T={tt}, got {keyboard_groups.shape[1]}"
-                )
+                raise ValueError(f"matrix-game-3 keyboard condition window mismatch: expected latent T={tt}, got {keyboard_groups.shape[1]}")
 
             keyboard_groups = keyboard_groups.reshape(batch_size, keyboard_groups.shape[1], -1)
-            mouse_q = phase.mouse_attn_q.apply(hidden_states.reshape(-1, hidden_states.shape[-1])).reshape(
-                batch_size, tt * spatial_tokens, -1
-            )
+            mouse_q = phase.mouse_attn_q.apply(hidden_states.reshape(-1, hidden_states.shape[-1])).reshape(batch_size, tt * spatial_tokens, -1)
             keyboard_kv = phase.keyboard_attn_kv.apply(keyboard_groups.reshape(-1, keyboard_groups.shape[-1]))
             keyboard_kv = keyboard_kv.reshape(batch_size, keyboard_groups.shape[1], -1)
 
@@ -537,12 +522,8 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             kv = keyboard_kv.view(batch_size, -1, 2, self.action_heads_num, keyboard_head_dim)
             k_k, v_k = kv.permute(2, 0, 1, 3, 4).unbind(0)
 
-            q_k = phase.key_attn_q_norm.apply(q_k.reshape(-1, keyboard_head_dim)).reshape(
-                batch_size, -1, self.action_heads_num, keyboard_head_dim
-            )
-            k_k = phase.key_attn_k_norm.apply(k_k.reshape(-1, keyboard_head_dim)).reshape(
-                batch_size, -1, self.action_heads_num, keyboard_head_dim
-            )
+            q_k = phase.key_attn_q_norm.apply(q_k.reshape(-1, keyboard_head_dim)).reshape(batch_size, -1, self.action_heads_num, keyboard_head_dim)
+            k_k = phase.key_attn_k_norm.apply(k_k.reshape(-1, keyboard_head_dim)).reshape(batch_size, -1, self.action_heads_num, keyboard_head_dim)
 
             q_k = rearrange(q_k, "b (t s) h d -> (b s) t h d", s=spatial_tokens)
             if memory_length > 0:
@@ -565,9 +546,7 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             v_k = v_k.repeat(spatial_tokens, 1, 1, 1)
             kb_attn = self._run_flash_attention(q_k, k_k, v_k, causal=False)
             kb_attn = rearrange(kb_attn, "(b s) t h d -> b (t s) (h d)", b=batch_size, s=spatial_tokens)
-            kb_proj = phase.proj_keyboard.apply(kb_attn.reshape(-1, kb_attn.shape[-1])).reshape(
-                batch_size, tt * spatial_tokens, -1
-            )
+            kb_proj = phase.proj_keyboard.apply(kb_attn.reshape(-1, kb_attn.shape[-1])).reshape(batch_size, tt * spatial_tokens, -1)
             hidden_states = hidden_states + kb_proj
 
         return hidden_states.squeeze(0)

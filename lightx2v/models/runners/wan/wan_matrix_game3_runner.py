@@ -10,8 +10,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
-from einops import rearrange
 from PIL import Image
+from einops import rearrange
 from loguru import logger
 
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, build_wan_model_with_lora
@@ -1004,12 +1004,16 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         assert self._mg3_target_h is not None and self._mg3_target_w is not None
         assert self._mg3_lat_h is not None and self._mg3_lat_w is not None
         c2ws_np = c2ws_seq.cpu().numpy()
-        c2ws_infer = modules["cam_utils"]._interpolate_camera_poses_handedness(
-            src_indices=src_indices,
-            src_rot_mat=c2ws_np[:, :3, :3],
-            src_trans_vec=c2ws_np[:, :3, 3],
-            tgt_indices=tgt_indices,
-        ).to(device=c2ws_seq.device)
+        c2ws_infer = (
+            modules["cam_utils"]
+            ._interpolate_camera_poses_handedness(
+                src_indices=src_indices,
+                src_rot_mat=c2ws_np[:, :3, :3],
+                src_trans_vec=c2ws_np[:, :3, 3],
+                tgt_indices=tgt_indices,
+            )
+            .to(device=c2ws_seq.device)
+        )
         # `framewise=True` means each timestep is represented relative to its own local
         # frame history, which matches the official per-segment conditioning path.
         c2ws_infer = modules["cam_utils"].compute_relative_poses(c2ws_infer, framewise=framewise)

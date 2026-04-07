@@ -1,7 +1,6 @@
 from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.utils.registry_factory import (
     CONV3D_WEIGHT_REGISTER,
-    LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
 )
 
@@ -27,9 +26,7 @@ class WanMtxg3PreWeights(WeightModule):
         # Patch embedding
         self.add_module(
             "patch_embedding",
-            CONV3D_WEIGHT_REGISTER["Default"](
-                "patch_embedding.weight", "patch_embedding.bias", stride=self.patch_size
-            ),
+            CONV3D_WEIGHT_REGISTER["Default"]("patch_embedding.weight", "patch_embedding.bias", stride=self.patch_size),
         )
 
         # Text embedding (2-layer MLP with GELU)
@@ -59,19 +56,13 @@ class WanMtxg3PreWeights(WeightModule):
         # Camera plucker embedding (global, before blocks)
         self.add_module(
             "patch_embedding_wancamctrl",
-            MM_WEIGHT_REGISTER["Default"](
-                "patch_embedding_wancamctrl.weight", "patch_embedding_wancamctrl.bias"
-            ),
+            MM_WEIGHT_REGISTER["Default"]("patch_embedding_wancamctrl.weight", "patch_embedding_wancamctrl.bias"),
         )
         self.add_module(
             "c2ws_hidden_states_layer1",
-            MM_WEIGHT_REGISTER["Default"](
-                "c2ws_hidden_states_layer1.weight", "c2ws_hidden_states_layer1.bias"
-            ),
+            MM_WEIGHT_REGISTER["Default"]("c2ws_hidden_states_layer1.weight", "c2ws_hidden_states_layer1.bias"),
         )
         self.add_module(
             "c2ws_hidden_states_layer2",
-            MM_WEIGHT_REGISTER["Default"](
-                "c2ws_hidden_states_layer2.weight", "c2ws_hidden_states_layer2.bias"
-            ),
+            MM_WEIGHT_REGISTER["Default"]("c2ws_hidden_states_layer2.weight", "c2ws_hidden_states_layer2.bias"),
         )

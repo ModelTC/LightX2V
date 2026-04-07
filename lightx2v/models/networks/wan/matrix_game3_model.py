@@ -1,11 +1,10 @@
 import json
 import os
 
-import torch
 from safetensors import safe_open
 
-from lightx2v.models.networks.wan.infer.matrix_game3.pre_infer import WanMtxg3PreInfer
 from lightx2v.models.networks.wan.infer.matrix_game3.post_infer import WanMtxg3PostInfer
+from lightx2v.models.networks.wan.infer.matrix_game3.pre_infer import WanMtxg3PreInfer
 from lightx2v.models.networks.wan.infer.matrix_game3.transformer_infer import WanMtxg3TransformerInfer
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.matrix_game3.pre_weights import WanMtxg3PreWeights
@@ -61,10 +60,7 @@ class WanMtxg3Model(WanModel):
         # Find safetensor files
         safetensor_files = [f for f in os.listdir(model_dir) if f.endswith(".safetensors")]
         if not safetensor_files:
-            raise FileNotFoundError(
-                f"No safetensors files found in {model_dir}. "
-                "Please download the Matrix-Game-3.0 model weights."
-            )
+            raise FileNotFoundError(f"No safetensors files found in {model_dir}. Please download the Matrix-Game-3.0 model weights.")
 
         weight_dict = {}
         for sf_file in sorted(safetensor_files):
@@ -75,7 +71,7 @@ class WanMtxg3Model(WanModel):
                     # Strip the common diffusers prefix if present
                     name = key
                     if name.startswith("model."):
-                        name = name[len("model."):]
+                        name = name[len("model.") :]
                     # Cast to appropriate dtype
                     if unified_dtype or all(s not in name for s in sensitive_layer):
                         weight_dict[name] = tensor.to(GET_DTYPE())

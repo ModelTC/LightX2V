@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+
 try:
     from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
 except (ImportError, ModuleNotFoundError):
