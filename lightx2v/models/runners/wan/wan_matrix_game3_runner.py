@@ -15,6 +15,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, build_wan_model_with_lora
+from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import GET_RECORDER_MODE, ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -106,6 +107,71 @@ def _expand_path_candidates(path_value: Any) -> list[Path]:
 def _append_unique_path(paths: list[Path], candidate: Path):
     if candidate not in paths:
         paths.append(candidate)
+
+
+class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
+    """Adapt the official MG3 FlowUniPC scheduler to LightX2V's scheduler interface.
+
+    The distilled path is fairly tolerant of LightX2V's generic Wan scheduler, but the
+    base model is much more sensitive to scheduler semantics under 50-step CFG. This
+    adapter keeps the rest of the LightX2V lifecycle untouched while delegating the
+    actual UniPC stepping logic to the official Matrix-Game-3 implementation.
+    """
+
+    def __init__(self, config, scheduler_cls):
+        super().__init__(config)
+        self.scheduler_cls = scheduler_cls
+        self.sample_shift = self.config["sample_shift"]
+        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.noise_pred = None
+        self.mask = None
+        self.vae_encoder_out = None
+        self.timestep_input = None
+        self._solver = None
+        self._generator = None
+
+    def _reset_solver(self):
+        self._solver = self.scheduler_cls()
+        self._solver.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
+
+    def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self._generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
+        self.vae_encoder_out = image_encoder_output.get("vae_encoder_out") if image_encoder_output is not None else None
+        if self.vae_encoder_out is not None:
+            self.vae_encoder_out = self.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        self.mask = torch.ones_like(self.latents)
+        self._reset_solver()
+
+    def reset(self, seed, latent_shape, step_index=None):
+        self._generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
+        if self.vae_encoder_out is not None:
+            self.vae_encoder_out = self.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        if self.mask is not None:
+            self.mask = self.mask.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        self._reset_solver()
+        if step_index is not None:
+            self.step_index = step_index
+
+    def step_pre(self, step_index):
+        super().step_pre(step_index)
+        self.timestep_input = torch.stack([self._solver.timesteps[self.step_index].to(device=AI_DEVICE)])
+
+    def step_post(self):
+        timestep = self._solver.timesteps[self.step_index].to(device=self.latents.device)
+        prev_sample = self._solver.step(
+            self.noise_pred.to(dtype=self.latents.dtype),
+            timestep,
+            self.latents,
+            return_dict=False,
+        )[0]
+        if self.mask is not None and self.vae_encoder_out is not None:
+            prev_sample = (1.0 - self.mask) * self.vae_encoder_out + self.mask * prev_sample
+        self.latents = prev_sample.to(dtype=GET_DTYPE())
+
+    def clear(self):
+        self._solver = None
 
 
 @RUNNER_REGISTER("wan2.2_matrix_game3")
@@ -219,6 +285,31 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         if not lora_configs:
             return WanMtxg3Model(**model_kwargs)
         return build_wan_model_with_lora(WanMtxg3Model, self.config, model_kwargs, lora_configs, model_type="wan2.2")
+
+    def init_scheduler(self):
+        # Distilled MG3 is already stable on the shared Wan scheduler path. Base MG3
+        # is far more sensitive to the exact UniPC implementation, so route it
+        # through the official FlowUniPC scheduler instead of the generic adapter.
+        if self.config.get("use_base_model", False):
+            try:
+                official_root = self.resolve_official_root()
+                wan_root = official_root / "wan"
+                utils_root = wan_root / "utils"
+                _ensure_namespace_package(f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.wan", wan_root)
+                _ensure_namespace_package(f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.wan.utils", utils_root)
+                scheduler_module = _load_module_from_path(
+                    f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.wan.utils.fm_solvers_unipc",
+                    utils_root / "fm_solvers_unipc.py",
+                )
+                self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, scheduler_module.FlowUniPCMultistepScheduler)
+                logger.info("[matrix-game-3] using official FlowUniPCMultistepScheduler for base-model sampling.")
+                return
+            except Exception as exc:
+                logger.warning(
+                    "[matrix-game-3] failed to initialize official base scheduler ({}); falling back to LightX2V WanScheduler.",
+                    exc,
+                )
+        super().init_scheduler()
 
     def _get_sub_model_folder(self) -> str:
         """Resolve which MG3 sub-model folder should be used for config lookup."""
@@ -1169,10 +1260,10 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         latents = torch.randn(
             tuple(segment_state.latent_shape),
             device=AI_DEVICE,
-            dtype=torch.float32,
+            dtype=GET_DTYPE(),
             generator=self._mg3_noise_generator,
         )
-        scheduler.vae_encoder_out = segment_state.vae_encoder_out.to(device=AI_DEVICE, dtype=torch.float32)
+        scheduler.vae_encoder_out = segment_state.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
         scheduler.mask = torch.ones_like(latents)
         # Mask value 0 means "keep the provided latent conditioning", while 1 means
         # "sample this slot from noise through the diffusion process".
