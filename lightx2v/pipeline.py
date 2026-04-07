@@ -446,9 +446,10 @@ class LightX2VPipeline:
         input_info = init_empty_input_info(self.task, self.support_tasks)
         seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
-        self.runner.run_pipeline(input_info)
+        gen_result = self.runner.run_pipeline(input_info)
         logger.info("Generated successfully!")
         logger.info(f"Saved in {save_result_path}")
+        return gen_result
 
     def _init_runner(self, config):
         torch.set_grad_enabled(False)
