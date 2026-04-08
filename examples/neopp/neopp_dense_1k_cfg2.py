@@ -13,7 +13,7 @@ pipe = LightX2VPipeline(
 )
 
 pipe.create_generator(config_json="../../configs/neopp/neopp_dense_cfg2.json")
-pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False})
+pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False, "save_result_for_debug": True})
 
 
 # -------------------------------------------------
