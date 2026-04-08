@@ -1,4 +1,6 @@
 import base64
+from PIL import Image
+import numpy as np
 
 import torch
 import torchvision.io as io
@@ -219,13 +221,24 @@ class NeoppRunner(DefaultRunner):
             with ProfilingContext4DebugL1("step_post"):
                 self.scheduler.step_post()
 
-        gen_result = self.process_images_after_vae_decoder()
+        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+            gen_result = self.process_images_after_vae_decoder_for_debug()
+        else:
+            gen_result = self.process_images_after_vae_decoder()
         return gen_result
 
     def process_images_after_vae_decoder(self):
         image = self._denorm(self.scheduler.image_prediction.float())
         image = (image.clamp(0, 1) * 255.0).round().to(torch.uint8).cpu()
         return base64.b64encode(io.encode_jpeg(image[0]).numpy()).decode("utf-8")
+
+    def process_images_after_vae_decoder_for_debug(self):
+        image = self._denorm(self.scheduler.image_prediction.float())
+        image = (image.clamp(0, 1).permute(0, 2, 3, 1).cpu().numpy() * 255.0).round().astype(np.uint8)
+        grid_image = Image.fromarray(image[0])
+        grid_image.save(self.input_info.save_result_path)
+        logger.info(f"✅ Image saved successfully to: {self.input_info.save_result_path} ✅")
+        return grid_image
 
     def _denorm(self, x: torch.Tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):
         """
