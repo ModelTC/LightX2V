@@ -82,3 +82,11 @@ class KVCacheManager:
         self._kv_buf[layer_idx, 0, self._kv_past_seq :] = key_states
         self._kv_buf[layer_idx, 1, self._kv_past_seq :] = value_states
         return self._kv_buf[layer_idx, 0], self._kv_buf[layer_idx, 1]
+
+    def clear(self):
+        self._kv_buf_cond = None
+        self._kv_buf_cond_key = None
+        self._kv_buf_uncond = None
+        self._kv_buf_uncond_key = None
+        self._kv_buf = None
+        self._kv_past_seq = None

@@ -202,6 +202,7 @@ class NeoppRunner(DefaultRunner):
     def clear_kvcache(self):
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
+        self.model.transformer_infer.kv_cache.clear()
 
     def init_run(self):
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape)
