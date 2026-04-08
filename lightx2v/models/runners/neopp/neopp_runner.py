@@ -1,6 +1,7 @@
 import torch
+import base64
 from PIL import Image
-
+import torchvision.io as io
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
@@ -181,6 +182,20 @@ class NeoppRunner(DefaultRunner):
         self.model.cfg_scale = cfg_scale
         self.model.cfg_norm = cfg_norm
 
+    def set_kvcache_t2i(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor):
+        self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
+        self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
+        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+
+    def set_kvcache_i2i(self, to_x2v_cond_kv: torch.Tensor, to_x2v_text_uncond_kv: torch.Tensor, to_x2v_img_uncond_kv: torch.Tensor):
+        self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
+        self.past_key_values_text_uncond = to_x2v_text_uncond_kv.to(AI_DEVICE)
+        self.past_key_values_img_uncond = to_x2v_img_uncond_kv.to(AI_DEVICE)
+        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        logger.info(f"KV cache text uncond shape: {self.past_key_values_text_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        logger.info(f"KV cache img uncond shape: {self.past_key_values_img_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+
     def clear_kvcache(self):
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
@@ -208,11 +223,8 @@ class NeoppRunner(DefaultRunner):
 
     def process_images_after_vae_decoder(self):
         image = self._denorm(self.scheduler.image_prediction.float())
-        image = (image.clamp(0, 1).permute(0, 2, 3, 1).cpu().numpy() * 255.0).round().astype(np.uint8)
-        grid_image = Image.fromarray(image[0])
-        grid_image.save(self.input_info.save_result_path)
-        logger.info(f"✅ Image saved successfully to: {self.input_info.save_result_path} ✅")
-        return grid_image
+        image = (image.clamp(0, 1)* 255.0).round().to(torch.uint8).cpu()
+        return base64.b64encode(io.encode_jpeg(image[0]).numpy()).decode("utf-8")
 
     def _denorm(self, x: torch.Tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):
         """
