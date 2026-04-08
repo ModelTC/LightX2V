@@ -2,7 +2,7 @@
 
 # set path firstly
 lightx2v_path=/data/nvme1/yongyang/FL/LightX2V
-model_path=/data/nvme1/yongyang/FL/neo9b/neo9b
+model_path=/data/nvme1/yongyang/FL/neo_9b_new/hf_step4000_ema
 
 export CUDA_VISIBLE_DEVICES=3
 
@@ -12,7 +12,6 @@ source ${lightx2v_path}/scripts/base/base.sh
 python -m lightx2v.infer \
 --seed 200 \
 --model_cls neopp \
---task t2i \
 --support_tasks t2i i2i \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/neopp/neopp_dense.json \

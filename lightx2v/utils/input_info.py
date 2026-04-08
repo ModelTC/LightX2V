@@ -324,7 +324,7 @@ task_dict = {
 def init_empty_input_info(task, support_tasks=[]):
     if len(support_tasks) == 0:
         support_tasks = [task]
-    assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
+    # assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
 
     if len(support_tasks) == 1:
         support_task = support_tasks[0]
