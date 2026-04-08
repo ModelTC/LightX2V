@@ -1,9 +1,9 @@
 import base64
-from PIL import Image
-import numpy as np
 
+import numpy as np
 import torch
 import torchvision.io as io
+from PIL import Image
 
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
