@@ -73,53 +73,23 @@ class NeoppRunner(DefaultRunner):
             token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
-            if self.config["task"] == "i2i":
-                N = self.num_input_images  # Need Check !!!!!!!!!!!
-                t_offset_img_uncond = self.past_key_values_img_uncond.shape[-3]
-                t_offset_text_uncond = t_offset_img_uncond + 3 * N
-                t_offset_cond = t_offset_text_uncond + (self.past_key_values_cond.shape[-3] - self.past_key_values_text_uncond.shape[-3])
+            indexes_cond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_cond, device=self.init_device)
+            indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_uncond, device=self.init_device)
 
-                indexes_cond = self._build_t2i_image_indexes(token_h, token_w, t_offset_cond, device=self.init_device)
-                indexes_text_uncond = self._build_t2i_image_indexes(token_h, token_w, t_offset_text_uncond, device=self.init_device)
+            cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
+            cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
+            cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
 
-                cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
+            cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
+            cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
+            cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
 
-                cos_t_text_uncond, sin_t_text_uncond = self._compute_rope(indexes_text_uncond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_text_uncond, sin_h_text_uncond = self._compute_rope(indexes_text_uncond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_text_uncond, sin_w_text_uncond = self._compute_rope(indexes_text_uncond[2].unsqueeze(0), self.inv_freq_hw)
-
-                return {
-                    "past_key_values_cond": self.past_key_values_cond,
-                    "past_key_values_uncond": self.past_key_values_text_uncond,
-                    "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
-                    "cos_sin_text_uncond": (cos_t_text_uncond, sin_t_text_uncond, cos_h_text_uncond, sin_h_text_uncond, cos_w_text_uncond, sin_w_text_uncond),
-                }
-            elif self.config["task"] == "t2i":
-                input_len_cond = self.past_key_values_cond.shape[-3]
-                input_len_uncond = self.past_key_values_uncond.shape[-3]
-
-                indexes_cond = self._build_t2i_image_indexes(token_h, token_w, input_len_cond, device=self.init_device)
-                indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, input_len_uncond, device=self.init_device)
-
-                cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
-
-                cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
-
-                return {
-                    "past_key_values_cond": self.past_key_values_cond,
-                    "past_key_values_uncond": self.past_key_values_uncond,
-                    "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
-                    "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
-                }
-            else:
-                print(f"self.config['task'] : {self.config['task']}")
-                raise ValueError(f"Unsupported task: {self.config['task']}")
+            return {
+                "past_key_values_cond": self.past_key_values_cond,
+                "past_key_values_uncond": self.past_key_values_uncond,
+                "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
+                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
+            }
 
     def get_latent_shape_with_target_hw(self):
         target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
@@ -127,48 +97,89 @@ class NeoppRunner(DefaultRunner):
         latent_shape = [1, 3, target_height, target_width]
         return latent_shape
 
-    def run_pipeline(self, input_info):
+    def multi_pipeline_run_debug(self, input_info):
         self.input_info = input_info
         if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
-            if self.config["task"] == "i2i":
-                if self.config.get("version", "moe") == "moe":
-                    pass
-                else:
-                    self.load_kvcache_i2i(
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor_it2i/to_x2v_cond_kv.pt",
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor_it2i/to_x2v_uncond_kv_text.pt",
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor_it2i/to_x2v_uncond_kv_img.pt",
-                    )
-            elif self.config["task"] == "t2i":
-                if self.config.get("version", "moe") == "moe":
-                    self.load_kvcache_t2i(
-                        "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
-                        "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
-                    )
-                else:
-                    self.load_kvcache_t2i(
-                        "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0.pt",
-                        "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0.pt",
-                    )
-        assert self.past_key_values_cond is not None, "cond KV cache must be loaded"
+            self.load_kvcache(
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0_289.pt",
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0_9.pt",
+            )
+            self.set_inference_params(
+                index_offset_cond=289,
+                index_offset_uncond=9,
+                cfg_interval=(-1, 2),
+                cfg_scale=4.0,
+                cfg_norm="global",
+                timestep_shift=3.0,
+            )
+            self.input_info.save_result_path = self.input_info.save_result_path.replace(".png", "_0.png")
+
+        self.inputs = self.run_input_encoder()
+        gen_result = self.run_main()
+        self.clear_kvcache()
+
+        self.input_info = self.input_info
+        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+            self.load_kvcache(
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_1_346.pt",
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_1_12.pt",
+            )
+            self.set_inference_params(
+                index_offset_cond=346,
+                index_offset_uncond=12,
+                cfg_interval=(-1, 2),
+                cfg_scale=4.0,
+                cfg_norm="global",
+                timestep_shift=3.0,
+            )
+            self.input_info.save_result_path = self.input_info.save_result_path.replace("_0.png", "_1.png")
 
         self.inputs = self.run_input_encoder()
         gen_result = self.run_main()
         self.clear_kvcache()
         return gen_result
 
-    def load_kvcache_t2i(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
+    def run_pipeline(self, input_info):
+        self.input_info = input_info
+        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+            self.load_kvcache(
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0_289.pt",
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0_9.pt",
+            )
+            self.set_inference_params(
+                index_offset_cond=289,
+                index_offset_uncond=9,
+                cfg_interval=(-1, 2),
+                cfg_scale=4.0,
+                cfg_norm="global",
+                timestep_shift=3.0,
+            )
+
+        self.inputs = self.run_input_encoder()
+        gen_result = self.run_main()
+        self.clear_kvcache()
+        return gen_result
+
+    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
         self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
         self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
         logger.info(f"Loaded t2i KV cache from {to_x2v_cond_kv_path} and {to_x2v_uncond_kv_path}")
         logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
         logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
 
-    def load_kvcache_i2i(self, to_x2v_cond_path, to_x2v_uncond_kv_path, to_x2v_img_uncond_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        logger.info(f"Loaded i2i KV caches: cond={self.past_key_values_cond.shape}, uncond={self.past_key_values_uncond.shape}")
+    # def load_kvcache_i2i(self, to_x2v_cond_path, to_x2v_uncond_kv_path, to_x2v_img_uncond_path):
+    #     self.past_key_values_cond = torch.load(to_x2v_cond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+    #     self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+    #     self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+    #     logger.info(f"Loaded i2i KV caches: cond={self.past_key_values_cond.shape}, uncond={self.past_key_values_uncond.shape}")
+
+    def set_inference_params(self, index_offset_cond, index_offset_uncond, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
+        self.index_offset_cond = index_offset_cond
+        self.index_offset_uncond = index_offset_uncond
+        self.scheduler.timestep_shift = timestep_shift
+        self.model.cfg_interval = cfg_interval
+        self.model.cfg_scale = cfg_scale
+        self.model.cfg_norm = cfg_norm
 
     def clear_kvcache(self):
         self.past_key_values_cond = None
