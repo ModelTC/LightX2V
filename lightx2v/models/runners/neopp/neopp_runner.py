@@ -1,7 +1,8 @@
-import torch
 import base64
-from PIL import Image
+
+import torch
 import torchvision.io as io
+
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
@@ -223,7 +224,7 @@ class NeoppRunner(DefaultRunner):
 
     def process_images_after_vae_decoder(self):
         image = self._denorm(self.scheduler.image_prediction.float())
-        image = (image.clamp(0, 1)* 255.0).round().to(torch.uint8).cpu()
+        image = (image.clamp(0, 1) * 255.0).round().to(torch.uint8).cpu()
         return base64.b64encode(io.encode_jpeg(image[0]).numpy()).decode("utf-8")
 
     def _denorm(self, x: torch.Tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):
