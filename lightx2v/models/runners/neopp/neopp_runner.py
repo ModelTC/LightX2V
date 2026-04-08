@@ -221,7 +221,7 @@ class NeoppRunner(DefaultRunner):
             with ProfilingContext4DebugL1("step_post"):
                 self.scheduler.step_post()
 
-        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+        if self.config.get("save_result_for_debug", True):
             gen_result = self.process_images_after_vae_decoder_for_debug()
         else:
             gen_result = self.process_images_after_vae_decoder()
