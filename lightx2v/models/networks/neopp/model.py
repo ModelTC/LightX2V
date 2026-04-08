@@ -64,6 +64,25 @@ class NeoppModel(BaseTransformerModel):
         )
         return z
 
+    def cfg_norm_func(self, v_pred, v_pred_condition):
+        if self.cfg_norm == "global":
+            logger.info(f"cfg_norm is global, applying global normalization")
+            norm_v_condition = torch.norm(v_pred_condition, dim=(1, 2), keepdim=True)
+            norm_v_cfg = torch.norm(v_pred, dim=(1, 2), keepdim=True)
+            scale = (norm_v_condition / (norm_v_cfg + 1e-8)).clamp(min=0, max=1.0)
+            v_pred = v_pred * scale
+        elif self.cfg_norm == "channel":
+            logger.info(f"cfg_norm is channel, applying channel normalization")
+            norm_v_condition = torch.norm(v_pred_condition, dim=-1, keepdim=True)
+            norm_v_cfg = torch.norm(v_pred, dim=-1, keepdim=True)
+            scale = (norm_v_condition / (norm_v_cfg + 1e-8)).clamp(min=0, max=1.0)
+            v_pred = v_pred * scale
+        elif self.cfg_norm == "none":
+            logger.info(f"cfg_norm is none, no normalization will be applied")
+        else:
+            raise ValueError(f"Invalid cfg_norm: {self.cfg_norm}")
+        return v_pred
+
     def _infer_t2i_i2i(self, inputs, pre_infer_out):
         t = self.scheduler.timesteps[self.scheduler.step_index]
         use_cfg = t > self.cfg_interval[0] and t < self.cfg_interval[1] and self.cfg_scale > 1
@@ -84,7 +103,9 @@ class NeoppModel(BaseTransformerModel):
                 v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
                 dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
                 v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
-                return v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+                v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+                v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
+                return v_pred
             else:
                 return self._infer_pass(inputs, pre_infer_out, "cond")
         else:
@@ -92,22 +113,7 @@ class NeoppModel(BaseTransformerModel):
             if use_cfg:
                 v_pred_uncond = self._infer_pass(inputs, pre_infer_out, "uncond")
                 v_pred = v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
-                if self.cfg_norm == "global":
-                    logger.info(f"cfg_norm is global, applying global normalization")
-                    norm_v_condition = torch.norm(v_pred_condition, dim=(1, 2), keepdim=True)
-                    norm_v_cfg = torch.norm(v_pred, dim=(1, 2), keepdim=True)
-                    scale = (norm_v_condition / (norm_v_cfg + 1e-8)).clamp(min=0, max=1.0)
-                    v_pred = v_pred * scale
-                elif self.cfg_norm == "channel":
-                    logger.info(f"cfg_norm is channel, applying channel normalization")
-                    norm_v_condition = torch.norm(v_pred_condition, dim=-1, keepdim=True)
-                    norm_v_cfg = torch.norm(v_pred, dim=-1, keepdim=True)
-                    scale = (norm_v_condition / (norm_v_cfg + 1e-8)).clamp(min=0, max=1.0)
-                    v_pred = v_pred * scale
-                elif self.cfg_norm == "none":
-                    logger.info(f"cfg_norm is none, no normalization will be applied")
-                else:
-                    raise ValueError(f"Invalid cfg_norm: {self.cfg_norm}")
+                v_pred = self.cfg_norm_func(v_pred, v_pred_condition)
                 return v_pred
             return v_pred_condition
 
