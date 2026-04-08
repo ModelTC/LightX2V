@@ -7,6 +7,16 @@ MODEL_PATH="${MODEL_PATH:-/path/to/Matrix-Game-3.0}"
 CONFIG_JSON="configs/matrix_game3/matrix_game3_base.json"
 SAVE_PATH="${SAVE_PATH:-save_results/matrix_game3_base}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+# Reuse the repo's standard runtime defaults. Base MG3 is notably more sensitive
+# to precision than the distilled path, so default the sensitive layers to fp32.
+export lightx2v_path="${lightx2v_path:-${REPO_ROOT}}"
+export model_path="${model_path:-${MODEL_PATH}}"
+source "${lightx2v_path}/scripts/base/base.sh"
+export SENSITIVE_LAYER_DTYPE="${SENSITIVE_LAYER_DTYPE:-FP32}"
+
 python -m lightx2v.infer \
     --model_cls wan2.2_matrix_game3 \
     --task i2v \

@@ -208,10 +208,8 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         )
 
         # Gate and residual
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            x = x.to(self.sensitive_layer_dtype) + y_out.to(self.sensitive_layer_dtype) * gate_msa.squeeze()
-        else:
-            x = x + y_out * gate_msa.squeeze()
+        x_dtype = x.dtype
+        x = (x.float() + y_out.float() * gate_msa.squeeze().float()).to(x_dtype)
 
         # --- Phase 1: Camera Plucker Injection ---
         if pre_infer_out.plucker_emb is not None:
@@ -258,22 +256,16 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         # --- Phase 4 (or 3): FFN ---
         ffn_phase_idx = 4 if has_action else 3
         ffn_phase = block.compute_phases[ffn_phase_idx]
-        norm2_out = ffn_phase.norm2.apply(x)
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            norm2_out = norm2_out.to(self.sensitive_layer_dtype)
-        norm2_out = norm2_out * (1 + c_scale_msa.squeeze()) + c_shift_msa.squeeze()
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            norm2_out = norm2_out.to(self.infer_dtype)
+        norm2_out = ffn_phase.norm2.apply(x).float()
+        norm2_out = norm2_out * (1 + c_scale_msa.squeeze().float()) + c_shift_msa.squeeze().float()
+        norm2_out = norm2_out.to(x_dtype)
 
         y = ffn_phase.ffn_0.apply(norm2_out)
         y = torch.nn.functional.gelu(y, approximate="tanh")
         y = ffn_phase.ffn_2.apply(y)
 
         # FFN gate + residual
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            x = x.to(self.sensitive_layer_dtype) + y.to(self.sensitive_layer_dtype) * c_gate_msa.squeeze()
-        else:
-            x = x + y * c_gate_msa.squeeze()
+        x = (x.float() + y.float() * c_gate_msa.squeeze().float()).to(x_dtype)
 
         return x
 
@@ -281,12 +273,11 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         """Self-attention with memory-aware indexed RoPE."""
         cos_sin = self.cos_sin
 
-        norm1_out = phase.norm1.apply(x)
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            norm1_out = norm1_out.to(self.sensitive_layer_dtype)
-        norm1_out = norm1_out * (1 + scale_msa.squeeze()) + shift_msa.squeeze()
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            norm1_out = norm1_out.to(self.infer_dtype)
+        # Official MG3 performs the norm1 modulation in fp32, then casts back to
+        # the model dtype right before the QKV projections.
+        norm1_out = phase.norm1.apply(x).float()
+        norm1_out = norm1_out * (1 + scale_msa.squeeze().float()) + shift_msa.squeeze().float()
+        norm1_out = norm1_out.to(x.dtype)
 
         s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
@@ -563,23 +554,19 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
     def infer_non_blocks(self, weights, x, e):
         """Head processing — same as base but handles per-token time embeddings."""
         if e.dim() == 2:
-            modulation = weights.head_modulation.tensor
-            e_parts = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
+            modulation = weights.head_modulation.tensor.float()
+            e_parts = (modulation + e.float().unsqueeze(1)).chunk(2, dim=1)
         elif e.dim() == 3:
-            modulation = weights.head_modulation.tensor.unsqueeze(2)
-            e_parts = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
+            modulation = weights.head_modulation.tensor.float().unsqueeze(2)
+            e_parts = (modulation + e.float().unsqueeze(1)).chunk(2, dim=1)
             e_parts = [ei.squeeze(1) for ei in e_parts]
         else:
-            modulation = weights.head_modulation.tensor
-            e_parts = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
+            modulation = weights.head_modulation.tensor.float()
+            e_parts = (modulation + e.float().unsqueeze(1)).chunk(2, dim=1)
 
-        x = weights.norm.apply(x)
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            x = x.to(self.sensitive_layer_dtype)
-        x = x * (1 + e_parts[1].squeeze()) + e_parts[0].squeeze()
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            x = x.to(self.infer_dtype)
-        x = weights.head.apply(x)
+        x = weights.norm.apply(x).float()
+        x = x * (1 + e_parts[1].squeeze().float()) + e_parts[0].squeeze().float()
+        x = weights.head.apply(x.to(self.infer_dtype))
         return x
 
     def set_freqs(self, freqs):

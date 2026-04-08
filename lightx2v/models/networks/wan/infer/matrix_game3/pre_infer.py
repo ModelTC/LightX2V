@@ -161,9 +161,11 @@ class WanMtxg3PreInfer(WanPreInfer):
         else:
             embed = weights.time_embedding_0.apply(embed)
         embed = torch.nn.functional.silu(embed)
-        embed = weights.time_embedding_2.apply(embed)
+        embed = weights.time_embedding_2.apply(embed).float()
+        # Official MG3 keeps both the time embedding and its 6-way modulation
+        # projection in fp32 before each block consumes them.
         embed0 = torch.nn.functional.silu(embed)
-        embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim))
+        embed0 = weights.time_projection_1.apply(embed0).unflatten(1, (6, self.dim)).float()
 
         # Text embedding
         if self.sensitive_layer_dtype != self.infer_dtype:
