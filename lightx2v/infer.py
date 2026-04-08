@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 
 try:
     from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
@@ -82,6 +83,7 @@ def main():
             "bagel",
             "seedvr2",
             "neopp",
+            "motus",
         ],
         default="wan2.1",
     )
@@ -102,6 +104,7 @@ def main():
         default="",
         help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
+    parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for Motus i2v inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
     parser.add_argument("--image_strength", type=float, default=1.0, help="The strength of the image-to-audio-video (i2av) task")
@@ -167,6 +170,7 @@ def main():
         help="Path to action model checkpoint for WorldPlay models.",
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
