@@ -7,8 +7,12 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from lightx2v.disagg.rdma_client import RDMAClient
-from lightx2v.disagg.rdma_server import RDMAServer
+try:
+    from lightx2v.disagg.rdma_client import RDMAClient
+    from lightx2v.disagg.rdma_server import RDMAServer
+except ImportError:
+    RDMAClient = None
+    RDMAServer = None
 
 logger = logging.getLogger(__name__)
 
