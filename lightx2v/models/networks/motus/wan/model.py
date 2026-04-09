@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
+from functools import lru_cache
 
 import torch
 import torch.nn as nn
@@ -33,9 +34,6 @@ def rope_params(max_seq_len, dim, theta=10000):
                         torch.arange(0, dim, 2).to(torch.float64).div(dim)))
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
-
-
-from functools import lru_cache
 
 @torch.amp.autocast('cuda', enabled=False)
 def rope_apply(x: torch.Tensor, grid_sizes: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
