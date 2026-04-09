@@ -85,7 +85,7 @@ class NeoppModel(BaseTransformerModel):
 
     def _infer_t2i_i2i(self, inputs, pre_infer_out):
         t = self.scheduler.timesteps[self.scheduler.step_index]
-        use_cfg = t > self.cfg_interval[0] and t < self.cfg_interval[1] and self.cfg_scale > 1
+        use_cfg = t >= self.cfg_interval[0] and t <= self.cfg_interval[1] and self.cfg_scale > 1
 
         if self.config.get("cfg_parallel", False):
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
