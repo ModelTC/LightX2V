@@ -1,6 +1,6 @@
 import inspect
 from dataclasses import MISSING, dataclass, field, fields, make_dataclass
-from typing import Any
+from typing import Any, Optional
 
 import torch
 
@@ -232,6 +232,7 @@ class T2AVInputInfo:
     audio_latent_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -242,6 +243,7 @@ class I2AVInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -250,6 +252,7 @@ class I2AVInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass

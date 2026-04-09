@@ -415,6 +415,7 @@ class LightX2VPipeline:
         image_path=None,
         video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
+        image_frame_idx=None,
         last_frame_path=None,
         audio_path=None,
         src_ref_images=None,
@@ -427,6 +428,7 @@ class LightX2VPipeline:
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
         # image_strength can be a scalar (float/int) or a list matching the number of images
+        # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
         self.seed = seed
         self.image_path = image_path
         self.video_path = video_path  # For SR task
@@ -442,6 +444,7 @@ class LightX2VPipeline:
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
         self.image_strength = image_strength
+        self.image_frame_idx = image_frame_idx
         if task is not None:
             self.task = task
             self.modify_config({"task": self.task})
