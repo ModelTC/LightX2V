@@ -75,13 +75,13 @@ class NeoppAttentionWeights(WeightModule):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.self_attn"
 
-        self.add_module("q_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.q_proj_mot_gen.weight"))
+        self.add_module("q_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.q_proj_mot_gen.weight", None))
 
-        self.add_module("k_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.k_proj_mot_gen.weight"))
+        self.add_module("k_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.k_proj_mot_gen.weight", None))
 
-        self.add_module("v_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.v_proj_mot_gen.weight"))
+        self.add_module("v_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.v_proj_mot_gen.weight", None))
 
-        self.add_module("o_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.o_proj_mot_gen.weight"))
+        self.add_module("o_proj_mot_gen", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.o_proj_mot_gen.weight", None))
 
         self.add_module(
             "qk_norm",
@@ -101,7 +101,7 @@ class NeoppSparseMoeWeights(WeightModule):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.{subname}"
 
-        self.add_module("gate", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate.weight"))
+        self.add_module("gate", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate.weight", None))
 
         self.num_experts = num_experts
         experts = WeightModuleList(NeoppMoeSingleExpertWeights(block_index, mm_type, subname, j) for j in range(num_experts))
@@ -129,18 +129,18 @@ class NeoppMoeSingleExpertWeights(WeightModule):
     def __init__(self, block_index, mm_type, subname, expert_index):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.{subname}.experts.{expert_index}"
-        self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight"))
-        self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight"))
-        self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight"))
+        self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight", None))
+        self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight", None))
+        self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight", None))
 
 
 class NeoppMlpWeights(WeightModule):
     def __init__(self, block_index, mm_type):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.mlp_mot_gen"
-        self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight"))
-        self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight"))
-        self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight"))
+        self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight", None))
+        self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight", None))
+        self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.down_proj.weight", None))
 
     # def load(self, weight_dict):
     #     super().load(weight_dict)
@@ -157,7 +157,7 @@ class NeoppFmHeadWeights(WeightModule):
         super().__init__()
         self.add_module(
             "fm_head_0",
-            MM_WEIGHT_REGISTER[mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 "fm_modules.fm_head.0.weight",
                 "fm_modules.fm_head.0.bias",
             ),
@@ -165,7 +165,7 @@ class NeoppFmHeadWeights(WeightModule):
 
         self.add_module(
             "fm_head_2",
-            MM_WEIGHT_REGISTER[mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 "fm_modules.fm_head.2.weight",
                 "fm_modules.fm_head.2.bias",
             ),
