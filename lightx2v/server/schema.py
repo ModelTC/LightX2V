@@ -15,7 +15,19 @@ class TalkObject(BaseModel):
     mask: str = Field(..., description="Mask path")
 
 
-class BaseTaskRequest(BaseModel):
+class DisaggOverrideRequest(BaseModel):
+    """Optional Mooncake / disagg overrides (merged into runner.config per request)."""
+
+    data_bootstrap_room: Optional[int] = Field(None, description="Per-request Mooncake bootstrap room (disagg)")
+    disagg_phase1_receiver_engine_rank: Optional[int] = Field(
+        None,
+        description="Transformer receiver rank for phase1 send (decentralized / multi-transformer)",
+    )
+    disagg_bootstrap_room: Optional[int] = Field(None, description="Alias for data_bootstrap_room in some clients")
+    disagg_decoder_bootstrap_room: Optional[int] = Field(None, description="Phase2 Mooncake room override")
+
+
+class BaseTaskRequest(DisaggOverrideRequest):
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     prompt: str = Field("", description="Generation prompt")
     use_prompt_enhancer: bool = Field(False, description="Whether to use prompt enhancer")

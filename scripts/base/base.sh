@@ -12,6 +12,8 @@ fi
 
 export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
 
+export MOONCAKE_CONFIG_PATH=${lightx2v_path}/configs/mooncake_config.json
+
 # always set false to avoid some warnings
 export TOKENIZERS_PARALLELISM=false
 # set expandable_segments to True to avoid OOM
