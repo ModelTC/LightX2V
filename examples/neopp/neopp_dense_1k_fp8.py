@@ -5,12 +5,12 @@ from lightx2v import LightX2VPipeline
 # -------------------------------------------------
 
 pipe = LightX2VPipeline(
-    model_path="/data/nvme1/yongyang/FL/neo_9b_new/hf_step44000_ema_x2v_part",
+    model_path="/data/nvme1/yongyang/FL/neo_9b_new/hf_step44000_ema_x2v_part_fp8",
     model_cls="neopp",
     support_tasks=["t2i", "i2i"],
 )
 
-pipe.create_generator(config_json="../../configs/neopp/neopp_dense.json")
+pipe.create_generator(config_json="../../configs/neopp/neopp_dense_fp8.json")
 pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False, "save_result_for_debug": True})
 
 
@@ -36,7 +36,7 @@ pipe.runner.set_inference_params(
 
 pipe.generate(
     seed=200,
-    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_0.png",
+    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_fp8_0.png",
     target_shape=[1024, 1024],  # Height, Width
 )
 
@@ -59,7 +59,7 @@ pipe.runner.set_inference_params(
 
 pipe.generate(
     seed=201,
-    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_1.png",
+    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_fp8_1.png",
     target_shape=[1024, 1024],  # Height, Width
 )
 
@@ -82,6 +82,6 @@ pipe.runner.set_inference_params(
 
 pipe.generate(
     seed=202,
-    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_2.png",
+    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_fp8_2.png",
     target_shape=[1024, 1024],  # Height, Width
 )
