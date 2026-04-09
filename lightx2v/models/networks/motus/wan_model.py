@@ -1,12 +1,11 @@
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
 
-from lightx2v.models.networks.motus.primitives import sinusoidal_embedding_1d
 from lightx2v.models.networks.motus.wan.model import WanModel
 from lightx2v.models.networks.motus.wan.vae2_2 import Wan2_2_VAE
 
@@ -42,6 +41,8 @@ class WanVideoModel(nn.Module):
     def decode_video(self, video_latents: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             return torch.stack([self.vae.decode([video_latents[i]])[0] for i in range(video_latents.shape[0])], dim=0)
+            # TODO: maybe can speed up with batch to tensor
+            # return self.vae.model.decode(video_latents, self.vae.scale).float().clamp(-1, 1)
 
     @classmethod
     def from_config(cls, config_path: str, vae_path: str, device: str = "cuda", precision: str = "bfloat16"):

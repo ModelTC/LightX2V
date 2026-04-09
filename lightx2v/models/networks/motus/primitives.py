@@ -30,14 +30,18 @@ def rope_apply(x: torch.Tensor, grid_sizes: torch.Tensor, freqs: torch.Tensor) -
 
     @lru_cache(maxsize=256)
     def _make_freq_grid(f: int, h: int, w: int):
-        return torch.cat(
-            [
-                fpart[:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                hpart[:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                wpart[:w].view(1, 1, w, -1).expand(f, h, w, -1),
-            ],
-            dim=-1,
-        ).reshape(f * h * w, 1, -1).contiguous()
+        return (
+            torch.cat(
+                [
+                    fpart[:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                    hpart[:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                    wpart[:w].view(1, 1, w, -1).expand(f, h, w, -1),
+                ],
+                dim=-1,
+            )
+            .reshape(f * h * w, 1, -1)
+            .contiguous()
+        )
 
     for g_idx, (f, h, w) in enumerate(uniq.tolist()):
         idx = (inv == g_idx).nonzero(as_tuple=False).squeeze(-1)

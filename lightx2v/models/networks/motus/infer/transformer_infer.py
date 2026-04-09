@@ -88,7 +88,10 @@ class MotusTransformerInfer(BaseTransformerInfer):
             scheduler.step_pre(step_index)
             video_tokens = model.video_module.prepare_input(scheduler.video_latents.to(model.dtype))
             state_tokens = pre_infer_out.state.unsqueeze(1).to(model.dtype)
-            registers = model.action_expert.registers.expand(state_tokens.shape[0], -1, -1)
+            # in case for the registers is set to 0
+            registers = model.action_expert.registers
+            if registers is not None:
+                registers = registers.expand(state_tokens.shape[0], -1, -1)
             action_tokens = model.action_expert.input_encoder(state_tokens, scheduler.action_latents, registers)
             und_tokens = und_tokens_base.clone()
 
@@ -118,7 +121,9 @@ class MotusTransformerInfer(BaseTransformerInfer):
 
                 video_velocity = model.video_module.apply_output_head(video_tokens, video_head_time_emb)
                 action_pred_full = model.action_expert.decoder(action_tokens, action_head_time_emb)
-                action_velocity = action_pred_full[:, 1 : -model.action_expert.config.num_registers, :]
+                # in case for the registers is set to 0
+                num_regs = model.action_expert.config.num_registers
+                action_velocity = action_pred_full[:, 1:-num_regs, :] if num_regs > 0 else action_pred_full[:, 1:, :]
 
             scheduler.step(video_velocity=video_velocity, action_velocity=action_velocity, dt=dt, condition_frame_latent=pre_infer_out.condition_frame_latent)
 

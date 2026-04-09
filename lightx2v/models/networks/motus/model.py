@@ -10,16 +10,15 @@ import torch.nn as nn
 from PIL import Image
 from loguru import logger
 from transformers import AutoProcessor
-from tqdm import tqdm
 
-from lightx2v.models.networks.motus.ops import LinearWithMM, TripleQKVProjector
 from lightx2v.models.networks.motus.core import Motus, MotusConfig
 from lightx2v.models.networks.motus.image_utils import resize_with_padding
-from lightx2v.models.networks.motus.primitives import rope_apply
-from lightx2v.models.networks.motus.t5 import T5EncoderModel
 from lightx2v.models.networks.motus.infer.post_infer import MotusPostInfer
 from lightx2v.models.networks.motus.infer.pre_infer import MotusPreInfer
 from lightx2v.models.networks.motus.infer.transformer_infer import MotusTransformerInfer
+from lightx2v.models.networks.motus.ops import LinearWithMM, TripleQKVProjector
+from lightx2v.models.networks.motus.primitives import rope_apply
+from lightx2v.models.networks.motus.t5 import T5EncoderModel
 from lightx2v.models.schedulers.motus.scheduler import MotusScheduler
 
 
@@ -122,6 +121,7 @@ class MotusModel:
                     signature = None
 
                 if signature and "mm_token_type_ids" in signature.parameters:
+
                     def wrapped_get_rope_index(*args, __orig=method, **kwargs):
                         if "mm_token_type_ids" not in kwargs:
                             input_ids = kwargs.get("input_ids")

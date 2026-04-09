@@ -7,10 +7,10 @@ from loguru import logger
 
 from lightx2v.models.networks.motus.model import MotusModel
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import save_to_video
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.profiler import *
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -92,4 +92,3 @@ class MotusRunner(BaseRunner):
             num_inference_steps=int(self.config.get("num_inference_steps", 10)),
         )
         self._save_outputs(pred_frames, pred_actions)
-
