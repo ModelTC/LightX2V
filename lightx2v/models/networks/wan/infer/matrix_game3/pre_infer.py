@@ -150,7 +150,7 @@ class WanMtxg3PreInfer(WanPreInfer):
                 t = torch.cat([timestep_memory.squeeze(0).to(device=x.device, dtype=x.dtype), t.to(device=x.device, dtype=x.dtype)], dim=0)
 
         # Patch embedding
-        x = weights.patch_embedding.apply(x.unsqueeze(0))
+        x = weights.patch_embedding.apply(x.unsqueeze(0)).to(self.infer_dtype)
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
 
@@ -174,7 +174,7 @@ class WanMtxg3PreInfer(WanPreInfer):
         else:
             out = weights.text_embedding_0.apply(context.squeeze(0))
         out = torch.nn.functional.gelu(out, approximate="tanh")
-        context = weights.text_embedding_2.apply(out)
+        context = weights.text_embedding_2.apply(out).to(self.infer_dtype)
 
         # Grid sizes and RoPE
         grid_sizes = GridOutput(
@@ -227,7 +227,7 @@ class WanMtxg3PreInfer(WanPreInfer):
 
             plucker_emb = weights.patch_embedding_wancamctrl.apply(plucker_emb.squeeze(0))
             plucker_hidden = weights.c2ws_hidden_states_layer2.apply(torch.nn.functional.silu(weights.c2ws_hidden_states_layer1.apply(plucker_emb)))
-            plucker_emb = plucker_emb + plucker_hidden
+            plucker_emb = (plucker_emb + plucker_hidden).to(self.infer_dtype)
 
         return WanMtxg3PreInferOutput(
             embed=embed,
