@@ -1,5 +1,9 @@
 import torch
-from flashinfer.fused_moe.core import get_cutlass_fused_moe_module
+
+try:
+    from flashinfer.fused_moe.core import get_cutlass_fused_moe_module
+except ImportError:
+    get_cutlass_fused_moe_module = None
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401

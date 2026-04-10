@@ -2,7 +2,11 @@ import torch
 import torch.nn.functional as F
 
 # from flashinfer.activation import silu_and_mul as flashinfer_silu_and_mul
-from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
+try:
+    from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
+except ImportError:
+    flashinfer_cutlass_fused_moe = None
+
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
