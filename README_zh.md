@@ -45,7 +45,7 @@ pre-commit run --all-files
 ## :fire: 最新动态
 
 - **2026年4月10日: ** 🎉 我们更新了分离部署的技术博客
-  - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](examples/BeginnerGuide/ZH_CN/DisaggBlogPost.md)
+  - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](blogs/ZH_CN/DisaggBlogPost.md)
 
 - **2026年3月5日：** 🚀 支持 Intel AIPC PTL 的部署，感谢Intel团队。
 
