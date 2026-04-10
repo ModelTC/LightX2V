@@ -1,18 +1,22 @@
-import importlib.util
 import json
-import sys
-import types
+import math
+import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin, SchedulerOutput
+from diffusers.utils import deprecate
 from PIL import Image
 from einops import rearrange
 from loguru import logger
+from scipy.interpolate import interp1d
+from scipy.spatial.transform import Rotation, Slerp
 
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.scheduler import BaseScheduler
@@ -27,12 +31,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_MATRIX_GAME3_OFFICIAL_ROOT_RELATIVE_CANDIDATES = (
-    Path("Matrix-Game-3") / "Matrix-Game-3",
-    Path("Matrix-Game-3"),
-)
 _MATRIX_GAME3_CONFIG_ROOT_RELATIVE = Path("Matrix-Game-3.0")
-_MATRIX_GAME3_OFFICIAL_PACKAGE = "_lightx2v_matrix_game3_official"
 _MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT = (
     "Vibrant colors, overexposure, static, blurred details, subtitles, style, artwork, "
     "painting, still image, overall grayness, worst quality, low quality, JPEG compression "
@@ -40,6 +39,11 @@ _MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT = (
     "deformed, disfigured, malformed limbs, fused fingers, still image, cluttered background, "
     "three legs, crowded background, walking backwards"
 )
+_MATRIX_GAME3_WSAD_OFFSET = 12.35
+_MATRIX_GAME3_DIAGONAL_OFFSET = 8.73
+_MATRIX_GAME3_MOUSE_PITCH_SENSITIVITY = 15.0
+_MATRIX_GAME3_MOUSE_YAW_SENSITIVITY = 15.0
+_MATRIX_GAME3_MOUSE_THRESHOLD = 0.02
 
 
 @dataclass
@@ -69,29 +73,6 @@ class MatrixGame3SegmentState:
     dit_cond_dict: dict[str, Any]
 
 
-def _load_module_from_path(module_name: str, file_path: Path):
-    """Import an official Matrix-Game-3 helper module by filesystem path once."""
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"failed to load module {module_name} from {file_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _ensure_namespace_package(package_name: str, package_path: Path):
-    """Register a synthetic namespace package so relative imports inside official code work."""
-    if package_name in sys.modules:
-        return sys.modules[package_name]
-    module = types.ModuleType(package_name)
-    module.__path__ = [str(package_path)]
-    sys.modules[package_name] = module
-    return module
-
-
 def _expand_path_candidates(path_value: Any) -> list[Path]:
     """Resolve a user-provided path against cwd and the project root when needed."""
     raw_path = Path(str(path_value)).expanduser()
@@ -104,9 +85,854 @@ def _expand_path_candidates(path_value: Any) -> list[Path]:
     return candidates
 
 
-def _append_unique_path(paths: list[Path], candidate: Path):
-    if candidate not in paths:
-        paths.append(candidate)
+def _matrix_game3_combine_data(data, num_frames=57, keyboard_dim=4, mouse=True):
+    assert num_frames % 4 == 1
+    keyboard_condition = torch.zeros((num_frames, keyboard_dim))
+    if mouse:
+        mouse_condition = torch.zeros((num_frames, 2))
+
+    current_frame = 0
+    selections = [12]
+
+    while current_frame < num_frames:
+        rd_frame = selections[random.randint(0, len(selections) - 1)]
+        rd = random.randint(0, len(data) - 1)
+        keyboard_sample = data[rd]["keyboard_condition"]
+        if mouse:
+            mouse_sample = data[rd]["mouse_condition"]
+
+        if current_frame == 0:
+            keyboard_condition[:1] = keyboard_sample[:1]
+            if mouse:
+                mouse_condition[:1] = mouse_sample[:1]
+            current_frame = 1
+        else:
+            rd_frame = min(rd_frame, num_frames - current_frame)
+            repeat_time = rd_frame // 4
+            keyboard_condition[current_frame : current_frame + rd_frame] = keyboard_sample.repeat(repeat_time, 1)
+            if mouse:
+                mouse_condition[current_frame : current_frame + rd_frame] = mouse_sample.repeat(repeat_time, 1)
+            current_frame += rd_frame
+
+    if mouse:
+        return {
+            "keyboard_condition": keyboard_condition,
+            "mouse_condition": mouse_condition,
+        }
+    return {"keyboard_condition": keyboard_condition}
+
+
+def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
+    actions_single_action = [
+        "forward",
+        "left",
+        "right",
+    ]
+    actions_double_action = [
+        "forward_left",
+        "forward_right",
+    ]
+
+    actions_single_camera = [
+        "camera_l",
+        "camera_r",
+    ]
+    actions_to_test = actions_double_action * 5 + actions_single_camera * 5 + actions_single_action * 5
+    for action in (actions_single_action + actions_double_action):
+        for camera in actions_single_camera:
+            actions_to_test.append(f"{action}_{camera}")
+
+    base_action = actions_single_action + actions_single_camera
+    keyboard_idx = {
+        "forward": 0,
+        "back": 1,
+        "left": 2,
+        "right": 3,
+    }
+    cam_value = 0.1
+    camera_value_map = {
+        "camera_up": [cam_value, 0],
+        "camera_down": [-cam_value, 0],
+        "camera_l": [0, -cam_value],
+        "camera_r": [0, cam_value],
+        "camera_ur": [cam_value, cam_value],
+        "camera_ul": [cam_value, -cam_value],
+        "camera_dr": [-cam_value, cam_value],
+        "camera_dl": [-cam_value, -cam_value],
+    }
+
+    data = []
+    for action_name in actions_to_test:
+        keyboard_condition = [[0, 0, 0, 0, 0, 0] for _ in range(num_samples_per_action)]
+        mouse_condition = [[0, 0] for _ in range(num_samples_per_action)]
+
+        for sub_action in base_action:
+            if sub_action not in action_name:
+                continue
+            if sub_action in camera_value_map:
+                mouse_condition = [camera_value_map[sub_action] for _ in range(num_samples_per_action)]
+            elif sub_action in keyboard_idx:
+                col = keyboard_idx[sub_action]
+                for row in keyboard_condition:
+                    row[col] = 1
+
+        data.append(
+            {
+                "keyboard_condition": torch.tensor(keyboard_condition),
+                "mouse_condition": torch.tensor(mouse_condition),
+            }
+        )
+
+    return _matrix_game3_combine_data(data, num_frames, keyboard_dim=6, mouse=True)
+
+
+def _matrix_game3_compute_next_pose_from_action(current_pose, keyboard_action, mouse_action):
+    x, y, z, pitch, yaw = current_pose
+    w, s, a, d = keyboard_action[:4]
+    mouse_x, mouse_y = mouse_action[:2]
+
+    delta_pitch = _MATRIX_GAME3_MOUSE_PITCH_SENSITIVITY * mouse_x if abs(mouse_x) >= _MATRIX_GAME3_MOUSE_THRESHOLD else 0.0
+    delta_yaw = _MATRIX_GAME3_MOUSE_YAW_SENSITIVITY * mouse_y if abs(mouse_y) >= _MATRIX_GAME3_MOUSE_THRESHOLD else 0.0
+
+    new_pitch = pitch + delta_pitch
+    new_yaw = yaw + delta_yaw
+
+    while new_yaw > 180:
+        new_yaw -= 360
+    while new_yaw < -180:
+        new_yaw += 360
+
+    local_forward = 0.0
+    if w > 0.5 and s < 0.5:
+        local_forward = _MATRIX_GAME3_WSAD_OFFSET
+    elif s > 0.5 and w < 0.5:
+        local_forward = -_MATRIX_GAME3_WSAD_OFFSET
+
+    local_right = 0.0
+    if d > 0.5 and a < 0.5:
+        local_right = _MATRIX_GAME3_WSAD_OFFSET
+    elif a > 0.5 and d < 0.5:
+        local_right = -_MATRIX_GAME3_WSAD_OFFSET
+
+    if abs(local_forward) > 0.1 and abs(local_right) > 0.1:
+        local_forward = np.sign(local_forward) * _MATRIX_GAME3_DIAGONAL_OFFSET
+        local_right = np.sign(local_right) * _MATRIX_GAME3_DIAGONAL_OFFSET
+
+    avg_yaw = float((yaw + new_yaw) / 2.0)
+    yaw_rad = float(np.deg2rad(avg_yaw))
+    cos_yaw = np.cos(yaw_rad)
+    sin_yaw = np.sin(yaw_rad)
+
+    delta_x = cos_yaw * local_forward - sin_yaw * local_right
+    delta_y = sin_yaw * local_forward + cos_yaw * local_right
+    return np.array([x + delta_x, y + delta_y, z, new_pitch, new_yaw], dtype=np.float32)
+
+
+def _matrix_game3_compute_all_poses_from_actions(keyboard_conditions, mouse_conditions, first_pose=None, return_last_pose=False):
+    total_frames = len(keyboard_conditions)
+    all_poses = np.zeros((total_frames, 5), dtype=np.float32)
+    if first_pose is not None:
+        all_poses[0] = first_pose
+
+    for idx in range(total_frames - 1):
+        all_poses[idx + 1] = _matrix_game3_compute_next_pose_from_action(
+            all_poses[idx],
+            keyboard_conditions[idx],
+            mouse_conditions[idx],
+        )
+
+    if return_last_pose:
+        last_pose = _matrix_game3_compute_next_pose_from_action(
+            all_poses[-1],
+            keyboard_conditions[-1],
+            mouse_conditions[-1],
+        )
+        return all_poses, last_pose
+    return all_poses
+
+
+def _matrix_game3_interpolate_camera_poses(src_indices, src_rot_mat, src_trans_vec, tgt_indices):
+    interp_func_trans = interp1d(
+        src_indices,
+        src_trans_vec,
+        axis=0,
+        kind="linear",
+        bounds_error=False,
+        fill_value="extrapolate",
+    )
+    interpolated_trans_vec = interp_func_trans(tgt_indices)
+
+    src_quat_vec = Rotation.from_matrix(src_rot_mat)
+    quats = src_quat_vec.as_quat().copy()
+    for idx in range(1, len(quats)):
+        if np.dot(quats[idx], quats[idx - 1]) < 0:
+            quats[idx] = -quats[idx]
+    src_quat_vec = Rotation.from_quat(quats)
+    slerp_func_rot = Slerp(src_indices, src_quat_vec)
+    interpolated_rot_quat = slerp_func_rot(tgt_indices)
+    interpolated_rot_mat = interpolated_rot_quat.as_matrix()
+
+    poses = np.zeros((len(tgt_indices), 4, 4), dtype=np.float32)
+    poses[:, :3, :3] = interpolated_rot_mat
+    poses[:, :3, 3] = interpolated_trans_vec
+    poses[:, 3, 3] = 1.0
+    return torch.from_numpy(poses).float()
+
+
+def _matrix_game3_se3_inverse(transform):
+    rotation = transform[:, :3, :3]
+    translation = transform[:, :3, 3:]
+    rotation_inv = rotation.transpose(-1, -2)
+    translation_inv = -torch.bmm(rotation_inv, translation)
+    inverse = torch.eye(4, device=transform.device, dtype=transform.dtype)[None, :, :].repeat(transform.shape[0], 1, 1)
+    inverse[:, :3, :3] = rotation_inv
+    inverse[:, :3, 3:] = translation_inv
+    return inverse
+
+
+def _matrix_game3_compute_relative_poses(c2ws_mat, framewise=False, normalize_trans=True):
+    ref_w2cs = _matrix_game3_se3_inverse(c2ws_mat[0:1])
+    relative_poses = torch.matmul(ref_w2cs, c2ws_mat)
+    relative_poses[0] = torch.eye(4, device=c2ws_mat.device, dtype=c2ws_mat.dtype)
+    if framewise:
+        relative_poses_framewise = torch.bmm(_matrix_game3_se3_inverse(relative_poses[:-1]), relative_poses[1:])
+        relative_poses[1:] = relative_poses_framewise
+    if normalize_trans:
+        translations = relative_poses[:, :3, 3]
+        max_norm = torch.norm(translations, dim=-1).max()
+        if max_norm > 0:
+            relative_poses[:, :3, 3] = translations / max_norm
+    return relative_poses
+
+
+@torch.no_grad()
+def _matrix_game3_create_meshgrid(n_frames, height, width, bias=0.5, device="cuda", dtype=torch.float32):
+    x_range = torch.arange(width, device=device, dtype=dtype)
+    y_range = torch.arange(height, device=device, dtype=dtype)
+    grid_y, grid_x = torch.meshgrid(y_range, x_range, indexing="ij")
+    grid_xy = torch.stack([grid_x, grid_y], dim=-1).view([-1, 2]) + bias
+    return grid_xy[None, ...].repeat(n_frames, 1, 1)
+
+
+def _matrix_game3_get_plucker_embeddings(c2ws_mat, intrinsics, height, width):
+    n_frames = c2ws_mat.shape[0]
+    grid_xy = _matrix_game3_create_meshgrid(n_frames, height, width, device=c2ws_mat.device, dtype=c2ws_mat.dtype)
+    fx, fy, cx, cy = intrinsics.chunk(4, dim=-1)
+    i = grid_xy[..., 0]
+    j = grid_xy[..., 1]
+    zs = torch.ones_like(i)
+    xs = (i - cx) / fx * zs
+    ys = (j - cy) / fy * zs
+
+    directions = torch.stack([xs, ys, zs], dim=-1)
+    directions = directions / directions.norm(dim=-1, keepdim=True)
+    rays_d = directions @ c2ws_mat[:, :3, :3].transpose(-1, -2)
+    rays_o = c2ws_mat[:, :3, 3]
+    rays_o = rays_o[:, None, :].expand_as(rays_d)
+    return torch.cat([rays_o, rays_d], dim=-1).view([n_frames, height, width, 6])
+
+
+def _matrix_game3_select_memory_idx_fov(extrinsics_all, current_start_frame_idx, selected_index_base, return_confidence=False, use_gpu=False):
+    if not use_gpu:
+        use_gpu = True
+
+    device = extrinsics_all.device if isinstance(extrinsics_all, torch.Tensor) else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if isinstance(extrinsics_all, np.ndarray):
+        extrinsics_tensor = torch.from_numpy(extrinsics_all).to(device).float()
+    else:
+        extrinsics_tensor = extrinsics_all.to(device).float()
+
+    video_w, video_h = 1280, 720
+    fov_rad = np.deg2rad(90)
+    fx = video_w / (2 * np.tan(fov_rad / 2))
+    fy = video_h / (2 * np.tan(fov_rad / 2))
+
+    if current_start_frame_idx <= 1:
+        empty_index = [0] * len(selected_index_base)
+        empty_conf = [0.0] * len(selected_index_base)
+        return (empty_index, empty_conf) if return_confidence else empty_index
+
+    candidate_indices = torch.arange(1, current_start_frame_idx, device=device)
+    rotation = extrinsics_tensor[candidate_indices, :3, :3]
+    translation = extrinsics_tensor[candidate_indices, :3, 3:4]
+    rotation_inv = rotation.transpose(1, 2)
+    translation_inv = -torch.bmm(rotation_inv, translation)
+
+    selected_index = []
+    selected_confidence = []
+    near, far = 0.1, 30.0
+    num_side = 10
+    z_samples = torch.linspace(near, far, num_side, device=device)
+    x_samples = torch.linspace(-1, 1, num_side, device=device)
+    y_samples = torch.linspace(-1, 1, num_side, device=device)
+    grid_x, grid_y, grid_z = torch.meshgrid(x_samples, y_samples, z_samples, indexing="ij")
+    points_cam_base = torch.stack(
+        [
+            grid_x.reshape(-1) * grid_z.reshape(-1) * (video_w / (2 * fx)),
+            grid_y.reshape(-1) * grid_z.reshape(-1) * (video_h / (2 * fy)),
+            grid_z.reshape(-1),
+        ],
+        dim=0,
+    )
+
+    for base_idx in selected_index_base:
+        extrinsics = extrinsics_tensor[base_idx]
+        points_world = extrinsics[:3, :3] @ points_cam_base + extrinsics[:3, 3:4]
+        points_world_batched = points_world.unsqueeze(0)
+        points_in_candidates = torch.bmm(rotation_inv, points_world_batched.expand(len(candidate_indices), -1, -1)) + translation_inv
+
+        x = points_in_candidates[:, 0, :]
+        y = points_in_candidates[:, 1, :]
+        z = points_in_candidates[:, 2, :]
+        u = (x * fx / torch.clamp(z, min=1e-6)) + video_w / 2
+        v = (y * fy / torch.clamp(z, min=1e-6)) + video_h / 2
+
+        in_view = (z > near) & (z < far) & (u >= 0) & (u <= video_w) & (v >= 0) & (v <= video_h)
+        ratios = in_view.float().mean(dim=1)
+        best_idx = torch.argmax(ratios)
+        selected_index.append(candidate_indices[best_idx].item())
+        selected_confidence.append(ratios[best_idx].item())
+
+    return (selected_index, selected_confidence) if return_confidence else selected_index
+
+
+def _matrix_game3_get_extrinsics(video_rotation, video_position):
+    num_frames = len(video_rotation)
+    extrinsics_vid = []
+    for idx in range(num_frames):
+        roll, pitch, yaw = video_rotation[idx]
+        roll, pitch, yaw = np.radians([roll, pitch, yaw])
+
+        rotation_z = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+        rotation_y = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
+        rotation_x = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
+        rotation = rotation_z @ rotation_y @ rotation_x
+
+        extrinsics = np.eye(4, dtype=np.float32)
+        extrinsics[:3, :3] = rotation
+        extrinsics[:3, 3] = video_position[idx]
+        extrinsics_vid.append(extrinsics)
+
+    rotation_init = np.array(
+        [
+            [0, 0, 1],
+            [1, 0, 0],
+            [0, -1, 0],
+        ],
+        dtype=np.float32,
+    )
+    extrinsics = torch.from_numpy(np.array(extrinsics_vid, dtype=np.float32))
+    extrinsics[:, :3, :3] = extrinsics[:, :3, :3] @ rotation_init
+    extrinsics[:, :3, 3] = extrinsics[:, :3, 3] * 0.01
+    return extrinsics
+
+
+def _matrix_game3_get_intrinsics(height, width):
+    fov_deg = 90
+    fov_rad = np.deg2rad(fov_deg)
+    fx = width / (2 * np.tan(fov_rad / 2))
+    fy = height / (2 * np.tan(fov_rad / 2))
+    cx = width / 2
+    cy = height / 2
+    return torch.tensor([fx, fy, cx, cy])
+
+
+def _matrix_game3_interpolate_camera_poses_handedness(src_indices, src_rot_mat, src_trans_vec, tgt_indices):
+    dets = np.linalg.det(src_rot_mat)
+    flip_handedness = dets.size > 0 and np.median(dets) < 0.0
+    if flip_handedness:
+        flip_mat = np.diag([1.0, 1.0, -1.0]).astype(src_rot_mat.dtype)
+        src_rot_mat = src_rot_mat @ flip_mat
+    c2ws = _matrix_game3_interpolate_camera_poses(
+        src_indices=src_indices,
+        src_rot_mat=src_rot_mat,
+        src_trans_vec=src_trans_vec,
+        tgt_indices=tgt_indices,
+    )
+    if flip_handedness:
+        flip_mat_t = torch.from_numpy(flip_mat).to(c2ws.device, dtype=c2ws.dtype)
+        c2ws[:, :3, :3] = c2ws[:, :3, :3] @ flip_mat_t
+    return c2ws
+
+
+class _MatrixGame3ConditionsShim:
+    Bench_actions_universal = staticmethod(_matrix_game3_bench_actions_universal)
+
+
+class _MatrixGame3UtilsShim:
+    compute_all_poses_from_actions = staticmethod(_matrix_game3_compute_all_poses_from_actions)
+
+
+class _MatrixGame3CamUtilsShim:
+    _interpolate_camera_poses_handedness = staticmethod(_matrix_game3_interpolate_camera_poses_handedness)
+    compute_relative_poses = staticmethod(_matrix_game3_compute_relative_poses)
+    get_plucker_embeddings = staticmethod(_matrix_game3_get_plucker_embeddings)
+    select_memory_idx_fov = staticmethod(_matrix_game3_select_memory_idx_fov)
+    get_extrinsics = staticmethod(_matrix_game3_get_extrinsics)
+    get_intrinsics = staticmethod(_matrix_game3_get_intrinsics)
+
+
+class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
+    """Inlined Matrix-Game-3 FlowUniPC scheduler from the official implementation."""
+
+    _compatibles = [scheduler.name for scheduler in KarrasDiffusionSchedulers]
+    order = 1
+
+    @register_to_config
+    def __init__(
+        self,
+        num_train_timesteps: int = 1000,
+        solver_order: int = 2,
+        prediction_type: str = "flow_prediction",
+        shift: Optional[float] = 1.0,
+        use_dynamic_shifting: bool = False,
+        thresholding: bool = False,
+        dynamic_thresholding_ratio: float = 0.995,
+        sample_max_value: float = 1.0,
+        predict_x0: bool = True,
+        solver_type: str = "bh2",
+        lower_order_final: bool = True,
+        disable_corrector: List[int] = [],
+        solver_p: SchedulerMixin = None,
+        timestep_spacing: str = "linspace",
+        steps_offset: int = 0,
+        final_sigmas_type: Optional[str] = "zero",
+    ):
+        if solver_type not in ["bh1", "bh2"]:
+            if solver_type in ["midpoint", "heun", "logrho"]:
+                self.register_to_config(solver_type="bh2")
+            else:
+                raise NotImplementedError(f"{solver_type} is not implemented for {self.__class__}")
+
+        self.predict_x0 = predict_x0
+        self.num_inference_steps = None
+        alphas = np.linspace(1, 1 / num_train_timesteps, num_train_timesteps)[::-1].copy()
+        sigmas = 1.0 - alphas
+        sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32)
+
+        if not use_dynamic_shifting:
+            sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
+
+        self.sigmas = sigmas
+        self.timesteps = sigmas * num_train_timesteps
+        self.model_outputs = [None] * solver_order
+        self.timestep_list = [None] * solver_order
+        self.lower_order_nums = 0
+        self.disable_corrector = disable_corrector
+        self.solver_p = solver_p
+        self.last_sample = None
+        self._step_index = None
+        self._begin_index = None
+        self.sigmas = self.sigmas.to("cpu")
+        self.sigma_min = self.sigmas[-1].item()
+        self.sigma_max = self.sigmas[0].item()
+
+    @property
+    def step_index(self):
+        return self._step_index
+
+    @property
+    def begin_index(self):
+        return self._begin_index
+
+    def set_begin_index(self, begin_index: int = 0):
+        self._begin_index = begin_index
+
+    def set_timesteps(
+        self,
+        num_inference_steps: Union[int, None] = None,
+        device: Union[str, torch.device] = None,
+        sigmas: Optional[List[float]] = None,
+        mu: Optional[Union[float, None]] = None,
+        shift: Optional[Union[float, None]] = None,
+    ):
+        if self.config.use_dynamic_shifting and mu is None:
+            raise ValueError("you have to pass a value for `mu` when `use_dynamic_shifting` is set to be `True`")
+
+        if sigmas is None:
+            sigmas = np.linspace(self.sigma_max, self.sigma_min, num_inference_steps + 1).copy()[:-1]
+
+        if self.config.use_dynamic_shifting:
+            sigmas = self.time_shift(mu, 1.0, sigmas)
+        else:
+            if shift is None:
+                shift = self.config.shift
+            sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
+
+        if self.config.final_sigmas_type == "sigma_min":
+            sigma_last = ((1 - self.alphas_cumprod[0]) / self.alphas_cumprod[0]) ** 0.5
+        elif self.config.final_sigmas_type == "zero":
+            sigma_last = 0
+        else:
+            raise ValueError(f"`final_sigmas_type` must be one of 'zero', or 'sigma_min', but got {self.config.final_sigmas_type}")
+
+        timesteps = sigmas * self.config.num_train_timesteps
+        sigmas = np.concatenate([sigmas, [sigma_last]]).astype(np.float32)
+        self.sigmas = torch.from_numpy(sigmas)
+        self.timesteps = torch.from_numpy(timesteps).to(device=device, dtype=torch.int64)
+        self.num_inference_steps = len(timesteps)
+        self.model_outputs = [None] * self.config.solver_order
+        self.lower_order_nums = 0
+        self.last_sample = None
+        if self.solver_p:
+            self.solver_p.set_timesteps(self.num_inference_steps, device=device)
+        self._step_index = None
+        self._begin_index = None
+        self.sigmas = self.sigmas.to("cpu")
+
+    def _threshold_sample(self, sample: torch.Tensor) -> torch.Tensor:
+        dtype = sample.dtype
+        batch_size, channels, *remaining_dims = sample.shape
+        if dtype not in (torch.float32, torch.float64):
+            sample = sample.float()
+        sample = sample.reshape(batch_size, channels * np.prod(remaining_dims))
+        abs_sample = sample.abs()
+        s = torch.quantile(abs_sample, self.config.dynamic_thresholding_ratio, dim=1)
+        s = torch.clamp(s, min=1, max=self.config.sample_max_value)
+        s = s.unsqueeze(1)
+        sample = torch.clamp(sample, -s, s) / s
+        sample = sample.reshape(batch_size, channels, *remaining_dims)
+        return sample.to(dtype)
+
+    def _sigma_to_t(self, sigma):
+        return sigma * self.config.num_train_timesteps
+
+    def _sigma_to_alpha_sigma_t(self, sigma):
+        return 1 - sigma, sigma
+
+    def time_shift(self, mu: float, sigma: float, t: torch.Tensor):
+        return math.exp(mu) / (math.exp(mu) + (1 / t - 1) ** sigma)
+
+    def convert_model_output(self, model_output: torch.Tensor, *args, sample: torch.Tensor = None, **kwargs) -> torch.Tensor:
+        timestep = args[0] if len(args) > 0 else kwargs.pop("timestep", None)
+        if sample is None:
+            if len(args) > 1:
+                sample = args[1]
+            else:
+                raise ValueError("missing `sample` as a required keyward argument")
+        if timestep is not None:
+            deprecate(
+                "timesteps",
+                "1.0.0",
+                "Passing `timesteps` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
+            )
+
+        sigma = self.sigmas[self.step_index]
+        _, sigma_t = self._sigma_to_alpha_sigma_t(sigma)
+
+        if self.predict_x0:
+            if self.config.prediction_type == "flow_prediction":
+                sigma_t = self.sigmas[self.step_index]
+                x0_pred = sample - sigma_t * model_output
+            else:
+                raise ValueError(
+                    f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler."
+                )
+            if self.config.thresholding:
+                x0_pred = self._threshold_sample(x0_pred)
+            return x0_pred
+
+        if self.config.prediction_type == "flow_prediction":
+            sigma_t = self.sigmas[self.step_index]
+            epsilon = sample - (1 - sigma_t) * model_output
+        else:
+            raise ValueError(
+                f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler."
+            )
+        if self.config.thresholding:
+            sigma_t = self.sigmas[self.step_index]
+            x0_pred = sample - sigma_t * model_output
+            x0_pred = self._threshold_sample(x0_pred)
+            epsilon = model_output + x0_pred
+        return epsilon
+
+    def multistep_uni_p_bh_update(self, model_output: torch.Tensor, *args, sample: torch.Tensor = None, order: int = None, **kwargs) -> torch.Tensor:
+        prev_timestep = args[0] if len(args) > 0 else kwargs.pop("prev_timestep", None)
+        if sample is None:
+            if len(args) > 1:
+                sample = args[1]
+            else:
+                raise ValueError("missing `sample` as a required keyward argument")
+        if order is None:
+            if len(args) > 2:
+                order = args[2]
+            else:
+                raise ValueError("missing `order` as a required keyward argument")
+        if prev_timestep is not None:
+            deprecate(
+                "prev_timestep",
+                "1.0.0",
+                "Passing `prev_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
+            )
+        model_output_list = self.model_outputs
+        s0 = self.timestep_list[-1]
+        m0 = model_output_list[-1]
+        x = sample
+
+        if self.solver_p:
+            x_t = self.solver_p.step(model_output, s0, x).prev_sample
+            return x_t
+
+        sigma_t, sigma_s0 = self.sigmas[self.step_index + 1], self.sigmas[self.step_index]
+        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma_t)
+        alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(sigma_s0)
+        lambda_t = torch.log(alpha_t) - torch.log(sigma_t)
+        lambda_s0 = torch.log(alpha_s0) - torch.log(sigma_s0)
+        h = lambda_t - lambda_s0
+        device = sample.device
+
+        rks = []
+        d1s = []
+        for idx in range(1, order):
+            si = self.step_index - idx
+            mi = model_output_list[-(idx + 1)]
+            alpha_si, sigma_si = self._sigma_to_alpha_sigma_t(self.sigmas[si])
+            lambda_si = torch.log(alpha_si) - torch.log(sigma_si)
+            rk = (lambda_si - lambda_s0) / h
+            rks.append(rk)
+            d1s.append((mi - m0) / rk)
+
+        rks.append(1.0)
+        rks = torch.tensor(rks, device=device)
+        matrix_r = []
+        vector_b = []
+        hh = -h if self.predict_x0 else h
+        h_phi_1 = torch.expm1(hh)
+        h_phi_k = h_phi_1 / hh - 1
+        factorial_i = 1
+
+        if self.config.solver_type == "bh1":
+            b_h = hh
+        elif self.config.solver_type == "bh2":
+            b_h = torch.expm1(hh)
+        else:
+            raise NotImplementedError()
+
+        for idx in range(1, order + 1):
+            matrix_r.append(torch.pow(rks, idx - 1))
+            vector_b.append(h_phi_k * factorial_i / b_h)
+            factorial_i *= idx + 1
+            h_phi_k = h_phi_k / hh - 1 / factorial_i
+
+        matrix_r = torch.stack(matrix_r)
+        vector_b = torch.tensor(vector_b, device=device)
+
+        if len(d1s) > 0:
+            d1s = torch.stack(d1s, dim=1)
+            if order == 2:
+                rhos_p = torch.tensor([0.5], dtype=x.dtype, device=device)
+            else:
+                rhos_p = torch.linalg.solve(matrix_r[:-1, :-1], vector_b[:-1]).to(device).to(x.dtype)
+        else:
+            d1s = None
+
+        if self.predict_x0:
+            x_t_ = sigma_t / sigma_s0 * x - alpha_t * h_phi_1 * m0
+            pred_res = torch.einsum("k,bkc...->bc...", rhos_p, d1s) if d1s is not None else 0
+            x_t = x_t_ - alpha_t * b_h * pred_res
+        else:
+            x_t_ = alpha_t / alpha_s0 * x - sigma_t * h_phi_1 * m0
+            pred_res = torch.einsum("k,bkc...->bc...", rhos_p, d1s) if d1s is not None else 0
+            x_t = x_t_ - sigma_t * b_h * pred_res
+        return x_t.to(x.dtype)
+
+    def multistep_uni_c_bh_update(
+        self,
+        this_model_output: torch.Tensor,
+        *args,
+        last_sample: torch.Tensor = None,
+        this_sample: torch.Tensor = None,
+        order: int = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        this_timestep = args[0] if len(args) > 0 else kwargs.pop("this_timestep", None)
+        if last_sample is None:
+            if len(args) > 1:
+                last_sample = args[1]
+            else:
+                raise ValueError("missing `last_sample` as a required keyward argument")
+        if this_sample is None:
+            if len(args) > 2:
+                this_sample = args[2]
+            else:
+                raise ValueError("missing `this_sample` as a required keyward argument")
+        if order is None:
+            if len(args) > 3:
+                order = args[3]
+            else:
+                raise ValueError("missing `order` as a required keyward argument")
+        if this_timestep is not None:
+            deprecate(
+                "this_timestep",
+                "1.0.0",
+                "Passing `this_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
+            )
+
+        model_output_list = self.model_outputs
+        m0 = model_output_list[-1]
+        x = last_sample
+        x_t = this_sample
+        model_t = this_model_output
+
+        sigma_t, sigma_s0 = self.sigmas[self.step_index], self.sigmas[self.step_index - 1]
+        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma_t)
+        alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(sigma_s0)
+        lambda_t = torch.log(alpha_t) - torch.log(sigma_t)
+        lambda_s0 = torch.log(alpha_s0) - torch.log(sigma_s0)
+        h = lambda_t - lambda_s0
+        device = this_sample.device
+
+        rks = []
+        d1s = []
+        for idx in range(1, order):
+            si = self.step_index - (idx + 1)
+            mi = model_output_list[-(idx + 1)]
+            alpha_si, sigma_si = self._sigma_to_alpha_sigma_t(self.sigmas[si])
+            lambda_si = torch.log(alpha_si) - torch.log(sigma_si)
+            rk = (lambda_si - lambda_s0) / h
+            rks.append(rk)
+            d1s.append((mi - m0) / rk)
+
+        rks.append(1.0)
+        rks = torch.tensor(rks, device=device)
+        matrix_r = []
+        vector_b = []
+        hh = -h if self.predict_x0 else h
+        h_phi_1 = torch.expm1(hh)
+        h_phi_k = h_phi_1 / hh - 1
+        factorial_i = 1
+
+        if self.config.solver_type == "bh1":
+            b_h = hh
+        elif self.config.solver_type == "bh2":
+            b_h = torch.expm1(hh)
+        else:
+            raise NotImplementedError()
+
+        for idx in range(1, order + 1):
+            matrix_r.append(torch.pow(rks, idx - 1))
+            vector_b.append(h_phi_k * factorial_i / b_h)
+            factorial_i *= idx + 1
+            h_phi_k = h_phi_k / hh - 1 / factorial_i
+
+        matrix_r = torch.stack(matrix_r)
+        vector_b = torch.tensor(vector_b, device=device)
+        d1s = torch.stack(d1s, dim=1) if len(d1s) > 0 else None
+
+        if order == 1:
+            rhos_c = torch.tensor([0.5], dtype=x.dtype, device=device)
+        else:
+            rhos_c = torch.linalg.solve(matrix_r, vector_b).to(device).to(x.dtype)
+
+        if self.predict_x0:
+            x_t_ = sigma_t / sigma_s0 * x - alpha_t * h_phi_1 * m0
+            corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1], d1s) if d1s is not None else 0
+            d1_t = model_t - m0
+            x_t = x_t_ - alpha_t * b_h * (corr_res + rhos_c[-1] * d1_t)
+        else:
+            x_t_ = alpha_t / alpha_s0 * x - sigma_t * h_phi_1 * m0
+            corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1], d1s) if d1s is not None else 0
+            d1_t = model_t - m0
+            x_t = x_t_ - sigma_t * b_h * (corr_res + rhos_c[-1] * d1_t)
+        return x_t.to(x.dtype)
+
+    def index_for_timestep(self, timestep, schedule_timesteps=None):
+        if schedule_timesteps is None:
+            schedule_timesteps = self.timesteps
+        indices = (schedule_timesteps == timestep).nonzero()
+        pos = 1 if len(indices) > 1 else 0
+        return indices[pos].item()
+
+    def _init_step_index(self, timestep):
+        if self.begin_index is None:
+            if isinstance(timestep, torch.Tensor):
+                timestep = timestep.to(self.timesteps.device)
+            self._step_index = self.index_for_timestep(timestep)
+        else:
+            self._step_index = self._begin_index
+
+    def step(
+        self,
+        model_output: torch.Tensor,
+        timestep: Union[int, torch.Tensor],
+        sample: torch.Tensor,
+        return_dict: bool = True,
+        generator=None,
+    ) -> Union[SchedulerOutput, Tuple]:
+        if self.num_inference_steps is None:
+            raise ValueError("Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler")
+
+        if self.step_index is None:
+            self._init_step_index(timestep)
+
+        use_corrector = self.step_index > 0 and self.step_index - 1 not in self.disable_corrector and self.last_sample is not None
+        model_output_convert = self.convert_model_output(model_output, sample=sample)
+        if use_corrector:
+            sample = self.multistep_uni_c_bh_update(
+                this_model_output=model_output_convert,
+                last_sample=self.last_sample,
+                this_sample=sample,
+                order=self.this_order,
+            )
+
+        for idx in range(self.config.solver_order - 1):
+            self.model_outputs[idx] = self.model_outputs[idx + 1]
+            self.timestep_list[idx] = self.timestep_list[idx + 1]
+
+        self.model_outputs[-1] = model_output_convert
+        self.timestep_list[-1] = timestep
+
+        if self.config.lower_order_final:
+            this_order = min(self.config.solver_order, len(self.timesteps) - self.step_index)
+        else:
+            this_order = self.config.solver_order
+
+        self.this_order = min(this_order, self.lower_order_nums + 1)
+        assert self.this_order > 0
+
+        self.last_sample = sample
+        prev_sample = self.multistep_uni_p_bh_update(
+            model_output=model_output,
+            sample=sample,
+            order=self.this_order,
+        )
+
+        if self.lower_order_nums < self.config.solver_order:
+            self.lower_order_nums += 1
+        self._step_index += 1
+
+        if not return_dict:
+            return (prev_sample,)
+        return SchedulerOutput(prev_sample=prev_sample)
+
+    def scale_model_input(self, sample: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        return sample
+
+    def add_noise(self, original_samples: torch.Tensor, noise: torch.Tensor, timesteps: torch.IntTensor) -> torch.Tensor:
+        sigmas = self.sigmas.to(device=original_samples.device, dtype=original_samples.dtype)
+        if original_samples.device.type == "mps" and torch.is_floating_point(timesteps):
+            schedule_timesteps = self.timesteps.to(original_samples.device, dtype=torch.float32)
+            timesteps = timesteps.to(original_samples.device, dtype=torch.float32)
+        else:
+            schedule_timesteps = self.timesteps.to(original_samples.device)
+            timesteps = timesteps.to(original_samples.device)
+
+        if self.begin_index is None:
+            step_indices = [self.index_for_timestep(timestep, schedule_timesteps) for timestep in timesteps]
+        elif self.step_index is not None:
+            step_indices = [self.step_index] * timesteps.shape[0]
+        else:
+            step_indices = [self.begin_index] * timesteps.shape[0]
+
+        sigma = sigmas[step_indices].flatten()
+        while len(sigma.shape) < len(original_samples.shape):
+            sigma = sigma.unsqueeze(-1)
+
+        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma)
+        return alpha_t * original_samples + sigma_t * noise
+
+    def __len__(self):
+        return self.config.num_train_timesteps
 
 
 class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
@@ -289,24 +1115,15 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     def init_scheduler(self):
         # Distilled MG3 is already stable on the shared Wan scheduler path. Base MG3
         # is far more sensitive to the exact UniPC implementation, so route it
-        # through the official FlowUniPC scheduler instead of the generic adapter.
+        # through the inlined official FlowUniPC scheduler instead of the generic adapter.
         if self.config.get("use_base_model", False):
             try:
-                official_root = self.resolve_official_root()
-                wan_root = official_root / "wan"
-                utils_root = wan_root / "utils"
-                _ensure_namespace_package(f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.wan", wan_root)
-                _ensure_namespace_package(f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.wan.utils", utils_root)
-                scheduler_module = _load_module_from_path(
-                    f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.wan.utils.fm_solvers_unipc",
-                    utils_root / "fm_solvers_unipc.py",
-                )
-                self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, scheduler_module.FlowUniPCMultistepScheduler)
-                logger.info("[matrix-game-3] using official FlowUniPCMultistepScheduler for base-model sampling.")
+                self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, FlowUniPCMultistepScheduler)
+                logger.info("[matrix-game-3] using inlined official FlowUniPCMultistepScheduler for base-model sampling.")
                 return
             except Exception as exc:
                 logger.warning(
-                    "[matrix-game-3] failed to initialize official base scheduler ({}); falling back to LightX2V WanScheduler.",
+                    "[matrix-game-3] failed to initialize inlined official base scheduler ({}); falling back to LightX2V WanScheduler.",
                     exc,
                 )
         super().init_scheduler()
@@ -314,72 +1131,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     def _get_sub_model_folder(self) -> str:
         """Resolve which MG3 sub-model folder should be used for config lookup."""
         return str(self.config.get("sub_model_folder", "base_model" if self.config.get("use_base_model", False) else "base_distilled_model"))
-
-    def _resolve_official_root_candidate(self, candidate: Path) -> Optional[Path]:
-        """Accept either the inner package root or its parent repository directory."""
-        direct_root = candidate.expanduser()
-        if (direct_root / "generate.py").is_file() and (direct_root / "pipeline").is_dir() and (direct_root / "utils").is_dir():
-            return direct_root
-
-        nested_root = direct_root / "Matrix-Game-3"
-        if (nested_root / "generate.py").is_file() and (nested_root / "pipeline").is_dir() and (nested_root / "utils").is_dir():
-            return nested_root
-        return None
-
-    def resolve_official_root(self) -> Path:
-        """Resolve the official Matrix-Game-3 source root using config-first priority."""
-        configured_root = self.config.get("matrix_game3_official_root")
-        if configured_root:
-            for candidate in _expand_path_candidates(configured_root):
-                resolved = self._resolve_official_root_candidate(candidate)
-                if resolved is not None:
-                    return resolved
-            raise FileNotFoundError(
-                "Matrix-Game-3 official source root is missing or invalid for "
-                f"matrix_game3_official_root={configured_root!r}. "
-                "The runner needs the official utils/pipeline files to build camera and action conditions. "
-                "Please set config['matrix_game3_official_root'] to the official source root directory."
-            )
-
-        auto_candidates: list[Path] = []
-        for relative_path in _MATRIX_GAME3_OFFICIAL_ROOT_RELATIVE_CANDIDATES:
-            _append_unique_path(auto_candidates, _PROJECT_ROOT / relative_path)
-        _append_unique_path(auto_candidates, _PROJECT_ROOT)
-
-        path_hints = [
-            self.config.get("model_path"),
-            self.config.get("config_json"),
-            self.input_info.image_path if getattr(self, "input_info", None) is not None else None,
-        ]
-        for path_hint in path_hints:
-            if not path_hint:
-                continue
-            for candidate in _expand_path_candidates(path_hint):
-                looks_like_file = candidate.is_file() or candidate.suffix.lower() in {
-                    ".json",
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".webp",
-                    ".bmp",
-                    ".gif",
-                    ".npy",
-                }
-                current = candidate.parent if looks_like_file else candidate
-                for ancestor in (current, *current.parents):
-                    _append_unique_path(auto_candidates, ancestor)
-                    _append_unique_path(auto_candidates, ancestor / "Matrix-Game-3")
-
-        for candidate in auto_candidates:
-            resolved = self._resolve_official_root_candidate(candidate)
-            if resolved is not None:
-                return resolved
-
-        raise FileNotFoundError(
-            "Matrix-Game-3 official source root could not be resolved from the project layout. "
-            "The runner needs it to import official utils/conditions.py, utils/cam_utils.py, utils/utils.py, "
-            "and pipeline helpers. Please set config['matrix_game3_official_root'] explicitly."
-        )
 
     def resolve_model_config_path(self) -> Path:
         """Resolve the MG3 base/distilled config.json with explicit override support."""
@@ -436,47 +1187,14 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         self.mouse_dim_in = int(self.config.get("mouse_dim_in", action_config.get("mouse_dim_in", 2)))
 
     def _get_official_modules(self) -> dict[str, Any]:
-        """Lazy-load helper code from the official Matrix-Game-3 repository.
-
-        We intentionally reuse the official camera/action utilities instead of
-        re-implementing pose math in the LightX2V runner.
-        """
+        """Expose inlined Matrix-Game-3 helpers through a module-like interface."""
         if self._official_modules is not None:
             return self._official_modules
 
-        official_root = self.resolve_official_root()
-        utils_root = official_root / "utils"
-        if not utils_root.is_dir():
-            raise FileNotFoundError(
-                f"Matrix-Game-3 utils directory is missing under {official_root}. "
-                "The runner needs the official utils modules to construct action and camera conditions. "
-                "Please set config['matrix_game3_official_root'] to the official source root directory."
-            )
-
-        required_utils = {
-            "conditions": utils_root / "conditions.py",
-            "cam_utils": utils_root / "cam_utils.py",
-            "transform": utils_root / "transform.py",
-            "utils": utils_root / "utils.py",
-        }
-        missing_utils = [str(path) for path in required_utils.values() if not path.is_file()]
-        if missing_utils:
-            raise FileNotFoundError(
-                "Matrix-Game-3 official utility files are incomplete. "
-                f"Missing: {missing_utils}. "
-                "The runner needs these files to reuse the official action/camera preprocessing. "
-                "Please set config['matrix_game3_official_root'] to a complete official source checkout."
-            )
-
-        _ensure_namespace_package(_MATRIX_GAME3_OFFICIAL_PACKAGE, official_root)
-        utils_pkg = f"{_MATRIX_GAME3_OFFICIAL_PACKAGE}.utils"
-        _ensure_namespace_package(utils_pkg, utils_root)
-
         modules = {
-            "conditions": _load_module_from_path(f"{utils_pkg}.conditions", required_utils["conditions"]),
-            "cam_utils": _load_module_from_path(f"{utils_pkg}.cam_utils", required_utils["cam_utils"]),
-            "transform": _load_module_from_path(f"{utils_pkg}.transform", required_utils["transform"]),
-            "utils": _load_module_from_path(f"{utils_pkg}.utils", required_utils["utils"]),
+            "conditions": _MatrixGame3ConditionsShim,
+            "cam_utils": _MatrixGame3CamUtilsShim,
+            "utils": _MatrixGame3UtilsShim,
         }
         self._official_modules = modules
         return modules
