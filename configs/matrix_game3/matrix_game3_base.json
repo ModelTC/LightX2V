@@ -3,6 +3,8 @@
     "task": "i2v",
     "sub_model_folder": "base_model",
     "use_base_model": true,
+    "vae_type": "mg_lightvae_v2",
+    "lightvae_pruning_rate": 0.75,
 
     "target_video_length": 57,
     "target_height": 704,

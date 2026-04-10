@@ -1029,6 +1029,12 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             config["mode"] = "matrix_game3"
             config["use_image_encoder"] = False
             config["use_base_model"] = bool(config.get("use_base_model", False))
+            config["vae_type"] = str(config.get("vae_type", "mg_lightvae_v2"))
+            if "lightvae_pruning_rate" not in config:
+                if config["vae_type"] == "mg_lightvae":
+                    config["lightvae_pruning_rate"] = 0.5
+                elif config["vae_type"] == "mg_lightvae_v2":
+                    config["lightvae_pruning_rate"] = 0.75
             if "sub_model_folder" not in config:
                 config["sub_model_folder"] = "base_model" if config["use_base_model"] else "base_distilled_model"
             config["num_channels_latents"] = int(config.get("num_channels_latents", 48))
