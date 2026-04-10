@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from .metrics import monitor_cli
+
 
 class TaskStatus(Enum):
     PENDING = "pending"
@@ -43,6 +45,7 @@ class TaskManager:
         self.total_tasks = 0
         self.completed_tasks = 0
         self.failed_tasks = 0
+        self._emit_queue_metrics_unlocked()
 
     def create_task(self, message: Any) -> str:
         with self._lock:
@@ -60,6 +63,7 @@ class TaskManager:
             self.total_tasks += 1
 
             self._cleanup_old_tasks()
+            self._emit_queue_metrics_unlocked()
 
             return task_id
 
@@ -73,6 +77,7 @@ class TaskManager:
             task.start_time = datetime.now()
 
             self._tasks.move_to_end(task_id)
+            self._emit_queue_metrics_unlocked()
 
             return task
 
@@ -89,6 +94,7 @@ class TaskManager:
                 task.save_result_path = save_result_path
 
             self.completed_tasks += 1
+            self._emit_queue_metrics_unlocked()
 
     def fail_task(self, task_id: str, error: str):
         with self._lock:
@@ -102,6 +108,7 @@ class TaskManager:
             task.error = error
 
             self.failed_tasks += 1
+            self._emit_queue_metrics_unlocked()
 
     def cancel_task(self, task_id: str) -> bool:
         with self._lock:
@@ -121,6 +128,7 @@ class TaskManager:
             if task.thread and task.thread.is_alive():
                 task.thread.join(timeout=5)
 
+            self._emit_queue_metrics_unlocked()
             return True
 
     def cancel_all_tasks(self):
@@ -198,6 +206,13 @@ class TaskManager:
                 "failed_tasks": self.failed_tasks,
             }
 
+    def set_max_queue_size(self, max_queue_size: int):
+        if max_queue_size <= 0:
+            raise ValueError("max_queue_size must be positive")
+        with self._lock:
+            self.max_queue_size = max_queue_size
+            self._emit_queue_metrics_unlocked()
+
     def _cleanup_old_tasks(self, keep_count: int = 1000):
         if len(self._tasks) <= keep_count:
             return
@@ -210,6 +225,16 @@ class TaskManager:
         for task_id, _ in completed_tasks[:remove_count]:
             del self._tasks[task_id]
             logger.debug(f"Cleaned up old task: {task_id}")
+
+    def _emit_queue_metrics_unlocked(self):
+        pending_tasks = sum(1 for t in self._tasks.values() if t.status == TaskStatus.PENDING)
+        active_tasks = sum(1 for t in self._tasks.values() if t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING])
+        try:
+            monitor_cli.lightx2v_task_queue_pending_size.set(pending_tasks)
+            monitor_cli.lightx2v_task_queue_active_size.set(active_tasks)
+            monitor_cli.lightx2v_task_queue_capacity.set(self.max_queue_size)
+        except Exception as e:
+            logger.debug(f"Failed to emit queue metrics: {e}")
 
 
 task_manager = TaskManager()

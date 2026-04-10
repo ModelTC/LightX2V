@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from loguru import logger
 from starlette.responses import RedirectResponse
 
+from ..metrics import monitor_cli
 from ..services import DistributedInferenceService
 from ..task_manager import TaskStatus, task_manager
 from .deps import ServiceContainer, get_services
@@ -25,6 +26,40 @@ class ApiServer:
         self._setup_routes()
 
     def _setup_routes(self):
+        @self.app.middleware("http")
+        async def metrics_middleware(request, call_next):
+            start_time = time.monotonic()
+            method = request.method
+            endpoint = request.url.path
+            monitor_cli.lightx2v_api_request_total.labels(method=method, endpoint=endpoint).inc()
+
+            try:
+                response = await call_next(request)
+                status_code = response.status_code
+                status_label = "success" if status_code < 400 else "error"
+                if status_code >= 400:
+                    monitor_cli.lightx2v_api_request_error_total.labels(
+                        method=method,
+                        endpoint=endpoint,
+                        error_type=f"http_{status_code}",
+                    ).inc()
+                return response
+            except Exception as e:
+                status_label = "error"
+                monitor_cli.lightx2v_api_request_error_total.labels(
+                    method=method,
+                    endpoint=endpoint,
+                    error_type=type(e).__name__,
+                ).inc()
+                raise
+            finally:
+                duration = time.monotonic() - start_time
+                monitor_cli.lightx2v_api_request_e2e_duration_seconds.labels(
+                    method=method,
+                    endpoint=endpoint,
+                    status=status_label,
+                ).observe(duration)
+
         @self.app.get("/")
         def redirect_to_docs():
             return RedirectResponse(url="/docs")
