@@ -45,7 +45,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 ## :fire: Latest News
 
 - **April 10, 2026:** 🎉 We released a technical blog on disaggregated deployment
-  - [Scaling Diffusion Model Serving with Disaggregated Deployment in LightX2V](examples/BeginnerGuide/EN/DisaggBlogPost.md)
+  - [LightX2V Disaggregated Deployment: Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference](blogs/EN/DisaggBlogPost.md)
 
 - **March 5, 2026:** 🚀 We now support deployment on Intel AIPC PTL. Thanks to the Intel team.
 

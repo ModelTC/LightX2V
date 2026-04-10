@@ -1,4 +1,4 @@
-# Scaling Diffusion Model Serving with Disaggregated Deployment in LightX2V
+# Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference
 
 By LightX2V and Mooncake
 
