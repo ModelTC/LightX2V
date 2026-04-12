@@ -1108,7 +1108,10 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         return super().run_text_encoder(input_info)
 
     def load_transformer(self):
-        from lightx2v.models.networks.wan.matrix_game3_model import WanMtxg3Model
+        from lightx2v.models.networks.wan.matrix_game3_model import (
+            WanMtxg3Model,
+            WanMtxg3OfficialBaseModel,
+        )
 
         # The backbone is still a Wan2.2 DiT, but Matrix-Game-3 swaps in a dedicated
         # network wrapper that understands keyboard / mouse / camera conditions.
@@ -1119,6 +1122,15 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         }
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
+            if self.config.get("use_base_model", False):
+                try:
+                    logger.info("[matrix-game-3] base-model path will use the official WanModel forward for denoising.")
+                    return WanMtxg3OfficialBaseModel(**model_kwargs)
+                except Exception as exc:
+                    logger.warning(
+                        "[matrix-game-3] failed to initialize official base-model forward ({}); falling back to the custom LightX2V MG3 model.",
+                        exc,
+                    )
             return WanMtxg3Model(**model_kwargs)
         return build_wan_model_with_lora(WanMtxg3Model, self.config, model_kwargs, lora_configs, model_type="wan2.2")
 
