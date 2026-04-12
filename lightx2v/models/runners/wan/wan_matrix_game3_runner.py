@@ -987,7 +987,11 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
     def step_post(self):
         timestep = self._solver.timesteps[self.step_index].to(device=self.latents.device)
         prev_sample = self._solver.step(
-            self.noise_pred.to(dtype=self.latents.dtype),
+            # Keep the model output in its original precision. The official MG3
+            # pipeline feeds float32 noise predictions into UniPC even when the
+            # latent state is bf16, and downcasting here introduces a tiny
+            # per-step drift that the 50-step base model visibly amplifies.
+            self.noise_pred,
             timestep,
             self.latents,
             return_dict=False,
