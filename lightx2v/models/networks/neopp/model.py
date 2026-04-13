@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.neopp.infer.post_infer import NeoppPostInfer
@@ -45,9 +46,9 @@ class NeoppModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        logger.info(f"infer: cfg_scale={self.cfg_scale}")
-        logger.info(f"infer: cfg_interval={self.cfg_interval}")
-        logger.info(f"infer: cfg_norm={self.cfg_norm}")
+        # logger.info(f"infer: cfg_scale={self.cfg_scale}")
+        # logger.info(f"infer: cfg_interval={self.cfg_interval}")
+        # logger.info(f"infer: cfg_norm={self.cfg_norm}")
         pre_infer_out = self.pre_infer.infer(self.pre_weight)
 
         # if self.config["task"] == "i2i":
@@ -96,7 +97,12 @@ class NeoppModel(BaseTransformerModel):
         if self.seq_p_group is not None:
             world_size = dist.get_world_size(self.seq_p_group)
             cur_rank = dist.get_rank(self.seq_p_group)
-            shard = torch.chunk(pre_infer_out.image_embeds, world_size, dim=1)[cur_rank]
+            image_embeds = pre_infer_out.image_embeds
+            seq_len = image_embeds.shape[1]
+            padding_size = (world_size - (seq_len % world_size)) % world_size
+            if padding_size > 0:
+                image_embeds = F.pad(image_embeds, (0, 0, 0, padding_size))
+            shard = torch.chunk(image_embeds, world_size, dim=1)[cur_rank]
             pre_infer_out.image_embeds_cond = shard
             pre_infer_out.image_embeds_uncond = shard
         else:
@@ -185,6 +191,7 @@ class NeoppModel(BaseTransformerModel):
             gathered_hidden_states = [torch.empty_like(hidden_states) for _ in range(world_size)]
             dist.all_gather(gathered_hidden_states, hidden_states, group=self.seq_p_group)
             hidden_states = torch.cat(gathered_hidden_states, dim=1)
+            hidden_states = hidden_states[:, : pre_infer_out.image_token_num, :]
 
         v_pred = self.post_infer.infer(self.post_weight, pre_infer_out, hidden_states)
         return v_pred

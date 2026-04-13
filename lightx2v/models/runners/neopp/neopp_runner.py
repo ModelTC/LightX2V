@@ -2,6 +2,7 @@ import base64
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.io as io
 from PIL import Image
 
@@ -95,18 +96,26 @@ class NeoppRunner(DefaultRunner):
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
-                cos_t_cond = torch.chunk(cos_t_cond, world_size, dim=1)[cur_rank]
-                sin_t_cond = torch.chunk(sin_t_cond, world_size, dim=1)[cur_rank]
-                cos_h_cond = torch.chunk(cos_h_cond, world_size, dim=1)[cur_rank]
-                sin_h_cond = torch.chunk(sin_h_cond, world_size, dim=1)[cur_rank]
-                cos_w_cond = torch.chunk(cos_w_cond, world_size, dim=1)[cur_rank]
-                sin_w_cond = torch.chunk(sin_w_cond, world_size, dim=1)[cur_rank]
-                cos_t_uncond = torch.chunk(cos_t_uncond, world_size, dim=1)[cur_rank]
-                sin_t_uncond = torch.chunk(sin_t_uncond, world_size, dim=1)[cur_rank]
-                cos_h_uncond = torch.chunk(cos_h_uncond, world_size, dim=1)[cur_rank]
-                sin_h_uncond = torch.chunk(sin_h_uncond, world_size, dim=1)[cur_rank]
-                cos_w_uncond = torch.chunk(cos_w_uncond, world_size, dim=1)[cur_rank]
-                sin_w_uncond = torch.chunk(sin_w_uncond, world_size, dim=1)[cur_rank]
+                seq_len = cos_t_cond.shape[1]
+                padding_size = (world_size - (seq_len % world_size)) % world_size
+
+                def _pad_and_chunk(t):
+                    if padding_size > 0:
+                        t = F.pad(t, (0, 0, 0, padding_size))
+                    return torch.chunk(t, world_size, dim=1)[cur_rank]
+
+                cos_t_cond = _pad_and_chunk(cos_t_cond)
+                sin_t_cond = _pad_and_chunk(sin_t_cond)
+                cos_h_cond = _pad_and_chunk(cos_h_cond)
+                sin_h_cond = _pad_and_chunk(sin_h_cond)
+                cos_w_cond = _pad_and_chunk(cos_w_cond)
+                sin_w_cond = _pad_and_chunk(sin_w_cond)
+                cos_t_uncond = _pad_and_chunk(cos_t_uncond)
+                sin_t_uncond = _pad_and_chunk(sin_t_uncond)
+                cos_h_uncond = _pad_and_chunk(cos_h_uncond)
+                sin_h_uncond = _pad_and_chunk(sin_h_uncond)
+                cos_w_uncond = _pad_and_chunk(cos_w_uncond)
+                sin_w_uncond = _pad_and_chunk(sin_w_uncond)
 
             return {
                 "past_key_values_cond": self.past_key_values_cond,
