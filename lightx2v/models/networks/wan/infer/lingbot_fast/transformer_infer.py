@@ -6,6 +6,7 @@ from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import (
     WanSFTransformerInfer,
     causal_rope_apply,
 )
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -20,13 +21,38 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
     - KV cache indexing uses actual token count (not hardcoded frame_seq_length)
     """
 
-    def _initialize_kv_cache(self, dtype, device):
-        kv_cache1 = []
-        if self.local_attn_size != -1:
-            kv_cache_size = self.local_attn_size * self.frame_seq_length
+    def __init__(self, config):
+        super().__init__(config)
+        self._text_len = config.get("text_len", 512)
+
+    def _sp_world_size(self):
+        if self.config.get("seq_parallel", False) and dist.is_initialized():
+            return dist.get_world_size(self.seq_p_group)
+        return 1
+
+    def reinit_caches(self, frame_seq_length, num_output_frames, text_len=None):
+        self.frame_seq_length = frame_seq_length
+        self._kv_size = frame_seq_length * num_output_frames
+        if text_len is not None:
+            self._text_len = text_len
+        ws = self._sp_world_size()
+        cfg_max = self.config.get("sf_config", {}).get("max_attention_size", None)
+        if cfg_max is not None:
+            self.max_attention_size = cfg_max // ws
+        elif self.local_attn_size == -1:
+            self.max_attention_size = self._kv_size // ws
         else:
-            kv_cache_size = 32760
-        self.kv_cache_size = kv_cache_size
+            self.max_attention_size = self.local_attn_size * frame_seq_length // ws
+
+        self._initialize_kv_cache(self.dtype, self.device)
+        self._initialize_crossattn_cache(self.dtype, self.device)
+
+    def _initialize_kv_cache(self, dtype, device):
+        if not hasattr(self, "_kv_size"):
+            return
+        kv_cache1 = []
+        ws = self._sp_world_size()
+        self.kv_cache_size = self._kv_size // ws
 
         n, d = self.num_heads, self.head_dim
         if self.kv_quant_config is not None:
@@ -41,17 +67,17 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
         for _ in range(self.config["num_layers"]):
             if self.k_cache_dtype is not None:
                 entry = {
-                    "k": torch.zeros((kv_cache_size, n, d), dtype=self.k_cache_dtype, device=self.device),
-                    "v": torch.zeros((kv_cache_size, n, d), dtype=self.v_cache_dtype, device=self.device),
-                    "k_scales": torch.zeros((kv_cache_size, n, 1), dtype=torch.float32, device=self.device),
-                    "v_scales": torch.zeros((kv_cache_size, n, 1), dtype=torch.float32, device=self.device),
+                    "k": torch.zeros((self.kv_cache_size, n, d), dtype=self.k_cache_dtype, device=self.device),
+                    "v": torch.zeros((self.kv_cache_size, n, d), dtype=self.v_cache_dtype, device=self.device),
+                    "k_scales": torch.zeros((self.kv_cache_size, n, 1), dtype=GET_DTYPE(), device=self.device),
+                    "v_scales": torch.zeros((self.kv_cache_size, n, 1), dtype=GET_DTYPE(), device=self.device),
                     "global_end_index": torch.tensor([0], dtype=torch.long, device=self.device),
                     "local_end_index": torch.tensor([0], dtype=torch.long, device=self.device),
                 }
             else:
                 entry = {
-                    "k": torch.zeros((kv_cache_size, n, d)).to(dtype).to(device),
-                    "v": torch.zeros((kv_cache_size, n, d)).to(dtype).to(device),
+                    "k": torch.zeros((self.kv_cache_size, n, d)).to(dtype).to(device),
+                    "v": torch.zeros((self.kv_cache_size, n, d)).to(dtype).to(device),
                     "global_end_index": torch.tensor([0], dtype=torch.long).to(device),
                     "local_end_index": torch.tensor([0], dtype=torch.long).to(device),
                 }
@@ -60,19 +86,20 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
         self.kv_cache1_default = kv_cache1
 
     def _initialize_crossattn_cache(self, dtype, device):
+        if not hasattr(self, "_kv_size"):
+            return
         crossattn_cache = []
         n, d = self.num_heads, self.head_dim
+        # Align with source: cross_kv_shape = [batch, max_sequence_length, num_heads, head_dim]
+        text_len = self._text_len
         for _ in range(self.config["num_layers"]):
             crossattn_cache.append(
                 {
-                    "k": torch.zeros((512, n, d)).to(dtype).to(device),
-                    "v": torch.zeros((512, n, d)).to(dtype).to(device),
-                    "is_init": False,
+                    "k": torch.zeros((text_len, n, d)).to(dtype).to(device),
+                    "v": torch.zeros((text_len, n, d)).to(dtype).to(device),
                 }
             )
         self.crossattn_cache_default = crossattn_cache
-
-    # ---- RoPE with seq_parallel support ----
 
     def _apply_rope_sp(self, q, k, grid_sizes, freqs, start_frame):
         """Apply causal RoPE correctly when tokens are split across GPUs."""
@@ -108,6 +135,63 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
         k = torch.view_as_real(k_c * pos_freqs).flatten(2).type_as(k)
         return q, k
 
+    @staticmethod
+    def _a2a_seq_to_heads(x, world_size, shard_heads, group):
+        """[local_seq, all_heads, dim] -> [full_seq, shard_heads, dim]"""
+        local_seq, _, dim = x.shape
+        x = x.reshape(local_seq, world_size, shard_heads, dim)
+        x = x.permute(1, 0, 2, 3).contiguous()  # [world_size, local_seq, shard_heads, dim]
+        out = torch.empty_like(x)
+        dist.all_to_all_single(out, x, group=group)
+        # out[i] = rank i's local tokens for this rank's head shard — keep contiguous
+        return out.reshape(local_seq * world_size, shard_heads, dim)
+
+    @staticmethod
+    def _a2a_heads_to_seq(x, world_size, shard_heads, group):
+        """[full_seq, shard_heads, dim] -> [local_seq, all_heads, dim]"""
+        full_seq, _, dim = x.shape
+        local_seq = full_seq // world_size
+        x = x.reshape(world_size, local_seq, shard_heads, dim).contiguous()
+        out = torch.empty_like(x)
+        dist.all_to_all_single(out, x, group=group)
+        return out.permute(1, 0, 2, 3).reshape(local_seq, world_size * shard_heads, dim)
+
+    def _sp_kvcache_attn(self, q, k_cache, v_cache, phase):
+        """Self-attention with KV cache under sequence parallelism.
+
+        The standard Ulysses all-to-all assumes Q/K/V have the same "image"
+        length, but with KV cache K/V is longer than Q.  We do separate
+        all-to-all for Q and K/V so the full history is properly assembled.
+        """
+        world_size = dist.get_world_size(self.seq_p_group)
+        shard_heads = self.num_heads // world_size
+        d = self.head_dim
+
+        full_q = self._a2a_seq_to_heads(q, world_size, shard_heads, self.seq_p_group)
+        full_k = self._a2a_seq_to_heads(k_cache, world_size, shard_heads, self.seq_p_group)
+        full_v = self._a2a_seq_to_heads(v_cache, world_size, shard_heads, self.seq_p_group)
+
+        q_lens = torch.tensor([full_q.size(0)], dtype=torch.int32, device=full_q.device)
+        k_lens = torch.tensor([full_k.size(0)], dtype=torch.int32, device=full_k.device)
+        cu_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
+        cu_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
+
+        attn_out = phase.self_attn_1.apply(
+            q=full_q,
+            k=full_k,
+            v=full_v,
+            cu_seqlens_q=cu_q,
+            cu_seqlens_kv=cu_k,
+            max_seqlen_q=full_q.size(0),
+            max_seqlen_kv=full_k.size(0),
+        )
+
+        # flash_attn returns 2D [seq, shard_heads*dim]; reshape to 3D for all-to-all
+        attn_out = attn_out.view(full_q.size(0), shard_heads, d)
+        attn_out = self._a2a_heads_to_seq(attn_out, world_size, shard_heads, self.seq_p_group)
+        # flatten back to 2D [local_seq, all_heads*dim]
+        return attn_out.reshape(q.size(0), self.num_heads * d)
+
     # ---- Override self-attention to fix RoPE and KV cache indexing ----
 
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
@@ -138,6 +222,7 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
 
         seg_index = int(self.scheduler.seg_index)
+        frame_seqlen = grid_sizes[0][1:].prod().item()
         current_start_frame = seg_index * self.num_frame_per_block
 
         if self.config.get("seq_parallel", False):
@@ -146,13 +231,15 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
             q = causal_rope_apply(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
             k = causal_rope_apply(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
 
-        # Use actual token count instead of config-based frame_seq_length
         num_new_tokens = int(q.size(0))
-        seg_seq_len = num_new_tokens
-        current_start = seg_index * seg_seq_len
+        # Use num_new_tokens for KV cache positioning — it already adapts to SP
+        # (with SP each rank holds total_tokens/world_size per segment).
+        # Using frame_seqlen (full spatial) would leave gaps in per-rank caches.
+        current_start = seg_index * num_new_tokens
         current_end = current_start + num_new_tokens
         kv_cache = self.kv_cache1[self.block_idx]
-        sink_tokens = self.sink_size * (num_new_tokens // self.num_frame_per_block) if self.num_frame_per_block > 0 else 0
+        local_per_frame = num_new_tokens // self.num_frame_per_block if self.num_frame_per_block > 0 else 0
+        sink_tokens = self.sink_size * local_per_frame
 
         global_end = int(kv_cache["global_end_index"].item())
         local_end = int(kv_cache["local_end_index"].item())
@@ -204,24 +291,15 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
             attn_k = kv_cache["k"][attn_start:local_end_index]
             attn_v = kv_cache["v"][attn_start:local_end_index]
 
-        k_lens = torch.empty_like(seq_lens).fill_(attn_k.size(0))
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
-
         if self.clean_cuda_cache:
             del norm1_out, norm1_weight, norm1_bias
             torch_device_module.empty_cache()
 
         if self.config.get("seq_parallel", False):
-            attn_out = phase.self_attn_1_parallel.apply(
-                q=q,
-                k=attn_k,
-                v=attn_v,
-                slice_qkv_len=q.shape[0],
-                cu_seqlens_qkv=cu_seqlens_q,
-                attention_module=phase.self_attn_1,
-                seq_p_group=self.seq_p_group,
-            )
+            attn_out = self._sp_kvcache_attn(q, attn_k, attn_v, phase)
         else:
+            k_lens = torch.empty_like(seq_lens).fill_(attn_k.size(0))
+            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
             attn_out = phase.self_attn_1.apply(
                 q=q,
                 k=attn_k,
@@ -239,8 +317,6 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
             torch_device_module.empty_cache()
 
         return y
-
-    # ---- Override block inference to pass camera conditioning ----
 
     def infer_block_with_kvcache(self, block, x, pre_infer_out):
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.pre_process(
@@ -276,8 +352,6 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
         # print(x, x.shape)
         # exit()
         return x
-
-    # ---- Cross-attention with camera injection ----
 
     def infer_cross_attn_with_kvcache(self, phase, x, context, y_out, gate_msa, block=None, conditional_dict=None):
         num_frames = gate_msa.shape[0]

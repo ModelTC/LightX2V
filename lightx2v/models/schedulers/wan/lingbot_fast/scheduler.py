@@ -24,8 +24,6 @@ class LingbotFastScheduler(WanScheduler):
         super().__init__(config)
         self.dtype = torch.bfloat16
         self.num_frame_per_block = self.config["sf_config"]["num_frame_per_block"]
-        self.num_output_frames = self.config["sf_config"]["num_output_frames"]
-        self.num_blocks = self.num_output_frames // self.num_frame_per_block
         self.timesteps_index = self.config["sf_config"]["timesteps_index"]
         self.infer_steps = len(self.timesteps_index)
         self.context_noise = 0

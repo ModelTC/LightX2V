@@ -27,29 +27,13 @@ class LingbotFastRunner(LingbotRunner):
     """
 
     def __init__(self, config):
-        with config.temporarily_unlocked():
-            if "use_image_encoder" not in config:
-                config["use_image_encoder"] = False
-            config["enable_lingbot_cam_ctrl"] = bool(config.get("enable_lingbot_cam_ctrl", True))
-
-        # Skip Wan22MoeRunner.__init__ (MoE high/low noise model init not needed)
         WanRunner.__init__(self, config)
-
-        model_path = str(self.config.get("model_path", "")).lower()
-        if "cam" in model_path:
-            self.control_type = "cam"
-        elif "act" in model_path:
-            self.control_type = "act"
-        else:
-            self.control_type = "cam"
-
+        self.control_type = config.get("control_type", "cam")
         self.is_live = config.get("is_live", False)
         if self.is_live:
             self.width = self.config["target_width"]
             self.height = self.config["target_height"]
             self.run_main = self.run_main_live
-
-    # ---- Override transformer loading for fast model ----
 
     def load_transformer(self):
         wan_model_kwargs = {
@@ -70,30 +54,34 @@ class LingbotFastRunner(LingbotRunner):
         self.scheduler = LingbotFastScheduler(self.config)
 
     def set_target_shape(self):
-        sf_config = self.config["sf_config"]
-        num_frame_per_block = sf_config["num_frame_per_block"]
-        num_output_frames = sf_config["num_output_frames"]
-        num_output_frames = (num_output_frames // num_frame_per_block) * num_frame_per_block
-        self.num_output_frames = num_output_frames
-
+        num_frame_per_block = self.config["sf_config"].get("num_frame_per_block", 3)
         latent_shape = self.input_info.latent_shape
+        lat_f = latent_shape[1]
         lat_h, lat_w = latent_shape[2], latent_shape[3]
-        self.config.target_shape = [16, self.num_output_frames, lat_h, lat_w]
+        num_output_frames = lat_f - (lat_f % num_frame_per_block)
+        self.input_info.latent_shape = [latent_shape[0], num_output_frames, lat_h, lat_w]
+        self.config.target_shape = [self.config.get("num_channels_latents", 16), num_output_frames, lat_h, lat_w]
+
+        self.scheduler.num_output_frames = num_output_frames
+        self.scheduler.num_blocks = num_output_frames // num_frame_per_block
 
         p = self.config.get("patch_size", [1, 2, 2])
         frame_seq_length = (lat_h // p[1]) * (lat_w // p[2])
-        if frame_seq_length != sf_config.get("frame_seq_length", 1560):
-            logger.info(
-                "[lingbot_fast] adjusting frame_seq_length: {} -> {} (lat_h={}, lat_w={}, patch={})",
-                sf_config.get("frame_seq_length"),
-                frame_seq_length,
-                lat_h,
-                lat_w,
-                p,
-            )
-            sf_config["frame_seq_length"] = frame_seq_length
+        logger.info(
+            "[lingbot_fast] lat_f={}, num_output_frames={}, frame_seq_length={} (lat_h={}, lat_w={}, patch={})",
+            lat_f,
+            num_output_frames,
+            frame_seq_length,
+            lat_h,
+            lat_w,
+            p,
+        )
+
         if hasattr(self, "model") and hasattr(self.model, "transformer_infer"):
-            self.model.transformer_infer.frame_seq_length = frame_seq_length
+            self.model.transformer_infer.reinit_caches(
+                frame_seq_length,
+                num_output_frames,
+            )
 
     def get_video_segment_num(self):
         self.video_segment_num = self.scheduler.num_blocks
@@ -129,6 +117,7 @@ class LingbotFastRunner(LingbotRunner):
             pred_latent_chunks = torch.cat(pred_latent_chunks, dim=1)
             videos = self.vae.decode([pred_latent_chunks])
         """
+        self.set_target_shape()
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile(self.input_info)
@@ -217,6 +206,7 @@ class LingbotFastRunner(LingbotRunner):
                 self.video_recorder.start(self.width, self.height)
             if world_size > 1 and dist is not None:
                 dist.barrier()
+            self.set_target_shape()
             self.init_run()
             if self.config.get("compile", False):
                 self.model.select_graph_for_compile(self.input_info)
