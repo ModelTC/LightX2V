@@ -24,6 +24,7 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         self.head_dim = llm_config["head_dim"]
         self.num_key_value_groups = self.num_heads // self.num_kv_heads
         self.scaling = self.head_dim**-0.5
+        self.use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         self.version = config.get("version", "moe")
         if self.version == "moe":
             self.num_experts_per_tok = llm_config["num_experts_per_tok"]
@@ -91,7 +92,12 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         key_states = attn_w.k_proj_mot_gen.apply(hidden_states)
         key_states = key_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
 
-        attn_w.qk_norm.apply(query_states, key_states, cos_sin)
+        if self.use_triton_qknorm_rope:
+            # Triton fused path: dual-RMSNorm + 3D Neox-RoPE in one kernel launch (in-place).
+            attn_w.qk_norm.apply(query_states, key_states, cos_sin)
+        else:
+            # Pure torch path: expanded dual-RMSNorm + 3D Neox-RoPE.
+            query_states, key_states = self._qk_norm_rope_torch(attn_w, query_states, key_states, cos_sin, hidden_states.dtype)
 
         value_states = attn_w.v_proj_mot_gen.apply(hidden_states)
         value_states = value_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
@@ -102,6 +108,54 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
         attn_output = attn_w.o_proj_mot_gen.apply(attn_output)
         return attn_output
+
+    def _qk_norm_rope_torch(self, attn_w, query_states, key_states, cos_sin, out_dtype):
+        """Pure-torch dual-RMSNorm + 3D Neox-RoPE for Q and K.
+
+        Equivalent to the triton fused_qk_norm_3drope kernel.
+        head_dim layout (input and output): [t_h1 | t_h2 | h_h1 | h_h2 | w_h1 | w_h2]
+          where half=head_dim//2, quarter=half//2, eighth=quarter//2.
+
+        cos_t : [1, seq, half]    (cat(freqs_t, freqs_t); unique part is [:quarter])
+        cos_h : [1, seq, quarter] (cat(freqs_h, freqs_h); unique part is [:eighth])
+        cos_w : [1, seq, quarter] (cat(freqs_w, freqs_w); unique part is [:eighth])
+        """
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+        half = self.head_dim // 2
+        quarter = self.head_dim // 4
+        eighth = self.head_dim // 8
+
+        # Extract the unique (non-repeated) half of each cos/sin; unsqueeze for head broadcast.
+        c_t = cos_t.squeeze(0)[:, :quarter].unsqueeze(1).float()  # [seq, 1, quarter]
+        s_t = sin_t.squeeze(0)[:, :quarter].unsqueeze(1).float()
+        c_h = cos_h.squeeze(0)[:, :eighth].unsqueeze(1).float()  # [seq, 1, eighth]
+        s_h = sin_h.squeeze(0)[:, :eighth].unsqueeze(1).float()
+        c_w = cos_w.squeeze(0)[:, :eighth].unsqueeze(1).float()  # [seq, 1, eighth]
+        s_w = sin_w.squeeze(0)[:, :eighth].unsqueeze(1).float()
+
+        def _norm_rope(x, norm_t, norm_hw):
+            x_t = norm_t.apply(x[..., :half])  # RMSNorm t-segment  → [seq, heads, half]
+            x_hw = norm_hw.apply(x[..., half:])  # RMSNorm hw-segment → [seq, heads, half]
+            x_t_h1, x_t_h2 = x_t[..., :quarter].float(), x_t[..., quarter:].float()
+            x_h = x_hw[..., :quarter]
+            x_w = x_hw[..., quarter:]
+            x_h_h1, x_h_h2 = x_h[..., :eighth].float(), x_h[..., eighth:].float()
+            x_w_h1, x_w_h2 = x_w[..., :eighth].float(), x_w[..., eighth:].float()
+            return torch.cat(
+                [
+                    x_t_h1 * c_t - x_t_h2 * s_t,
+                    x_t_h2 * c_t + x_t_h1 * s_t,
+                    x_h_h1 * c_h - x_h_h2 * s_h,
+                    x_h_h2 * c_h + x_h_h1 * s_h,
+                    x_w_h1 * c_w - x_w_h2 * s_w,
+                    x_w_h2 * c_w + x_w_h1 * s_w,
+                ],
+                dim=-1,
+            ).to(out_dtype)
+
+        query_states = _norm_rope(query_states, attn_w.q_norm_mot_gen, attn_w.q_norm_hw_mot_gen)
+        key_states = _norm_rope(key_states, attn_w.k_norm_mot_gen, attn_w.k_norm_hw_mot_gen)
+        return query_states, key_states
 
     # @ProfilingContext4DebugL1("Compute Attn")
     def _compute_attn(self, attn_w, query_states, key_states, value_states):
