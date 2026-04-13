@@ -57,7 +57,7 @@ class NeoppDecoderLayerWeights(WeightModule):
         )
 
         use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
-        attn = NeoppAttentionWeights(block_index, mm_type, attn_type, use_triton_qknorm_rope)
+        attn = NeoppAttentionWeights(config, block_index, mm_type, attn_type, use_triton_qknorm_rope)
         self.add_module("self_attn", attn)
 
         self.add_module(
@@ -76,7 +76,7 @@ class NeoppDecoderLayerWeights(WeightModule):
 
 
 class NeoppAttentionWeights(WeightModule):
-    def __init__(self, block_index, mm_type, attn_type="flash_attn2", use_triton_qknorm_rope=True):
+    def __init__(self, config, block_index, mm_type, attn_type="flash_attn2", use_triton_qknorm_rope=True):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.self_attn"
 
@@ -120,6 +120,11 @@ class NeoppAttentionWeights(WeightModule):
             )
 
         self.add_module("cross_attn", ATTN_WEIGHT_REGISTER[attn_type]())
+        if config["seq_parallel"]:
+            self.add_module(
+                "cross_attn_parallel",
+                ATTN_WEIGHT_REGISTER[config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
 
 class NeoppSparseMoeWeights(WeightModule):

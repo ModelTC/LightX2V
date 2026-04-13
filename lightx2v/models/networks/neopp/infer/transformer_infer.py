@@ -32,6 +32,11 @@ class NeoppTransformerInfer(BaseTransformerInfer):
             self._mlp_forward = self._sparse_moe
         else:
             self._mlp_forward = self._dense_mlp
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+        self.cross_attn_type = self.config["attn_type"]
         self.kv_cache = KVCacheManager()
 
     @torch.no_grad()
@@ -43,8 +48,9 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
         hidden_states = pre_infer_out.image_embeds.squeeze(0)  # [seq, hidden]
 
+        self._kvcache_len = past_key_values.shape[2]
         seq_len_q = hidden_states.shape[0]
-        seq_len_k = past_key_values.shape[2] + seq_len_q
+        seq_len_k = self._kvcache_len + seq_len_q
         _cache_key = infer_pass
         if not hasattr(self, "_seqlen_cache"):
             self._seqlen_cache = {}
@@ -159,15 +165,29 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
     # @ProfilingContext4DebugL1("Compute Attn")
     def _compute_attn(self, attn_w, query_states, key_states, value_states):
-        attn_output = attn_w.cross_attn.apply(
-            q=query_states,
-            k=key_states,
-            v=value_states,
-            cu_seqlens_q=self._cu_seqlens_q,
-            cu_seqlens_kv=self._cu_seqlens_k,
-            max_seqlen_q=self._max_seqlen_q,
-            max_seqlen_kv=self._max_seqlen_k,
-        )
+        if self.config["seq_parallel"]:
+            attn_output = attn_w.cross_attn_parallel.apply(
+                q=query_states,
+                k=key_states,
+                v=value_states,
+                slice_qkv_len=self._kvcache_len,
+                cu_seqlens_qkv=self._cu_seqlens_k,
+                attention_module=attn_w.cross_attn,
+                attention_type=self.cross_attn_type,
+                seq_p_group=self.seq_p_group,
+                img_first=False,
+                q_only_img=True,
+            )
+        else:
+            attn_output = attn_w.cross_attn.apply(
+                q=query_states,
+                k=key_states,
+                v=value_states,
+                cu_seqlens_q=self._cu_seqlens_q,
+                cu_seqlens_kv=self._cu_seqlens_k,
+                max_seqlen_q=self._max_seqlen_q,
+                max_seqlen_kv=self._max_seqlen_k,
+            )
         return attn_output
 
     # @ProfilingContext4DebugL1("Sparse MoE")

@@ -12,7 +12,7 @@ pipe = LightX2VPipeline(
     support_tasks=["t2i", "i2i"],
 )
 
-pipe.create_generator(config_json="../../configs/neopp/neopp_dense_parallel_cfg.json")
+pipe.create_generator(config_json="../../configs/neopp/neopp_dense_parallel_cfg_seq.json")
 pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False, "save_result_for_debug": True})
 
 

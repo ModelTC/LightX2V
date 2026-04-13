@@ -34,6 +34,10 @@ class NeoppRunner(DefaultRunner):
         self.past_key_values_text_uncond = None
         self.past_key_values_img_uncond = None
         self.num_input_images = config.get("num_input_images", 1)
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def init_scheduler(self):
         self.scheduler = NeoppMoeScheduler(self.config)
@@ -87,6 +91,22 @@ class NeoppRunner(DefaultRunner):
             cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
             cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
             cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
+
+            if self.seq_p_group is not None:
+                world_size = dist.get_world_size(self.seq_p_group)
+                cur_rank = dist.get_rank(self.seq_p_group)
+                cos_t_cond = torch.chunk(cos_t_cond, world_size, dim=1)[cur_rank]
+                sin_t_cond = torch.chunk(sin_t_cond, world_size, dim=1)[cur_rank]
+                cos_h_cond = torch.chunk(cos_h_cond, world_size, dim=1)[cur_rank]
+                sin_h_cond = torch.chunk(sin_h_cond, world_size, dim=1)[cur_rank]
+                cos_w_cond = torch.chunk(cos_w_cond, world_size, dim=1)[cur_rank]
+                sin_w_cond = torch.chunk(sin_w_cond, world_size, dim=1)[cur_rank]
+                cos_t_uncond = torch.chunk(cos_t_uncond, world_size, dim=1)[cur_rank]
+                sin_t_uncond = torch.chunk(sin_t_uncond, world_size, dim=1)[cur_rank]
+                cos_h_uncond = torch.chunk(cos_h_uncond, world_size, dim=1)[cur_rank]
+                sin_h_uncond = torch.chunk(sin_h_uncond, world_size, dim=1)[cur_rank]
+                cos_w_uncond = torch.chunk(cos_w_uncond, world_size, dim=1)[cur_rank]
+                sin_w_uncond = torch.chunk(sin_w_uncond, world_size, dim=1)[cur_rank]
 
             return {
                 "past_key_values_cond": self.past_key_values_cond,

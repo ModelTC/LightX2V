@@ -8,6 +8,7 @@
     "cfg_interval": [-1, 2],
     "enable_cfg": true,
     "parallel": {
-        "cfg_p_size": 3
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
     }
 }
