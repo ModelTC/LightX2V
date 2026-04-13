@@ -82,6 +82,7 @@ def main():
             "bagel",
             "seedvr2",
             "neopp",
+            "lingbot_world_fast",
         ],
         default="wan2.1",
     )

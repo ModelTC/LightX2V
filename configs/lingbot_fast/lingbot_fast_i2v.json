@@ -1,0 +1,27 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 1.0,
+    "sample_shift": 10.0,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": true,
+    "use_image_encoder": false,
+    "enable_lingbot_cam_ctrl": false,
+    "dit_original_ckpt": "/data/nvme4/models/lingbot-world-base-cam/lingbot_world_fast/",
+    "sf_config": {
+        "local_attn_size": -1,
+        "num_frame_per_block": 3,
+        "num_transformer_blocks": 40,
+        "frame_seq_length": 1560,
+        "num_output_frames": 21,
+        "timesteps_index": [0, 179, 358, 679]
+    }
+}
