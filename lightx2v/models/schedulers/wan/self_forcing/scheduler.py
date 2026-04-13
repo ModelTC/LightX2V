@@ -90,10 +90,6 @@ class WanSFScheduler(WanScheduler):
         sigma_t = sigmas[timestep_id].reshape(-1, 1, 1, 1)
         x0_pred = xt - sigma_t * flow_pred
         x0_pred = x0_pred.to(original_dtype)
-        print(sigma_t)
-        # print(flow_pred)
-        # print(x0_pred)
-        # exit()
 
         # add noise
         if self.step_index < self.infer_steps - 1:
