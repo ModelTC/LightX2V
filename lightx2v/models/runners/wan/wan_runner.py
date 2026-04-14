@@ -842,18 +842,8 @@ class Wan22DenseRunner(WanRunner):
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
     def __init__(self, config):
-        with config.temporarily_unlocked():
-            if "use_image_encoder" not in config:
-                config["use_image_encoder"] = False
-            config["enable_lingbot_cam_ctrl"] = bool(config.get("enable_lingbot_cam_ctrl", True))
         super().__init__(config)
-        model_path = str(self.config.get("model_path", "")).lower()
-        if "cam" in model_path:
-            self.control_type = "cam"
-        elif "act" in model_path:
-            self.control_type = "act"
-        else:
-            self.control_type = "cam"
+        self.control_type = config.get("control_type", "cam")
 
     def set_inputs(self, inputs):
         super().set_inputs(inputs)

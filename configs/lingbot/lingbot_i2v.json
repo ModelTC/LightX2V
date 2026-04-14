@@ -19,7 +19,7 @@
     "offload_granularity": "model",
     "boundary": 0.947,
     "use_image_encoder": false,
-    "enable_lingbot_cam_ctrl": true,
+    "control_type": "act",
     "parallel": {
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"

@@ -43,19 +43,19 @@ class WanSFTransformerInfer(WanTransformerInfer):
         self.local_attn_size = sf_config["local_attn_size"]
         self.max_attention_size = 32760 if self.local_attn_size == -1 else self.local_attn_size * 1560
         self.sink_size = sf_config.get("sink_size", 0)
-        self.num_frame_per_block = sf_config["num_frame_per_block"]
-        self.num_transformer_blocks = sf_config["num_transformer_blocks"]
-        self.frame_seq_length = sf_config["frame_seq_length"]
+        self.num_frame_per_block = sf_config.get("num_frame_per_block", 3)
+        self.num_transformer_blocks = self.blocks_num
+        self.frame_seq_length = sf_config.get("frame_seq_length", 1560)
         self.kv_quant_config = sf_config.get("kv_quant", None)
         if self.kv_quant_config is not None:
             from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 
             self.quant_fp8_vllm = quant_fp8_vllm
             self.dequant_fp8_vllm = dequant_fp8_vllm
+        self.infer_func = self.infer_with_kvcache
+
         self._initialize_kv_cache(self.device, self.dtype)
         self._initialize_crossattn_cache(self.device, self.dtype)
-
-        self.infer_func = self.infer_with_kvcache
 
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
