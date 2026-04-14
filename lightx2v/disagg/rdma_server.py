@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import threading
 
@@ -39,10 +40,14 @@ class RDMAServer:
         self.local_psn = 123456
         self._next_psn = int(self.local_psn)
         self.port_num = port_num
-        self.gid_index = 1
+        self.gid_index = 0
         self.buffer_size = int(buffer_size)
         if self.buffer_size <= 0:
             raise ValueError("buffer_size must be positive")
+        if iface_name is None:
+            env_iface = os.getenv("RDMA_IFACE", "").strip()
+            if env_iface:
+                iface_name = env_iface
         if iface_name is None:
             devices = get_device_list()
             if not devices:
@@ -60,6 +65,7 @@ class RDMAServer:
 
         self.pd = PD(self.ctx)
         self.cq = CQ(self.ctx, 10)
+        self.gid_index = self._resolve_gid_index()
 
         # 创建 QP (Queue Pair)
         qp_init_attr = QPCap(max_send_wr=10, max_recv_wr=10, max_send_sge=1, max_recv_sge=1)
@@ -90,6 +96,25 @@ class RDMAServer:
             mr_addr = self.mr.buf
         self._mr_addr = int(mr_addr)
         print(f"[Server] MR Registered. Addr: {mr_addr}, RKey: {self.mr.rkey}")
+
+    def _resolve_gid_index(self):
+        env_gid = os.getenv("RDMA_GID_INDEX", "").strip()
+        if env_gid:
+            idx = int(env_gid)
+            self.ctx.query_gid(port_num=self.port_num, index=idx)
+            return idx
+
+        preferred = [2, 0, 1, 3, 4, 5, 6, 7]
+        for idx in preferred:
+            try:
+                gid = str(self.ctx.query_gid(port_num=self.port_num, index=idx))
+            except Exception:
+                continue
+            if gid and gid != "::":
+                return idx
+
+        self.ctx.query_gid(port_num=self.port_num, index=0)
+        return 0
 
     def register_memory(self, addr: int, length: int):
         """Validate a requested sub-region against server MR and return registration metadata.

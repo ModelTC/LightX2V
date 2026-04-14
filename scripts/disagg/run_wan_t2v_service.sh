@@ -23,12 +23,12 @@ transformer_cfg=${lightx2v_path}/configs/disagg/wan_t2v_disagg_transformer.json
 decoder_cfg=${lightx2v_path}/configs/disagg/wan_t2v_disagg_decoder.json
 
 seed=42
-request_count=10
+request_count=30
 prompt="Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 negative_prompt="镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 save_result_path=${lightx2v_path}/save_results/test_disagg.mp4
 output_files=()
-for ((i=1; i<=request_count; i++)); do
+for ((i=0; i<request_count; i++)); do
 	output_files+=("${save_result_path%.mp4}${i}.mp4")
 done
 
@@ -157,3 +157,5 @@ while true; do
 	sleep 5
 	wait_seconds=$((wait_seconds + 5))
 done
+
+sleep 30

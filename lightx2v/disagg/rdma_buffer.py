@@ -4,6 +4,7 @@ import ctypes
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -214,31 +215,40 @@ class RDMABuffer:
             raise ValueError("invalid slot payload")
         plen = int.from_bytes(raw_slot[:4], byteorder="little", signed=False)
         if plen == 0:
-            return {}
+            raise ValueError("slot payload is not committed yet")
+        if plen > self.slot_size - 4:
+            raise ValueError(f"invalid slot payload length: {plen}")
         data = raw_slot[4 : 4 + plen]
-        return json.loads(data.decode("utf-8"))
+        try:
+            return json.loads(data.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("slot payload is incomplete or corrupted") from exc
 
     def produce(self, config: Dict[str, Any]) -> int:
         """Produce one config into ring buffer and advance tail by rdma_faa."""
         if self.rdma_server is None and self.rdma_client is None:
             raise RuntimeError("produce requires rdma_server or rdma_client")
 
-        # Reserve one slot by atomically incrementing tail.
-        old_tail = self._rdma_faa(self.descriptor.tail_addr, 1)
+        # Read current indices first, write the slot fully, then publish by advancing tail.
+        old_tail = self._read_remote_u64(self.descriptor.tail_addr)
         cur_head = self._read_remote_u64(self.descriptor.head_addr)
-        if (old_tail + 1) - cur_head > self.buffer_size:
-            # Ring full, rollback reservation.
-            self._rdma_faa(self.descriptor.tail_addr, -1)
+        if old_tail - cur_head >= self.buffer_size:
             raise BufferError("ring buffer is full")
 
         slot_idx = old_tail % self.buffer_size
         offset = self._slot_offset(slot_idx)
         payload = self._serialize_config(config)
+        payload_len_header = payload[:4]
+        payload_body = payload[4:]
 
         # Write payload to the selected slot (works for both server-local and client-remote paths).
         slot_addr = self.descriptor.slot_addr + offset
         self._rdma_write_bytes(slot_addr, b"\x00" * self.slot_size)
-        self._rdma_write_bytes(slot_addr, payload)
+        if payload_body:
+            self._rdma_write_bytes(slot_addr + 4, payload_body)
+        # Write length header last so consumers never parse a half-written payload.
+        self._rdma_write_bytes(slot_addr, payload_len_header)
+        self._rdma_faa(self.descriptor.tail_addr, 1)
         logger.info("Produced config to RDMA buffer slot %d", slot_idx)
         return slot_idx
 
@@ -273,10 +283,23 @@ class RDMABuffer:
 
         slot_idx = old_head % self.buffer_size
         slot_addr = self.descriptor.slot_addr + self._slot_offset(slot_idx)
+        max_read_retries = 5
+        retry_sleep_seconds = 0.002
+        last_error: Optional[Exception] = None
+        for _ in range(max_read_retries):
+            try:
+                raw = self._rdma_read_bytes(slot_addr, self.slot_size)
+                config = self._deserialize_config(raw)
+                logger.info("Consumed config from RDMA buffer slot %d", slot_idx)
+                return config
+            except Exception as exc:
+                last_error = exc
+                time.sleep(retry_sleep_seconds)
+
+        # Slot still not readable after retries, rollback head so the slot can be retried later.
+        logger.warning("RDMA buffer slot %d read incomplete after retries, rolling back head: %s", slot_idx, last_error)
         try:
-            raw = self._rdma_read_bytes(slot_addr, self.slot_size)
+            self._rdma_faa(self.descriptor.head_addr, -1)
         except Exception as exc:
-            logger.warning("RDMA buffer slot read failed for slot %d: %s", slot_idx, exc)
-            return None
-        logger.info("Consumed config from RDMA buffer slot %d", slot_idx)
-        return self._deserialize_config(raw)
+            logger.warning("RDMA buffer rollback failed after incomplete slot read: %s", exc)
+        return None

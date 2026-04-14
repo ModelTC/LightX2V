@@ -1,0 +1,28 @@
+[
+  {
+    "name": "warmup",
+    "duration_s": 120,
+    "user_count": 1,
+    "spawn_rate": 0.1,
+    "wait_time_s": 0.0,
+    "config_variants": [
+      {
+        "infer_steps": 1,
+        "sample_shift": 5.0
+      }
+    ]
+  },
+  {
+    "name": "change",
+    "duration_s": 180,
+    "user_count": 1,
+    "spawn_rate": 0.1,
+    "wait_time_s": 0.0,
+    "config_variants": [
+      {
+        "infer_steps": 1,
+        "sample_shift": 5.0
+      }
+    ]
+  }
+]

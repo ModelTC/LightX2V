@@ -1,4 +1,6 @@
 import json
+import os
+import random
 import socket
 import threading
 import time
@@ -43,8 +45,13 @@ class AccessFlag:
 class RDMAClient:
     def __init__(self, iface_name=None, local_buffer_size=4096):
         self.local_psn = 654321
+        self._next_psn = (int(time.time() * 1000000) & 0xFFFFFF) or 1
         self.port_num = 1
-        self.gid_index = 1
+        self.gid_index = 0
+        if iface_name is None:
+            env_iface = os.getenv("RDMA_IFACE", "").strip()
+            if env_iface:
+                iface_name = env_iface
         if iface_name is None:
             devices = get_device_list()
             if not devices:
@@ -55,11 +62,12 @@ class RDMAClient:
         self.ctx = IBDevice(iface_name).open()
         self.pd = PD(self.ctx)
         self.cq = CQ(self.ctx, 10)
+        self.gid_index = self._resolve_gid_index()
 
         qp_init_attr = QPCap(max_send_wr=10, max_recv_wr=10, max_send_sge=1, max_recv_sge=1)
-        qia = QPInitAttr(qp_type=QPType.RC, scq=self.cq, rcq=self.cq, cap=qp_init_attr)
-        qa = QPAttr(port_num=self.port_num)
-        self.qp = QP(self.pd, qia, qa)
+        self._qia = QPInitAttr(qp_type=QPType.RC, scq=self.cq, rcq=self.cq, cap=qp_init_attr)
+        self._qa = QPAttr(port_num=self.port_num)
+        self.qp = QP(self.pd, self._qia, self._qa)
 
         # 客户端也需要注册内存，用于发送数据的源 (Write) 或接收数据的目标 (Read)
         self.buffer_size = int(local_buffer_size)
@@ -67,6 +75,69 @@ class RDMAClient:
             raise ValueError("local_buffer_size must be positive")
         self.local_mr = MR(self.pd, self.buffer_size, AccessFlag.LOCAL_WRITE)
         self._io_lock = threading.RLock()
+
+    def _resolve_gid_index(self):
+        env_gid = os.getenv("RDMA_GID_INDEX", "").strip()
+        if env_gid:
+            idx = int(env_gid)
+            self.ctx.query_gid(port_num=self.port_num, index=idx)
+            return idx
+
+        # Prefer IPv4-mapped RoCE entries for Ethernet-based RDMA devices.
+        preferred = [2, 0, 1, 3, 4, 5, 6, 7]
+        for idx in preferred:
+            try:
+                gid = str(self.ctx.query_gid(port_num=self.port_num, index=idx))
+            except Exception:
+                continue
+            if gid and gid != "::":
+                return idx
+
+        # Last resort: let query_gid raise a descriptive error for index 0.
+        self.ctx.query_gid(port_num=self.port_num, index=0)
+        return 0
+
+    def _alloc_local_psn(self):
+        self._next_psn = (self._next_psn + 1) & 0xFFFFFF
+        if self._next_psn == 0:
+            self._next_psn = 1
+        self.local_psn = self._next_psn
+        return self.local_psn
+
+    def _reset_qp(self):
+        old_qp = getattr(self, "qp", None)
+        self.qp = QP(self.pd, self._qia, self._qa)
+        if old_qp is not None:
+            close_fn = getattr(old_qp, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+
+    def _recv_json(self, sock, timeout_sec):
+        decoder = json.JSONDecoder()
+        chunks = []
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                continue
+
+            if not chunk:
+                break
+
+            chunks.append(chunk)
+            payload = b"".join(chunks).decode("utf-8", errors="strict")
+            try:
+                obj, _ = decoder.raw_decode(payload)
+                return obj
+            except json.JSONDecodeError:
+                continue
+
+        msg = b"".join(chunks).decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Timed out waiting for complete handshake JSON. payload={msg!r}")
 
     def _ensure_local_mr_capacity(self, required_size: int):
         required = int(required_size)
@@ -76,29 +147,73 @@ class RDMAClient:
         self.local_mr = MR(self.pd, self.buffer_size, AccessFlag.LOCAL_WRITE)
 
     def connect_to_server(self, server_ip="127.0.0.1", port=5566):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((server_ip, port))
+        max_retries = max(1, int(os.getenv("RDMA_CLIENT_CONNECT_RETRIES", "30")))
+        connect_timeout_sec = float(os.getenv("RDMA_CLIENT_CONNECT_TIMEOUT_SEC", "2.0"))
+        backoff_base_sec = float(os.getenv("RDMA_CLIENT_BACKOFF_BASE_SEC", "0.1"))
+        backoff_max_sec = float(os.getenv("RDMA_CLIENT_BACKOFF_MAX_SEC", "2.0"))
+        jitter_ratio = float(os.getenv("RDMA_CLIENT_BACKOFF_JITTER", "0.2"))
 
-        # 1. 接收 Server 信息 (包含 rkey 和 addr)
-        data = sock.recv(4096)
-        self.remote_info = json.loads(data.decode())
-        print(f"[Client] Got Server Info: Addr={hex(self.remote_info['addr'])}, RKey={self.remote_info['rkey']}")
+        last_exc = None
+        for attempt in range(1, max_retries + 1):
+            sock = None
+            try:
+                self._reset_qp()
+                self._alloc_local_psn()
 
-        # 2. 发送我的信息给 Server
-        gid = self.ctx.query_gid(port_num=self.port_num, index=self.gid_index)
-        my_info = {
-            "lid": self.ctx.query_port(port_num=self.port_num).lid,
-            "qpn": self.qp.qp_num,
-            "psn": self.local_psn,
-            "gid": str(gid),
-            "gid_index": self.gid_index,
-        }
-        sock.sendall(json.dumps(my_info).encode())
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(connect_timeout_sec)
+                sock.connect((server_ip, port))
 
-        # 3. 修改 QP 状态
-        self._modify_qp_to_rts()
-        self.sock = sock
-        print("[Client] Connection established (RTS)")
+                # 1. 接收 Server 信息 (包含 rkey 和 addr)
+                remote_info = self._recv_json(sock, timeout_sec=connect_timeout_sec)
+                if not isinstance(remote_info, dict):
+                    raise RuntimeError(f"Invalid handshake payload type: {type(remote_info)}")
+                required_keys = {"addr", "rkey", "qpn", "psn", "gid"}
+                missing = required_keys.difference(remote_info.keys())
+                if missing:
+                    raise RuntimeError(f"Handshake missing keys: {sorted(missing)}")
+                self.remote_info = remote_info
+                print(f"[Client] Got Server Info: Addr={hex(int(self.remote_info['addr']))}, RKey={self.remote_info['rkey']}")
+
+                # 2. 发送我的信息给 Server
+                gid = self.ctx.query_gid(port_num=self.port_num, index=self.gid_index)
+                my_info = {
+                    "lid": self.ctx.query_port(port_num=self.port_num).lid,
+                    "qpn": self.qp.qp_num,
+                    "psn": self.local_psn,
+                    "gid": str(gid),
+                    "gid_index": self.gid_index,
+                }
+                sock.sendall(json.dumps(my_info).encode())
+
+                # 3. 修改 QP 状态
+                self._modify_qp_to_rts()
+                sock.settimeout(None)
+                self.sock = sock
+                print(f"[Client] Connection established (RTS) to {server_ip}:{port} at attempt {attempt}/{max_retries}")
+                return
+            except Exception as exc:
+                last_exc = exc
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+
+                if attempt < max_retries:
+                    backoff = min(backoff_max_sec, backoff_base_sec * (2 ** (attempt - 1)))
+                    if jitter_ratio > 0:
+                        jitter = random.uniform(1.0 - jitter_ratio, 1.0 + jitter_ratio)
+                        backoff = max(0.01, backoff * jitter)
+                    print(
+                        f"[Client] Handshake attempt {attempt}/{max_retries} failed to {server_ip}:{port}: {exc}. "
+                        f"Retrying in {backoff:.2f}s"
+                    )
+                    time.sleep(backoff)
+
+        raise RuntimeError(
+            f"RDMA client failed to connect to {server_ip}:{port} after {max_retries} attempts"
+        ) from last_exc
 
     def _modify_qp_to_rts(self):
         # Follow the standard RC flow: INIT -> RTR -> RTS.

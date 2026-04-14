@@ -70,6 +70,19 @@ class ControllerService(BaseService):
             return {self._to_plain(v) for v in value}
         return value
 
+    def _resolve_service_config_json(self, config_json: str, instance_type: str) -> str:
+        config_path = Path(config_json)
+        if config_path.is_file():
+            if config_path.name.endswith("_controller.json"):
+                candidate = config_path.with_name(config_path.name.replace("_controller.json", f"_{instance_type}.json"))
+                if candidate.is_file():
+                    return str(candidate)
+            if config_path.name.endswith("_distill_controller.json"):
+                candidate = config_path.with_name(config_path.name.replace("_distill_controller.json", f"_distill_{instance_type}.json"))
+                if candidate.is_file():
+                    return str(candidate)
+        return config_json
+
     def _monitor_node_from_instance_address(self, instance_address: str) -> str:
         host, port_str = instance_address.rsplit(":", 1)
         rank = int(port_str) - REQUEST_POLLING_PORT
@@ -137,6 +150,7 @@ class ControllerService(BaseService):
             config_json = instance_cfg.get("config_json")
             if not model_path or not config_json:
                 raise RuntimeError("model_path and config_json are required to launch service subprocess")
+            service_config_json = self._resolve_service_config_json(str(config_json), instance_type)
 
             cmd = [
                 sys.executable,
@@ -153,7 +167,7 @@ class ControllerService(BaseService):
                 "--model_path",
                 str(model_path),
                 "--config_json",
-                str(config_json),
+                service_config_json,
                 "--seed",
                 str(instance_cfg.get("seed", 42)),
                 "--prompt",
@@ -337,6 +351,79 @@ class ControllerService(BaseService):
             need_bytes_phase2,
         )
 
+    def _build_latency_summary(self, result: dict[str, Any], controller_recv_ts: float) -> dict[str, float] | None:
+        request_metrics = result.get("request_metrics")
+        if not isinstance(request_metrics, dict):
+            return None
+
+        stages = request_metrics.get("stages")
+        if not isinstance(stages, dict):
+            return None
+
+        def _as_float(value: Any) -> float | None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _stage(name: str) -> dict[str, Any]:
+            stage_metrics = stages.get(name)
+            return stage_metrics if isinstance(stage_metrics, dict) else {}
+
+        controller_send_ts = _as_float(request_metrics.get("controller_send_ts"))
+        encoder = _stage("encoder")
+        transformer = _stage("transformer")
+        decoder = _stage("decoder")
+
+        encoder_recv_ts = _as_float(encoder.get("request_received_ts"))
+        encoder_compute_start_ts = _as_float(encoder.get("compute_start_ts"))
+        encoder_compute_end_ts = _as_float(encoder.get("compute_end_ts"))
+        encoder_output_enqueued_ts = _as_float(encoder.get("output_enqueued_ts"))
+
+        transformer_recv_ts = _as_float(transformer.get("request_received_ts"))
+        transformer_compute_start_ts = _as_float(transformer.get("compute_start_ts"))
+        transformer_compute_end_ts = _as_float(transformer.get("compute_end_ts"))
+        transformer_output_enqueued_ts = _as_float(transformer.get("output_enqueued_ts"))
+
+        decoder_recv_ts = _as_float(decoder.get("request_received_ts"))
+        decoder_compute_start_ts = _as_float(decoder.get("compute_start_ts"))
+        decoder_compute_end_ts = _as_float(decoder.get("compute_end_ts"))
+        decoder_output_enqueued_ts = _as_float(decoder.get("output_enqueued_ts"))
+
+        required_values = [
+            controller_send_ts,
+            encoder_recv_ts,
+            encoder_compute_start_ts,
+            encoder_compute_end_ts,
+            encoder_output_enqueued_ts,
+            transformer_recv_ts,
+            transformer_compute_start_ts,
+            transformer_compute_end_ts,
+            transformer_output_enqueued_ts,
+            decoder_recv_ts,
+            decoder_compute_start_ts,
+            decoder_compute_end_ts,
+            decoder_output_enqueued_ts,
+        ]
+        if any(value is None for value in required_values):
+            return None
+
+        summary: dict[str, float] = {
+            "controller_to_encoder_comm_delay_s": encoder_recv_ts - controller_send_ts,
+            "encoder_scheduling_delay_s": encoder_compute_start_ts - encoder_recv_ts,
+            "encoder_compute_delay_s": encoder_compute_end_ts - encoder_compute_start_ts,
+            "encoder_communication_delay_s": transformer_recv_ts - encoder_output_enqueued_ts,
+            "transformer_scheduling_delay_s": transformer_compute_start_ts - transformer_recv_ts,
+            "transformer_compute_delay_s": transformer_compute_end_ts - transformer_compute_start_ts,
+            "transformer_communication_delay_s": decoder_recv_ts - transformer_output_enqueued_ts,
+            "decoder_scheduling_delay_s": decoder_compute_start_ts - decoder_recv_ts,
+            "decoder_compute_delay_s": decoder_compute_end_ts - decoder_compute_start_ts,
+            "decoder_communication_delay_s": controller_recv_ts - decoder_output_enqueued_ts,
+            "end_to_end_delay_s": controller_recv_ts - controller_send_ts,
+        }
+        summary["sum_of_components_s"] = sum(value for key, value in summary.items() if key != "end_to_end_delay_s" and key != "sum_of_components_s")
+        return summary
+
     def add_instance(self, instance_type: str, instance_address: str):
         """Add instance address to the matching scheduling policy by type."""
         if not instance_address:
@@ -376,17 +463,14 @@ class ControllerService(BaseService):
         self.logger.info("Request enqueued to encoder request RDMA buffer")
 
     def run(self, config):
-        """Initialize controller buffers, send requests, wait for decoder save_path callbacks, then exit."""
+        """Initialize controller buffers, stream request configs from workload, then wait for all callbacks."""
         if config is None:
             raise ValueError("config cannot be None")
 
         self._shutting_down = False
 
         bootstrap_addr = config.get("data_bootstrap_addr", "127.0.0.1")
-        encoder_engine_rank = config.get("encoder_engine_rank", 0)
-        transformer_engine_rank = config.get("transformer_engine_rank", 1)
-        decoder_engine_rank = config.get("decoder_engine_rank", 2)
-        request_count = int(config.get("request_count", 10))
+        request_ingress_port = int(config.get("controller_request_port", os.getenv("DISAGG_CONTROLLER_REQUEST_PORT", REQUEST_POLLING_PORT - 2)))
         result_port = int(config.get("controller_result_port", REQUEST_POLLING_PORT - 1))
         self._bootstrap_addr = str(bootstrap_addr)
         self._runtime_config = self._to_plain(config)
@@ -397,16 +481,13 @@ class ControllerService(BaseService):
         self.decoder_policy = RoundRobinPolicy()
 
         self._init_request_rdma_buffer(bootstrap_addr, config)
+        
+        time.sleep(5.0)
 
         for instance_type in ("encoder", "transformer", "decoder"):
             address = self.create_instance(instance_type)
-
-        monitor_nodes = [
-            f"tcp://{bootstrap_addr}:{MONITOR_POLLING_PORT + encoder_engine_rank}",
-            f"tcp://{bootstrap_addr}:{MONITOR_POLLING_PORT + transformer_engine_rank}",
-            f"tcp://{bootstrap_addr}:{MONITOR_POLLING_PORT + decoder_engine_rank}",
-        ]
-        self.monitor.nodes = monitor_nodes
+        for _ in range(5):
+            self.create_instance("transformer")
 
         monitor_stop_event = Event()
         scale_out_threshold = 80.0
@@ -419,6 +500,7 @@ class ControllerService(BaseService):
         }
 
         def _monitor_callback(results):
+            return
             if self._shutting_down:
                 return
 
@@ -429,13 +511,16 @@ class ControllerService(BaseService):
             }
 
             for item in results:
-                self.logger.info("monitor: %s", item)
+                # self.logger.info("monitor: %s", item)
                 if not isinstance(item, dict):
                     continue
 
                 service_type = str(item.get("service_type", ""))
                 if service_type not in {"encoder", "transformer", "decoder"}:
                     continue
+                
+                # if service_type not in {"transformer"}:
+                #     continue
 
                 if item.get("status") != "ok":
                     continue
@@ -484,12 +569,13 @@ class ControllerService(BaseService):
                             new_address,
                         )
                     except Exception as exc:
-                        self.logger.warning(
-                            "Auto-scale out skipped for service=%s avg_gpu_utilization=%.2f reason=%s",
-                            service_type,
-                            avg_gpu_utilization,
-                            exc,
-                        )
+                        pass
+                        # self.logger.warning(
+                        #     "Auto-scale out skipped for service=%s avg_gpu_utilization=%.2f reason=%s",
+                        #     service_type,
+                        #     avg_gpu_utilization,
+                        #     exc,
+                        # )
 
                 low_metric = min(metrics, key=lambda metric: float(metric["gpu_utilization"]))
                 low_utilization = float(low_metric["gpu_utilization"])
@@ -529,31 +615,123 @@ class ControllerService(BaseService):
             daemon=True,
         )
         monitor_thread.start()
+        
+        time.sleep(5.0)
 
         base_save_path = config.get("save_path")
         expected_rooms: set[int] = set()
         received_rooms: set[int] = set()
         received_results: list[dict] = []
+        next_room = 0
+        batch_request_start_ts: float | None = None
+
+        def _handle_decoder_result(result: Any):
+            if not isinstance(result, dict):
+                self.logger.warning("Ignored non-dict decoder result: %s", result)
+                return
+            room = result.get("data_bootstrap_room")
+            if room is None:
+                self.logger.warning("Ignored decoder result without data_bootstrap_room: %s", result)
+                return
+            room = int(room)
+            if room not in expected_rooms:
+                self.logger.warning("Ignored decoder result for unexpected room=%s: %s", room, result)
+                return
+            if room in received_rooms:
+                self.logger.info("Duplicate decoder result for room=%s ignored", room)
+                return
+
+            controller_recv_ts = time.time()
+            latency_summary = self._build_latency_summary(result, controller_recv_ts)
+            if latency_summary is not None:
+                result["latency_summary"] = latency_summary
+                self.logger.info("Latency summary room=%s metrics=%s", room, latency_summary)
+
+            received_rooms.add(room)
+            received_results.append(result)
+
+            if result.get("ok", False):
+                self.logger.info(
+                    "Decoder result received room=%s save_path=%s (%s/%s)",
+                    room,
+                    result.get("save_path"),
+                    len(received_rooms),
+                    len(expected_rooms),
+                )
+            else:
+                self.logger.error(
+                    "Decoder result failed room=%s error=%s (%s/%s)",
+                    room,
+                    result.get("error"),
+                    len(received_rooms),
+                    len(expected_rooms),
+                )
+
+        def _drain_decoder_results_non_block():
+            while True:
+                result = self.req_mgr.receive_non_block(result_port)
+                if result is None:
+                    break
+                _handle_decoder_result(result)
+
         try:
-            for i in range(request_count):
+            self.logger.info("Waiting workload configs on port=%s", request_ingress_port)
+            while True:
+                workload_config = self.req_mgr.receive(request_ingress_port)
+                if not isinstance(workload_config, dict):
+                    self.logger.warning("Ignored invalid workload config packet: %s", workload_config)
+                    continue
+
+                if workload_config.get("workload_end") or workload_config.get("end") or workload_config.get("stop"):
+                    self.logger.info("Received workload end signal, stop accepting new configs.")
+                    break
+
                 request_config = dict(config)
-                request_config["data_bootstrap_room"] = i
+                request_config.update(self._to_plain(workload_config))
+
+                room = request_config.get("data_bootstrap_room", next_room)
+                try:
+                    room = int(room)
+                except (TypeError, ValueError):
+                    room = next_room
+                if room in expected_rooms:
+                    while next_room in expected_rooms:
+                        next_room += 1
+                    room = next_room
+                next_room = max(next_room, room + 1)
+
+                request_config["data_bootstrap_room"] = room
                 request_config["controller_result_host"] = bootstrap_addr
                 request_config["controller_result_port"] = result_port
-                if base_save_path:
+
+                metrics = request_config.get("request_metrics")
+                if not isinstance(metrics, dict):
+                    metrics = {}
+                metrics["request_id"] = int(metrics.get("request_id", room))
+                metrics["controller_send_ts"] = time.time()
+                if not isinstance(metrics.get("stages"), dict):
+                    metrics["stages"] = {}
+                request_config["request_metrics"] = metrics
+
+                if base_save_path and not request_config.get("save_path"):
                     save_path = Path(base_save_path)
-                    request_config["save_path"] = str(save_path.with_name(f"{save_path.stem}{i}{save_path.suffix}"))
-                # TODO: use queue to receive request from client and dispatch, currently we just send the same request multiple times for testing
+                    request_config["save_path"] = str(save_path.with_name(f"{save_path.stem}{room}{save_path.suffix}"))
+
                 with self._lock:
                     current_request = request_config
+
+                if batch_request_start_ts is None:
+                    batch_request_start_ts = time.time()
+
                 self.send_request(current_request)
                 self.logger.info(
                     "Dispatched request room=%s save_path=%s",
-                    i,
+                    room,
                     request_config.get("save_path"),
                 )
+                expected_rooms.add(room)
 
-                expected_rooms.add(i)
+                _drain_decoder_results_non_block()
 
             self.logger.info(
                 "Waiting for decoder results: expected=%s on port=%s",
@@ -562,42 +740,18 @@ class ControllerService(BaseService):
             )
             while len(received_rooms) < len(expected_rooms):
                 result = self.req_mgr.receive(result_port)
-                if not isinstance(result, dict):
-                    self.logger.warning("Ignored non-dict decoder result: %s", result)
-                    continue
-                room = result.get("data_bootstrap_room")
-                if room is None:
-                    self.logger.warning("Ignored decoder result without data_bootstrap_room: %s", result)
-                    continue
-                room = int(room)
-                if room not in expected_rooms:
-                    self.logger.warning("Ignored decoder result for unexpected room=%s: %s", room, result)
-                    continue
-                if room in received_rooms:
-                    self.logger.info("Duplicate decoder result for room=%s ignored", room)
-                    continue
-
-                received_rooms.add(room)
-                received_results.append(result)
-
-                if result.get("ok", False):
-                    self.logger.info(
-                        "Decoder result received room=%s save_path=%s (%s/%s)",
-                        room,
-                        result.get("save_path"),
-                        len(received_rooms),
-                        len(expected_rooms),
-                    )
-                else:
-                    self.logger.error(
-                        "Decoder result failed room=%s error=%s (%s/%s)",
-                        room,
-                        result.get("error"),
-                        len(received_rooms),
-                        len(expected_rooms),
-                    )
+                _handle_decoder_result(result)
 
             self.logger.info("All decoder results received. Controller exiting.")
+            if batch_request_start_ts is None:
+                batch_request_start_ts = time.time()
+            batch_total_time_s = time.time() - batch_request_start_ts
+            self.logger.info(
+                "Batch total elapsed time: requests=%s completed=%s total_time_s=%.3f",
+                len(expected_rooms),
+                len(received_rooms),
+                batch_total_time_s,
+            )
         finally:
             self._shutting_down = True
             monitor_stop_event.set()

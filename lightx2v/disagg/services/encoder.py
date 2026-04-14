@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -76,7 +77,17 @@ class EncoderService(BaseService):
             daemon=True,
         )
         self._reporter_thread.start()
+        self.sync_comm = str(os.getenv("SYNC_COMM", "")).strip().lower() not in ("", "0", "false", "no", "off")
         self.load_models()
+
+    def _wait_sender_success(self, room: int, sender: DataSender):
+        while True:
+            status = sender.poll()
+            if status == DataPoll.Success:
+                return
+            if status == DataPoll.Failed:
+                raise RuntimeError(f"DataSender transfer failed for room={room}")
+            time.sleep(0.001)
 
     def _get_queue_metrics(self) -> dict[str, Any]:
         with self._queue_metrics_lock:
@@ -185,7 +196,7 @@ class EncoderService(BaseService):
         return True
 
     def init(self, config):
-        self.config = config
+        self._sync_runtime_config(config)
         shared_slots = int(self.config.get("rdma_buffer_slots", self._request_slots))
         shared_slot_size = int(self.config.get("rdma_buffer_slot_size", 4096))
         self._request_server_ip = str(self.config.get("rdma_request_host", self._request_server_ip))
@@ -237,13 +248,6 @@ class EncoderService(BaseService):
         )
         self.data_mgr.init(data_args, data_bootstrap_room)
         self.data_sender[data_bootstrap_room] = DataSender(self.data_mgr, data_bootstrap_addr, data_bootstrap_room)
-
-        phase1_meta = {
-            "request_config": dict(self.config),
-            "encoder_node_address": self.data_mgr.get_localhost(),
-            "encoder_session_id": self.data_mgr.get_session_id(),
-        }
-        self._phase1_rdma_buffer.produce(phase1_meta)
 
     def load_models(self):
         self.logger.info("Loading Encoder Models...")
@@ -345,6 +349,8 @@ class EncoderService(BaseService):
         """
         self.logger.info("Starting processing in EncoderService...")
         room = int(config.get("data_bootstrap_room", 0))
+        encoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("encoder", {})
+        encoder_metrics["compute_start_ts"] = time.time()
 
         room_buffers = self._rdma_buffers.get(room)
         sender = self.data_sender.get(room)
@@ -411,6 +417,7 @@ class EncoderService(BaseService):
         else:
             raise ValueError(f"Unsupported task: {task}")
 
+        encoder_metrics["compute_end_ts"] = time.time()
         self.logger.info("Encode processing completed. Preparing to send data...")
 
         if self.data_mgr is not None and sender is not None:
@@ -499,7 +506,19 @@ class EncoderService(BaseService):
                 meta_buf[: len(meta_bytes)].copy_(torch.from_numpy(np.frombuffer(meta_bytes, dtype=np.uint8)))
 
             buffer_ptrs = [buf.data_ptr() for buf in room_buffers]
+            # Publish phase1 request metadata after compute so downstream can see latest metrics.
+            encoder_metrics["output_enqueued_ts"] = time.time()
+            phase1_meta = {
+                "request_config": dict(config),
+                "encoder_node_address": self.data_mgr.get_localhost(),
+                "encoder_session_id": self.data_mgr.get_session_id(),
+            }
+            if self._phase1_rdma_buffer is None:
+                raise RuntimeError("phase1 RDMA buffer is not ready")
+            self._phase1_rdma_buffer.produce(phase1_meta)
             sender.send(buffer_ptrs)
+            if self.sync_comm:
+                self._wait_sender_success(room, sender)
 
     def release_memory(self, room: int):
         """
@@ -561,6 +580,11 @@ class EncoderService(BaseService):
             if self._request_rdma_buffer is not None:
                 config = self._request_rdma_buffer.consume()
                 if config is not None:
+                    if not isinstance(config, dict) or "data_bootstrap_room" not in config:
+                        self.logger.warning("Ignored incomplete request packet from RDMA buffer: %s", config)
+                        continue
+                    encoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("encoder", {})
+                    encoder_metrics["request_received_ts"] = time.time()
                     self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
                     req_queue.append(config)
 
@@ -588,6 +612,10 @@ class EncoderService(BaseService):
             for room in list(complete_queue.keys()):
                 sender = self.data_sender.get(room)
                 if sender is None:
+                    completed_rooms.append(room)
+                    continue
+
+                if self.sync_comm:
                     completed_rooms.append(room)
                     continue
 

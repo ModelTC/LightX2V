@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-SCRIPT_NAME="run_wan_t2v_service.sh"
+SCRIPT_NAME="run_wan22_i2v_distill.sh"
 
-list_port=(5566 7788 12788 17788 27788)
+list_port=(5566 12788 17788 27788)
 
-n=10
+n=30
 list_n=($(seq 0 $((n-1))))
 
-PORTS=(5555 12787)
+PORTS=(5555 7788 7789 7790 12787)
 
 for a in "${list_port[@]}"; do
     for b in "${list_n[@]}"; do
@@ -70,6 +70,28 @@ if [[ -n "${script_pids}" ]]; then
 else
     echo "No running process found for ${SCRIPT_NAME}"
 fi
+
+# Fallback cleanup for orphaned disagg service processes.
+cleanup_patterns=(
+    "lightx2v.disagg.examples.run_service"
+    "python -m lightx2v.disagg"
+    "conda run -n lightx2v bash scripts/disagg/run_wan22_i2v_distill.sh"
+)
+
+for pattern in "${cleanup_patterns[@]}"; do
+    echo "Stopping processes matching pattern: ${pattern}"
+    matched_pids=$(pgrep -f "$pattern" || true)
+    if [[ -z "${matched_pids}" ]]; then
+        echo "No process matched: ${pattern}"
+        continue
+    fi
+
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        echo "Killing matched pid=$pid"
+        kill_pid_gracefully "$pid"
+    done <<< "$matched_pids"
+done
 
 for port in "${PORTS[@]}"; do
     echo "Stopping listeners on port ${port}"
