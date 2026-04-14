@@ -792,6 +792,7 @@ class T5EncoderModel:
         quant_scheme=None,
         lazy_load=False,
         load_from_rank0=False,
+        dummy_model=False,
     ):
         self.text_len = text_len
         self.dtype = dtype
@@ -821,24 +822,28 @@ class T5EncoderModel:
             .requires_grad_(False)
         )
 
-        weights_dict = load_weights(
-            self.checkpoint_path,
-            cpu_offload=cpu_offload,
-            load_from_rank0=load_from_rank0,
-        )
+        if not dummy_model:
+            weights_dict = load_weights(
+                self.checkpoint_path,
+                cpu_offload=cpu_offload,
+                load_from_rank0=load_from_rank0,
+            )
 
-        if cpu_offload:
-            block_weights_dict = split_block_weights(weights_dict)
-            if lazy_load:
-                model.blocks_weights.load({})
-            else:
-                model.blocks_weights.load(block_weights_dict)
-            del block_weights_dict
+            if cpu_offload:
+                block_weights_dict = split_block_weights(weights_dict)
+                if lazy_load:
+                    model.blocks_weights.load({})
+                else:
+                    model.blocks_weights.load(block_weights_dict)
+                del block_weights_dict
+                gc.collect()
+
+            model.load_state_dict(weights_dict)
+            del weights_dict
             gc.collect()
+        else:
+            logger.info("[DummyModel] Skipping T5 weight loading, using random init")
 
-        model.load_state_dict(weights_dict)
-        del weights_dict
-        gc.collect()
         self.model = model
         if shard_fn is not None:
             self.model = shard_fn(self.model, sync_module_states=False)

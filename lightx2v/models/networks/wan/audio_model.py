@@ -43,6 +43,26 @@ class WanAudioModel(WanModel):
                 adapter_model_name = "audio_adapter_model.safetensors"
             self.config["adapter_model_path"] = os.path.join(self.config["model_path"], adapter_model_name)
 
+        if self.config.get("dummy_model", False):
+            from lightx2v.models.networks.base_model import SAFETENSORS_DTYPE_MAP, BaseTransformerModel
+
+            dummy_device = str(self.device)
+            logger.info(f"[DummyModel] Generating random adapter weights on device={dummy_device}")
+            tensors_meta = BaseTransformerModel._read_safetensors_metadata(self.config["adapter_model_path"])
+            adapter_weights_dict = {}
+            from lightx2v.utils.envs import GET_DTYPE
+
+            for key, meta in tensors_meta.items():
+                if "audio" in key:
+                    continue
+                shape = meta["shape"]
+                dtype = GET_DTYPE()
+                original_dtype = SAFETENSORS_DTYPE_MAP.get(meta["dtype"])
+                if original_dtype is not None and not original_dtype.is_floating_point:
+                    dtype = original_dtype
+                adapter_weights_dict[key] = torch.randn(shape, dtype=dtype, device=dummy_device) if dtype.is_floating_point else torch.zeros(shape, dtype=dtype, device=dummy_device)
+            return adapter_weights_dict
+
         adapter_offload = self.config.get("cpu_offload", False)
         load_from_rank0 = self.config.get("load_from_rank0", False)
         adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)

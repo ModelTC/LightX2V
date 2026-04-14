@@ -843,7 +843,7 @@ class WanVAE_(nn.Module):
         return y.transpose(1, 2).to(x)
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, load_from_rank0=False, pruning_rate=0.0, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False, dtype=torch.float, load_from_rank0=False, pruning_rate=0.0, dummy_model=False, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
@@ -860,16 +860,20 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
     )
     cfg.update(**kwargs)
 
-    # init model
-    with torch.device("meta"):
+    if dummy_model:
+        logger.info("[DummyModel] Skipping VAE weight loading, using random init")
         model = WanVAE_(**cfg)
+    else:
+        # init model
+        with torch.device("meta"):
+            model = WanVAE_(**cfg)
 
-    # load checkpoint
-    weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
-    for k in weights_dict.keys():
-        if weights_dict[k].dtype != dtype:
-            weights_dict[k] = weights_dict[k].to(dtype)
-    model.load_state_dict(weights_dict, assign=True)
+        # load checkpoint
+        weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
+        for k in weights_dict.keys():
+            if weights_dict[k].dtype != dtype:
+                weights_dict[k] = weights_dict[k].to(dtype)
+        model.load_state_dict(weights_dict, assign=True)
 
     # Convert Conv3d weights to channels_last_3d for cuDNN optimization
     if GET_USE_CHANNELS_LAST_3D():
@@ -893,6 +897,7 @@ class WanVAE:
         load_from_rank0=False,
         use_lightvae=False,
         use_cache_vae=False,
+        dummy_model=False,
     ):
         self.dtype = dtype
         self.device = device
@@ -985,7 +990,7 @@ class WanVAE:
 
         # init model
         self.model = (
-            _video_vae(pretrained_path=vae_path, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0, pruning_rate=pruning_rate)
+            _video_vae(pretrained_path=vae_path, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0, pruning_rate=pruning_rate, dummy_model=dummy_model)
             .eval()
             .requires_grad_(False)
             .to(device)

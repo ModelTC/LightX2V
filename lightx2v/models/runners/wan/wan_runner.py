@@ -122,6 +122,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 cpu_offload=clip_offload,
                 use_31_block=self.config.get("use_31_block", True),
                 load_from_rank0=self.config.get("load_from_rank0", False),
+                dummy_model=self.config.get("dummy_model", False),
             )
 
         return image_encoder
@@ -162,6 +163,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             quant_scheme=t5_quant_scheme,
             load_from_rank0=self.config.get("load_from_rank0", False),
             lazy_load=self.config.get("t5_lazy_load", False),
+            dummy_model=self.config.get("dummy_model", False),
         )
         text_encoders = [text_encoder]
         return text_encoders
@@ -190,6 +192,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
@@ -213,6 +216,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
