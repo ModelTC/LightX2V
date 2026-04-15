@@ -129,7 +129,11 @@ class ApiServer:
             result = await generation_service.generate_with_stop_event(message, task_info.stop_event)
 
             if result:
-                task_manager.complete_task(task_id, result.save_result_path)
+                task_manager.complete_task(
+                    task_id,
+                    save_result_path=result.save_result_path or None,
+                    result_png=getattr(result, "result_png", None),
+                )
                 logger.info(f"Task {task_id} completed successfully")
             else:
                 if task_info.stop_event.is_set():
