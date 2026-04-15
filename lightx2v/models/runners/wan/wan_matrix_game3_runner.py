@@ -1135,19 +1135,19 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         return build_wan_model_with_lora(WanMtxg3Model, self.config, model_kwargs, lora_configs, model_type="wan2.2")
 
     def init_scheduler(self):
-        # Distilled MG3 is already stable on the shared Wan scheduler path. Base MG3
-        # is far more sensitive to the exact UniPC implementation, so route it
-        # through the inlined official FlowUniPC scheduler instead of the generic adapter.
-        if self.config.get("use_base_model", False):
-            try:
-                self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, FlowUniPCMultistepScheduler)
-                logger.info("[matrix-game-3] using inlined official FlowUniPCMultistepScheduler for base-model sampling.")
-                return
-            except Exception as exc:
-                logger.warning(
-                    "[matrix-game-3] failed to initialize inlined official base scheduler ({}); falling back to LightX2V WanScheduler.",
-                    exc,
-                )
+        # MG3 relies on a fixed latent prefix that must be re-injected after every
+        # diffusion step. The inlined FlowUniPC adapter already mirrors the official
+        # per-step semantics while keeping the denoiser itself on the native
+        # LightX2V path, so prefer it for both base and distilled checkpoints.
+        try:
+            self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, FlowUniPCMultistepScheduler)
+            logger.info("[matrix-game-3] using inlined FlowUniPCMultistepScheduler for MG3 sampling.")
+            return
+        except Exception as exc:
+            logger.warning(
+                "[matrix-game-3] failed to initialize inlined MG3 scheduler ({}); falling back to LightX2V WanScheduler.",
+                exc,
+            )
         super().init_scheduler()
 
     def _get_sub_model_folder(self) -> str:

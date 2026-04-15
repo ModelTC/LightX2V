@@ -28,9 +28,22 @@ class WanScheduler(BaseScheduler):
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
 
+    def _uses_conditioned_latent_prefix(self):
+        """Whether this Wan variant keeps a fixed latent prefix during diffusion.
+
+        Vanilla Wan2.2 i2v/s2v already does this for the first encoded frames. MG3
+        reuses the same mechanism, but the carried prefix can be longer on later
+        segments because previous latent tails are stitched back in as conditioning.
+        """
+        task = self.config.get("task")
+        model_cls = str(self.config.get("model_cls", ""))
+        if task not in ["i2v", "s2v", "rs2v"]:
+            return False
+        return model_cls in {"wan2.2", "wan2.2_matrix_game3"}
+
     def prepare(self, seed, latent_shape, image_encoder_output=None):
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
-            self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
+        if self._uses_conditioned_latent_prefix():
+            self.vae_encoder_out = image_encoder_output["vae_encoder_out"] if image_encoder_output is not None else None
 
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
@@ -64,7 +77,7 @@ class WanScheduler(BaseScheduler):
             device=AI_DEVICE,
             generator=self.generator,
         )
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self._uses_conditioned_latent_prefix() and self.vae_encoder_out is not None:
             self.mask = masks_like(self.latents, zero=True)
             self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents
 
@@ -328,7 +341,7 @@ class WanScheduler(BaseScheduler):
     def step_pre(self, step_index):
         super().step_pre(step_index)
         self.timestep_input = torch.stack([self.timesteps[self.step_index]])
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self._uses_conditioned_latent_prefix() and self.mask is not None:
             self.timestep_input = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
 
     def step_post(self):
@@ -370,5 +383,5 @@ class WanScheduler(BaseScheduler):
             self.lower_order_nums += 1
 
         self.latents = prev_sample
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self._uses_conditioned_latent_prefix() and self.mask is not None and self.vae_encoder_out is not None:
             self.latents = (1.0 - self.mask) * self.vae_encoder_out + self.mask * self.latents
