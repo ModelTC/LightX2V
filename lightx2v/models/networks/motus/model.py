@@ -17,8 +17,8 @@ from lightx2v.models.networks.motus.infer.post_infer import MotusPostInfer
 from lightx2v.models.networks.motus.infer.pre_infer import MotusPreInfer
 from lightx2v.models.networks.motus.infer.transformer_infer import MotusTransformerInfer
 from lightx2v.models.networks.motus.ops import LinearWithMM, TripleQKVProjector
+from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.motus.primitives import rope_apply
-from lightx2v.models.networks.motus.t5 import T5EncoderModel
 from lightx2v.models.schedulers.motus.scheduler import MotusScheduler
 
 
@@ -42,6 +42,7 @@ class MotusModel:
         self.t5_encoder = self._load_t5_encoder()
         self.vlm_processor = self._load_vlm_processor()
         self._load_normalization_stats()
+        self._rope_cos_sin_cache = {}
         self._build_native_stack()
 
     def _build_native_stack(self):
@@ -96,7 +97,7 @@ class MotusModel:
         return self._t5_encoder_cls(
             text_len=512,
             dtype=torch.bfloat16,
-            device=str(self.device),
+            device=self.device,
             checkpoint_path=os.path.join(self.config["wan_path"], "models_t5_umt5-xxl-enc-bf16.pth"),
             tokenizer_path=os.path.join(self.config["wan_path"], "google", "umt5-xxl"),
         )
@@ -233,6 +234,31 @@ class MotusModel:
             freqs = freqs.to(self.device)
         return freqs
 
+    def get_wan_rotary_cos_sin(self, grid_size: tuple[int, int, int]):
+        if grid_size in self._rope_cos_sin_cache:
+            return self._rope_cos_sin_cache[grid_size]
+
+        freqs = self.get_wan_freqs()
+        head_dim_half = freqs.shape[1]
+        c_f = head_dim_half - 2 * (head_dim_half // 3)
+        c_h = head_dim_half // 3
+        c_w = head_dim_half // 3
+        fpart, hpart, wpart = freqs.split([c_f, c_h, c_w], dim=1)
+        f, h, w = grid_size
+
+        freq_grid = torch.cat(
+            [
+                fpart[:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                hpart[:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                wpart[:w].view(1, 1, w, -1).expand(f, h, w, -1),
+            ],
+            dim=-1,
+        ).reshape(f * h * w, -1)
+
+        cos_sin = (freq_grid.real.contiguous(), freq_grid.imag.contiguous())
+        self._rope_cos_sin_cache[grid_size] = cos_sin
+        return cos_sin
+
     def prepare_frame(self, image_path: str) -> torch.Tensor:
         image = Image.open(image_path).convert("RGB")
         image_np = np.asarray(image).astype(np.float32) / 255.0
@@ -263,7 +289,10 @@ class MotusModel:
         return f"{prefix}{prompt}"
 
     def build_t5_embeddings(self, instruction: str):
-        t5_out = self.t5_encoder([instruction], str(self.device))
+        if hasattr(self.t5_encoder, "infer"):
+            t5_out = self.t5_encoder.infer([instruction])
+        else:
+            t5_out = self.t5_encoder([instruction], self.device)
         if isinstance(t5_out, torch.Tensor):
             return [t5_out.squeeze(0)] if t5_out.dim() == 3 else [t5_out]
         return t5_out

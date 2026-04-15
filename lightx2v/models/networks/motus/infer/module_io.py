@@ -3,6 +3,8 @@ from typing import Any
 
 import torch
 
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
+
 
 @dataclass
 class MotusPreInferModuleOutput:
@@ -15,7 +17,7 @@ class MotusPreInferModuleOutput:
     image_context: torch.Tensor | None
     und_tokens: torch.Tensor
     condition_frame_latent: torch.Tensor
-    grid_sizes: torch.Tensor
+    grid_sizes: GridOutput
 
 
 @dataclass

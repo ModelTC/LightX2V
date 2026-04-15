@@ -1,5 +1,7 @@
 import torch
 
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
+
 from .module_io import MotusPreInferModuleOutput
 
 
@@ -27,6 +29,9 @@ class MotusPreInfer:
         und_tokens = self.adapter.model.und_module.extract_und_features(vlm_inputs)
         image_context = self.adapter.model.und_module.extract_image_context(vlm_inputs)
 
+        batch_size = state.shape[0]
+        grid_sizes = self.adapter.model.grid_sizes[:batch_size]
+
         self.scheduler.prepare(
             seed=seed,
             condition_frame_latent=condition_frame_latent,
@@ -45,5 +50,8 @@ class MotusPreInfer:
             image_context=image_context,
             und_tokens=und_tokens,
             condition_frame_latent=condition_frame_latent,
-            grid_sizes=self.adapter.model.grid_sizes[: state.shape[0]],
+            grid_sizes=GridOutput(
+                tensor=grid_sizes,
+                tuple=tuple(int(v) for v in grid_sizes[0].tolist()),
+            ),
         )

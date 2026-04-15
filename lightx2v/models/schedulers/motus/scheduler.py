@@ -10,7 +10,15 @@ class MotusScheduler(BaseScheduler):
         self.action_latents = None
         self.timesteps = None
 
+    def _ensure_video_latent_5d(self, latent: torch.Tensor) -> torch.Tensor:
+        if latent.dim() == 5:
+            return latent
+        if latent.dim() == 4:
+            return latent.unsqueeze(0)
+        raise ValueError(f"Expected condition_frame_latent to be 4D or 5D, got shape {tuple(latent.shape)}")
+
     def prepare(self, seed, condition_frame_latent, action_shape, dtype, device):
+        condition_frame_latent = self._ensure_video_latent_5d(condition_frame_latent)
         batch, channels, _, latent_h, latent_w = condition_frame_latent.shape
         total_latent_frames = 1 + self.config["num_video_frames"] // 4
         generator = None if seed is None else torch.Generator(device=device).manual_seed(seed)
@@ -33,6 +41,7 @@ class MotusScheduler(BaseScheduler):
             yield step_index, t, t_next, t_next - t
 
     def step(self, video_velocity, action_velocity, dt, condition_frame_latent):
+        condition_frame_latent = self._ensure_video_latent_5d(condition_frame_latent)
         self.video_latents = self.video_latents + video_velocity * dt
         self.action_latents = self.action_latents + action_velocity * dt
         self.video_latents[:, :, 0:1] = condition_frame_latent

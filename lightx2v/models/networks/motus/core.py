@@ -7,12 +7,22 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, Qwen3VLForConditionalGeneration
 
+from lightx2v.models.networks.wan.infer.triton_ops import fuse_scale_shift_kernel
+from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
+
 from .action_expert import ActionExpert, ActionExpertConfig
-from .primitives import sinusoidal_embedding_1d
 from .und_expert import UndExpert, UndExpertConfig
 from .wan_model import WanVideoModel
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_modulation(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
+    scale = scale.squeeze(2)
+    shift = shift.squeeze(2)
+    if x.is_cuda:
+        return fuse_scale_shift_kernel(x.float().contiguous(), scale.contiguous(), shift.contiguous())
+    return x.float() * (1 + scale) + shift
 
 
 @dataclass
@@ -89,7 +99,7 @@ class VideoModule(nn.Module):
     def process_ffn(self, video_tokens: torch.Tensor, video_adaln_modulation: tuple, layer_idx: int) -> torch.Tensor:
         wan_layer = self.video_model.wan_model.blocks[layer_idx]
         v_mod = video_adaln_modulation
-        ffn_input = wan_layer.norm2(video_tokens).float() * (1 + v_mod[4].squeeze(2)) + v_mod[3].squeeze(2)
+        ffn_input = _apply_modulation(wan_layer.norm2(video_tokens), v_mod[4], v_mod[3])
         ffn_out = wan_layer.ffn(ffn_input)
         with torch.amp.autocast("cuda", dtype=torch.float32):
             return video_tokens + ffn_out * v_mod[5].squeeze(2)
@@ -223,7 +233,7 @@ class ActionModule(nn.Module):
     def process_ffn(self, action_tokens: torch.Tensor, action_adaln_modulation: tuple, layer_idx: int) -> torch.Tensor:
         action_block = self.action_expert.blocks[layer_idx]
         a_mod = action_adaln_modulation
-        ffn_input = action_block.norm2(action_tokens).float() * (1 + a_mod[4].squeeze(2)) + a_mod[3].squeeze(2)
+        ffn_input = _apply_modulation(action_block.norm2(action_tokens), a_mod[4], a_mod[3])
         ffn_out = action_block.ffn(ffn_input)
         with torch.amp.autocast("cuda", dtype=torch.float32):
             return action_tokens + ffn_out * a_mod[5].squeeze(2)

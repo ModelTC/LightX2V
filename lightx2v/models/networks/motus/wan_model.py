@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from lightx2v.models.networks.motus.wan.model import WanModel
-from lightx2v.models.networks.motus.wan.vae2_2 import Wan2_2_VAE
+from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 
 try:
     from safetensors.torch import load_file as safe_load_file
@@ -32,17 +32,21 @@ class WanVideoModel(nn.Module):
         self.precision = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}[precision]
         self.wan_model = WanModel(**model_config)
         self.wan_model.to(device=self.device, dtype=self.precision)
-        self.vae = Wan2_2_VAE(vae_pth=vae_path, device=self.device)
+        self.vae = Wan2_2_VAE(vae_path=vae_path, dtype=self.precision, device=self.device)
 
     def encode_video(self, video_pixels: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
-            return self.vae.encode(video_pixels)
+            return self.vae.encode(video_pixels.to(device=self.device, dtype=self.precision))
 
     def decode_video(self, video_latents: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
-            return torch.stack([self.vae.decode([video_latents[i]])[0] for i in range(video_latents.shape[0])], dim=0)
-            # TODO: maybe can speed up with batch to tensor
-            # return self.vae.model.decode(video_latents, self.vae.scale).float().clamp(-1, 1)
+            decoded = []
+            for i in range(video_latents.shape[0]):
+                sample = self.vae.decode(video_latents[i].to(device=self.device, dtype=self.precision))
+                if sample.dim() > 4 and sample.shape[0] == 1:
+                    sample = sample.squeeze(0)
+                decoded.append(sample)
+            return torch.stack(decoded, dim=0)
 
     @classmethod
     def from_config(cls, config_path: str, vae_path: str, device: str = "cuda", precision: str = "bfloat16"):
