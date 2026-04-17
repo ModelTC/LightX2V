@@ -41,6 +41,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
+- [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: Latest News
 
