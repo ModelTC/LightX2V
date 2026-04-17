@@ -11,8 +11,13 @@ import cv2
 import matplotlib
 import numpy as np
 import requests
-import trimesh
-from scipy.spatial.transform import Rotation
+
+try:
+    import trimesh
+    from scipy.spatial.transform import Rotation
+except ImportError:
+    trimesh = None
+    Rotation = None
 
 
 def segment_sky(image_or_path, onnx_session):
@@ -216,7 +221,7 @@ def convert_predictions_to_glb_scene(
     mask_sky_bg=False,
     mask_ambiguous=False,
     as_mesh=True,
-) -> trimesh.Scene:
+):
     """
     Converts model predictions to a 3D scene represented as a GLB file.
 
@@ -459,7 +464,7 @@ def convert_predictions_to_glb_scene(
 
 
 def integrate_camera_into_scene(
-    scene: trimesh.Scene,
+    scene,
     camera_transform: np.ndarray,
     camera_color: tuple,
     scale_factor: float,
@@ -546,7 +551,7 @@ def apply_transformation_to_points(transform_matrix: np.ndarray, point_array: np
     return final_result
 
 
-def generate_camera_mesh_faces(base_cone_mesh: trimesh.Trimesh) -> np.ndarray:
+def generate_camera_mesh_faces(base_cone_mesh):
     """
     Generates face indices for a complex camera mesh composed of multiple cone layers.
 
