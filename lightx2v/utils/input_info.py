@@ -283,6 +283,25 @@ class WorldPlayI2VInputInfo:
 
 
 @dataclass
+class WorldMirrorReconInputInfo:
+    """Input info for HY-WorldMirror-2.0 3D reconstruction.
+
+    Unlike the diffusion tasks, this task takes a directory / video / image
+    and saves multi-view depth / normal / Gaussian-splat results to disk.
+    """
+
+    seed: int = field(default_factory=int)
+    # Input may be a directory of images, a single image, or a video.
+    input_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)  # output root dir
+    strict_output_path: str = field(default_factory=lambda: None)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # Optional priors
+    prior_cam_path: str = field(default_factory=lambda: None)
+    prior_depth_path: str = field(default_factory=lambda: None)
+
+
+@dataclass
 class WorldPlayT2VInputInfo:
     """Input info for WorldPlay model (text-to-video with action/pose conditioning)."""
 
@@ -321,6 +340,7 @@ task_dict = {
     "i2av": I2AVInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,
+    "recon": WorldMirrorReconInputInfo,
 }
 
 
