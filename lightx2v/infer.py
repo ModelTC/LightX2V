@@ -194,18 +194,27 @@ def main():
 
     validate_config_paths(config)
 
+    stop_after_runner_init = False
     with ProfilingContext4DebugL1("Total Cost"):
         # init runner
         runner = init_runner(config)
+        print_config(runner.config)
+        stop_after_runner_init = bool(runner.config.get("debug_stop_after_runner_init", False))
+        if stop_after_runner_init:
+            logger.warning("`debug_stop_after_runner_init` is enabled. Stopping after runner initialization.")
+        else:
         # start to infer
-        data = args.__dict__
-        update_input_info_from_dict(input_info, data)
-        runner.run_pipeline(input_info)
+            data = args.__dict__
+            update_input_info_from_dict(input_info, data)
+            runner.run_pipeline(input_info)
 
     # Clean up distributed process group
     if dist.is_initialized():
         dist.destroy_process_group()
         logger.info("Distributed process group cleaned up")
+
+    if stop_after_runner_init:
+        return
 
 
 if __name__ == "__main__":
