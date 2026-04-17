@@ -79,7 +79,7 @@ struct FP16_GEMM_GATHER_V2 {
         }
 
         // ---- Accumulators / tile registers (same layout as nopf) ----
-        
+
         simd<sycl::half, 8*16>  acc[4][4] = {0};
         simd<sycl::half, 8*16>  a_tile[2][4];    // A tiles:  a_tile[buf][m_blk]
         simd<sycl::half, 16*16> b_tile[2][4];    // B tiles:  b_tile[buf][n_blk]  (VNNI)

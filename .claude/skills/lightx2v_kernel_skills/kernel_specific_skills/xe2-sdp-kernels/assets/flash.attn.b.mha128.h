@@ -19,9 +19,9 @@ ESIMD_INLINE void flashAttnBMha128(
   constexpr uint32_t slmSizeSoftMaxHistoric = 0 * sizeof(float);
   constexpr uint32_t slmSizeSoftMaxCompensation = 0 * sizeof(float);
   constexpr uint32_t slmSize =
-    slmSizeV + 
-    slmSizeSoftMaxSum + 
-    slmSizeSoftMaxHistoric + 
+    slmSizeV +
+    slmSizeSoftMaxSum +
+    slmSizeSoftMaxHistoric +
     slmSizeSoftMaxCompensation;
   constexpr uint32_t baseOffsetInc16[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
   __ESIMD_NS::slm_init(slmSize);
@@ -689,7 +689,7 @@ ESIMD_INLINE void inplaceNormFp16(
 
   for (int nn = 0; nn < loopCount; nn++) {
     simd<fp16, 256> fp16Abs;
-    fp16Input = 
+    fp16Input =
       __ESIMD_ENS::lsc_load_2d<
       fp16,
       16,

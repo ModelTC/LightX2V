@@ -972,4 +972,3 @@ icpx -fsycl -O3 kernel.cpp -Xs "-doubleGRF" -o kernel
 **Rule of thumb**: on Xe1, if total live FP16 elements across all `simd` variables in the hot loop exceeds ~1500, consider `-doubleGRF`.
 
 ---
-
