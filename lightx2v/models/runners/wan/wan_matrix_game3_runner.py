@@ -122,7 +122,7 @@ def _matrix_game3_combine_data(data, num_frames=57, keyboard_dim=4, mouse=True):
     return {"keyboard_condition": keyboard_condition}
 
 
-def _matrix_game3_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> dict[str, Any]:
+def _matrix_game3_basic_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> dict[str, Any]:
     tensor = tensor.detach()
     tensor_fp32 = tensor.to(dtype=torch.float32)
     flattened = tensor_fp32.reshape(-1)
@@ -136,6 +136,26 @@ def _matrix_game3_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> di
         "std": float(tensor_fp32.std(unbiased=False).item()),
         "head": flattened[:head_values].cpu().tolist(),
     }
+
+
+def _matrix_game3_tensor_probe(tensor: torch.Tensor, mask: Optional[torch.Tensor] = None, head_values: int = 8) -> dict[str, Any]:
+    probe = {"full_latent": _matrix_game3_basic_tensor_probe(tensor, head_values=head_values)}
+    if mask is None or mask.shape != tensor.shape:
+        return probe
+
+    mask_fp32 = mask.detach().to(dtype=torch.float32)
+    time_activity = mask_fp32.amax(dim=(0, 2, 3))
+    sampled_indices = torch.nonzero(time_activity > 0.0, as_tuple=False).flatten()
+    fixed_latent_frames = int(sampled_indices[0].item()) if sampled_indices.numel() > 0 else tensor.shape[1]
+    probe["fixed_latent_frames"] = fixed_latent_frames
+
+    if fixed_latent_frames < tensor.shape[1]:
+        sampled_region = tensor[:, fixed_latent_frames:]
+        probe["sampled_region"] = _matrix_game3_basic_tensor_probe(sampled_region, head_values=head_values)
+    else:
+        probe["sampled_region"] = "empty (all latent frames are fixed)"
+
+    return probe
 
 
 def _matrix_game3_log_debug_payload(name: str, payload: dict[str, Any]) -> None:
@@ -1036,7 +1056,7 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
             prev_sample = (1.0 - self.mask) * self.vae_encoder_out + self.mask * prev_sample
         self.latents = prev_sample.to(dtype=GET_DTYPE())
         if self._debug_step_probe_enabled and self.step_index == self._debug_probe_step:
-            _matrix_game3_log_debug_payload(f"step_{self.step_index}_output_latent", _matrix_game3_tensor_probe(self.latents))
+            _matrix_game3_log_debug_payload(f"step_{self.step_index}_output_latent", _matrix_game3_tensor_probe(self.latents, mask=self.mask))
             self.debug_stop_requested = True
 
     def clear(self):
