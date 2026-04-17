@@ -4,8 +4,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from einops import rearrange
-from gsplat.rendering import rasterization
-from gsplat.strategy import DefaultStrategy
+
+try:
+    from gsplat.rendering import rasterization
+    from gsplat.strategy import DefaultStrategy
+except ImportError:
+    rasterization = None
+    DefaultStrategy = None
 from torch import Tensor
 
 from ..utils import act_gs, sh_utils

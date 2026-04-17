@@ -11,7 +11,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
-from plyfile import PlyData, PlyElement
+
+try:
+    from plyfile import PlyData, PlyElement
+except ImportError:
+    PlyData = None
+    PlyElement = None
 
 
 def save_camera_params(extrinsics, intrinsics, target_dir):
