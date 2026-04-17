@@ -385,3 +385,12 @@ python converter.py \
     --output_name merged_model \
     --single_file
 ```
+
+
+### 5. dit权重头导出
+#### 5.1 safetensors meta →  dump_\txt
+```bash
+python tools/convert/export_dummy_meta.py \
+    /data/temp/SekoTalk-v2.5-bf16-step4/ \
+ -o /data/temp/SekoTalk-v2.5-bf16-step4-dummy
+```

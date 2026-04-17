@@ -143,11 +143,23 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
 
     @staticmethod
     def _read_safetensors_metadata(file_path):
-        """Read tensor metadata (names, shapes, dtypes) from safetensors file header without loading data."""
+        """Read tensor metadata (names, shapes, dtypes) from safetensors file header without loading data.
+
+        Supports two kinds of safetensors files:
+        1. Full model files: metadata is extracted from normal tensor header entries.
+        2. Lightweight dummy-meta files (exported by tools/convert/export_dummy_meta.py):
+           all tensor metadata is stored in ``__metadata__._tensor_meta`` as a JSON string,
+           with ``__metadata__._is_dummy_meta == "true"`` as the marker.
+        """
         with open(file_path, "rb") as f:
             header_size = struct.unpack("<Q", f.read(8))[0]
             header_json = f.read(header_size).decode("utf-8")
         header = json.loads(header_json)
+
+        metadata = header.get("__metadata__", {})
+        if metadata.get("_is_dummy_meta") == "true" and "_tensor_meta" in metadata:
+            return json.loads(metadata["_tensor_meta"])
+
         tensors = {}
         for key, info in header.items():
             if key == "__metadata__":
