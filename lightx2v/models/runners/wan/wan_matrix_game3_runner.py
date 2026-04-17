@@ -170,6 +170,14 @@ def _matrix_game3_resolve_debug_first_frame_path(save_result_path: Optional[str]
     return Path.cwd() / "matrix_game3.debug_first_frame.png"
 
 
+def _matrix_game3_resolve_debug_frame_path(save_result_path: Optional[str], frame_index: int) -> Path:
+    if save_result_path:
+        output_path = Path(save_result_path)
+        suffix = output_path.suffix if output_path.suffix else ".mp4"
+        return output_path.with_name(output_path.name[: -len(suffix)] + f".debug_frame_{frame_index}.png")
+    return Path.cwd() / f"matrix_game3.debug_frame_{frame_index}.png"
+
+
 def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
     actions_single_action = [
         "forward",
@@ -2154,11 +2162,22 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             logger.warning("[matrix-game-3][debug] unexpected decoded image ndim: {}. Skipping first-frame save.", decoded_images.ndim)
             return
 
-        first_frame = decoded_images[0, :, 0].detach().float().add_(1.0).mul_(0.5).clamp_(0.0, 1.0).cpu()
-        frame_path = _matrix_game3_resolve_debug_first_frame_path(getattr(self.input_info, "save_result_path", None))
-        frame_path.parent.mkdir(parents=True, exist_ok=True)
-        TF.to_pil_image(first_frame).save(frame_path)
-        logger.info("[matrix-game-3][debug] saved decoded first frame to {}", frame_path)
+        save_result_path = getattr(self.input_info, "save_result_path", None)
+        frame_indices = [1, 32, 56]
+        total_frames = decoded_images.shape[2]
+        for frame_index in frame_indices:
+            if frame_index >= total_frames:
+                logger.warning(
+                    "[matrix-game-3][debug] requested decoded frame {} but total decoded frames are only {}. Skipping.",
+                    frame_index,
+                    total_frames,
+                )
+                continue
+            frame = decoded_images[0, :, frame_index].detach().float().add_(1.0).mul_(0.5).clamp_(0.0, 1.0).cpu()
+            frame_path = _matrix_game3_resolve_debug_frame_path(save_result_path, frame_index)
+            frame_path.parent.mkdir(parents=True, exist_ok=True)
+            TF.to_pil_image(frame).save(frame_path)
+            logger.info("[matrix-game-3][debug] saved decoded frame {} to {}", frame_index, frame_path)
 
     def run_main(self):
         self.init_run()
