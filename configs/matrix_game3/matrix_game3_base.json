@@ -17,8 +17,9 @@
     "sample_shift": 5.0,
     "sample_guide_scale": 5.0,
     "enable_cfg": true,
-    "debug_stop_after_scheduler_probe": true,
+    "debug_stop_after_scheduler_probe": false,
     "debug_scheduler_probe_step": 49,
+    "debug_stop_after_vae_decode": true,
 
     "first_clip_frame": 57,
     "clip_frame": 56,

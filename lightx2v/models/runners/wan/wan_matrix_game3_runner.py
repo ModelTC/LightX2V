@@ -162,6 +162,14 @@ def _matrix_game3_log_debug_payload(name: str, payload: dict[str, Any]) -> None:
     logger.info("[matrix-game-3][debug] {}:\n{}", name, json.dumps(payload, ensure_ascii=False, indent=4, default=str))
 
 
+def _matrix_game3_resolve_debug_first_frame_path(save_result_path: Optional[str]) -> Path:
+    if save_result_path:
+        output_path = Path(save_result_path)
+        suffix = output_path.suffix if output_path.suffix else ".mp4"
+        return output_path.with_name(output_path.name[: -len(suffix)] + ".debug_first_frame.png")
+    return Path.cwd() / "matrix_game3.debug_first_frame.png"
+
+
 def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
     actions_single_action = [
         "forward",
@@ -2139,6 +2147,19 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         self._mg3_current_segment_full_latents = latents.detach().clone()
         return latents
 
+    def _log_vae_decode_probe_and_save_frame(self, decoded_images: torch.Tensor) -> None:
+        _matrix_game3_log_debug_payload("vae_decode_output", _matrix_game3_basic_tensor_probe(decoded_images))
+
+        if decoded_images.ndim != 5:
+            logger.warning("[matrix-game-3][debug] unexpected decoded image ndim: {}. Skipping first-frame save.", decoded_images.ndim)
+            return
+
+        first_frame = decoded_images[0, :, 0].detach().float().add_(1.0).mul_(0.5).clamp_(0.0, 1.0).cpu()
+        frame_path = _matrix_game3_resolve_debug_first_frame_path(getattr(self.input_info, "save_result_path", None))
+        frame_path.parent.mkdir(parents=True, exist_ok=True)
+        TF.to_pil_image(first_frame).save(frame_path)
+        logger.info("[matrix-game-3][debug] saved decoded first frame to {}", frame_path)
+
     def run_main(self):
         self.init_run()
         if self.config.get("compile", False) and hasattr(self.model, "comple"):
@@ -2166,6 +2187,11 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                     self.gen_video = torch.cat(frames, dim=2)
                 else:
                     self.gen_video = self.run_vae_decoder(latents)
+                if self.config.get("debug_stop_after_vae_decode", False):
+                    self._log_vae_decode_probe_and_save_frame(self.gen_video)
+                    logger.warning("[matrix-game-3][debug] stopping after VAE decode probe.")
+                    self.end_run()
+                    return None
                 self.end_run_segment(segment_idx)
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
