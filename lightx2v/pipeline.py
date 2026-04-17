@@ -11,6 +11,10 @@ import torch.distributed as dist
 from loguru import logger
 
 try:
+    from lightx2v.models.runners.flux2_dev.flux2_dev_runner import Flux2DevRunner  # noqa: F401
+except (ImportError, ModuleNotFoundError) as e:
+    logger.warning(f"Flux2DevRunner not available: {e}")
+try:
     from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
 except (ImportError, ModuleNotFoundError) as e:
     logger.warning(f"Flux2KleinRunner not available: {e}")
@@ -132,6 +136,8 @@ class LightX2VPipeline:
             self.model_cls = "z_image"
         elif self.model_cls in ["flux2_klein"]:
             self.model_cls = "flux2_klein"
+        elif self.model_cls in ["flux2_dev"]:
+            self.model_cls = "flux2_dev"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 
