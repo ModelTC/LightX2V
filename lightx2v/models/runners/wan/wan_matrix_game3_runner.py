@@ -978,6 +978,7 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.debug_stop_requested = False
         self._debug_step_probe_enabled = bool(self.config.get("debug_stop_after_scheduler_probe", False))
         self._debug_timesteps_logged = False
+        self._debug_probe_step = int(self.config.get("debug_scheduler_probe_step", max(self.infer_steps - 1, 0)))
 
     def _reset_solver(self):
         self._solver = self.scheduler_cls()
@@ -1020,9 +1021,6 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.timestep_input = torch.stack([self._solver.timesteps[self.step_index].to(device=AI_DEVICE)])
 
     def step_post(self):
-        if self._debug_step_probe_enabled and self.step_index == 0:
-            _matrix_game3_log_debug_payload("step_0_input_latent", _matrix_game3_tensor_probe(self.latents))
-
         timestep = self._solver.timesteps[self.step_index].to(device=self.latents.device)
         prev_sample = self._solver.step(
             # Keep the model output in its original precision. The official MG3
@@ -1037,10 +1035,9 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         if self.mask is not None and self.vae_encoder_out is not None:
             prev_sample = (1.0 - self.mask) * self.vae_encoder_out + self.mask * prev_sample
         self.latents = prev_sample.to(dtype=GET_DTYPE())
-        if self._debug_step_probe_enabled and self.step_index in (0, 1):
+        if self._debug_step_probe_enabled and self.step_index == self._debug_probe_step:
             _matrix_game3_log_debug_payload(f"step_{self.step_index}_output_latent", _matrix_game3_tensor_probe(self.latents))
-            if self.step_index == 1:
-                self.debug_stop_requested = True
+            self.debug_stop_requested = True
 
     def clear(self):
         self._solver = None
