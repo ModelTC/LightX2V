@@ -68,8 +68,9 @@ class StateActionEncoder(nn.Module):
     def forward(self, state_tokens: torch.Tensor, action_tokens: torch.Tensor, registers: torch.Tensor = None) -> torch.Tensor:
         encoded = torch.cat([self.state_encoder(state_tokens), self.action_encoder(action_tokens)], dim=1)
         if registers is not None:
-            encoded = torch.cat([encoded, registers], dim=1)
-        return encoded + self.pos_embedding[:, : encoded.shape[1], :]
+            encoded = torch.cat([encoded, registers.to(dtype=encoded.dtype, device=encoded.device)], dim=1)
+        pos_embedding = self.pos_embedding[:, : encoded.shape[1], :].to(dtype=encoded.dtype, device=encoded.device)
+        return encoded + pos_embedding
 
 
 class ActionEncoder(nn.Module):
@@ -83,8 +84,9 @@ class ActionEncoder(nn.Module):
     def forward(self, state_tokens: torch.Tensor, action_tokens: torch.Tensor, registers: torch.Tensor = None) -> torch.Tensor:
         encoded = self.action_encoder(action_tokens)
         if registers is not None:
-            encoded = torch.cat([encoded, registers], dim=1)
-        return encoded + self.pos_embedding[:, : encoded.shape[1], :]
+            encoded = torch.cat([encoded, registers.to(dtype=encoded.dtype, device=encoded.device)], dim=1)
+        pos_embedding = self.pos_embedding[:, : encoded.shape[1], :].to(dtype=encoded.dtype, device=encoded.device)
+        return encoded + pos_embedding
 
 
 class ActionExpertBlock(nn.Module):

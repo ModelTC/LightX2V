@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +18,10 @@ from lightx2v.models.networks.motus.infer.post_infer import MotusPostInfer
 from lightx2v.models.networks.motus.infer.pre_infer import MotusPreInfer
 from lightx2v.models.networks.motus.infer.transformer_infer import MotusTransformerInfer
 from lightx2v.models.networks.motus.ops import LinearWithMM, TripleQKVProjector
-from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.motus.primitives import rope_apply
-from lightx2v.models.schedulers.motus.scheduler import MotusScheduler
 
 
 class MotusModel:
-    """Thin LightX2V wrapper over Motus native inference."""
-
     def __init__(self, config, device):
         self.config = config
         self.device = device
@@ -36,32 +33,37 @@ class MotusModel:
         self._motus_config_cls = MotusConfig
         self._resize_with_padding = resize_with_padding
         self._rope_apply = rope_apply
-        self._t5_encoder_cls = T5EncoderModel
 
         self.model = self._load_model().eval()
-        self.t5_encoder = self._load_t5_encoder()
         self.vlm_processor = self._load_vlm_processor()
         self._load_normalization_stats()
         self._rope_cos_sin_cache = {}
-        self._build_native_stack()
-
-    def _build_native_stack(self):
-        self.scheduler = MotusScheduler(self.config)
         self.pre_infer = MotusPreInfer(self, self.config)
         self.transformer_infer = MotusTransformerInfer(self, self.config)
         self.post_infer = MotusPostInfer(self, self.config)
+        self.scheduler = None
 
-        self.pre_infer.set_scheduler(self.scheduler)
-        self.transformer_infer.set_scheduler(self.scheduler)
-        self.post_infer.set_scheduler(self.scheduler)
+    @property
+    def action_chunk_size(self):
+        return self.model.config.action_chunk_size
+
+    @property
+    def action_dim(self):
+        return self.model.config.action_dim
+
+    def set_scheduler(self, scheduler):
+        self.scheduler = scheduler
+        self.pre_infer.set_scheduler(scheduler)
+        self.transformer_infer.set_scheduler(scheduler)
+        self.post_infer.set_scheduler(scheduler)
 
     def _build_model_config(self):
         return self._motus_config_cls(
-            wan_checkpoint_path=self.config["wan_path"],
+            wan_model_path=self.config["wan_path"],
             vae_path=os.path.join(self.config["wan_path"], "Wan2.2_VAE.pth"),
             wan_config_path=self.config["wan_path"],
             video_precision=self.config.get("video_precision", "bfloat16"),
-            vlm_checkpoint_path=self.config["vlm_path"],
+            vlm_model_path=self.config["vlm_path"],
             und_expert_hidden_size=self.config.get("und_expert_hidden_size", 512),
             und_expert_ffn_dim_multiplier=self.config.get("und_expert_ffn_dim_multiplier", 4),
             und_expert_norm_eps=self.config.get("und_expert_norm_eps", 1e-5),
@@ -86,21 +88,47 @@ class MotusModel:
 
     def _load_model(self):
         logger.info("Loading Motus model")
+        load_started_at = time.perf_counter()
+        build_started_at = time.perf_counter()
         model = self._motus_cls(self._build_model_config())
+        logger.info(f"Motus model graph built in {time.perf_counter() - build_started_at:.2f}s")
+
         self._patch_qwen3_vl_rope_index(model)
-        model.to(self.device)
-        model.load_checkpoint(self.config["checkpoint_path"], strict=False)
+
+        checkpoint_started_at = time.perf_counter()
+        checkpoint_payload = self._load_checkpoint_payload(self.config["model_path"])
+        self._load_checkpoint_into_model(model, checkpoint_payload, strict=False)
+        logger.info(f"Motus checkpoint loaded in {time.perf_counter() - checkpoint_started_at:.2f}s")
+
+        patch_started_at = time.perf_counter()
         self._apply_lightx2v_patches(model)
+        logger.info(f"Motus LightX2V patches applied in {time.perf_counter() - patch_started_at:.2f}s")
+
+        move_started_at = time.perf_counter()
+        model.to(self.device)
+        logger.info(f"Motus model moved to {self.device} in {time.perf_counter() - move_started_at:.2f}s")
+        logger.info(f"Motus total load time: {time.perf_counter() - load_started_at:.2f}s")
         return model
 
-    def _load_t5_encoder(self):
-        return self._t5_encoder_cls(
-            text_len=512,
-            dtype=torch.bfloat16,
-            device=self.device,
-            checkpoint_path=os.path.join(self.config["wan_path"], "models_t5_umt5-xxl-enc-bf16.pth"),
-            tokenizer_path=os.path.join(self.config["wan_path"], "google", "umt5-xxl"),
-        )
+    def _resolve_checkpoint_path(self, path: str) -> Path:
+        checkpoint_path = Path(path)
+        if checkpoint_path.is_dir():
+            checkpoint_path = checkpoint_path / "mp_rank_00_model_states.pt"
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        return checkpoint_path
+
+    def _load_checkpoint_payload(self, path: str) -> dict[str, Any]:
+        checkpoint_path = self._resolve_checkpoint_path(path)
+        load_started_at = time.perf_counter()
+        logger.info(f"Loading Motus checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        logger.info(f"Motus checkpoint file deserialized in {time.perf_counter() - load_started_at:.2f}s")
+        return checkpoint
+
+    def _load_checkpoint_into_model(self, model, checkpoint_payload: dict[str, Any], strict: bool = True):
+        state_dict = checkpoint_payload["module"]
+        model.load_state_dict(state_dict, strict=strict)
 
     def _load_vlm_processor(self):
         return AutoProcessor.from_pretrained(self.config["vlm_path"], trust_remote_code=True)
@@ -288,15 +316,6 @@ class MotusModel:
         )
         return f"{prefix}{prompt}"
 
-    def build_t5_embeddings(self, instruction: str):
-        if hasattr(self.t5_encoder, "infer"):
-            t5_out = self.t5_encoder.infer([instruction])
-        else:
-            t5_out = self.t5_encoder([instruction], self.device)
-        if isinstance(t5_out, torch.Tensor):
-            return [t5_out.squeeze(0)] if t5_out.dim() == 3 else [t5_out]
-        return t5_out
-
     def _tensor_to_pil(self, tensor: torch.Tensor) -> Image.Image:
         tensor = tensor.float().clamp(0, 1)
         np_img = (tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
@@ -321,20 +340,46 @@ class MotusModel:
         return vlm_inputs
 
     @torch.no_grad()
-    def encode_condition_frame(self, first_frame: torch.Tensor):
-        first_frame_norm = (first_frame * 2.0 - 1.0).unsqueeze(2)
-        return self.model.video_model.encode_video(first_frame_norm.to(self.model.dtype))
+    def prepare_runtime_inputs(self, inputs, image_path: str, prompt: str, state_value):
+        first_frame = self.prepare_frame(image_path)
+        state = self.prepare_state(state_value)
+        instruction = self.build_instruction(prompt)
+        t5_context = inputs["text_encoder_output"]["context"]
+        processed_t5_context = self.model.video_module.preprocess_t5_embeddings(t5_context)
+        vlm_inputs = [self.build_vlm_inputs(instruction, first_frame)]
+        und_tokens = self.model.und_module.extract_und_features(vlm_inputs)
+        image_context = self.model.und_module.extract_image_context(vlm_inputs)
+
+        inputs.update(
+            {
+                "motus_first_frame": first_frame,
+                "motus_state": state,
+                "motus_instruction": instruction,
+                "motus_t5_embeddings": t5_context,
+                "motus_processed_t5_context": processed_t5_context,
+                "motus_vlm_inputs": vlm_inputs,
+                "motus_und_tokens": und_tokens,
+                "motus_image_context": image_context,
+            }
+        )
+        return inputs
 
     @torch.no_grad()
-    def infer(self, image_path: str, prompt: str, state_value, num_inference_steps: int, seed: int | None = None):
-        self.scheduler.infer_steps = num_inference_steps
-        pre_infer_out = self.pre_infer.infer(image_path=image_path, prompt=prompt, state_value=state_value, seed=seed)
-        video_latents, action_latents = self.transformer_infer.infer(None, pre_infer_out)
-        post_infer_out = self.post_infer.infer(video_latents, action_latents)
+    def _infer_cond(self, inputs):
+        pre_infer_out = self.pre_infer.infer(None, inputs)
+        video_velocity, action_velocity = self.transformer_infer.infer(None, pre_infer_out)
+        self.scheduler.noise_pred = video_velocity.squeeze(0)
+        self.scheduler.action_noise_pred = action_velocity
+        return pre_infer_out
 
-        pred_frames = post_infer_out.pred_frames
-        if pred_frames.dim() == 5:
-            if pred_frames.shape[1] == 3:
-                pred_frames = pred_frames.permute(0, 2, 1, 3, 4)
-            pred_frames = pred_frames.squeeze(0)
-        return pred_frames, post_infer_out.pred_actions.squeeze(0)
+    @torch.no_grad()
+    def infer(self, inputs):
+        if self.scheduler is None:
+            raise RuntimeError("MotusModel requires a scheduler before infer().")
+        self._infer_cond(inputs)
+
+    @torch.no_grad()
+    def postprocess_actions(self):
+        if self.scheduler is None:
+            raise RuntimeError("MotusModel requires a scheduler before postprocess_actions().")
+        return self.post_infer.infer(self.scheduler.action_latents, None)

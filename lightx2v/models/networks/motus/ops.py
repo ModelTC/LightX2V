@@ -86,8 +86,12 @@ class LinearWithMM(nn.Module):
         return y2d.reshape(*x.shape[:-1], self.out_features)
 
     def forward(self, x):
+        input_dtype = x.dtype
+        if x.dtype != self.weight.dtype:
+            x = x.to(self.weight.dtype)
         if not self.quantized:
-            return F.linear(x, self.weight, self.bias)
+            y = F.linear(x, self.weight, self.bias)
+            return y if y.dtype == input_dtype else y.to(input_dtype)
         return self._mm_apply(x)
 
 
@@ -135,7 +139,18 @@ class RegistryAttention(nn.Module):
             return tensor.to(torch.bfloat16)
         return tensor.to(torch.float32)
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = False):
+    def forward(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        causal: bool = False,
+        cu_seqlens_q: torch.Tensor | None = None,
+        cu_seqlens_kv: torch.Tensor | None = None,
+        max_seqlen_q: int | None = None,
+        max_seqlen_kv: int | None = None,
+        **kwargs,
+    ):
         if q.dim() != 4 or k.dim() != 4 or v.dim() != 4:
             raise ValueError("RegistryAttention expects q/k/v with shape [B, L, H, D].")
 
@@ -145,15 +160,24 @@ class RegistryAttention(nn.Module):
 
         batch, q_len = q.shape[:2]
         kv_len = k.shape[1]
+        if cu_seqlens_q is None:
+            cu_seqlens_q = self._build_cu_seqlens(batch, q_len, q.device)
+        if cu_seqlens_kv is None:
+            cu_seqlens_kv = self._build_cu_seqlens(batch, kv_len, k.device)
+        if max_seqlen_q is None:
+            max_seqlen_q = q_len
+        if max_seqlen_kv is None:
+            max_seqlen_kv = kv_len
         out = self.kernel.apply(
             q=q,
             k=k,
             v=v,
             causal=causal,
-            cu_seqlens_q=self._build_cu_seqlens(batch, q_len, q.device),
-            cu_seqlens_kv=self._build_cu_seqlens(batch, kv_len, k.device),
-            max_seqlen_q=q_len,
-            max_seqlen_kv=kv_len,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_kv,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_kv=max_seqlen_kv,
+            **kwargs,
         )
         if out.dim() == 2:
             out = out.view(batch, q_len, -1)

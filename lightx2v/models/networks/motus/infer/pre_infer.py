@@ -1,57 +1,62 @@
 import torch
 
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
+from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 
 from .module_io import MotusPreInferModuleOutput
 
 
-class MotusPreInfer:
-    def __init__(self, adapter, config):
-        self.adapter = adapter
-        self.config = config
+class MotusPreInfer(WanPreInfer):
+    def __init__(self, model, config):
+        super().__init__(config)
+        self.model = model
         self.scheduler = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
     @torch.no_grad()
-    def infer(self, image_path: str, prompt: str, state_value, seed: int | None = None):
+    def infer(self, weights, inputs, kv_start=0, kv_end=0):
+        del weights, kv_start, kv_end
         if self.scheduler is None:
             raise RuntimeError("MotusPreInfer requires a scheduler before infer().")
 
-        first_frame = self.adapter.prepare_frame(image_path)
-        state = self.adapter.prepare_state(state_value)
-        instruction = self.adapter.build_instruction(prompt)
-        t5_embeddings = self.adapter.build_t5_embeddings(instruction)
-        vlm_inputs = [self.adapter.build_vlm_inputs(instruction, first_frame)]
-        condition_frame_latent = self.adapter.encode_condition_frame(first_frame)
-        processed_t5_context = self.adapter.model.video_module.preprocess_t5_embeddings(t5_embeddings)
-        und_tokens = self.adapter.model.und_module.extract_und_features(vlm_inputs)
-        image_context = self.adapter.model.und_module.extract_image_context(vlm_inputs)
+        first_frame = inputs["motus_first_frame"]
+        state = inputs["motus_state"]
+        instruction = inputs["motus_instruction"]
+        t5_context = inputs["motus_t5_embeddings"]
+        processed_t5_context = inputs["motus_processed_t5_context"]
+        vlm_inputs = inputs["motus_vlm_inputs"]
+        image_context = inputs["motus_image_context"]
+        und_tokens = inputs["motus_und_tokens"]
 
         batch_size = state.shape[0]
-        grid_sizes = self.adapter.model.grid_sizes[:batch_size]
-
-        self.scheduler.prepare(
-            seed=seed,
-            condition_frame_latent=condition_frame_latent,
-            action_shape=(state.shape[0], self.adapter.model.config.action_chunk_size, self.adapter.model.config.action_dim),
-            dtype=self.adapter.model.dtype,
-            device=self.adapter.device,
+        grid_sizes = self.model.model.grid_sizes[:batch_size]
+        grid_output = GridOutput(
+            tensor=grid_sizes,
+            tuple=tuple(int(v) for v in grid_sizes[0].tolist()),
         )
 
+        if self.cos_sin is None or self.grid_sizes != grid_output.tuple:
+            self.grid_sizes = grid_output.tuple
+            self.cos_sin = self.prepare_cos_sin(grid_output.tuple, self.freqs.clone())
+
+        dummy_embed = torch.empty(0, device=state.device, dtype=processed_t5_context.dtype)
+
         return MotusPreInferModuleOutput(
+            embed=dummy_embed,
+            grid_sizes=grid_output,
+            x=self.scheduler.video_latents,
+            embed0=dummy_embed,
+            context=processed_t5_context,
+            cos_sin=self.cos_sin,
             first_frame=first_frame,
             state=state,
             instruction=instruction,
-            t5_embeddings=t5_embeddings,
+            t5_embeddings=t5_context,
             vlm_inputs=vlm_inputs,
-            processed_t5_context=processed_t5_context,
             image_context=image_context,
             und_tokens=und_tokens,
-            condition_frame_latent=condition_frame_latent,
-            grid_sizes=GridOutput(
-                tensor=grid_sizes,
-                tuple=tuple(int(v) for v in grid_sizes[0].tolist()),
-            ),
+            condition_frame_latent=self.scheduler.condition_frame_latent,
+            adapter_args={"instruction": instruction},
         )

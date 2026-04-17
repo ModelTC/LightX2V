@@ -1,11 +1,9 @@
 import torch
 
-from .module_io import MotusPostInferModuleOutput
-
 
 class MotusPostInfer:
-    def __init__(self, adapter, config):
-        self.adapter = adapter
+    def __init__(self, model, config):
+        self.model = model
         self.config = config
         self.scheduler = None
 
@@ -13,8 +11,6 @@ class MotusPostInfer:
         self.scheduler = scheduler
 
     @torch.no_grad()
-    def infer(self, video_latents: torch.Tensor, action_latents: torch.Tensor):
-        decoded_frames = self.adapter.model.video_model.decode_video(video_latents)
-        pred_frames = ((decoded_frames[:, :, 1:] + 1.0) / 2.0).clamp(0, 1).float()
-        pred_actions = self.adapter.denormalize_actions(action_latents.float())
-        return MotusPostInferModuleOutput(pred_frames=pred_frames, pred_actions=pred_actions)
+    def infer(self, action_latents: torch.Tensor, pre_infer_out):
+        del pre_infer_out
+        return self.model.denormalize_actions(action_latents.float()).squeeze(0)

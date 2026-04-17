@@ -12,26 +12,49 @@ from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
 
 from .action_expert import ActionExpert, ActionExpertConfig
 from .und_expert import UndExpert, UndExpertConfig
-from .wan_model import WanVideoModel
+from .video_backbone import MotusVideoBackbone
 
 logger = logging.getLogger(__name__)
 
 
 def _apply_modulation(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
+    out_dtype = x.dtype
     scale = scale.squeeze(2)
     shift = shift.squeeze(2)
     if x.is_cuda:
-        return fuse_scale_shift_kernel(x.float().contiguous(), scale.contiguous(), shift.contiguous())
-    return x.float() * (1 + scale) + shift
+        out = fuse_scale_shift_kernel(x.float().contiguous(), scale.contiguous(), shift.contiguous())
+    else:
+        out = x.float() * (1 + scale) + shift
+    return out if out.dtype == out_dtype else out.to(out_dtype)
+
+
+def _get_module_dtype(module: nn.Module) -> Optional[torch.dtype]:
+    for tensor in list(module.parameters(recurse=False)) + list(module.buffers(recurse=False)):
+        if torch.is_tensor(tensor) and tensor.is_floating_point():
+            return tensor.dtype
+    for tensor in module.parameters():
+        if tensor.is_floating_point():
+            return tensor.dtype
+    for tensor in module.buffers():
+        if tensor.is_floating_point():
+            return tensor.dtype
+    return None
+
+
+def _cast_for_module_input(x: torch.Tensor, module: nn.Module) -> torch.Tensor:
+    target_dtype = _get_module_dtype(module)
+    if target_dtype is not None and x.dtype != target_dtype:
+        return x.to(target_dtype)
+    return x
 
 
 @dataclass
 class MotusConfig:
-    wan_checkpoint_path: str
+    wan_model_path: str
     vae_path: str
     wan_config_path: str
     video_precision: str = "bfloat16"
-    vlm_checkpoint_path: str = ""
+    vlm_model_path: str = ""
     und_expert_hidden_size: int = 512
     und_expert_ffn_dim_multiplier: int = 4
     und_expert_norm_eps: float = 1e-5
@@ -100,9 +123,11 @@ class VideoModule(nn.Module):
         wan_layer = self.video_model.wan_model.blocks[layer_idx]
         v_mod = video_adaln_modulation
         ffn_input = _apply_modulation(wan_layer.norm2(video_tokens), v_mod[4], v_mod[3])
+        ffn_input = _cast_for_module_input(ffn_input, wan_layer.ffn)
         ffn_out = wan_layer.ffn(ffn_input)
         with torch.amp.autocast("cuda", dtype=torch.float32):
-            return video_tokens + ffn_out * v_mod[5].squeeze(2)
+            out = video_tokens + ffn_out * v_mod[5].squeeze(2)
+        return out if out.dtype == video_tokens.dtype else out.to(video_tokens.dtype)
 
     def apply_output_head(self, video_tokens: torch.Tensor, video_time_emb: torch.Tensor) -> torch.Tensor:
         x = self.video_model.wan_model.head(video_tokens, video_time_emb)
@@ -202,7 +227,8 @@ class UndModule(nn.Module):
 
     def process_ffn(self, und_tokens: torch.Tensor, layer_idx: int) -> torch.Tensor:
         block = self.und_expert.blocks[layer_idx]
-        return und_tokens + block.ffn(block.norm2(und_tokens))
+        ffn_input = _cast_for_module_input(block.norm2(und_tokens), block.ffn)
+        return und_tokens + block.ffn(ffn_input)
 
 
 class ActionModule(nn.Module):
@@ -234,9 +260,11 @@ class ActionModule(nn.Module):
         action_block = self.action_expert.blocks[layer_idx]
         a_mod = action_adaln_modulation
         ffn_input = _apply_modulation(action_block.norm2(action_tokens), a_mod[4], a_mod[3])
+        ffn_input = _cast_for_module_input(ffn_input, action_block.ffn)
         ffn_out = action_block.ffn(ffn_input)
         with torch.amp.autocast("cuda", dtype=torch.float32):
-            return action_tokens + ffn_out * a_mod[5].squeeze(2)
+            out = action_tokens + ffn_out * a_mod[5].squeeze(2)
+        return out if out.dtype == action_tokens.dtype else out.to(action_tokens.dtype)
 
 
 class Motus(nn.Module):
@@ -245,33 +273,9 @@ class Motus(nn.Module):
         self.config = config
         self.dtype = torch.bfloat16
         load_backbones = True if config.load_pretrained_backbones is None else bool(config.load_pretrained_backbones)
-
-        if load_backbones:
-            self.video_model = WanVideoModel.from_pretrained(
-                checkpoint_path=config.wan_checkpoint_path,
-                vae_path=config.vae_path,
-                config_path=config.wan_config_path,
-                precision=config.video_precision,
-            )
-        else:
-            self.video_model = WanVideoModel.from_config(
-                config_path=config.wan_config_path,
-                vae_path=config.vae_path,
-                device="cuda",
-                precision=config.video_precision,
-            )
-
-        if load_backbones:
-            self.vlm_model = Qwen3VLForConditionalGeneration.from_pretrained(
-                config.vlm_checkpoint_path,
-                dtype=self.dtype,
-                device_map="cuda",
-                trust_remote_code=True,
-            )
-        else:
-            vlm_cfg = AutoConfig.from_pretrained(config.vlm_checkpoint_path, trust_remote_code=True)
-            self.vlm_model = Qwen3VLForConditionalGeneration._from_config(vlm_cfg, torch_dtype=self.dtype)
-            self.vlm_model.to(device="cuda", dtype=self.dtype)
+        self.load_device = torch.device("cuda")
+        self.video_model = self._load_video_model(load_backbones)
+        self.vlm_model = self._load_vlm_model(load_backbones)
 
         for param in self.vlm_model.parameters():
             param.requires_grad = False
@@ -339,6 +343,44 @@ class Motus(nn.Module):
         self.video_module = VideoModule(self.video_model, self.dtype, self.device, self.grid_sizes)
         self.und_module = UndModule(self.vlm_model, self.und_expert, self.config, self.dtype, self.device, image_context_adapter=self.image_context_adapter)
         self.action_module = ActionModule(self.action_expert, self.config, self.video_model, self.vlm_model, self.dtype, self.device)
+
+    def _load_video_model(self, load_backbones: bool) -> MotusVideoBackbone:
+        if load_backbones:
+            return MotusVideoBackbone.from_pretrained(
+                model_path=self.config.wan_model_path,
+                vae_path=self.config.vae_path,
+                config_path=self.config.wan_config_path,
+                device=str(self.load_device),
+                precision=self.config.video_precision,
+                load_vae=False,
+            )
+        return MotusVideoBackbone.from_config(
+            config_path=self.config.wan_config_path,
+            vae_path=self.config.vae_path,
+            device=str(self.load_device),
+            precision=self.config.video_precision,
+            load_vae=False,
+        )
+
+    def _load_vlm_model(self, load_backbones: bool) -> Qwen3VLForConditionalGeneration:
+        if load_backbones:
+            if self.load_device.type == "cpu":
+                return Qwen3VLForConditionalGeneration.from_pretrained(
+                    self.config.vlm_model_path,
+                    torch_dtype=self.dtype,
+                    trust_remote_code=True,
+                )
+            return Qwen3VLForConditionalGeneration.from_pretrained(
+                self.config.vlm_model_path,
+                dtype=self.dtype,
+                device_map="cuda",
+                trust_remote_code=True,
+            )
+
+        vlm_cfg = AutoConfig.from_pretrained(self.config.vlm_model_path, trust_remote_code=True)
+        vlm_model = Qwen3VLForConditionalGeneration._from_config(vlm_cfg, torch_dtype=self.dtype)
+        vlm_model.to(device=self.load_device, dtype=self.dtype)
+        return vlm_model
 
     def load_checkpoint(self, path: str, strict: bool = True) -> Dict:
         checkpoint_path = Path(path)
