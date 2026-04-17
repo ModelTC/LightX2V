@@ -11,7 +11,7 @@ import torch.distributed as dist
 from loguru import logger
 
 try:
-    from lightx2v.models.runners.flux2.flux2_runner import Flux2KleinRunner, Flux2DevRunner  # noqa: F401
+    from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 except (ImportError, ModuleNotFoundError) as e:
     logger.warning(f"Flux2 runners not available: {e}")
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401

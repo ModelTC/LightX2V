@@ -1,6 +1,6 @@
 #!/bin/bash
-lightx2v_path=/home/wangshankun/LightX2V
-model_path="/data/nvme7/HF/hub/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c"
+lightx2v_path=
+model_path="/data/temp/FLUX.2-dev"
 export CUDA_VISIBLE_DEVICES=7
 
 source ${lightx2v_path}/scripts/base/base.sh

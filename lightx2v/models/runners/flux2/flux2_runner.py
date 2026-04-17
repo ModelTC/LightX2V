@@ -5,9 +5,9 @@ import os
 import torch
 from loguru import logger
 
-from lightx2v.models.networks.flux2.model import Flux2KleinTransformerModel, Flux2DevTransformerModel
+from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.flux2.scheduler import Flux2Scheduler, Flux2DevScheduler
+from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -77,10 +77,7 @@ class Flux2BaseRunner(DefaultRunner):
 
         if isinstance(image_path, str):
             if os.path.isdir(image_path):
-                image_files = sorted([
-                    os.path.join(image_path, f) for f in os.listdir(image_path)
-                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"))
-                ])
+                image_files = sorted([os.path.join(image_path, f) for f in os.listdir(image_path) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"))])
                 input_image = [Image.open(img_file).convert("RGB") for img_file in image_files]
             else:
                 input_image = Image.open(image_path).convert("RGB")
@@ -292,7 +289,6 @@ class Flux2BaseRunner(DefaultRunner):
 
 @RUNNER_REGISTER("flux2_klein")
 class Flux2KleinRunner(Flux2BaseRunner):
-
     def load_transformer(self):
         model_kwargs = {
             "model_path": os.path.join(self.config["model_path"], "transformer"),
@@ -303,6 +299,7 @@ class Flux2KleinRunner(Flux2BaseRunner):
 
     def load_text_encoder(self):
         from lightx2v.models.input_encoders.hf.flux2.qwen3_model import Flux2Klein_TextEncoder
+
         text_encoder = Flux2Klein_TextEncoder(self.config)
         return [text_encoder]
 
@@ -330,7 +327,6 @@ class Flux2KleinRunner(Flux2BaseRunner):
 
 @RUNNER_REGISTER("flux2_dev")
 class Flux2DevRunner(Flux2BaseRunner):
-
     def load_transformer(self):
         model_kwargs = {
             "model_path": os.path.join(self.config["model_path"], "transformer"),
@@ -341,6 +337,7 @@ class Flux2DevRunner(Flux2BaseRunner):
 
     def load_text_encoder(self):
         from lightx2v.models.input_encoders.hf.flux2.mistral3_model import Flux2Dev_TextEncoder
+
         text_encoder = Flux2Dev_TextEncoder(self.config)
         return [text_encoder]
 

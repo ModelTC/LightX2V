@@ -13,10 +13,7 @@ except ImportError:
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
-SYSTEM_MESSAGE = (
-    "You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\n"
-    "attribution and actions without speculation."
-)
+SYSTEM_MESSAGE = "You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation."
 
 
 def format_input(prompts, system_message=SYSTEM_MESSAGE, images=None):
@@ -33,10 +30,7 @@ def format_input(prompts, system_message=SYSTEM_MESSAGE, images=None):
         ]
     else:
         assert len(images) == len(prompts), "Number of images must match number of prompts"
-        messages = [
-            [{"role": "system", "content": [{"type": "text", "text": system_message}]}]
-            for _ in cleaned_txt
-        ]
+        messages = [[{"role": "system", "content": [{"type": "text", "text": system_message}]}] for _ in cleaned_txt]
         for i, (el, imgs) in enumerate(zip(messages, images)):
             if imgs is not None:
                 el.append({"role": "user", "content": [{"type": "image", "image": img} for img in imgs]})
@@ -66,13 +60,9 @@ class Flux2Dev_TextEncoder:
             tokenizer_kwargs = {}
 
         if self.cpu_offload:
-            self.text_encoder = Mistral3ForConditionalGeneration.from_pretrained(
-                text_encoder_path, torch_dtype=GET_DTYPE(), device_map="cpu", **kwargs
-            )
+            self.text_encoder = Mistral3ForConditionalGeneration.from_pretrained(text_encoder_path, torch_dtype=GET_DTYPE(), device_map="cpu", **kwargs)
         else:
-            self.text_encoder = Mistral3ForConditionalGeneration.from_pretrained(
-                text_encoder_path, torch_dtype=GET_DTYPE(), device_map=AI_DEVICE, **kwargs
-            )
+            self.text_encoder = Mistral3ForConditionalGeneration.from_pretrained(text_encoder_path, torch_dtype=GET_DTYPE(), device_map=AI_DEVICE, **kwargs)
 
         self.tokenizer = AutoProcessor.from_pretrained(tokenizer_path, **tokenizer_kwargs)
 
