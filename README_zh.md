@@ -41,6 +41,7 @@ pre-commit run --all-files
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
+- [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: 最新动态
 
