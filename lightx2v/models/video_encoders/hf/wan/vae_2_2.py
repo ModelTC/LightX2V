@@ -206,7 +206,11 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        return F.normalize(x, dim=(1 if self.channel_first else -1)) * self.scale * self.gamma + self.bias
+        dims = (1 if self.channel_first else -1)
+        # Match the official Wan2.2 VAE RMS normalization exactly; the generated
+        # MG3 frames are sensitive to tiny decoder math differences.
+        rms = (x.pow(2).mean(dims, keepdim=True) + 1e-6).sqrt()
+        return (x / rms) * self.gamma + self.bias
 
 
 class Upsample(nn.Upsample):
@@ -214,7 +218,7 @@ class Upsample(nn.Upsample):
         """
         Fix bfloat16 support for nearest neighbor interpolation.
         """
-        return super().forward(x.float()).type_as(x)
+        return super().forward(x).type_as(x)
 
 
 class Resample(nn.Module):
