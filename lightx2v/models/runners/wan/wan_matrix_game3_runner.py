@@ -122,6 +122,26 @@ def _matrix_game3_combine_data(data, num_frames=57, keyboard_dim=4, mouse=True):
     return {"keyboard_condition": keyboard_condition}
 
 
+def _matrix_game3_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> dict[str, Any]:
+    tensor = tensor.detach()
+    tensor_fp32 = tensor.to(dtype=torch.float32)
+    flattened = tensor_fp32.reshape(-1)
+    return {
+        "shape": list(tensor.shape),
+        "dtype": str(tensor.dtype),
+        "device": str(tensor.device),
+        "min": float(tensor_fp32.min().item()),
+        "max": float(tensor_fp32.max().item()),
+        "mean": float(tensor_fp32.mean().item()),
+        "std": float(tensor_fp32.std(unbiased=False).item()),
+        "head": flattened[:head_values].cpu().tolist(),
+    }
+
+
+def _matrix_game3_log_debug_payload(name: str, payload: dict[str, Any]) -> None:
+    logger.info("[matrix-game-3][debug] {}:\n{}", name, json.dumps(payload, ensure_ascii=False, indent=4, default=str))
+
+
 def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
     actions_single_action = [
         "forward",
@@ -955,12 +975,25 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.timestep_input = None
         self._solver = None
         self._generator = None
+        self.debug_stop_requested = False
+        self._debug_step_probe_enabled = bool(self.config.get("debug_stop_after_scheduler_probe", False))
+        self._debug_timesteps_logged = False
 
     def _reset_solver(self):
         self._solver = self.scheduler_cls()
         self._solver.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
+        if self._debug_step_probe_enabled and not self._debug_timesteps_logged:
+            _matrix_game3_log_debug_payload(
+                "scheduler_timesteps_head",
+                {
+                    "timesteps_head": self._solver.timesteps[:3].detach().cpu().tolist(),
+                },
+            )
+            self._debug_timesteps_logged = True
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.debug_stop_requested = False
+        self._debug_timesteps_logged = False
         self._generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
         self.vae_encoder_out = image_encoder_output.get("vae_encoder_out") if image_encoder_output is not None else None
@@ -970,6 +1003,8 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self._reset_solver()
 
     def reset(self, seed, latent_shape, step_index=None):
+        self.debug_stop_requested = False
+        self._debug_timesteps_logged = False
         self._generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
         if self.vae_encoder_out is not None:
@@ -985,6 +1020,9 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.timestep_input = torch.stack([self._solver.timesteps[self.step_index].to(device=AI_DEVICE)])
 
     def step_post(self):
+        if self._debug_step_probe_enabled and self.step_index == 0:
+            _matrix_game3_log_debug_payload("step_0_input_latent", _matrix_game3_tensor_probe(self.latents))
+
         timestep = self._solver.timesteps[self.step_index].to(device=self.latents.device)
         prev_sample = self._solver.step(
             # Keep the model output in its original precision. The official MG3
@@ -999,9 +1037,15 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         if self.mask is not None and self.vae_encoder_out is not None:
             prev_sample = (1.0 - self.mask) * self.vae_encoder_out + self.mask * prev_sample
         self.latents = prev_sample.to(dtype=GET_DTYPE())
+        if self._debug_step_probe_enabled and self.step_index in (0, 1):
+            _matrix_game3_log_debug_payload(f"step_{self.step_index}_output_latent", _matrix_game3_tensor_probe(self.latents))
+            if self.step_index == 1:
+                self.debug_stop_requested = True
 
     def clear(self):
         self._solver = None
+        self.debug_stop_requested = False
+        self._debug_timesteps_logged = False
 
 
 @RUNNER_REGISTER("wan2.2_matrix_game3")
@@ -2039,11 +2083,76 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             self._apply_segment_scheduler_state(segment_state)
 
     def run_segment(self, segment_idx=0):
-        # Save the raw latent output before the VAE decoder trims or converts anything;
-        # the next segment needs these latents for temporal conditioning and memory.
-        latents = super().run_segment(segment_idx)
+        infer_steps = self.model.scheduler.infer_steps
+
+        for step_index in range(infer_steps):
+            with ProfilingContext4DebugL1(
+                "Run Dit every step",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
+                metrics_labels=[step_index + 1, infer_steps],
+            ):
+                if self.video_segment_num == 1:
+                    self.check_stop()
+                logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
+
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
+
+                if getattr(self.model.scheduler, "debug_stop_requested", False):
+                    logger.warning("[matrix-game-3][debug] stopping after scheduler latent probe.")
+                    break
+
+                if self.progress_callback:
+                    current_step = segment_idx * infer_steps + step_index + 1
+                    total_all_steps = self.video_segment_num * infer_steps
+                    self.progress_callback((current_step / total_all_steps) * 100, 100)
+
+        if segment_idx is not None and segment_idx == self.video_segment_num - 1:
+            del self.inputs
+            torch_device_module.empty_cache()
+
+        latents = self.model.scheduler.latents
         self._mg3_current_segment_full_latents = latents.detach().clone()
         return latents
+
+    def run_main(self):
+        self.init_run()
+        if self.config.get("compile", False) and hasattr(self.model, "comple"):
+            self.model.select_graph_for_compile(self.input_info)
+        for segment_idx in range(self.video_segment_num):
+            logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
+            with ProfilingContext4DebugL1(
+                f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                metrics_labels=["WanMatrixGame3Runner"],
+            ):
+                self.check_stop()
+                self.init_run_segment(segment_idx)
+                latents = self.run_segment(segment_idx)
+                if getattr(self.model.scheduler, "debug_stop_requested", False):
+                    logger.warning("[matrix-game-3][debug] scheduler probe complete. Stopping before VAE decode.")
+                    self.end_run()
+                    return None
+                if self.config.get("use_stream_vae", False):
+                    frames = []
+                    for frame_segment in self.run_vae_decoder_stream(latents):
+                        frames.append(frame_segment)
+                        logger.info(f"frame sagment: {len(frames)} done")
+                    self.gen_video = torch.cat(frames, dim=2)
+                else:
+                    self.gen_video = self.run_vae_decoder(latents)
+                self.end_run_segment(segment_idx)
+        gen_video_final = self.process_images_after_vae_decoder()
+        self.end_run()
+        return gen_video_final
 
     def end_run_segment(self, segment_idx=None):
         """Carry segment outputs forward and remove overlap from decoded frames."""

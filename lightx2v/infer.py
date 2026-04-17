@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 
 import torch
@@ -39,47 +38,6 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all, validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
-
-
-def _collect_runner_runtime_debug_info(runner):
-    debug_info = {
-        "resolved_vae_path": None,
-        "resolved_lightvae_encoder_vae_pth": None,
-        "resolved_scheduler_class": None,
-        "scheduler_timesteps_head": None,
-    }
-
-    if hasattr(runner, "_resolve_wan22_vae_paths"):
-        resolved_vae_paths = runner._resolve_wan22_vae_paths()
-        debug_info["resolved_vae_path"] = resolved_vae_paths.get("vae_path")
-        debug_info["resolved_lightvae_encoder_vae_pth"] = resolved_vae_paths.get("lightvae_encoder_vae_pth")
-
-    scheduler = getattr(runner, "scheduler", None)
-    if scheduler is not None:
-        scheduler_class = scheduler.__class__.__name__
-        inner_scheduler_class = None
-        if getattr(scheduler, "_solver", None) is not None:
-            inner_scheduler_class = scheduler._solver.__class__.__name__
-        elif getattr(scheduler, "scheduler_cls", None) is not None:
-            inner_scheduler_class = scheduler.scheduler_cls.__name__
-
-        if inner_scheduler_class is not None:
-            debug_info["resolved_scheduler_class"] = f"{scheduler_class} -> {inner_scheduler_class}"
-        else:
-            debug_info["resolved_scheduler_class"] = scheduler_class
-
-        timesteps = None
-        if getattr(scheduler, "_solver", None) is not None and getattr(scheduler._solver, "timesteps", None) is not None:
-            timesteps = scheduler._solver.timesteps
-        elif getattr(scheduler, "timesteps", None) is not None:
-            timesteps = scheduler.timesteps
-
-        if timesteps is None:
-            debug_info["scheduler_timesteps_head"] = "uninitialized (set_timesteps not called yet)"
-        else:
-            debug_info["scheduler_timesteps_head"] = timesteps[:5].detach().cpu().tolist()
-
-    return debug_info
 
 
 def init_runner(config):
@@ -236,31 +194,18 @@ def main():
 
     validate_config_paths(config)
 
-    stop_after_runner_init = False
     with ProfilingContext4DebugL1("Total Cost"):
         # init runner
         runner = init_runner(config)
-        logger.info(
-            "runner runtime debug info:\n{}",
-            json.dumps(_collect_runner_runtime_debug_info(runner), ensure_ascii=False, indent=4, default=str),
-        )
-        stop_after_runner_init = bool(runner.config.get("debug_stop_after_runner_init", False))
-        if stop_after_runner_init:
-            logger.warning("`debug_stop_after_runner_init` is enabled. Stopping after runner initialization.")
-        else:
-            # start to infer
-            data = args.__dict__
-            update_input_info_from_dict(input_info, data)
-            runner.run_pipeline(input_info)
+        # start to infer
+        data = args.__dict__
+        update_input_info_from_dict(input_info, data)
+        runner.run_pipeline(input_info)
 
     # Clean up distributed process group
     if dist.is_initialized():
         dist.destroy_process_group()
         logger.info("Distributed process group cleaned up")
-
-    if stop_after_runner_init:
-        return
-
 
 if __name__ == "__main__":
     main()
