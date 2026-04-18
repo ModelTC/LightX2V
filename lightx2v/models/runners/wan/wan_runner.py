@@ -829,11 +829,7 @@ class Wan22DenseRunner(WanRunner):
             default_pruning_rate = 0.75
 
         decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
-        teacher_encoder_path = (
-            self.config.get("lightvae_encoder_vae_pth")
-            or self.config.get("lightvae_encoder_path")
-            or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
-        )
+        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
 
         return {
             "vae_path": decoder_path,

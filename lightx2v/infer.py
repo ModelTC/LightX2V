@@ -232,5 +232,6 @@ def main():
         dist.destroy_process_group()
         logger.info("Distributed process group cleaned up")
 
+
 if __name__ == "__main__":
     main()

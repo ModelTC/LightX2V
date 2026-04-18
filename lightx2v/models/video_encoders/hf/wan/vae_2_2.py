@@ -206,7 +206,7 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        dims = (1 if self.channel_first else -1)
+        dims = 1 if self.channel_first else -1
         # Match the official Wan2.2 VAE RMS normalization exactly; the generated
         # MG3 frames are sensitive to tiny decoder math differences.
         rms = (x.pow(2).mean(dims, keepdim=True) + 1e-6).sqrt()
@@ -1211,10 +1211,7 @@ class Wan2_2_VAE:
                     logging.warning("Unable to infer LightVAE pruning rate from checkpoint; fallback to 0.75.")
 
             teacher_vae_path = lightvae_encoder_vae_pth or vae_path
-            logging.info(
-                f"Loading mg_lightvae decoder from {vae_path} (pruning_rate={resolved_pruning_rate}), "
-                f"while keeping teacher encoder from {teacher_vae_path}."
-            )
+            logging.info(f"Loading mg_lightvae decoder from {vae_path} (pruning_rate={resolved_pruning_rate}), while keeping teacher encoder from {teacher_vae_path}.")
             self.encoder_model = (
                 _video_vae(
                     pretrained_path=teacher_vae_path,

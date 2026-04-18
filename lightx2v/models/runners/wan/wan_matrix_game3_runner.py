@@ -8,10 +8,10 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.distributed as dist
+from PIL import Image
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin, SchedulerOutput
 from diffusers.utils import deprecate
-from PIL import Image
 from einops import rearrange
 from loguru import logger
 from scipy.interpolate import interp1d
@@ -136,7 +136,7 @@ def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
         "camera_r",
     ]
     actions_to_test = actions_double_action * 5 + actions_single_camera * 5 + actions_single_action * 5
-    for action in (actions_single_action + actions_double_action):
+    for action in actions_single_action + actions_double_action:
         for camera in actions_single_camera:
             actions_to_test.append(f"{action}_{camera}")
 
@@ -623,9 +623,7 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
                 sigma_t = self.sigmas[self.step_index]
                 x0_pred = sample - sigma_t * model_output
             else:
-                raise ValueError(
-                    f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler."
-                )
+                raise ValueError(f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler.")
             if self.config.thresholding:
                 x0_pred = self._threshold_sample(x0_pred)
             return x0_pred
@@ -634,9 +632,7 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
             sigma_t = self.sigmas[self.step_index]
             epsilon = sample - (1 - sigma_t) * model_output
         else:
-            raise ValueError(
-                f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler."
-            )
+            raise ValueError(f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler.")
         if self.config.thresholding:
             sigma_t = self.sigmas[self.step_index]
             x0_pred = sample - sigma_t * model_output
@@ -1883,9 +1879,7 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         if current_plucker is None:
             current_plucker = self._build_or_get_segment_camera_only(segment_idx)
         plucker_with_memory = (
-            torch.cat(memory_pluckers + [current_plucker.to(device=AI_DEVICE, dtype=GET_DTYPE())], dim=2)
-            if memory_pluckers
-            else current_plucker.to(device=AI_DEVICE, dtype=GET_DTYPE())
+            torch.cat(memory_pluckers + [current_plucker.to(device=AI_DEVICE, dtype=GET_DTYPE())], dim=2) if memory_pluckers else current_plucker.to(device=AI_DEVICE, dtype=GET_DTYPE())
         )
         src = torch.cat(self._mg3_generated_latent_history, dim=1)
         valid_latent_idx = [idx for idx in latent_idx if 0 <= idx < src.shape[1]]
