@@ -1816,7 +1816,13 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             w=self._mg3_lat_w,
         )
 
-    def _build_memory_metadata(self, segment_idx: int, current_start_frame_idx: int, current_end_frame_idx: int) -> dict[str, Any]:
+    def _build_memory_metadata(
+        self,
+        segment_idx: int,
+        current_start_frame_idx: int,
+        current_end_frame_idx: int,
+        current_plucker: Optional[torch.Tensor] = None,
+    ) -> dict[str, Any]:
         # Official source: pipeline/inference_pipeline.py and utils/cam_utils.py.
         # Current downstream model code only requires c2ws_plucker_emb / keyboard_cond / mouse_cond,
         # but we still stage the memory-facing metadata here so the runner owns segment bookkeeping.
@@ -1874,7 +1880,8 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             rel_pose = modules["cam_utils"].compute_relative_poses(rel_pair, framewise=False)[1:2]
             memory_pluckers.append(self._build_plucker_from_pose(rel_pose.to(device=AI_DEVICE)))
 
-        current_plucker = self._build_or_get_segment_camera_only(segment_idx)
+        if current_plucker is None:
+            current_plucker = self._build_or_get_segment_camera_only(segment_idx)
         plucker_with_memory = torch.cat(memory_pluckers + [current_plucker], dim=2) if memory_pluckers else current_plucker
         src = torch.cat(self._mg3_generated_latent_history, dim=1)
         valid_latent_idx = [idx for idx in latent_idx if 0 <= idx < src.shape[1]]
@@ -1991,7 +1998,14 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             "segment_idx": segment_idx,
             "first_clip": first_clip,
         }
-        dit_cond_dict.update(self._build_memory_metadata(segment_idx, current_start_frame_idx, current_end_frame_idx))
+        dit_cond_dict.update(
+            self._build_memory_metadata(
+                segment_idx,
+                current_start_frame_idx,
+                current_end_frame_idx,
+                current_plucker=camera_only,
+            )
+        )
 
         state = MatrixGame3SegmentState(
             segment_idx=segment_idx,
