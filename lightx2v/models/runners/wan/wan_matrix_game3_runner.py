@@ -24,7 +24,6 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import GET_RECORDER_MODE, ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import best_output_size
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -1352,22 +1351,33 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     def run_vae_encoder(self, img):
         # Unlike the generic Wan2.2 i2v path, MG3 only encodes the first frame. The
         # remaining temporal slots are left zeroed and later mixed with scheduler noise.
-        max_area = self.config.target_height * self.config.target_width
-        ih, iw = img.height, img.width
-        dh = self.config.patch_size[1] * self.config.vae_stride[1]
-        dw = self.config.patch_size[2] * self.config.vae_stride[2]
-        ow, oh = best_output_size(iw, ih, dw, dh, max_area)
+        target_h = int(self.config["target_height"])
+        target_w = int(self.config["target_width"])
+        target_ratio = target_h / target_w
+        input_h, input_w = img.height, img.width
+        if input_h / input_w > target_ratio:
+            crop_h = int(input_w * target_ratio)
+            crop_w = input_w
+        else:
+            crop_h = input_h
+            crop_w = int(input_h / target_ratio)
 
-        scale = max(ow / iw, oh / ih)
-        img = img.resize((round(iw * scale), round(ih * scale)), Image.LANCZOS)
-        x1 = (img.width - ow) // 2
-        y1 = (img.height - oh) // 2
-        img = img.crop((x1, y1, x1 + ow, y1 + oh))
-
-        image_tensor = TF.to_tensor(img).sub_(0.5).div_(0.5).to(AI_DEVICE).unsqueeze(1)
+        crop_x = int(round((input_w - crop_w) / 2.0))
+        crop_y = int(round((input_h - crop_h) / 2.0))
+        image_uint8 = torch.from_numpy(np.array(img)).unsqueeze(0).permute(0, 3, 1, 2)
+        image_uint8 = image_uint8[:, :, crop_y : crop_y + crop_h, crop_x : crop_x + crop_w]
+        image_tensor = image_uint8.float().div_(255.0)
+        image_tensor = torch.nn.functional.interpolate(
+            image_tensor,
+            size=(target_h, target_w),
+            mode="bicubic",
+            align_corners=True,
+            antialias=True,
+        )
+        image_tensor = image_tensor.mul_(2.0).sub_(1.0).transpose(0, 1).to(AI_DEVICE)
         first_frame_latent = self.get_vae_encoder_output(image_tensor)
-        lat_h = oh // self.config["vae_stride"][1]
-        lat_w = ow // self.config["vae_stride"][2]
+        lat_h = target_h // self.config["vae_stride"][1]
+        lat_w = target_w // self.config["vae_stride"][2]
         latent_shape = self._segment_latent_shape(lat_h, lat_w, self.first_clip_frame)
         vae_encoder_out = torch.zeros(latent_shape, device=first_frame_latent.device, dtype=first_frame_latent.dtype)
         vae_encoder_out[:, : first_frame_latent.shape[1]] = first_frame_latent

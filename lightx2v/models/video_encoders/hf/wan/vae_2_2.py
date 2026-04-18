@@ -1219,8 +1219,8 @@ class Wan2_2_VAE:
                     cpu_offload=cpu_offload,
                     dtype=dtype,
                     load_from_rank0=load_from_rank0,
-                    normalize_state_dict=False,
-                    strict=True,
+                    normalize_state_dict=True,
+                    strict=False,
                     pruning_rate=0.0,
                 )
                 .eval()
