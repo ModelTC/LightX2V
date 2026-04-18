@@ -44,6 +44,20 @@ def _matrix_game3_forward_value_probe(value: Any) -> Any:
     return str(value)
 
 
+def _matrix_game3_compute_max_seq_len(config, lat_h: int, lat_w: int) -> int:
+    first_clip_frame = int(config.get("first_clip_frame", config.get("target_video_length", 57)))
+    vae_stride_t = int(tuple(config.get("vae_stride", (4, 16, 16)))[0])
+    patch_h, patch_w = tuple(config.get("patch_size", (1, 2, 2)))[1:]
+    max_lat_f = (first_clip_frame - 1) // vae_stride_t + 1
+    max_mem_f = 5
+    max_total_f = max_lat_f + max_mem_f
+    max_seq_len = max_total_f * lat_h * lat_w // (patch_h * patch_w)
+    sp_size = int(config.get("sp_size", 1))
+    if sp_size > 1:
+        max_seq_len = int(((max_seq_len + sp_size - 1) // sp_size) * sp_size)
+    return max_seq_len
+
+
 class WanMtxg3PreInferOutput:
     """Container for MG3 pre-inference outputs passed to the transformer."""
 
@@ -155,11 +169,13 @@ class WanMtxg3PreInfer(WanPreInfer):
         # `image_encoder_output["dit_cond_dict"]` container by the runner.
         image_encoder_output = inputs.get("image_encoder_output", {})
         dit_cond_dict = image_encoder_output.get("dit_cond_dict") or {}
+        memory_plucker = dit_cond_dict.get("plucker_emb_with_memory", None)
+        camera_plucker = dit_cond_dict.get("c2ws_plucker_emb", None)
 
         if self.scheduler.infer_condition:
-            plucker_emb = dit_cond_dict.get("plucker_emb_with_memory", None)
+            plucker_emb = memory_plucker
             if plucker_emb is None:
-                plucker_emb = dit_cond_dict.get("c2ws_plucker_emb", None)
+                plucker_emb = camera_plucker
             mouse_cond = dit_cond_dict.get("mouse_cond", None)
             keyboard_cond = dit_cond_dict.get("keyboard_cond", None)
             x_memory = dit_cond_dict.get("x_memory", None)
@@ -195,9 +211,7 @@ class WanMtxg3PreInfer(WanPreInfer):
                 "memory_latent_idx": _matrix_game3_forward_value_probe(memory_latent_idx),
                 "predict_latent_idx": _matrix_game3_forward_value_probe(predict_latent_idx),
             }
-            total_latent_frames_debug = x.shape[1] + (int(x_memory.shape[2]) if x_memory is not None else 0)
-            patch_h_debug, patch_w_debug = tuple(self.config.get("patch_size", (1, 2, 2)))[1:]
-            debug_payload["seq_len"] = int(total_latent_frames_debug * x.shape[2] * x.shape[3] // (patch_h_debug * patch_w_debug))
+            debug_payload["seq_len"] = _matrix_game3_compute_max_seq_len(self.config, x.shape[2], x.shape[3])
             if self.scheduler.infer_condition:
                 self.scheduler.forward_kwargs_cond = debug_payload
             else:
