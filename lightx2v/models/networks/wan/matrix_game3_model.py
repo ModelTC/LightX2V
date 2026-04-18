@@ -149,9 +149,17 @@ class WanMtxg3OfficialBaseModel:
         if self.config.get("enable_cfg", False):
             noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
             noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
-            self.scheduler.noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            noise_pred_guided = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            self.scheduler.noise_pred_cond = noise_pred_cond
+            self.scheduler.noise_pred_uncond = noise_pred_uncond
+            self.scheduler.noise_pred_guided = noise_pred_guided
+            self.scheduler.noise_pred = noise_pred_guided
         else:
-            self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            self.scheduler.noise_pred_cond = noise_pred
+            self.scheduler.noise_pred_uncond = None
+            self.scheduler.noise_pred_guided = noise_pred
+            self.scheduler.noise_pred = noise_pred
 
 
 class WanMtxg3Model(WanModel):

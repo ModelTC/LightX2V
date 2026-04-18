@@ -1013,6 +1013,9 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.sample_shift = self.config["sample_shift"]
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.noise_pred = None
+        self.noise_pred_cond = None
+        self.noise_pred_uncond = None
+        self.noise_pred_guided = None
         self.mask = None
         self.vae_encoder_out = None
         self.timestep_input = None
@@ -1043,6 +1046,10 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.vae_encoder_out = image_encoder_output.get("vae_encoder_out") if image_encoder_output is not None else None
         if self.vae_encoder_out is not None:
             self.vae_encoder_out = self.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        self.noise_pred = None
+        self.noise_pred_cond = None
+        self.noise_pred_uncond = None
+        self.noise_pred_guided = None
         self.mask = torch.ones_like(self.latents)
         self._reset_solver()
 
@@ -1053,6 +1060,10 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
         if self.vae_encoder_out is not None:
             self.vae_encoder_out = self.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        self.noise_pred = None
+        self.noise_pred_cond = None
+        self.noise_pred_uncond = None
+        self.noise_pred_guided = None
         if self.mask is not None:
             self.mask = self.mask.to(device=AI_DEVICE, dtype=GET_DTYPE())
         self._reset_solver()
@@ -1061,6 +1072,10 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
 
     def step_pre(self, step_index):
         super().step_pre(step_index)
+        self.noise_pred = None
+        self.noise_pred_cond = None
+        self.noise_pred_uncond = None
+        self.noise_pred_guided = None
         self.timestep_input = torch.stack([self._solver.timesteps[self.step_index].to(device=AI_DEVICE)])
 
     def step_post(self):
@@ -1086,6 +1101,10 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self._solver = None
         self.debug_stop_requested = False
         self._debug_timesteps_logged = False
+        self.noise_pred = None
+        self.noise_pred_cond = None
+        self.noise_pred_uncond = None
+        self.noise_pred_guided = None
 
 
 @RUNNER_REGISTER("wan2.2_matrix_game3")
@@ -2164,6 +2183,15 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs)
                 noise_pred = self.model.scheduler.noise_pred.detach().clone() if self.model.scheduler.noise_pred is not None else None
+                noise_pred_cond = (
+                    self.model.scheduler.noise_pred_cond.detach().clone() if getattr(self.model.scheduler, "noise_pred_cond", None) is not None else None
+                )
+                noise_pred_uncond = (
+                    self.model.scheduler.noise_pred_uncond.detach().clone() if getattr(self.model.scheduler, "noise_pred_uncond", None) is not None else None
+                )
+                noise_pred_guided = (
+                    self.model.scheduler.noise_pred_guided.detach().clone() if getattr(self.model.scheduler, "noise_pred_guided", None) is not None else None
+                )
 
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
@@ -2185,10 +2213,19 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                         if self.model.scheduler.mask is not None
                         else None,
                         "latent_before": _matrix_game3_basic_tensor_probe(latent_before),
+                        "noise_pred_cond": _matrix_game3_basic_tensor_probe(noise_pred_cond) if noise_pred_cond is not None else None,
+                        "noise_pred_uncond": _matrix_game3_basic_tensor_probe(noise_pred_uncond) if noise_pred_uncond is not None else None,
+                        "noise_pred_guided": _matrix_game3_basic_tensor_probe(noise_pred_guided) if noise_pred_guided is not None else None,
                         "noise_pred": _matrix_game3_basic_tensor_probe(noise_pred) if noise_pred is not None else None,
                         "latent_after": _matrix_game3_basic_tensor_probe(latent_after),
                     }
                     torch.save(latent_before.cpu(), debug_steps_dir / f"step_{step_index:03d}_latent_before.pt")
+                    if noise_pred_cond is not None:
+                        torch.save(noise_pred_cond.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred_cond.pt")
+                    if noise_pred_uncond is not None:
+                        torch.save(noise_pred_uncond.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred_uncond.pt")
+                    if noise_pred_guided is not None:
+                        torch.save(noise_pred_guided.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred_guided.pt")
                     if noise_pred is not None:
                         torch.save(noise_pred.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred.pt")
                     torch.save(latent_after.cpu(), debug_steps_dir / f"step_{step_index:03d}_latent_after.pt")
