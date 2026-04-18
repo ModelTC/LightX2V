@@ -201,8 +201,8 @@ def render_interpolated_video(
         return exts, ints
 
     def build_wobble_traj(nums, delta, anchor_idx=0, yaw_rad=0.0, pivot=None, forward_ratio=0.0):
-        anchor_c2w = camtoworlds[:, anchor_idx:anchor_idx + 1]
-        anchor_K = intrinsics[:, anchor_idx:anchor_idx + 1]
+        anchor_c2w = camtoworlds[:, anchor_idx : anchor_idx + 1]
+        anchor_K = intrinsics[:, anchor_idx : anchor_idx + 1]
         need_rebuild = (yaw_rad != 0.0 or forward_ratio != 0.0) and pivot is not None
         if need_rebuild:
             device = camtoworlds.device
