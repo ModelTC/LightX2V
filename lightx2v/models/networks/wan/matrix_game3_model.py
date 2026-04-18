@@ -120,13 +120,20 @@ class WanMtxg3OfficialBaseModel:
             return t.reshape(1, -1).to(device=latents.device, dtype=latents.dtype)
 
         timestep_scalar = t.reshape(1).to(device=latents.device, dtype=latents.dtype)
+        patch_size = tuple(self.config.get("patch_size", (1, 2, 2)))
+        patch_h = int(patch_size[1])
+        patch_w = int(patch_size[2])
+        latent_frames = int(latents.shape[1])
+        latent_h = int(latents.shape[2])
+        latent_w = int(latents.shape[3])
+        tokens_per_frame = latent_h * latent_w // (patch_h * patch_w)
         timestep = latents.new_full(
-            (latents.shape[1], latents.shape[2] * latents.shape[3] // 4),
+            (latent_frames, tokens_per_frame),
             timestep_scalar.squeeze(0),
         )
         mask = getattr(self.scheduler, "mask", None)
         if mask is not None:
-            fixed_latent_frames = int((mask[0].flatten(1).sum(dim=1) == 0).sum().item())
+            fixed_latent_frames = int((mask.to(dtype=torch.float32).amax(dim=(0, 2, 3)) == 0).sum().item())
             if fixed_latent_frames > 0:
                 timestep[:fixed_latent_frames].zero_()
         return timestep.flatten().unsqueeze(0)
