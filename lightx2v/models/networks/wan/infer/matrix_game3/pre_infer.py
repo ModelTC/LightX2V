@@ -229,7 +229,9 @@ class WanMtxg3PreInfer(WanPreInfer):
                     dim=1,
                 )
 
-            plucker_emb = weights.patch_embedding_wancamctrl.apply(plucker_emb.squeeze(0))
+            plucker_weight_dtype = weights.patch_embedding_wancamctrl._get_actual_weight().dtype
+            plucker_emb = plucker_emb.squeeze(0).to(device=x.device, dtype=plucker_weight_dtype)
+            plucker_emb = weights.patch_embedding_wancamctrl.apply(plucker_emb)
             plucker_hidden = weights.c2ws_hidden_states_layer2.apply(torch.nn.functional.silu(weights.c2ws_hidden_states_layer1.apply(plucker_emb)))
             plucker_emb = (plucker_emb + plucker_hidden).to(self.infer_dtype)
 

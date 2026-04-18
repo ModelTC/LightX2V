@@ -1878,11 +1878,15 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             reference_pose = self._mg3_extrinsics_all[reference_idx : reference_idx + 1]
             rel_pair = torch.cat([reference_pose, mem_pose], dim=0)
             rel_pose = modules["cam_utils"].compute_relative_poses(rel_pair, framewise=False)[1:2]
-            memory_pluckers.append(self._build_plucker_from_pose(rel_pose.to(device=AI_DEVICE)))
+            memory_pluckers.append(self._build_plucker_from_pose(rel_pose.to(device=AI_DEVICE)).to(device=AI_DEVICE, dtype=GET_DTYPE()))
 
         if current_plucker is None:
             current_plucker = self._build_or_get_segment_camera_only(segment_idx)
-        plucker_with_memory = torch.cat(memory_pluckers + [current_plucker], dim=2) if memory_pluckers else current_plucker
+        plucker_with_memory = (
+            torch.cat(memory_pluckers + [current_plucker.to(device=AI_DEVICE, dtype=GET_DTYPE())], dim=2)
+            if memory_pluckers
+            else current_plucker.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        )
         src = torch.cat(self._mg3_generated_latent_history, dim=1)
         valid_latent_idx = [idx for idx in latent_idx if 0 <= idx < src.shape[1]]
         if valid_latent_idx != latent_idx:
