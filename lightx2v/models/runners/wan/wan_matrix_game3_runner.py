@@ -2156,27 +2156,45 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 if self.video_segment_num == 1:
                     self.check_stop()
                 logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+                latent_before = self.model.scheduler.latents.detach().clone()
 
                 with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.step_pre(step_index=step_index)
 
                 with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs)
+                noise_pred = self.model.scheduler.noise_pred.detach().clone() if self.model.scheduler.noise_pred is not None else None
 
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
+                latent_after = self.model.scheduler.latents.detach().clone()
 
                 if dump_all_scheduler_steps:
                     step_payload = {
                         "step_index": step_index,
-                        "timestep": int(self.model.scheduler._solver.timesteps[step_index].item()) if getattr(self.model.scheduler, "_solver", None) is not None else None,
-                        "latent_output": _matrix_game3_tensor_probe(self.model.scheduler.latents, mask=self.model.scheduler.mask),
+                        "timestep": float(self.model.scheduler._solver.timesteps[step_index].item())
+                        if getattr(self.model.scheduler, "_solver", None) is not None
+                        else None,
+                        "fixed_latent_frames": int((self.model.scheduler.mask.detach().to(torch.float32).amax(dim=(0, 2, 3)) > 0.0).nonzero(as_tuple=False)[0].item())
+                        if self.model.scheduler.mask is not None and self.model.scheduler.mask.ndim == 4
+                        and (self.model.scheduler.mask.detach().to(torch.float32).amax(dim=(0, 2, 3)) > 0.0).any()
+                        else None,
+                        "mask": _matrix_game3_basic_tensor_probe(self.model.scheduler.mask.amax(dim=(0, 2, 3)))
+                        if self.model.scheduler.mask is not None and self.model.scheduler.mask.ndim == 4
+                        else _matrix_game3_basic_tensor_probe(self.model.scheduler.mask)
+                        if self.model.scheduler.mask is not None
+                        else None,
+                        "latent_before": _matrix_game3_basic_tensor_probe(latent_before),
+                        "noise_pred": _matrix_game3_basic_tensor_probe(noise_pred) if noise_pred is not None else None,
+                        "latent_after": _matrix_game3_basic_tensor_probe(latent_after),
                     }
-                    tensor_path = debug_steps_dir / f"step_{step_index:03d}_output_latent.pt"
-                    torch.save(self.model.scheduler.latents.detach().cpu(), tensor_path)
+                    torch.save(latent_before.cpu(), debug_steps_dir / f"step_{step_index:03d}_latent_before.pt")
+                    if noise_pred is not None:
+                        torch.save(noise_pred.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred.pt")
+                    torch.save(latent_after.cpu(), debug_steps_dir / f"step_{step_index:03d}_latent_after.pt")
                     with (debug_steps_dir / "steps_summary.jsonl").open("a", encoding="utf-8") as f:
                         f.write(json.dumps(step_payload, ensure_ascii=False) + "\n")
-                    _matrix_game3_log_debug_payload(f"step_{step_index}_output_latent", step_payload)
+                    _matrix_game3_log_debug_payload(f"step_{step_index}_scheduler_debug", step_payload)
 
                 if getattr(self.model.scheduler, "debug_stop_requested", False):
                     logger.warning("[matrix-game-3][debug] stopping after scheduler latent probe.")
