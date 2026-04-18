@@ -174,6 +174,12 @@ def main():
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument("--video_path", type=str, default=None, help="input video path(for sr/v2v task)")
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
+    parser.add_argument(
+        "--num_iterations",
+        type=int,
+        default=None,
+        help="Override the number of Matrix-Game-3 generation segments. Final video length follows 57 + 40 * (num_iterations - 1).",
+    )
 
     args = parser.parse_args()
     # validate_task_arguments(args)

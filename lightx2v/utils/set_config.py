@@ -42,11 +42,14 @@ def set_args2config(args):
 
 
 def auto_calc_config(config):
+    cli_num_iterations = config.get("num_iterations", None)
     if config.get("config_json", None) is not None:
         logger.info(f"Loading some config from {config['config_json']}")
         with open(config["config_json"], "r") as f:
             config_json = json.load(f)
         config.update(config_json)
+        if cli_num_iterations is not None:
+            config["num_iterations"] = cli_num_iterations
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
