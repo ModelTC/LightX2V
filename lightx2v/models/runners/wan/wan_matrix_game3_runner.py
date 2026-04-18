@@ -1016,6 +1016,8 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.noise_pred_cond = None
         self.noise_pred_uncond = None
         self.noise_pred_guided = None
+        self.forward_kwargs_cond = None
+        self.forward_kwargs_uncond = None
         self.mask = None
         self.vae_encoder_out = None
         self.timestep_input = None
@@ -1050,6 +1052,8 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.noise_pred_cond = None
         self.noise_pred_uncond = None
         self.noise_pred_guided = None
+        self.forward_kwargs_cond = None
+        self.forward_kwargs_uncond = None
         self.mask = torch.ones_like(self.latents)
         self._reset_solver()
 
@@ -1064,6 +1068,8 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.noise_pred_cond = None
         self.noise_pred_uncond = None
         self.noise_pred_guided = None
+        self.forward_kwargs_cond = None
+        self.forward_kwargs_uncond = None
         if self.mask is not None:
             self.mask = self.mask.to(device=AI_DEVICE, dtype=GET_DTYPE())
         self._reset_solver()
@@ -1076,6 +1082,8 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.noise_pred_cond = None
         self.noise_pred_uncond = None
         self.noise_pred_guided = None
+        self.forward_kwargs_cond = None
+        self.forward_kwargs_uncond = None
         self.timestep_input = torch.stack([self._solver.timesteps[self.step_index].to(device=AI_DEVICE)])
 
     def step_post(self):
@@ -1105,6 +1113,8 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.noise_pred_cond = None
         self.noise_pred_uncond = None
         self.noise_pred_guided = None
+        self.forward_kwargs_cond = None
+        self.forward_kwargs_uncond = None
 
 
 @RUNNER_REGISTER("wan2.2_matrix_game3")
@@ -2192,6 +2202,8 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 noise_pred_guided = (
                     self.model.scheduler.noise_pred_guided.detach().clone() if getattr(self.model.scheduler, "noise_pred_guided", None) is not None else None
                 )
+                forward_kwargs_cond = getattr(self.model.scheduler, "forward_kwargs_cond", None)
+                forward_kwargs_uncond = getattr(self.model.scheduler, "forward_kwargs_uncond", None)
 
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
@@ -2216,6 +2228,8 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                         "noise_pred_cond": _matrix_game3_basic_tensor_probe(noise_pred_cond) if noise_pred_cond is not None else None,
                         "noise_pred_uncond": _matrix_game3_basic_tensor_probe(noise_pred_uncond) if noise_pred_uncond is not None else None,
                         "noise_pred_guided": _matrix_game3_basic_tensor_probe(noise_pred_guided) if noise_pred_guided is not None else None,
+                        "forward_kwargs_cond": forward_kwargs_cond,
+                        "forward_kwargs_uncond": forward_kwargs_uncond,
                         "noise_pred": _matrix_game3_basic_tensor_probe(noise_pred) if noise_pred is not None else None,
                         "latent_after": _matrix_game3_basic_tensor_probe(latent_after),
                     }
