@@ -15,7 +15,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -73,7 +73,7 @@ class DefaultRunner(BaseRunner):
             self.load_model()
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
-        if hasattr(self, "model"):
+        if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
@@ -217,7 +217,10 @@ class DefaultRunner(BaseRunner):
         self.run_main(total_steps=1)
 
     def end_run(self):
-        self.model.scheduler.clear()
+        if self.model is not None:
+            self.model.scheduler.clear()
+        elif hasattr(self, "scheduler") and self.scheduler is not None:
+            self.scheduler.clear()
         if hasattr(self, "inputs"):
             del self.inputs
         self.input_info = None
@@ -454,16 +457,26 @@ class DefaultRunner(BaseRunner):
                 fps = self.config.get("fps", 16)
 
             if not dist.is_initialized() or dist.get_rank() == 0:
-                logger.info(f"🎬 Start to save video 🎬")
+                out_path = self.input_info.save_result_path
+                img_in = (getattr(self.input_info, "image_path", None) or "").strip()
+                vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
+                sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
 
-                save_to_video(self.gen_video_final, self.input_info.save_result_path, fps=fps, method="ffmpeg")
-                if self.config.get("task") == "sr":
-                    input_video_path = getattr(self.input_info, "video_path", "")
-                    if input_video_path:
-                        muxed_path = mux_audio_from_video(input_video_path, self.input_info.save_result_path)
-                        if muxed_path:
-                            logger.info(f"Audio muxed from input video: {input_video_path}")
-                logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
+                if sr_from_image_only:
+                    logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
+                    save_to_image(self.gen_video_final, out_path)
+                    logger.info(f"✅ Image saved successfully to: {out_path} ✅")
+                else:
+                    logger.info(f"🎬 Start to save video 🎬")
+
+                    save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
+                    if self.config.get("task") == "sr":
+                        input_video_path = getattr(self.input_info, "video_path", "")
+                        if input_video_path:
+                            muxed_path = mux_audio_from_video(input_video_path, out_path)
+                            if muxed_path:
+                                logger.info(f"Audio muxed from input video: {input_video_path}")
+                    logger.info(f"✅ Video saved successfully to: {out_path} ✅")
             return {"video": None}
 
     @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["DefaultRunner"])

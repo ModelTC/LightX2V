@@ -20,9 +20,9 @@
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
 
-> 🎉 **NEW: GenRL is here!** Check out our new **[GenRL Framework](https://github.com/ModelTC/GenRL)** for training visual generation models with reinforcement learning! High-performance RL-trained checkpoints now available on **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)**.
-
 > 👋 **Join our WeChat group! LightX2V Rotbot WeChat ID: random42seed**
+
+> 🌐 More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)
 
 ## 🧾 Community Code Contribution Guidelines
 
@@ -41,8 +41,13 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
+- [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: Latest News
+- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](examples/worldmirror/README.md).
+
+- **April 10, 2026:** 🎉 We released a technical blog on disaggregated deployment
+  - [LightX2V Disaggregated Deployment: Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
 
 - **March 5, 2026:** 🚀 We now support deployment on Intel AIPC PTL. Thanks to the Intel team.
 

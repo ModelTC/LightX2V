@@ -7,8 +7,12 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from lightx2v.disagg.rdma_client import RDMAClient
-from lightx2v.disagg.rdma_server import RDMAServer
+try:
+    from lightx2v.disagg.rdma_client import RDMAClient
+    from lightx2v.disagg.rdma_server import RDMAServer
+except ImportError:
+    RDMAClient = None
+    RDMAServer = None
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,11 @@ class RDMABuffer:
     - client: consumer side, reads slots remotely and updates head by rdma_faa.
 
     The ring stores serialized JSON configs in fixed-size slots.
+
+    Multi-consumer note: multiple client processes calling ``consume()`` compete on the
+    same head pointer. Unless the backend implements a true remote atomic fetch-add
+    (see ``RDMAClient.rdma_faa``), correctness under heavy parallel consumption is not
+    guaranteed. Prefer one consumer per ring or low parallelism for production.
     """
 
     def __init__(
@@ -82,8 +91,8 @@ class RDMABuffer:
                 base_addr = int(info["addr"])
                 need_bytes = 16 + self.buffer_size * self.slot_size
                 self.rdma_server.register_memory(base_addr, need_bytes)
-                self.rdma_server.write_memory(base_addr, (0).to_bytes(8, byteorder="little", signed=False))
-                self.rdma_server.write_memory(base_addr + 8, (0).to_bytes(8, byteorder="little", signed=False))
+                self.rdma_server.write_memory(base_addr, (0).to_bytes(8, byteorder="big", signed=False))
+                self.rdma_server.write_memory(base_addr + 8, (0).to_bytes(8, byteorder="big", signed=False))
                 self._descriptor = RDMABufferDescriptor(
                     slot_addr=base_addr + 16,
                     slot_bytes=self.buffer_size * self.slot_size,
@@ -116,10 +125,10 @@ class RDMABuffer:
         return self._descriptor
 
     def _write_local_u64(self, buf: bytearray, value: int):
-        buf[:8] = int(value).to_bytes(8, byteorder="little", signed=False)
+        buf[:8] = int(value).to_bytes(8, byteorder="big", signed=False)
 
     def _read_local_u64(self, buf: bytearray) -> int:
-        return int.from_bytes(bytes(buf[:8]), byteorder="little", signed=False)
+        return int.from_bytes(bytes(buf[:8]), byteorder="big", signed=False)
 
     def _rdma_faa(self, ptr_addr: int, add_value: int) -> int:
         if self.rdma_client is not None:
@@ -129,7 +138,7 @@ class RDMABuffer:
             with self._lock:
                 old = self._read_remote_u64(ptr_addr)
                 new = (old + int(add_value)) & ((1 << 64) - 1)
-                self._rdma_write_bytes(ptr_addr, new.to_bytes(8, byteorder="little", signed=False))
+                self._rdma_write_bytes(ptr_addr, new.to_bytes(8, byteorder="big", signed=False))
                 return old
 
         # Fallback: local atomic emulation (useful for single-process validation).
@@ -198,7 +207,7 @@ class RDMABuffer:
 
     def _read_remote_u64(self, remote_addr: int) -> int:
         raw = self._rdma_read_bytes(remote_addr, 8)
-        return int.from_bytes(raw, byteorder="little", signed=False)
+        return int.from_bytes(raw, byteorder="big", signed=False)
 
     def _slot_offset(self, index: int) -> int:
         return (index % self.buffer_size) * self.slot_size
@@ -226,9 +235,16 @@ class RDMABuffer:
         # Reserve one slot by atomically incrementing tail.
         old_tail = self._rdma_faa(self.descriptor.tail_addr, 1)
         cur_head = self._read_remote_u64(self.descriptor.head_addr)
-        if (old_tail + 1) - cur_head > self.buffer_size:
-            # Ring full, rollback reservation.
+        used = (old_tail + 1) - cur_head
+        if used > self.buffer_size:
             self._rdma_faa(self.descriptor.tail_addr, -1)
+            logger.error(
+                "Ring buffer full: old_tail=%d cur_head=%d used=%d buffer_size=%d",
+                old_tail,
+                cur_head,
+                used,
+                self.buffer_size,
+            )
             raise BufferError("ring buffer is full")
 
         slot_idx = old_tail % self.buffer_size
@@ -253,22 +269,24 @@ class RDMABuffer:
         except Exception as exc:
             return None
 
-        # Fast path: empty queue, do not touch head.
         if cur_head >= cur_tail:
             return None
 
-        # Try to reserve one slot by advancing head atomically.
         try:
             old_head = self._rdma_faa(self.descriptor.head_addr, 1)
         except Exception as exc:
             return None
 
         if old_head >= cur_tail:
-            # Lost the race: rollback reservation.
             try:
                 self._rdma_faa(self.descriptor.head_addr, -1)
             except Exception as exc:
                 logger.warning("RDMA buffer rollback failed on empty consume: %s", exc)
+            logger.debug(
+                "Consume race lost: old_head=%d cur_tail=%d (rolled back)",
+                old_head,
+                cur_tail,
+            )
             return None
 
         slot_idx = old_head % self.buffer_size

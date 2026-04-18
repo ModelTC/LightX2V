@@ -16,7 +16,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-
+        self.infer_func = self.infer_without_offload
         # Sequence parallel settings
         if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
@@ -279,7 +279,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         return encoder_hidden_states, hidden_states
 
-    def infer(self, block_weights, pre_infer_out):
+    def infer_without_offload(self, block_weights, pre_infer_out):
         """Run transformer inference through all blocks.
 
         Args:
@@ -324,4 +324,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         if output_seq_len is not None:
             hidden_states = hidden_states[:output_seq_len]
 
+        return hidden_states
+
+    def infer(self, block_weights, pre_infer_out):
+        hidden_states = self.infer_func(block_weights, pre_infer_out)
         return hidden_states

@@ -102,8 +102,6 @@ class WanScheduler(BaseScheduler):
 
         self.sigmas = torch.from_numpy(sigmas)
         self.timesteps = torch.from_numpy(timesteps).to(device=device, dtype=torch.int64)
-
-        assert len(self.timesteps) == self.infer_steps
         self.model_outputs = [
             None,
         ] * self.solver_order

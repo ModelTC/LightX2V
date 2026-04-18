@@ -20,9 +20,9 @@
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
-> 🎉 **新品发布：GenRL 来了！** 查看我们全新的 **[GenRL 框架](https://github.com/ModelTC/GenRL)**，使用强化学习训练视觉生成模型！高性能 RL 训练的 checkpoint 现已在 **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)** 开放下载。
-
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
+
+> 🌐 更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)
 
 ## 🧾 社区代码贡献指南
 
@@ -41,8 +41,12 @@ pre-commit run --all-files
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
+- [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: 最新动态
+
+- **2026年4月10日: ** 🎉 我们更新了分离部署的技术博客
+  - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
 
 - **2026年3月5日：** 🚀 支持 Intel AIPC PTL 的部署，感谢Intel团队。
 

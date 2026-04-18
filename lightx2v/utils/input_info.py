@@ -1,6 +1,6 @@
 import inspect
 from dataclasses import MISSING, dataclass, field, fields, make_dataclass
-from typing import Any
+from typing import Any, Optional
 
 import torch
 
@@ -121,6 +121,7 @@ class S2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
@@ -148,6 +149,7 @@ class RS2VInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
     # prev info
     overlap_frame: torch.Tensor = field(default_factory=lambda: None)
@@ -230,6 +232,7 @@ class T2AVInputInfo:
     audio_latent_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -240,6 +243,7 @@ class I2AVInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -248,6 +252,7 @@ class I2AVInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -275,6 +280,25 @@ class WorldPlayI2VInputInfo:
     viewmats: torch.Tensor = field(default_factory=lambda: None)
     Ks: torch.Tensor = field(default_factory=lambda: None)
     action: torch.Tensor = field(default_factory=lambda: None)
+
+
+@dataclass
+class WorldMirrorReconInputInfo:
+    """Input info for HY-WorldMirror-2.0 3D reconstruction.
+
+    Unlike the diffusion tasks, this task takes a directory / video / image
+    and saves multi-view depth / normal / Gaussian-splat results to disk.
+    """
+
+    seed: int = field(default_factory=int)
+    # Input may be a directory of images, a single image, or a video.
+    input_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)  # output root dir
+    strict_output_path: str = field(default_factory=lambda: None)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # Optional priors
+    prior_cam_path: str = field(default_factory=lambda: None)
+    prior_depth_path: str = field(default_factory=lambda: None)
 
 
 @dataclass
@@ -316,13 +340,14 @@ task_dict = {
     "i2av": I2AVInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,
+    "recon": WorldMirrorReconInputInfo,
 }
 
 
 def init_empty_input_info(task, support_tasks=[]):
     if len(support_tasks) == 0:
         support_tasks = [task]
-    assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
+    # assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
 
     if len(support_tasks) == 1:
         support_task = support_tasks[0]
@@ -358,9 +383,32 @@ def init_empty_input_info(task, support_tasks=[]):
     return merged_input_info_cls()
 
 
+def calculate_target_video_length_from_duration(duration_seconds: float, fps: int = 16) -> int:
+    """Calculate target_video_length from video duration using the formula:
+    target_video_length = (fps * seconds + 3) // 4 * 4 + 1
+
+    This ensures the result satisfies the VAE stride constraint: (n-1) % 4 == 0
+
+    Args:
+        duration_seconds: Video duration in seconds
+        fps: Target frames per second (default 16)
+
+    Returns:
+        Frame count that satisfies VAE stride constraint
+
+    Examples:
+        1s: (16*1 + 3) // 4 * 4 + 1 = 17 frames
+        3s: (16*3 + 3) // 4 * 4 + 1 = 49 frames
+        5s: (16*5 + 3) // 4 * 4 + 1 = 81 frames
+    """
+    target_video_length = (int(fps * duration_seconds) + 3) // 4 * 4 + 1
+    return target_video_length
+
+
 @dataclass
 class SekoTalkInputs:
     infer_steps: int | Any = UNSET
+    target_video_length: int | Any = UNSET
     seed: int | Any = UNSET
     prompt: str | Any = UNSET
     prompt_enhanced: str | Any = UNSET
@@ -388,6 +436,8 @@ class SekoTalkInputs:
     # flags for first and last clip
     is_first: bool | Any = UNSET
     is_last: bool | Any = UNSET
+    # if save video by stream
+    stream_save_video: bool | Any = UNSET
 
     @classmethod
     def from_args(cls, args, **overrides):

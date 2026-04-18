@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -11,6 +12,7 @@ from lightx2v.utils.input_info import init_empty_input_info, update_input_info_f
 from lightx2v.utils.set_config import set_config, set_parallel_config
 
 from ..distributed_utils import DistributedManager
+from .pipeline_image_encode import encode_pipeline_return_to_png_bytes
 
 
 class TorchrunInferenceWorker:
@@ -66,6 +68,7 @@ class TorchrunInferenceWorker:
     async def process_request(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         has_error = False
         error_msg = ""
+        pipeline_return = None
 
         try:
             if self.world_size > 1 and self.rank == 0:
@@ -79,7 +82,7 @@ class TorchrunInferenceWorker:
                 self.switch_lora(lora_name, lora_strength)
 
             task_data["task"] = self.runner.config["task"]
-            task_data["return_result_tensor"] = False
+            task_data["return_result_tensor"] = bool(task_data.get("return_result_tensor", False))
             task_data["negative_prompt"] = task_data.get("negative_prompt", "")
 
             target_fps = task_data.pop("target_fps", None)
@@ -93,7 +96,7 @@ class TorchrunInferenceWorker:
             update_input_info_from_dict(self.input_info, task_data)
 
             self.runner.set_config(task_data)
-            self.runner.run_pipeline(self.input_info)
+            pipeline_return = self.runner.run_pipeline(self.input_info)
 
             await asyncio.sleep(0)
 
@@ -114,12 +117,20 @@ class TorchrunInferenceWorker:
                     "message": f"Inference failed: {error_msg}",
                 }
             else:
-                return {
+                out: Dict[str, Any] = {
                     "task_id": task_data["task_id"],
                     "status": "success",
-                    "save_result_path": task_data["save_result_path"],
+                    "save_result_path": task_data.get("save_result_path"),
                     "message": "Inference completed",
                 }
+                if task_data.get("return_result_tensor"):
+                    encode_start = time.perf_counter()
+                    png = encode_pipeline_return_to_png_bytes(pipeline_return)
+                    encode_elapsed_ms = (time.perf_counter() - encode_start) * 1000
+                    logger.info(f"Task {task_data.get('task_id')} encode result_png cost {encode_elapsed_ms:.2f} ms")
+                    if png:
+                        out["result_png"] = png
+                return out
         else:
             return None
 

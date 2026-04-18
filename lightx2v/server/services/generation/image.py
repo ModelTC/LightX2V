@@ -35,8 +35,17 @@ class ImageGenerationService(BaseGenerationService):
                 await self._process_image_path(message.image_path, task_data)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
 
+            if hasattr(message, "image_mask_path") and message.image_mask_path:
+                await self._process_image_mask_path(message.image_mask_path, task_data)
+                logger.info(f"Task {message.task_id} image mask path: {task_data.get('image_mask_path')}")
+                self._pack_image_and_mask_as_dir(task_data)
+                logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
+
             self._prepare_output_path(message.save_result_path, task_data)
             task_data["seed"] = message.seed
+            prefer_memory_result = bool(getattr(message, "prefer_memory_result", False))
+            task_data.pop("prefer_memory_result", None)
+            task_data["return_result_tensor"] = prefer_memory_result
 
             result = await self.inference_service.submit_task_async(task_data)
 
@@ -50,6 +59,17 @@ class ImageGenerationService(BaseGenerationService):
                 actual_save_path = self.file_service.get_output_path(message.save_result_path)
                 if not actual_save_path.suffix:
                     actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
+                if prefer_memory_result:
+                    result_png = result.get("result_png")
+                    if not result_png:
+                        raise RuntimeError("Image inference did not return in-memory PNG bytes (result_png)")
+                    return TaskResponse(
+                        task_id=message.task_id,
+                        task_status="completed",
+                        save_result_path="",
+                        result_png=result_png,
+                    )
+
                 return TaskResponse(
                     task_id=message.task_id,
                     task_status="completed",

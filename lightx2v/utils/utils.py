@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 import torchvision
 import torchvision.transforms.functional as TF
+from PIL import Image
 from einops import rearrange
 from loguru import logger
 from torchvision.transforms import InterpolationMode
@@ -258,6 +259,7 @@ def save_to_video(
 
         # Get ffmpeg executable from imageio_ffmpeg
         ffmpeg_exe = ffmpeg.get_ffmpeg_exe()
+        out_pix = output_pix_fmt or "yuv420p"
 
         if lossless:
             command = [
@@ -305,16 +307,16 @@ def save_to_video(
                 "-vcodec",
                 "libx264",
                 "-pix_fmt",
-                output_pix_fmt,
+                out_pix,
                 "-an",  # No audio
                 output_path,
             ]
 
-        # Run FFmpeg
+        # Run FFmpeg (stderr to DEVNULL: avoids pipe buffer deadlock; no need to capture for errors)
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
 
         if process.stdin is None:
@@ -333,11 +335,22 @@ def save_to_video(
         process.wait()
 
         if process.returncode != 0:
-            error_output = process.stderr.read().decode() if process.stderr else "Unknown error"
-            raise RuntimeError(f"FFmpeg failed with error: {error_output}")
+            raise RuntimeError("FFmpeg failed.")
 
     else:
         raise ValueError(f"Unknown save method: {method}")
+
+
+def save_to_image(images: torch.Tensor, output_path: str) -> None:
+    """Save the first frame of ComfyUI tensor ``[N, H, W, C]`` (values in ``[0, 1]``) as a static image.
+
+    Used for ``task=sr`` when conditioning comes from ``image_path`` only (no ``video_path``).
+    """
+    assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
+    frame = images[0].clamp(0, 1).cpu().numpy()
+    frame_u8 = (frame * 255.0).round().astype(np.uint8)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    Image.fromarray(frame_u8).save(output_path)
 
 
 def mux_audio_from_video(

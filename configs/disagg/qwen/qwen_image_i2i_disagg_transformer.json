@@ -1,0 +1,32 @@
+{
+    "task": "i2i",
+    "disagg_mode": "transformer",
+    "text_encoder_dim": 3584,
+    "text_len": 4096,
+    "infer_steps": 40,
+    "prompt_template_encode": "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "prompt_template_encode_start_idx": 64,
+    "resize_mode": "adaptive",
+    "attn_type": "flash_attn3",
+    "enable_cfg": true,
+    "sample_guide_scale": 4.0,
+    "CONDITION_IMAGE_SIZE": 147456,
+    "USE_IMAGE_ID_IN_PROMPT": true,
+    "vae_z_dim": 16,
+    "vae_stride": [1, 8, 8],
+    "target_video_length": 1,
+    "target_height": 1664,
+    "target_width": 1664,
+    "disagg_config": {
+        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_room": 1,
+        "sender_engine_rank": 0,
+        "receiver_engine_rank": 1,
+        "protocol": "rdma",
+        "local_hostname": "localhost",
+        "metadata_server": "P2PHANDSHAKE",
+        "device_name": "",
+        "decoder_engine_rank": 2,
+        "decoder_bootstrap_room": 2
+    }
+}

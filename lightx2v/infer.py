@@ -7,11 +7,8 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 
-try:
-    from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
-except (ImportError, ModuleNotFoundError):
-    pass  # Already warned in pipeline.py
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -27,6 +24,7 @@ from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Ru
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
@@ -80,15 +78,18 @@ def main():
             "worldplay_bi",
             "z_image",
             "flux2_klein",
+            "flux2_dev",
             "ltx2",
             "bagel",
             "seedvr2",
             "neopp",
+            "lingbot_world_fast",
+            "worldmirror",
         ],
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "sr"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "sr", "recon"], default="t2v")
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
@@ -106,7 +107,10 @@ def main():
     )
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
-    parser.add_argument("--image_strength", type=float, default=1.0, help="The strength of the image-to-audio-video (i2av) task")
+    parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
+    parser.add_argument(
+        "--image_frame_idx", type=str, default="", help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
+    )
     # [Warning] For vace task, need refactor.
     parser.add_argument(
         "--src_ref_images",
@@ -168,9 +172,24 @@ def main():
         default=None,
         help="Path to action model checkpoint for WorldPlay models.",
     )
+    # WorldMirror (3D reconstruction) specific
+    parser.add_argument("--input_path", type=str, default=None, help="(worldmirror/recon) Path to a directory of images, a video file, or a single image.")
+    parser.add_argument("--strict_output_path", type=str, default=None, help="(worldmirror/recon) If set, write outputs directly here instead of under save_result_path/<subdir>/<timestamp>/.")
+    parser.add_argument("--prior_cam_path", type=str, default=None, help="(worldmirror/recon) Optional camera prior JSON (extrinsics + intrinsics).")
+    parser.add_argument("--prior_depth_path", type=str, default=None, help="(worldmirror/recon) Optional depth prior directory (one .npy/.png per image).")
+    parser.add_argument("--subfolder", type=str, default=None, help="(worldmirror/recon) Subfolder inside model_path containing weights. Overrides config.")
+    parser.add_argument("--disable_heads", type=str, nargs="*", default=None, help="(worldmirror/recon) Heads to disable: any of camera depth normal points gs.")
+    parser.add_argument("--enable_bf16", action="store_true", default=False, help="(worldmirror/recon) Run the WorldMirror model in bf16.")
+    parser.add_argument("--save_rendered", action="store_true", default=False, help="(worldmirror/recon) Render an interpolated fly-through video from Gaussian splats.")
+    parser.add_argument("--render_interp_per_pair", type=int, default=None, help="(worldmirror/recon) Interpolated frames per camera pair for --save_rendered.")
+    parser.add_argument("--render_depth", action="store_true", default=False, help="(worldmirror/recon) Also render a depth video with --save_rendered.")
+    parser.add_argument("--wm_config_path", type=str, default=None, help="(worldmirror/recon) Optional training YAML (pair with --wm_ckpt_path).")
+    parser.add_argument("--wm_ckpt_path", type=str, default=None, help="(worldmirror/recon) Optional .ckpt/.safetensors (pair with --wm_config_path).")
+
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
+    parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument("--video_path", type=str, default=None, help="input video path(for sr/v2v task)")
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")

@@ -11,9 +11,9 @@ import torch.distributed as dist
 from loguru import logger
 
 try:
-    from lightx2v.models.runners.flux2_klein.flux2_klein_runner import Flux2KleinRunner  # noqa: F401
+    from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 except (ImportError, ModuleNotFoundError) as e:
-    logger.warning(f"Flux2KleinRunner not available: {e}")
+    logger.warning(f"Flux2 runners not available: {e}")
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
@@ -23,11 +23,13 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_lingbot_fast_runner import LingbotFastRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
+from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
@@ -134,6 +136,8 @@ class LightX2VPipeline:
             self.model_cls = "z_image"
         elif self.model_cls in ["flux2_klein"]:
             self.model_cls = "flux2_klein"
+        elif self.model_cls in ["flux2_dev"]:
+            self.model_cls = "flux2_dev"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 
@@ -420,6 +424,7 @@ class LightX2VPipeline:
         action_path=None,
         video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
+        image_frame_idx=None,
         last_frame_path=None,
         audio_path=None,
         src_ref_images=None,
@@ -432,6 +437,7 @@ class LightX2VPipeline:
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
         # image_strength can be a scalar (float/int) or a list matching the number of images
+        # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
         self.seed = seed
         self.image_path = image_path
         self.action_path = action_path
@@ -448,6 +454,7 @@ class LightX2VPipeline:
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
         self.image_strength = image_strength
+        self.image_frame_idx = image_frame_idx
         if task is not None:
             self.task = task
             self.modify_config({"task": self.task})
@@ -455,9 +462,10 @@ class LightX2VPipeline:
         input_info = init_empty_input_info(self.task, self.support_tasks)
         seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
-        self.runner.run_pipeline(input_info)
+        gen_result = self.runner.run_pipeline(input_info)
         logger.info("Generated successfully!")
         logger.info(f"Saved in {save_result_path}")
+        return gen_result
 
     def _init_runner(self, config):
         torch.set_grad_enabled(False)

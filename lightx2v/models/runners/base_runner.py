@@ -18,6 +18,51 @@ class BaseRunner(ABC):
         self.vae_encoder_need_img_original = False
         self.input_info = None
 
+    def apply_disagg_request_overrides(self, config_modify):
+        """Mirror flat disagg request fields into ``disagg_config`` in disagg mode only."""
+        if not isinstance(config_modify, dict):
+            return
+        if not self.config.get("disagg_mode"):
+            return
+        disagg_config = self.config.get("disagg_config")
+        if not isinstance(disagg_config, dict):
+            return
+
+        def _safe_int(key):
+            value = config_modify.get(key)
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        with self.config.temporarily_unlocked():
+            data_bootstrap_room = _safe_int("data_bootstrap_room")
+            if data_bootstrap_room is not None:
+                self.config["data_bootstrap_room"] = data_bootstrap_room
+
+            disagg_bootstrap_room = _safe_int("disagg_bootstrap_room")
+            if disagg_bootstrap_room is not None:
+                disagg_config["bootstrap_room"] = disagg_bootstrap_room
+                self.config["data_bootstrap_room"] = disagg_bootstrap_room
+
+            decoder_bootstrap_room = _safe_int("disagg_decoder_bootstrap_room")
+            if decoder_bootstrap_room is not None:
+                disagg_config["decoder_bootstrap_room"] = decoder_bootstrap_room
+
+            phase1_receiver_engine_rank = _safe_int("disagg_phase1_receiver_engine_rank")
+            if phase1_receiver_engine_rank is not None:
+                self.config["disagg_phase1_receiver_engine_rank"] = phase1_receiver_engine_rank
+
+            for flat_key, disagg_key in (
+                ("disagg_phase1_receiver_engine_rank", "receiver_engine_rank"),
+                ("disagg_phase2_sender_engine_rank", "receiver_engine_rank"),
+            ):
+                value = _safe_int(flat_key)
+                if value is not None:
+                    disagg_config[disagg_key] = value
+
     def load_transformer(self):
         """Load transformer model
 
@@ -99,8 +144,11 @@ class BaseRunner(ABC):
         pass
 
     def init_scheduler(self):
-        """Initialize scheduler"""
-        pass
+        """Initialize scheduler."""
+        if self.config.get("disagg_mode") == "decode":
+            from lightx2v.models.schedulers.scheduler import NullScheduler
+
+            self.scheduler = NullScheduler()
 
     def load_vae_decoder(self):
         """Load VAE decoder
