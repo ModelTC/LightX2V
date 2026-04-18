@@ -128,7 +128,9 @@ class WanMtxg3OfficialBaseModel:
 
         if infer_condition:
             context = inputs["text_encoder_output"]["context"]
-            plucker_emb = dit_cond_dict.get("plucker_emb_with_memory", dit_cond_dict.get("c2ws_plucker_emb"))
+            plucker_emb = dit_cond_dict.get("plucker_emb_with_memory")
+            if plucker_emb is None:
+                plucker_emb = dit_cond_dict.get("c2ws_plucker_emb")
             mouse_cond = dit_cond_dict.get("mouse_cond")
             keyboard_cond = dit_cond_dict.get("keyboard_cond")
             x_memory = dit_cond_dict.get("x_memory")

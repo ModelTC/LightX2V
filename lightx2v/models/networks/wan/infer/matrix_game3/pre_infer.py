@@ -157,7 +157,9 @@ class WanMtxg3PreInfer(WanPreInfer):
         dit_cond_dict = image_encoder_output.get("dit_cond_dict") or {}
 
         if self.scheduler.infer_condition:
-            plucker_emb = dit_cond_dict.get("plucker_emb_with_memory", dit_cond_dict.get("c2ws_plucker_emb", None))
+            plucker_emb = dit_cond_dict.get("plucker_emb_with_memory", None)
+            if plucker_emb is None:
+                plucker_emb = dit_cond_dict.get("c2ws_plucker_emb", None)
             mouse_cond = dit_cond_dict.get("mouse_cond", None)
             keyboard_cond = dit_cond_dict.get("keyboard_cond", None)
             x_memory = dit_cond_dict.get("x_memory", None)
