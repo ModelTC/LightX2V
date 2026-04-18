@@ -44,6 +44,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: Latest News
+- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](examples/worldmirror/README.md).
 
 - **April 10, 2026:** 🎉 We released a technical blog on disaggregated deployment
   - [LightX2V Disaggregated Deployment: Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)

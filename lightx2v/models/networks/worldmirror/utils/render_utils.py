@@ -5,6 +5,7 @@ Interpolates smooth camera trajectories using SLERP quaternions,
 renders each frame via gsplat, and saves MP4 videos.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -199,9 +200,37 @@ def render_interpolated_video(
         ints = torch.cat(ints, dim=1)[:1]
         return exts, ints
 
-    def build_wobble_traj(nums, delta):
-        if s != 1:
-            raise ValueError("Wobble trajectory requires exactly 1 input view")
+    def build_wobble_traj(nums, delta, anchor_idx=0, yaw_rad=0.0, pivot=None, forward_ratio=0.0):
+        anchor_c2w = camtoworlds[:, anchor_idx:anchor_idx + 1]
+        anchor_K = intrinsics[:, anchor_idx:anchor_idx + 1]
+        need_rebuild = (yaw_rad != 0.0 or forward_ratio != 0.0) and pivot is not None
+        if need_rebuild:
+            device = camtoworlds.device
+            dtype = torch.float32
+            anc = anchor_c2w[0, 0].to(dtype)
+            P = anc[:3, 3]
+            R = anc[:3, :3]
+            if yaw_rad != 0.0:
+                U = -R[:, 1]
+                U = U / (U.norm() + 1e-8)
+                theta = torch.tensor(yaw_rad, device=device, dtype=dtype)
+                cos_t, sin_t = torch.cos(theta), torch.sin(theta)
+                K_mat = torch.zeros(3, 3, device=device, dtype=dtype)
+                K_mat[0, 1], K_mat[0, 2] = -U[2], U[1]
+                K_mat[1, 0], K_mat[1, 2] = U[2], -U[0]
+                K_mat[2, 0], K_mat[2, 1] = -U[1], U[0]
+                I3 = torch.eye(3, device=device, dtype=dtype)
+                R_yaw = I3 + sin_t * K_mat + (1 - cos_t) * (K_mat @ K_mat)
+                pivot_f = pivot.to(dtype)
+                P = R_yaw @ (P - pivot_f) + pivot_f
+                R = R_yaw @ R
+            if forward_ratio != 0.0:
+                pivot_f = pivot.to(dtype)
+                P = P + (pivot_f - P) * float(forward_ratio)
+            anc_new = torch.eye(4, device=device, dtype=dtype)
+            anc_new[:3, :3] = R
+            anc_new[:3, 3] = P
+            anchor_c2w = anc_new[None, None].expand(camtoworlds.shape[0], 1, 4, 4).contiguous()
         t = torch.linspace(0, 1, nums, dtype=torch.float32, device=camtoworlds.device)
         t = (torch.cos(torch.pi * (t + 1)) + 1) / 2
         tf = torch.eye(4, dtype=torch.float32, device=camtoworlds.device)
@@ -211,12 +240,56 @@ def render_interpolated_video(
         radius = radius * t
         tf[..., 0, 3] = torch.sin(2 * torch.pi * t) * radius
         tf[..., 1, 3] = -torch.cos(2 * torch.pi * t) * radius
-        exts = camtoworlds @ tf
-        ints = intrinsics.repeat(1, exts.shape[1], 1, 1)
+        exts = anchor_c2w @ tf
+        ints = anchor_K.repeat(1, exts.shape[1], 1, 1)
         return exts, ints
 
-    if s > 1:
+    render_traj = os.environ.get("RENDER_TRAJ", "interp").lower()
+    yaw_deg = float(os.environ.get("RENDER_TRAJ_YAW_DEG", "0"))
+    forward_ratio = float(os.environ.get("RENDER_TRAJ_FORWARD", "0"))
+    yaw_rad = yaw_deg * torch.pi / 180.0
+
+    if render_traj == "wobble":
+        scene_center = splats["means"][0].median(dim=0).values
+        all_ext, all_int = build_wobble_traj(
+            interp_per_pair * 12,
+            scene_center.norm(dim=-1)[None],
+            anchor_idx=s // 2,
+            yaw_rad=yaw_rad,
+            pivot=scene_center,
+            forward_ratio=forward_ratio,
+        )
+        loop_reverse = True
+    elif s > 1:
         all_ext, all_int = build_interpolated_traj([i for i in range(s)], interp_per_pair)
+        if yaw_deg != 0.0 or forward_ratio != 0.0:
+            device = all_ext.device
+            dtype = torch.float32
+            scene_center = splats["means"][0].median(dim=0).values.to(dtype)
+            anc = camtoworlds[:, s // 2][0].to(dtype)
+            U = -anc[:3, 1]
+            U = U / (U.norm() + 1e-8)
+            theta = torch.tensor(yaw_rad, device=device, dtype=dtype)
+            cos_t, sin_t = torch.cos(theta), torch.sin(theta)
+            K_mat = torch.zeros(3, 3, device=device, dtype=dtype)
+            K_mat[0, 1], K_mat[0, 2] = -U[2], U[1]
+            K_mat[1, 0], K_mat[1, 2] = U[2], -U[0]
+            K_mat[2, 0], K_mat[2, 1] = -U[1], U[0]
+            I3 = torch.eye(3, device=device, dtype=dtype)
+            R_yaw = I3 + sin_t * K_mat + (1 - cos_t) * (K_mat @ K_mat)
+            all_ext_f = all_ext.to(dtype).clone()
+            P = all_ext_f[..., :3, 3]
+            R = all_ext_f[..., :3, :3]
+            if yaw_deg != 0.0:
+                P_shift = P - scene_center
+                P_rot = (R_yaw[None, None] @ P_shift[..., None]).squeeze(-1)
+                P = P_rot + scene_center
+                R = R_yaw[None, None] @ R
+            if forward_ratio != 0.0:
+                P = P + (scene_center - P) * forward_ratio
+            all_ext_f[..., :3, :3] = R
+            all_ext_f[..., :3, 3] = P
+            all_ext = all_ext_f
     else:
         all_ext, all_int = build_wobble_traj(interp_per_pair * 12, splats["means"][0].median(dim=0).values.norm(dim=-1)[None])
 
