@@ -8,7 +8,6 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.distributed as dist
-import torchvision.transforms.functional as TF
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin, SchedulerOutput
 from diffusers.utils import deprecate
@@ -119,70 +118,6 @@ def _matrix_game3_combine_data(data, num_frames=57, keyboard_dim=4, mouse=True):
             "mouse_condition": mouse_condition,
         }
     return {"keyboard_condition": keyboard_condition}
-
-
-def _matrix_game3_basic_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> dict[str, Any]:
-    tensor = tensor.detach()
-    tensor_fp32 = tensor.to(dtype=torch.float32)
-    flattened = tensor_fp32.reshape(-1)
-    return {
-        "shape": list(tensor.shape),
-        "dtype": str(tensor.dtype),
-        "device": str(tensor.device),
-        "min": float(tensor_fp32.min().item()),
-        "max": float(tensor_fp32.max().item()),
-        "mean": float(tensor_fp32.mean().item()),
-        "std": float(tensor_fp32.std(unbiased=False).item()),
-        "head": flattened[:head_values].cpu().tolist(),
-    }
-
-
-def _matrix_game3_tensor_probe(tensor: torch.Tensor, mask: Optional[torch.Tensor] = None, head_values: int = 8) -> dict[str, Any]:
-    probe = {"full_latent": _matrix_game3_basic_tensor_probe(tensor, head_values=head_values)}
-    if mask is None or mask.shape != tensor.shape:
-        return probe
-
-    mask_fp32 = mask.detach().to(dtype=torch.float32)
-    time_activity = mask_fp32.amax(dim=(0, 2, 3))
-    sampled_indices = torch.nonzero(time_activity > 0.0, as_tuple=False).flatten()
-    fixed_latent_frames = int(sampled_indices[0].item()) if sampled_indices.numel() > 0 else tensor.shape[1]
-    probe["fixed_latent_frames"] = fixed_latent_frames
-
-    if fixed_latent_frames < tensor.shape[1]:
-        sampled_region = tensor[:, fixed_latent_frames:]
-        probe["sampled_region"] = _matrix_game3_basic_tensor_probe(sampled_region, head_values=head_values)
-    else:
-        probe["sampled_region"] = "empty (all latent frames are fixed)"
-
-    return probe
-
-
-def _matrix_game3_log_debug_payload(name: str, payload: dict[str, Any]) -> None:
-    logger.info("[matrix-game-3][debug] {}:\n{}", name, json.dumps(payload, ensure_ascii=False, indent=4, default=str))
-
-
-def _matrix_game3_resolve_debug_first_frame_path(save_result_path: Optional[str]) -> Path:
-    if save_result_path:
-        output_path = Path(save_result_path)
-        suffix = output_path.suffix if output_path.suffix else ".mp4"
-        return output_path.with_name(output_path.name[: -len(suffix)] + ".debug_first_frame.png")
-    return Path.cwd() / "matrix_game3.debug_first_frame.png"
-
-
-def _matrix_game3_resolve_debug_frame_path(save_result_path: Optional[str], frame_index: int) -> Path:
-    if save_result_path:
-        output_path = Path(save_result_path)
-        suffix = output_path.suffix if output_path.suffix else ".mp4"
-        return output_path.with_name(output_path.name[: -len(suffix)] + f".debug_frame_{frame_index}.png")
-    return Path.cwd() / f"matrix_game3.debug_frame_{frame_index}.png"
-
-
-def _matrix_game3_resolve_debug_steps_dir(save_result_path: Optional[str]) -> Path:
-    if save_result_path:
-        output_path = Path(save_result_path)
-        suffix = output_path.suffix if output_path.suffix else ".mp4"
-        return output_path.with_name(output_path.name[: -len(suffix)] + ".debug_steps")
-    return Path.cwd() / "matrix_game3.debug_steps"
 
 
 def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
@@ -1013,63 +948,32 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         self.sample_shift = self.config["sample_shift"]
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.noise_pred = None
-        self.noise_pred_cond = None
-        self.noise_pred_uncond = None
-        self.noise_pred_guided = None
-        self.forward_kwargs_cond = None
-        self.forward_kwargs_uncond = None
         self.mask = None
         self.vae_encoder_out = None
         self.timestep_input = None
         self._solver = None
         self._generator = None
-        self.debug_stop_requested = False
-        self._debug_step_probe_enabled = bool(self.config.get("debug_stop_after_scheduler_probe", False))
-        self._debug_timesteps_logged = False
-        self._debug_probe_step = int(self.config.get("debug_scheduler_probe_step", max(self.infer_steps - 1, 0)))
 
     def _reset_solver(self):
         self._solver = self.scheduler_cls()
         self._solver.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
-        if self._debug_step_probe_enabled and not self._debug_timesteps_logged:
-            _matrix_game3_log_debug_payload(
-                "scheduler_timesteps_head",
-                {
-                    "timesteps_head": self._solver.timesteps[:3].detach().cpu().tolist(),
-                },
-            )
-            self._debug_timesteps_logged = True
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
-        self.debug_stop_requested = False
-        self._debug_timesteps_logged = False
         self._generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
         self.vae_encoder_out = image_encoder_output.get("vae_encoder_out") if image_encoder_output is not None else None
         if self.vae_encoder_out is not None:
             self.vae_encoder_out = self.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
         self.noise_pred = None
-        self.noise_pred_cond = None
-        self.noise_pred_uncond = None
-        self.noise_pred_guided = None
-        self.forward_kwargs_cond = None
-        self.forward_kwargs_uncond = None
         self.mask = torch.ones_like(self.latents)
         self._reset_solver()
 
     def reset(self, seed, latent_shape, step_index=None):
-        self.debug_stop_requested = False
-        self._debug_timesteps_logged = False
         self._generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(tuple(latent_shape), dtype=GET_DTYPE(), device=AI_DEVICE, generator=self._generator)
         if self.vae_encoder_out is not None:
             self.vae_encoder_out = self.vae_encoder_out.to(device=AI_DEVICE, dtype=GET_DTYPE())
         self.noise_pred = None
-        self.noise_pred_cond = None
-        self.noise_pred_uncond = None
-        self.noise_pred_guided = None
-        self.forward_kwargs_cond = None
-        self.forward_kwargs_uncond = None
         if self.mask is not None:
             self.mask = self.mask.to(device=AI_DEVICE, dtype=GET_DTYPE())
         self._reset_solver()
@@ -1079,11 +983,6 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
     def step_pre(self, step_index):
         super().step_pre(step_index)
         self.noise_pred = None
-        self.noise_pred_cond = None
-        self.noise_pred_uncond = None
-        self.noise_pred_guided = None
-        self.forward_kwargs_cond = None
-        self.forward_kwargs_uncond = None
         self.timestep_input = torch.stack([self._solver.timesteps[self.step_index].to(device=AI_DEVICE)])
 
     def step_post(self):
@@ -1101,20 +1000,10 @@ class MatrixGame3OfficialSchedulerAdapter(BaseScheduler):
         if self.mask is not None and self.vae_encoder_out is not None:
             prev_sample = (1.0 - self.mask) * self.vae_encoder_out + self.mask * prev_sample
         self.latents = prev_sample.to(dtype=GET_DTYPE())
-        if self._debug_step_probe_enabled and self.step_index == self._debug_probe_step:
-            _matrix_game3_log_debug_payload(f"step_{self.step_index}_output_latent", _matrix_game3_tensor_probe(self.latents, mask=self.mask))
-            self.debug_stop_requested = True
 
     def clear(self):
         self._solver = None
-        self.debug_stop_requested = False
-        self._debug_timesteps_logged = False
         self.noise_pred = None
-        self.noise_pred_cond = None
-        self.noise_pred_uncond = None
-        self.noise_pred_guided = None
-        self.forward_kwargs_cond = None
-        self.forward_kwargs_uncond = None
 
 
 @RUNNER_REGISTER("wan2.2_matrix_game3")
@@ -2164,17 +2053,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
 
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
-        dump_all_scheduler_steps = bool(self.config.get("debug_dump_all_scheduler_steps", False))
-        debug_steps_dir = _matrix_game3_resolve_debug_steps_dir(getattr(self.input_info, "save_result_path", None)) if dump_all_scheduler_steps else None
-        if debug_steps_dir is not None:
-            debug_steps_dir.mkdir(parents=True, exist_ok=True)
-            summary_path = debug_steps_dir / "steps_summary.jsonl"
-            if summary_path.exists():
-                summary_path.unlink()
-            mask_path = debug_steps_dir / "mask.pt"
-            torch.save(self.model.scheduler.mask.detach().cpu(), mask_path)
-            logger.info("[matrix-game-3][debug] saving per-step scheduler tensors to {}", debug_steps_dir)
-
         for step_index in range(infer_steps):
             with ProfilingContext4DebugL1(
                 "Run Dit every step",
@@ -2185,71 +2063,15 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 if self.video_segment_num == 1:
                     self.check_stop()
                 logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
-                latent_before = self.model.scheduler.latents.detach().clone()
 
                 with ProfilingContext4DebugL1("step_pre"):
                     self.model.scheduler.step_pre(step_index=step_index)
 
                 with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs)
-                noise_pred = self.model.scheduler.noise_pred.detach().clone() if self.model.scheduler.noise_pred is not None else None
-                noise_pred_cond = (
-                    self.model.scheduler.noise_pred_cond.detach().clone() if getattr(self.model.scheduler, "noise_pred_cond", None) is not None else None
-                )
-                noise_pred_uncond = (
-                    self.model.scheduler.noise_pred_uncond.detach().clone() if getattr(self.model.scheduler, "noise_pred_uncond", None) is not None else None
-                )
-                noise_pred_guided = (
-                    self.model.scheduler.noise_pred_guided.detach().clone() if getattr(self.model.scheduler, "noise_pred_guided", None) is not None else None
-                )
-                forward_kwargs_cond = getattr(self.model.scheduler, "forward_kwargs_cond", None)
-                forward_kwargs_uncond = getattr(self.model.scheduler, "forward_kwargs_uncond", None)
 
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
-                latent_after = self.model.scheduler.latents.detach().clone()
-
-                if dump_all_scheduler_steps:
-                    step_payload = {
-                        "step_index": step_index,
-                        "timestep": float(self.model.scheduler._solver.timesteps[step_index].item())
-                        if getattr(self.model.scheduler, "_solver", None) is not None
-                        else None,
-                        "fixed_latent_frames": int((self.model.scheduler.mask.detach().to(torch.float32).amax(dim=(0, 2, 3)) > 0.0).nonzero(as_tuple=False)[0].item())
-                        if self.model.scheduler.mask is not None and self.model.scheduler.mask.ndim == 4
-                        and (self.model.scheduler.mask.detach().to(torch.float32).amax(dim=(0, 2, 3)) > 0.0).any()
-                        else None,
-                        "mask": _matrix_game3_basic_tensor_probe(self.model.scheduler.mask.amax(dim=(0, 2, 3)))
-                        if self.model.scheduler.mask is not None and self.model.scheduler.mask.ndim == 4
-                        else _matrix_game3_basic_tensor_probe(self.model.scheduler.mask)
-                        if self.model.scheduler.mask is not None
-                        else None,
-                        "latent_before": _matrix_game3_basic_tensor_probe(latent_before),
-                        "noise_pred_cond": _matrix_game3_basic_tensor_probe(noise_pred_cond) if noise_pred_cond is not None else None,
-                        "noise_pred_uncond": _matrix_game3_basic_tensor_probe(noise_pred_uncond) if noise_pred_uncond is not None else None,
-                        "noise_pred_guided": _matrix_game3_basic_tensor_probe(noise_pred_guided) if noise_pred_guided is not None else None,
-                        "forward_kwargs_cond": forward_kwargs_cond,
-                        "forward_kwargs_uncond": forward_kwargs_uncond,
-                        "noise_pred": _matrix_game3_basic_tensor_probe(noise_pred) if noise_pred is not None else None,
-                        "latent_after": _matrix_game3_basic_tensor_probe(latent_after),
-                    }
-                    torch.save(latent_before.cpu(), debug_steps_dir / f"step_{step_index:03d}_latent_before.pt")
-                    if noise_pred_cond is not None:
-                        torch.save(noise_pred_cond.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred_cond.pt")
-                    if noise_pred_uncond is not None:
-                        torch.save(noise_pred_uncond.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred_uncond.pt")
-                    if noise_pred_guided is not None:
-                        torch.save(noise_pred_guided.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred_guided.pt")
-                    if noise_pred is not None:
-                        torch.save(noise_pred.cpu(), debug_steps_dir / f"step_{step_index:03d}_noise_pred.pt")
-                    torch.save(latent_after.cpu(), debug_steps_dir / f"step_{step_index:03d}_latent_after.pt")
-                    with (debug_steps_dir / "steps_summary.jsonl").open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(step_payload, ensure_ascii=False) + "\n")
-                    _matrix_game3_log_debug_payload(f"step_{step_index}_scheduler_debug", step_payload)
-
-                if getattr(self.model.scheduler, "debug_stop_requested", False):
-                    logger.warning("[matrix-game-3][debug] stopping after scheduler latent probe.")
-                    break
 
                 if self.progress_callback:
                     current_step = segment_idx * infer_steps + step_index + 1
@@ -2263,30 +2085,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         latents = self.model.scheduler.latents
         self._mg3_current_segment_full_latents = latents.detach().clone()
         return latents
-
-    def _log_vae_decode_probe_and_save_frame(self, decoded_images: torch.Tensor) -> None:
-        _matrix_game3_log_debug_payload("vae_decode_output", _matrix_game3_basic_tensor_probe(decoded_images))
-
-        if decoded_images.ndim != 5:
-            logger.warning("[matrix-game-3][debug] unexpected decoded image ndim: {}. Skipping first-frame save.", decoded_images.ndim)
-            return
-
-        save_result_path = getattr(self.input_info, "save_result_path", None)
-        frame_indices = [1, 32, 56]
-        total_frames = decoded_images.shape[2]
-        for frame_index in frame_indices:
-            if frame_index >= total_frames:
-                logger.warning(
-                    "[matrix-game-3][debug] requested decoded frame {} but total decoded frames are only {}. Skipping.",
-                    frame_index,
-                    total_frames,
-                )
-                continue
-            frame = decoded_images[0, :, frame_index].detach().float().add_(1.0).mul_(0.5).clamp_(0.0, 1.0).cpu()
-            frame_path = _matrix_game3_resolve_debug_frame_path(save_result_path, frame_index)
-            frame_path.parent.mkdir(parents=True, exist_ok=True)
-            TF.to_pil_image(frame).save(frame_path)
-            logger.info("[matrix-game-3][debug] saved decoded frame {} to {}", frame_index, frame_path)
 
     def run_main(self):
         self.init_run()
@@ -2303,14 +2101,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 self.check_stop()
                 self.init_run_segment(segment_idx)
                 latents = self.run_segment(segment_idx)
-                if self.config.get("debug_stop_before_vae_decode", False):
-                    logger.warning("[matrix-game-3][debug] scheduler step dump complete. Stopping before VAE decode.")
-                    self.end_run()
-                    return None
-                if getattr(self.model.scheduler, "debug_stop_requested", False):
-                    logger.warning("[matrix-game-3][debug] scheduler probe complete. Stopping before VAE decode.")
-                    self.end_run()
-                    return None
                 if self.config.get("use_stream_vae", False):
                     frames = []
                     for frame_segment in self.run_vae_decoder_stream(latents):
@@ -2319,11 +2109,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                     self.gen_video = torch.cat(frames, dim=2)
                 else:
                     self.gen_video = self.run_vae_decoder(latents)
-                if self.config.get("debug_stop_after_vae_decode", False):
-                    self._log_vae_decode_probe_and_save_frame(self.gen_video)
-                    logger.warning("[matrix-game-3][debug] stopping after VAE decode probe.")
-                    self.end_run()
-                    return None
                 self.end_run_segment(segment_idx)
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()

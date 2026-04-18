@@ -3,7 +3,6 @@ import os
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 import torch
 from safetensors import safe_open
@@ -30,40 +29,6 @@ def _import_official_matrix_game3_wan_model():
     from wan.modules.model import WanModel as OfficialWanModel
 
     return OfficialWanModel
-
-
-def _matrix_game3_forward_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> dict[str, Any]:
-    tensor = tensor.detach()
-    tensor_fp32 = tensor.to(dtype=torch.float32)
-    flattened = tensor_fp32.reshape(-1)
-    return {
-        "shape": list(tensor.shape),
-        "dtype": str(tensor.dtype),
-        "device": str(tensor.device),
-        "min": float(tensor_fp32.min().item()),
-        "max": float(tensor_fp32.max().item()),
-        "mean": float(tensor_fp32.mean().item()),
-        "std": float(tensor_fp32.std(unbiased=False).item()),
-        "head": flattened[:head_values].cpu().tolist(),
-    }
-
-
-def _matrix_game3_forward_value_probe(value: Any) -> Any:
-    if value is None:
-        return None
-    if torch.is_tensor(value):
-        return _matrix_game3_forward_tensor_probe(value)
-    if isinstance(value, (int, float, str, bool)):
-        return value
-    if isinstance(value, (list, tuple)):
-        return {
-            "type": type(value).__name__,
-            "len": len(value),
-            "head": list(value[:8]),
-        }
-    if isinstance(value, dict):
-        return {k: _matrix_game3_forward_value_probe(v) for k, v in value.items()}
-    return str(value)
 
 
 def _matrix_game3_compute_max_seq_len(config, lat_h: int, lat_w: int) -> int:
@@ -191,12 +156,6 @@ class WanMtxg3OfficialBaseModel:
             "memory_latent_idx": memory_latent_idx,
             "predict_latent_idx": dit_cond_dict.get("predict_latent_idx"),
         }
-        if self.scheduler is not None:
-            debug_payload = {k: _matrix_game3_forward_value_probe(v) for k, v in forward_kwargs.items()}
-            if infer_condition:
-                self.scheduler.forward_kwargs_cond = debug_payload
-            else:
-                self.scheduler.forward_kwargs_uncond = debug_payload
         return forward_kwargs
 
     @torch.no_grad()
@@ -212,19 +171,11 @@ class WanMtxg3OfficialBaseModel:
     @torch.no_grad()
     def infer(self, inputs):
         if self.config.get("enable_cfg", False):
-            noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
-            noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
-            noise_pred_guided = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
-            self.scheduler.noise_pred_cond = noise_pred_cond
-            self.scheduler.noise_pred_uncond = noise_pred_uncond
-            self.scheduler.noise_pred_guided = noise_pred_guided
-            self.scheduler.noise_pred = noise_pred_guided
+            cond_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            uncond_pred = self._infer_cond_uncond(inputs, infer_condition=False)
+            self.scheduler.noise_pred = uncond_pred + self.scheduler.sample_guide_scale * (cond_pred - uncond_pred)
         else:
-            noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
-            self.scheduler.noise_pred_cond = noise_pred
-            self.scheduler.noise_pred_uncond = None
-            self.scheduler.noise_pred_guided = noise_pred
-            self.scheduler.noise_pred = noise_pred
+            self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
 
 class WanMtxg3Model(WanModel):

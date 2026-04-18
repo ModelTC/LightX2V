@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 from einops import rearrange
 
@@ -8,54 +6,6 @@ from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-
-def _matrix_game3_forward_tensor_probe(tensor: torch.Tensor, head_values: int = 8) -> dict[str, Any]:
-    tensor = tensor.detach()
-    tensor_fp32 = tensor.to(dtype=torch.float32)
-    flattened = tensor_fp32.reshape(-1)
-    return {
-        "shape": list(tensor.shape),
-        "dtype": str(tensor.dtype),
-        "device": str(tensor.device),
-        "min": float(tensor_fp32.min().item()),
-        "max": float(tensor_fp32.max().item()),
-        "mean": float(tensor_fp32.mean().item()),
-        "std": float(tensor_fp32.std(unbiased=False).item()),
-        "head": flattened[:head_values].cpu().tolist(),
-    }
-
-
-def _matrix_game3_forward_value_probe(value: Any) -> Any:
-    if value is None:
-        return None
-    if torch.is_tensor(value):
-        return _matrix_game3_forward_tensor_probe(value)
-    if isinstance(value, (int, float, str, bool)):
-        return value
-    if isinstance(value, (list, tuple)):
-        return {
-            "type": type(value).__name__,
-            "len": len(value),
-            "head": list(value[:8]),
-        }
-    if isinstance(value, dict):
-        return {k: _matrix_game3_forward_value_probe(v) for k, v in value.items()}
-    return str(value)
-
-
-def _matrix_game3_compute_max_seq_len(config, lat_h: int, lat_w: int) -> int:
-    first_clip_frame = int(config.get("first_clip_frame", config.get("target_video_length", 57)))
-    vae_stride_t = int(tuple(config.get("vae_stride", (4, 16, 16)))[0])
-    patch_h, patch_w = tuple(config.get("patch_size", (1, 2, 2)))[1:]
-    max_lat_f = (first_clip_frame - 1) // vae_stride_t + 1
-    max_mem_f = 5
-    max_total_f = max_lat_f + max_mem_f
-    max_seq_len = max_total_f * lat_h * lat_w // (patch_h * patch_w)
-    sp_size = int(config.get("sp_size", 1))
-    if sp_size > 1:
-        max_seq_len = int(((max_seq_len + sp_size - 1) // sp_size) * sp_size)
-    return max_seq_len
 
 
 class WanMtxg3PreInferOutput:
@@ -195,27 +145,6 @@ class WanMtxg3PreInfer(WanPreInfer):
             keyboard_cond_memory = None
             memory_latent_idx = None
         predict_latent_idx = dit_cond_dict.get("predict_latent_idx", None)
-
-        if hasattr(self.scheduler, "forward_kwargs_cond"):
-            debug_payload = {
-                "x": _matrix_game3_forward_value_probe(x.unsqueeze(0)),
-                "t": _matrix_game3_forward_value_probe(t.reshape(1, -1)),
-                "context": _matrix_game3_forward_value_probe(context),
-                "mouse_cond": _matrix_game3_forward_value_probe(mouse_cond),
-                "keyboard_cond": _matrix_game3_forward_value_probe(keyboard_cond),
-                "x_memory": _matrix_game3_forward_value_probe(x_memory),
-                "timestep_memory": _matrix_game3_forward_value_probe(timestep_memory),
-                "mouse_cond_memory": _matrix_game3_forward_value_probe(mouse_cond_memory),
-                "keyboard_cond_memory": _matrix_game3_forward_value_probe(keyboard_cond_memory),
-                "plucker_emb": _matrix_game3_forward_value_probe(plucker_emb),
-                "memory_latent_idx": _matrix_game3_forward_value_probe(memory_latent_idx),
-                "predict_latent_idx": _matrix_game3_forward_value_probe(predict_latent_idx),
-            }
-            debug_payload["seq_len"] = _matrix_game3_compute_max_seq_len(self.config, x.shape[2], x.shape[3])
-            if self.scheduler.infer_condition:
-                self.scheduler.forward_kwargs_cond = debug_payload
-            else:
-                self.scheduler.forward_kwargs_uncond = debug_payload
 
         memory_length = 0
         if x_memory is not None:
