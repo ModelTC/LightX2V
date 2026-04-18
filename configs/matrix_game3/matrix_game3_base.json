@@ -19,7 +19,9 @@
     "enable_cfg": true,
     "debug_stop_after_scheduler_probe": false,
     "debug_scheduler_probe_step": 49,
-    "debug_stop_after_vae_decode": true,
+    "debug_dump_all_scheduler_steps": true,
+    "debug_stop_before_vae_decode": true,
+    "debug_stop_after_vae_decode": false,
 
     "first_clip_frame": 57,
     "clip_frame": 56,

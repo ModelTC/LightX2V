@@ -178,6 +178,14 @@ def _matrix_game3_resolve_debug_frame_path(save_result_path: Optional[str], fram
     return Path.cwd() / f"matrix_game3.debug_frame_{frame_index}.png"
 
 
+def _matrix_game3_resolve_debug_steps_dir(save_result_path: Optional[str]) -> Path:
+    if save_result_path:
+        output_path = Path(save_result_path)
+        suffix = output_path.suffix if output_path.suffix else ".mp4"
+        return output_path.with_name(output_path.name[: -len(suffix)] + ".debug_steps")
+    return Path.cwd() / "matrix_game3.debug_steps"
+
+
 def _matrix_game3_bench_actions_universal(num_frames, num_samples_per_action=4):
     actions_single_action = [
         "forward",
@@ -2117,6 +2125,16 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
 
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
+        dump_all_scheduler_steps = bool(self.config.get("debug_dump_all_scheduler_steps", False))
+        debug_steps_dir = _matrix_game3_resolve_debug_steps_dir(getattr(self.input_info, "save_result_path", None)) if dump_all_scheduler_steps else None
+        if debug_steps_dir is not None:
+            debug_steps_dir.mkdir(parents=True, exist_ok=True)
+            summary_path = debug_steps_dir / "steps_summary.jsonl"
+            if summary_path.exists():
+                summary_path.unlink()
+            mask_path = debug_steps_dir / "mask.pt"
+            torch.save(self.model.scheduler.mask.detach().cpu(), mask_path)
+            logger.info("[matrix-game-3][debug] saving per-step scheduler tensors to {}", debug_steps_dir)
 
         for step_index in range(infer_steps):
             with ProfilingContext4DebugL1(
@@ -2137,6 +2155,18 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
 
                 with ProfilingContext4DebugL1("step_post"):
                     self.model.scheduler.step_post()
+
+                if dump_all_scheduler_steps:
+                    step_payload = {
+                        "step_index": step_index,
+                        "timestep": int(self.model.scheduler._solver.timesteps[step_index].item()) if getattr(self.model.scheduler, "_solver", None) is not None else None,
+                        "latent_output": _matrix_game3_tensor_probe(self.model.scheduler.latents, mask=self.model.scheduler.mask),
+                    }
+                    tensor_path = debug_steps_dir / f"step_{step_index:03d}_output_latent.pt"
+                    torch.save(self.model.scheduler.latents.detach().cpu(), tensor_path)
+                    with (debug_steps_dir / "steps_summary.jsonl").open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(step_payload, ensure_ascii=False) + "\n")
+                    _matrix_game3_log_debug_payload(f"step_{step_index}_output_latent", step_payload)
 
                 if getattr(self.model.scheduler, "debug_stop_requested", False):
                     logger.warning("[matrix-game-3][debug] stopping after scheduler latent probe.")
@@ -2194,6 +2224,10 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                 self.check_stop()
                 self.init_run_segment(segment_idx)
                 latents = self.run_segment(segment_idx)
+                if self.config.get("debug_stop_before_vae_decode", False):
+                    logger.warning("[matrix-game-3][debug] scheduler step dump complete. Stopping before VAE decode.")
+                    self.end_run()
+                    return None
                 if getattr(self.model.scheduler, "debug_stop_requested", False):
                     logger.warning("[matrix-game-3][debug] scheduler probe complete. Stopping before VAE decode.")
                     self.end_run()
