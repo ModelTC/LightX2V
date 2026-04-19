@@ -6,6 +6,7 @@
 MODEL_PATH="${MODEL_PATH:-/path/to/Matrix-Game-3.0}"
 CONFIG_JSON="configs/matrix_game3/matrix_game3_distilled.json"
 SAVE_PATH="${SAVE_PATH:-save_results/matrix_game3_distilled}"
+ACTION_PATH="${ACTION_PATH:-/path/to/action}"
 
 python -m lightx2v.infer \
     --model_cls wan2.2_matrix_game3 \

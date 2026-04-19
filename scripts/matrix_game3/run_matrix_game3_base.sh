@@ -6,16 +6,7 @@
 MODEL_PATH="${MODEL_PATH:-/path/to/Matrix-Game-3.0}"
 CONFIG_JSON="configs/matrix_game3/matrix_game3_base.json"
 SAVE_PATH="${SAVE_PATH:-save_results/matrix_game3_base}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-# Reuse the repo's standard runtime defaults. MG3 base needs localized fp32 math
-# around time modulation and residuals, but broad fp32-sensitive-layer overrides
-# skew the main bf16 execution path away from the official implementation.
-export lightx2v_path="${lightx2v_path:-${REPO_ROOT}}"
-export model_path="${model_path:-${MODEL_PATH}}"
-source "${lightx2v_path}/scripts/base/base.sh"
+ACTION_PATH="${ACTION_PATH:-/path/to/action}"
 
 python -m lightx2v.infer \
     --model_cls wan2.2_matrix_game3 \
