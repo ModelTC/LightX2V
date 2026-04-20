@@ -1,4 +1,5 @@
 import gc
+import os
 
 import numpy as np
 import requests
@@ -539,6 +540,60 @@ class DefaultRunner(BaseRunner):
             return True
         except Exception as e:
             logger.error(f"Failed to switch LoRA: {e}")
+            return False
+
+    def switch_lora_multi(self, resolved_items: list):
+        """
+        Apply one or more runtime LoRA adapters using the same primitives as
+        :meth:`switch_lora` (``model._load_lora_file`` + ``model._update_lora``).
+
+        - **Empty** ``resolved_items``: remove LoRA (same as ``switch_lora(\"\")``).
+        - **One** ``(path, strength)``: same as ``switch_lora(path, strength)``.
+        - **Multiple**: load each file with ``model._load_lora_file`` (identical to the
+          single-file path inside ``_update_lora``), scale tensors by per-item strength,
+          sum by key, then one ``_update_lora(merged, 1.0)``. Upstream has no separate
+          multi-file dynamic API; this keeps the per-file load path aligned with
+          ``switch_lora``.
+
+        Args:
+            resolved_items: List of ``(absolute_path_str, strength)`` tuples.
+
+        Returns:
+            bool: True on success, False otherwise.
+        """
+        if not hasattr(self, "model") or self.model is None:
+            logger.error("Model not loaded. Please load model first.")
+            return False
+        if not hasattr(self.model, "_update_lora"):
+            logger.error("Model does not support LoRA switching")
+            return False
+        try:
+            if not resolved_items:
+                return self.switch_lora("", 1.0)
+            if len(resolved_items) == 1:
+                path, strength = resolved_items[0]
+                return self.switch_lora(path, float(strength))
+            merged = None
+            for path, strength in resolved_items:
+                if not os.path.isfile(path):
+                    logger.warning(f"LoRA file missing: {path}")
+                    return False
+                weight_dict = self.model._load_lora_file(path)
+                s = float(strength)
+                if merged is None:
+                    merged = {k: v * s for k, v in weight_dict.items()}
+                else:
+                    for k, v in weight_dict.items():
+                        if k in merged:
+                            merged[k] = merged[k] + v * s
+            logger.info(
+                f"Switching LoRA ({len(resolved_items)} files fused; same _load_lora_file + _update_lora as single): {resolved_items}"
+            )
+            self.model._update_lora(merged, 1.0)
+            logger.info("LoRA switched successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to switch LoRA (multi): {e}")
             return False
 
     def __del__(self, _empty_cache=getattr(torch_device_module, "empty_cache", None), _gc_collect=gc.collect):
