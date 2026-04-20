@@ -194,17 +194,13 @@ class NeoppRunner(DefaultRunner):
         return gen_result
 
     def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        logger.info(f"Loaded t2i KV cache from {to_x2v_cond_kv_path} and {to_x2v_uncond_kv_path}")
-        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-
-    # def load_kvcache_i2i(self, to_x2v_cond_path, to_x2v_uncond_kv_path, to_x2v_img_uncond_path):
-    #     self.past_key_values_cond = torch.load(to_x2v_cond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-    #     self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-    #     self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-    #     logger.info(f"Loaded i2i KV caches: cond={self.past_key_values_cond.shape}, uncond={self.past_key_values_uncond.shape}")
+        cfg_p_rank = self._get_cfg_p_rank()
+        if cfg_p_rank != 1:  # rank 0 只做 cond，无需加载 uncond
+            self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+            logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
+        if cfg_p_rank != 0:  # rank 1 只做 uncond，无需加载 cond
+            self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+            logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
     def set_inference_params(self, index_offset_cond, index_offset_uncond, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
         self.index_offset_cond = index_offset_cond
@@ -215,18 +211,20 @@ class NeoppRunner(DefaultRunner):
         self.model.cfg_norm = cfg_norm
 
     def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor):
-        self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
-        self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
-        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        cfg_p_rank = self._get_cfg_p_rank()
+        if cfg_p_rank != 1:
+            self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
+            logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
+        if cfg_p_rank != 0:
+            self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
+            logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
-    # def set_kvcache_i2i(self, to_x2v_cond_kv: torch.Tensor, to_x2v_text_uncond_kv: torch.Tensor, to_x2v_img_uncond_kv: torch.Tensor):
-    #     self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
-    #     self.past_key_values_text_uncond = to_x2v_text_uncond_kv.to(AI_DEVICE)
-    #     self.past_key_values_img_uncond = to_x2v_img_uncond_kv.to(AI_DEVICE)
-    #     logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-    #     logger.info(f"KV cache text uncond shape: {self.past_key_values_text_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-    #     logger.info(f"KV cache img uncond shape: {self.past_key_values_img_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+    def _get_cfg_p_rank(self):
+        """返回当前进程在 cfg_p 组内的 rank；未开启 cfg_parallel 时返回 None（两份 kvcache 都需要加载）。"""
+        if self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            return dist.get_rank(cfg_p_group)
+        return None
 
     def clear_kvcache(self):
         self.past_key_values_cond = None

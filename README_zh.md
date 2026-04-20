@@ -20,9 +20,9 @@
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
 
-> 🎉 **新品发布：GenRL 来了！** 查看我们全新的 **[GenRL 框架](https://github.com/ModelTC/GenRL)**，使用强化学习训练视觉生成模型！高性能 RL 训练的 checkpoint 现已在 **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)** 开放下载。
-
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
+
+> 🌐 更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)
 
 ## 🧾 社区代码贡献指南
 
@@ -41,11 +41,16 @@ pre-commit run --all-files
 - [yeahdongcn](https://github.com/yeahdongcn)
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
+- [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: 最新动态
 
-- **2026年4月10日: ** 🎉 我们更新了分离部署的技术博客
-  - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](blogs/ZH_CN/DisaggBlogPost.md)
+- **2026年4月20日：** 🚀 我们很高兴发布 [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) 和 [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) 两个新模型。与之前的版本相比，这一版本基于高质量的720p数据集进行训练，并采用了优化过的低噪声训练算法。这些改进显著提升了模型在细粒度细节渲染以及视觉纹理方面的表现。
+
+- **2026年4月17日：** 🚀 我们支持了 [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) 模型。在单张 H100 显卡上，LightX2V 可实现约 1.2 倍的推理加速。详细用法请参考[此教程](examples/worldmirror/README_zh.md)。
+
+- **2026年4月10日：** 🎉 我们更新了分离部署的技术博客
+  - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
 
 - **2026年3月5日：** 🚀 支持 Intel AIPC PTL 的部署，感谢Intel团队。
 

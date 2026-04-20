@@ -849,7 +849,7 @@ class WanVAE_(nn.Module):
         return y.transpose(1, 2).to(x)
 
 
-def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, dtype=torch.float32, load_from_rank0=False, **kwargs):
+def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, dtype=torch.float32, load_from_rank0=False, dummy_model=False, **kwargs):
     # params
     cfg = dict(
         dim=dim,
@@ -862,17 +862,21 @@ def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offloa
     )
     cfg.update(**kwargs)
 
-    # init model
-    with torch.device("meta"):
+    if dummy_model:
+        logging.info("[DummyModel] Skipping VAE 2.2 weight loading, using random init")
         model = WanVAE_(**cfg)
+    else:
+        # init model
+        with torch.device("meta"):
+            model = WanVAE_(**cfg)
 
-    # load checkpoint
-    logging.info(f"loading {pretrained_path}")
-    weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
-    for k in weights_dict.keys():
-        if weights_dict[k].dtype != dtype:
-            weights_dict[k] = weights_dict[k].to(dtype)
-    model.load_state_dict(weights_dict, assign=True)
+        # load checkpoint
+        logging.info(f"loading {pretrained_path}")
+        weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
+        for k in weights_dict.keys():
+            if weights_dict[k].dtype != dtype:
+                weights_dict[k] = weights_dict[k].to(dtype)
+        model.load_state_dict(weights_dict, assign=True)
 
     # Convert Conv3d weights to channels_last_3d for cuDNN optimization
     if GET_USE_CHANNELS_LAST_3D():
@@ -895,6 +899,7 @@ class Wan2_2_VAE:
         cpu_offload=False,
         offload_cache=False,
         load_from_rank0=False,
+        dummy_model=False,
         **kwargs,
     ):
         self.dtype = dtype
@@ -1015,7 +1020,15 @@ class Wan2_2_VAE:
         # init model
         self.model = (
             _video_vae(
-                pretrained_path=vae_path, z_dim=z_dim, dim=c_dim, dim_mult=dim_mult, temperal_downsample=temperal_downsample, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0
+                pretrained_path=vae_path,
+                z_dim=z_dim,
+                dim=c_dim,
+                dim_mult=dim_mult,
+                temperal_downsample=temperal_downsample,
+                cpu_offload=cpu_offload,
+                dtype=dtype,
+                load_from_rank0=load_from_rank0,
+                dummy_model=dummy_model,
             )
             .eval()
             .requires_grad_(False)

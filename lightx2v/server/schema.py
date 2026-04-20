@@ -40,6 +40,8 @@ class BaseTaskRequest(DisaggOverrideRequest):
     target_shape: list[int] = Field([], description="Return video or image shape")
     lora_name: Optional[str] = Field(None, description="LoRA filename to load from lora_dir, None to disable LoRA")
     lora_strength: float = Field(1.0, description="LoRA strength")
+    # Internal switch: sync API sets this True to return image from memory only.
+    prefer_memory_result: bool = Field(default=False, exclude=True)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -83,6 +85,8 @@ class TaskResponse(BaseModel):
     task_id: str
     task_status: str
     save_result_path: str
+    # Filled after image generation in-process; never serialized in JSON responses.
+    result_png: Optional[bytes] = Field(default=None, exclude=True)
 
 
 class StopTaskResponse(BaseModel):

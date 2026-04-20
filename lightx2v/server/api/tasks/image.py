@@ -4,12 +4,12 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from loguru import logger
 
 from ...schema import ImageTaskRequest, TaskResponse
 from ...task_manager import TaskStatus, task_manager
 from ..deps import get_services, validate_url_async
-from .common import _stream_file_response
 
 router = APIRouter()
 
@@ -20,9 +20,6 @@ def _write_file_sync(file_path: Path, content: bytes) -> None:
 
 
 async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_interval_seconds: float):
-    services = get_services()
-    assert services.file_service is not None, "File service is not initialized"
-
     start_time = time.monotonic()
     while True:
         task_status = task_manager.get_task_status(task_id)
@@ -31,14 +28,14 @@ async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_
 
         status = task_status.get("status")
         if status == TaskStatus.COMPLETED.value:
-            save_result_path = task_status.get("save_result_path")
-            if not save_result_path:
-                raise HTTPException(status_code=500, detail=f"Task completed but no result path found: {task_id}")
-
-            full_path = Path(save_result_path)
-            if not full_path.is_absolute():
-                full_path = services.file_service.output_video_dir / save_result_path
-            return _stream_file_response(full_path)
+            result_png = task_manager.get_task_result_png(task_id)
+            if result_png:
+                return Response(
+                    content=result_png,
+                    media_type="image/png",
+                    headers={"Content-Disposition": 'inline; filename="result.png"'},
+                )
+            raise HTTPException(status_code=500, detail=f"Task completed but no in-memory image found: {task_id}")
 
         if status == TaskStatus.FAILED.value:
             raise HTTPException(status_code=500, detail=task_status.get("error", "Task failed"))
@@ -72,6 +69,7 @@ async def create_image_task(message: ImageTaskRequest):
             if not await validate_url_async(message.image_mask_path):
                 raise HTTPException(status_code=400, detail=f"Image mask URL is not accessible: {message.image_mask_path}")
 
+        message.prefer_memory_result = False
         task_id = task_manager.create_task(message)
         message.task_id = task_id
 
@@ -108,6 +106,7 @@ async def create_image_task_sync(
             if not await validate_url_async(message.image_mask_path):
                 raise HTTPException(status_code=400, detail=f"Image mask URL is not accessible: {message.image_mask_path}")
 
+        message.prefer_memory_result = True
         task_id = task_manager.create_task(message)
         message.task_id = task_id
 
@@ -184,6 +183,7 @@ async def create_image_task_form(
     )
 
     try:
+        message.prefer_memory_result = False
         task_id = task_manager.create_task(message)
         message.task_id = task_id
 
