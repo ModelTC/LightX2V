@@ -41,17 +41,17 @@ class NeoppTransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, inputs):
-        infer_pass = self.scheduler.infer_pass
+        pass_key = "cond" if self.scheduler.infer_condition else "uncond"
 
-        past_key_values = inputs[f"past_key_values_{infer_pass}"]  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        cos_sin = inputs[f"cos_sin_{infer_pass}"]
+        past_key_values = inputs[f"past_key_values_{pass_key}"]  # [layers, 2, past_seq, num_kv_heads, head_dim]
+        cos_sin = inputs[f"cos_sin_{pass_key}"]
 
         hidden_states = pre_infer_out.image_embeds.squeeze(0)  # [seq, hidden]
 
         self._kvcache_len = past_key_values.shape[2]
         seq_len_q = hidden_states.shape[0]
         seq_len_k = self._kvcache_len + seq_len_q
-        _cache_key = infer_pass
+        _cache_key = self.scheduler.infer_condition
         if not hasattr(self, "_seqlen_cache"):
             self._seqlen_cache = {}
         if self._seqlen_cache.get(_cache_key, {}).get("seqlens") != (seq_len_q, seq_len_k):
