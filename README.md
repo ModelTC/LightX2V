@@ -44,9 +44,10 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [Tyr0727](https://github.com/Tyr0727)
 
 ## :fire: Latest News
-- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](examples/worldmirror/README.md).
 
-- **April 12, 2026:** 🚀 We are excited to release the [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) and [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) models. Compared to previous iterations, this version was trained on a high-quality 720p dataset and features an optimized low-noise training algorithm. These enhancements significantly boost the model's performance in fine-grained detail rendering and visual texture.
+- **April 20, 2026:** 🚀 We are excited to release the [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) and [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) models. Compared to previous iterations, this version was trained on a high-quality 720p dataset and features an optimized low-noise training algorithm. These enhancements significantly boost the model's performance in fine-grained detail rendering and visual texture.
+
+- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](examples/worldmirror/README.md).
 
 - **April 10, 2026:** 🎉 We released a technical blog on disaggregated deployment
   - [LightX2V Disaggregated Deployment: Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
