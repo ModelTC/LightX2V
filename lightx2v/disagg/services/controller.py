@@ -54,6 +54,13 @@ class ControllerService(BaseService):
         self._sidecar_drain_timeout_seconds: float = float(os.getenv("DISAGG_SIDECAR_DRAIN_TIMEOUT_SECONDS", "0"))
         self._sidecar_reclaim_threads: list[Thread] = []
         self._shutting_down: bool = False
+        self._enable_monitor: bool = False
+
+    def _is_monitor_enabled(self) -> bool:
+        raw = os.getenv("ENABLE_MONITOR")
+        if raw is None:
+            return False
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
     def _is_tcp_port_open(self, host: str, port: int) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -731,9 +738,10 @@ class ControllerService(BaseService):
             instance_address = f"{self._bootstrap_addr}:{REQUEST_POLLING_PORT + gpu_id}"
             self._free_gpus.remove(gpu_id)
             # self.add_instance(instance_type, instance_address)
-            monitor_node = f"tcp://{self._bootstrap_addr}:{MONITOR_POLLING_PORT + gpu_id}"
-            if monitor_node not in self.monitor.nodes:
-                self.monitor.nodes.append(monitor_node)
+            if self._enable_monitor:
+                monitor_node = f"tcp://{self._bootstrap_addr}:{MONITOR_POLLING_PORT + gpu_id}"
+                if monitor_node not in self.monitor.nodes:
+                    self.monitor.nodes.append(monitor_node)
             self._managed_instances[instance_address] = {
                 "instance_type": instance_type,
                 "gpu_id": gpu_id,
@@ -800,7 +808,7 @@ class ControllerService(BaseService):
                     except subprocess.TimeoutExpired as exc:
                         raise RuntimeError(f"process did not exit after kill for {instance_type} instance {target_address}") from exc
 
-            if monitor_node in self.monitor.nodes:
+            if self._enable_monitor and monitor_node in self.monitor.nodes:
                 self.monitor.nodes.remove(monitor_node)
 
             monitor_port = MONITOR_POLLING_PORT + gpu_id
@@ -1060,6 +1068,7 @@ class ControllerService(BaseService):
         self._bootstrap_addr = str(bootstrap_addr)
         self._runtime_config = self._to_plain(config)
         self._init_gpu_pool(config)
+        self._enable_monitor = self._is_monitor_enabled()
 
         # self.encoder_policy = RoundRobinPolicy()
         # self.transformer_policy = RoundRobinPolicy()
@@ -1074,44 +1083,52 @@ class ControllerService(BaseService):
         for _ in range(5):
             self.create_instance("transformer")
 
-        monitor_stop_event = Event()
-        warmup_duration_s = self._load_warmup_duration_seconds(config)
-        autoscale_start_mono = time.monotonic()
-        warmup_skip_logged = False
-        warmup_end_logged = False
-        scale_out_threshold = 80.0
-        scale_out_max_queue_threshold = 2
-        scale_in_threshold = 20.0
-        scale_cooldown_seconds = 30.0
-        last_scale_ts: dict[str, float] = {
-            "encoder": 0.0,
-            "transformer": 0.0,
-            "decoder": 0.0,
-        }
+        monitor_stop_event: Event | None = None
+        monitor_thread: Thread | None = None
+        self._monitor_runtime = None
 
-        self._monitor_runtime = {
-            "warmup_duration_s": warmup_duration_s,
-            "autoscale_start_mono": autoscale_start_mono,
-            "warmup_skip_logged": warmup_skip_logged,
-            "warmup_end_logged": warmup_end_logged,
-            "scale_out_threshold": scale_out_threshold,
-            "scale_out_max_queue_threshold": scale_out_max_queue_threshold,
-            "scale_in_threshold": scale_in_threshold,
-            "scale_cooldown_seconds": scale_cooldown_seconds,
-            "last_scale_ts": last_scale_ts,
-        }
+        if self._enable_monitor:
+            monitor_stop_event = Event()
+            warmup_duration_s = self._load_warmup_duration_seconds(config)
+            autoscale_start_mono = time.monotonic()
+            warmup_skip_logged = False
+            warmup_end_logged = False
+            scale_out_threshold = 80.0
+            scale_out_max_queue_threshold = 2
+            scale_in_threshold = 20.0
+            scale_cooldown_seconds = 30.0
+            last_scale_ts: dict[str, float] = {
+                "encoder": 0.0,
+                "transformer": 0.0,
+                "decoder": 0.0,
+            }
 
-        monitor_thread = Thread(
-            target=self.monitor.run_forever,
-            kwargs={
-                "interval_seconds": 2.0,
-                "callback": self._monitor_callback,
-                "stop_event": monitor_stop_event,
-            },
-            name="controller-monitor",
-            daemon=True,
-        )
-        monitor_thread.start()
+            self._monitor_runtime = {
+                "warmup_duration_s": warmup_duration_s,
+                "autoscale_start_mono": autoscale_start_mono,
+                "warmup_skip_logged": warmup_skip_logged,
+                "warmup_end_logged": warmup_end_logged,
+                "scale_out_threshold": scale_out_threshold,
+                "scale_out_max_queue_threshold": scale_out_max_queue_threshold,
+                "scale_in_threshold": scale_in_threshold,
+                "scale_cooldown_seconds": scale_cooldown_seconds,
+                "last_scale_ts": last_scale_ts,
+            }
+
+            monitor_thread = Thread(
+                target=self.monitor.run_forever,
+                kwargs={
+                    "interval_seconds": 2.0,
+                    "callback": self._monitor_callback,
+                    "stop_event": monitor_stop_event,
+                },
+                name="controller-monitor",
+                daemon=True,
+            )
+            monitor_thread.start()
+            self.logger.info("ENABLE_MONITOR enabled, monitor thread started")
+        else:
+            self.logger.info("ENABLE_MONITOR is not set, skip monitor logic")
 
         time.sleep(5.0)
 
@@ -1239,8 +1256,10 @@ class ControllerService(BaseService):
             )
         finally:
             self._shutting_down = True
-            monitor_stop_event.set()
-            monitor_thread.join(timeout=2.0)
+            if monitor_stop_event is not None:
+                monitor_stop_event.set()
+            if monitor_thread is not None:
+                monitor_thread.join(timeout=2.0)
             self._monitor_runtime = None
 
             for instance_type, address in reversed(list(self.started_instances)):
