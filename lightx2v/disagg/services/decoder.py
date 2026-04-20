@@ -15,6 +15,7 @@ from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuff
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
 from lightx2v.disagg.rdma_client import RDMAClient
 from lightx2v.disagg.services.base import BaseService
+from lightx2v.disagg.services.data_mgr_sidecar import DataMgrSidecar
 from lightx2v.disagg.utils import estimate_transformer_buffer_sizes, load_wan_vae_decoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
@@ -63,6 +64,7 @@ class DecoderService(BaseService):
             daemon=True,
         )
         self._reporter_thread.start()
+        self._data_mgr_sidecar = DataMgrSidecar()
         self.sync_comm = str(os.getenv("SYNC_COMM", "")).strip().lower() not in ("", "0", "false", "no", "off")
         self.load_models()
 
@@ -315,6 +317,7 @@ class DecoderService(BaseService):
         self.release_memory(room)
 
         self.data_receiver.pop(room, None)
+        self._data_mgr_sidecar.unwatch_input(room)
 
         if self.data_mgr is None:
             return
@@ -340,6 +343,7 @@ class DecoderService(BaseService):
 
         while True:
             transfer_sizes = self.data_mgr.get_backlog_counts() if self.data_mgr is not None else {"request_pool": 0, "waiting_pool": 0}
+            sidecar_sizes = self._data_mgr_sidecar.get_pending_counts()
             self._update_queue_metrics(
                 {
                     "req_queue": len(req_queue),
@@ -349,6 +353,7 @@ class DecoderService(BaseService):
                 {
                     "request_pool": int(transfer_sizes.get("request_pool", 0)),
                     "waiting_pool": int(transfer_sizes.get("waiting_pool", 0)),
+                    "sidecar_input_watch": int(sidecar_sizes.get("input_watch", 0)),
                 },
             )
 
@@ -380,31 +385,23 @@ class DecoderService(BaseService):
                 try:
                     self.init(config)
                     waiting_queue[room] = config
+                    receiver = self.data_receiver.get(room)
+                    if receiver is None:
+                        raise RuntimeError(f"DataReceiver is not initialized for room={room}")
+                    self._data_mgr_sidecar.watch_input(room, receiver)
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
                     self.remove(room)
 
-            ready_rooms: List[int] = []
-            failed_rooms: List[int] = []
-            waiting_rooms = list(waiting_queue.keys())
-            if self.sync_comm and waiting_rooms:
-                waiting_rooms = [waiting_rooms[0]]
-
-            for room in waiting_rooms:
-                receiver = self.data_receiver.get(room)
-                if receiver is None:
-                    failed_rooms.append(room)
-                    continue
-
-                status = receiver.poll()
-                if status == DataPoll.Success:
-                    ready_rooms.append(room)
-                elif status == DataPoll.Failed:
-                    failed_rooms.append(room)
+            ready_rooms = self._data_mgr_sidecar.pop_ready_inputs()
+            failed_rooms = self._data_mgr_sidecar.pop_failed_inputs()
 
             for room in ready_rooms:
+                config = waiting_queue.pop(room, None)
+                if config is None:
+                    continue
                 self.logger.info("Latents received successfully in DecoderService for room=%s.", room)
-                exec_queue.append((room, waiting_queue.pop(room)))
+                exec_queue.append((room, config))
 
             for room in failed_rooms:
                 waiting_queue.pop(room, None)

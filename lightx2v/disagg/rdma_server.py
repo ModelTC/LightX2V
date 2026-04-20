@@ -64,11 +64,11 @@ class RDMAServer:
             raise RuntimeError(f"Failed to open RDMA device '{iface_name}'. Available devices: {available}")
 
         self.pd = PD(self.ctx)
-        self.cq = CQ(self.ctx, 10)
+        self.cq = CQ(self.ctx, 64)
         self.gid_index = self._resolve_gid_index()
 
         # 创建 QP (Queue Pair)
-        qp_init_attr = QPCap(max_send_wr=10, max_recv_wr=10, max_send_sge=1, max_recv_sge=1)
+        qp_init_attr = QPCap(max_send_wr=64, max_recv_wr=64, max_send_sge=1, max_recv_sge=1)
         qia = QPInitAttr(qp_type=QPType.RC, scq=self.cq, rcq=self.cq, cap=qp_init_attr)
         qa = QPAttr(port_num=self.port_num)
         self.qp = QP(self.pd, qia, qa)  # RC: Reliable Connected

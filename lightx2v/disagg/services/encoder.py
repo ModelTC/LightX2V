@@ -15,6 +15,7 @@ from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuff
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
 from lightx2v.disagg.rdma_client import RDMAClient
 from lightx2v.disagg.services.base import BaseService
+from lightx2v.disagg.services.data_mgr_sidecar import DataMgrSidecar
 from lightx2v.disagg.utils import (
     estimate_encoder_buffer_sizes,
     load_wan_image_encoder,
@@ -77,6 +78,7 @@ class EncoderService(BaseService):
             daemon=True,
         )
         self._reporter_thread.start()
+        self._data_mgr_sidecar = DataMgrSidecar()
         self.sync_comm = str(os.getenv("SYNC_COMM", "")).strip().lower() not in ("", "0", "false", "no", "off")
         self.load_models()
 
@@ -153,6 +155,21 @@ class EncoderService(BaseService):
         )
         return True
 
+    def _reconnect_request_buffer(self):
+        self._request_rdma_buffer = None
+        self._last_request_connect_retry_ts = 0.0
+
+        if self._request_rdma_client is not None:
+            sock = getattr(self._request_rdma_client, "sock", None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                self._request_rdma_client.sock = None
+
+        self._ensure_request_buffer()
+
     def _ensure_phase1_meta_buffer(self) -> bool:
         if self._phase1_rdma_buffer is not None:
             return True
@@ -195,8 +212,68 @@ class EncoderService(BaseService):
         )
         return True
 
+    def _reconnect_phase1_meta_buffer(self):
+        self._phase1_rdma_buffer = None
+        self._last_phase1_connect_retry_ts = 0.0
+
+        if self._phase1_rdma_client is not None:
+            sock = getattr(self._phase1_rdma_client, "sock", None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                self._phase1_rdma_client.sock = None
+
+        self._ensure_phase1_meta_buffer()
+
+    def _produce_phase1_request_with_retry(self, room: int, payload: dict[str, Any]):
+        retries = max(1, int(os.getenv("RDMA_PHASE1_PRODUCE_RETRIES", "3")))
+        retry_delay_s = max(0.01, float(os.getenv("RDMA_PHASE1_PRODUCE_RETRY_DELAY_S", "0.2")))
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                if self._phase1_rdma_buffer is None:
+                    self._ensure_phase1_meta_buffer()
+                if self._phase1_rdma_buffer is None:
+                    raise RuntimeError("phase1 RDMA buffer is not ready")
+                self._phase1_rdma_buffer.produce(payload)
+                return
+            except Exception as exc:
+                last_exc = exc
+                self.logger.warning(
+                    "Phase1 RDMA produce failed for room=%s attempt=%s/%s host=%s port=%s: %s",
+                    room,
+                    attempt,
+                    retries,
+                    self._phase1_server_ip,
+                    self._phase1_handshake_port,
+                    exc,
+                )
+                if attempt >= retries:
+                    break
+                try:
+                    self._reconnect_phase1_meta_buffer()
+                except Exception as reconnect_exc:
+                    self.logger.warning(
+                        "Phase1 RDMA reconnect failed for room=%s attempt=%s/%s host=%s port=%s: %s",
+                        room,
+                        attempt,
+                        retries,
+                        self._phase1_server_ip,
+                        self._phase1_handshake_port,
+                        reconnect_exc,
+                    )
+                time.sleep(retry_delay_s)
+
+        raise RuntimeError(f"Failed to produce phase1 RDMA request for room={room} after {retries} attempts") from last_exc
+
     def init(self, config):
         self._sync_runtime_config(config)
+        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", self.encoder_engine_rank))
+        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", self.transformer_engine_rank))
+        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", self.decoder_engine_rank))
         shared_slots = int(self.config.get("rdma_buffer_slots", self._request_slots))
         shared_slot_size = int(self.config.get("rdma_buffer_slot_size", 4096))
         self._request_server_ip = str(self.config.get("rdma_request_host", self._request_server_ip))
@@ -513,9 +590,7 @@ class EncoderService(BaseService):
                 "encoder_node_address": self.data_mgr.get_localhost(),
                 "encoder_session_id": self.data_mgr.get_session_id(),
             }
-            if self._phase1_rdma_buffer is None:
-                raise RuntimeError("phase1 RDMA buffer is not ready")
-            self._phase1_rdma_buffer.produce(phase1_meta)
+            self._produce_phase1_request_with_retry(room, phase1_meta)
             sender.send(buffer_ptrs)
             if self.sync_comm:
                 self._wait_sender_success(room, sender)
@@ -532,6 +607,7 @@ class EncoderService(BaseService):
         self.release_memory(room)
 
         self.data_sender.pop(room, None)
+        self._data_mgr_sidecar.unwatch_output(room)
 
         if self.data_mgr is None:
             return
@@ -555,19 +631,21 @@ class EncoderService(BaseService):
     def run(self, stop_event=None):
         req_queue = deque()
         exec_queue = deque()
-        complete_queue: Dict[int, dict] = {}
+        complete_queue: set[int] = set()
 
         while True:
             transfer_sizes = self.data_mgr.get_backlog_counts() if self.data_mgr is not None else {"request_pool": 0, "waiting_pool": 0}
+            sidecar_sizes = self._data_mgr_sidecar.get_pending_counts()
             self._update_queue_metrics(
                 {
                     "req_queue": len(req_queue),
                     "exec_queue": len(exec_queue),
-                    "complete_queue": len(complete_queue),
                 },
                 {
+                    "complete_queue": len(complete_queue),
                     "request_pool": int(transfer_sizes.get("request_pool", 0)),
                     "waiting_pool": int(transfer_sizes.get("waiting_pool", 0)),
+                    "sidecar_output_watch": int(sidecar_sizes.get("output_watch", 0)),
                 },
             )
 
@@ -576,6 +654,16 @@ class EncoderService(BaseService):
                     self._ensure_request_buffer()
                 except Exception:
                     self.logger.exception("Failed to connect request RDMA buffer, will retry")
+
+            if self._request_rdma_client is not None and self._request_rdma_client.has_qp_error():
+                self.logger.warning(
+                    "Request RDMA client entered error state, reconnecting: %s",
+                    self._request_rdma_client.last_wc_error_message(),
+                )
+                try:
+                    self._reconnect_request_buffer()
+                except Exception:
+                    self.logger.exception("Failed to reconnect request RDMA buffer after QP error")
 
             if self._request_rdma_buffer is not None:
                 config = self._request_rdma_buffer.consume()
@@ -602,32 +690,25 @@ class EncoderService(BaseService):
                 room, config = exec_queue.popleft()
                 try:
                     self.process(config)
-                    complete_queue[room] = config
+                    if self.sync_comm:
+                        self.remove(room)
+                    else:
+                        sender = self.data_sender.get(room)
+                        if sender is None:
+                            self.logger.error("DataSender is missing for room=%s", room)
+                            self.remove(room)
+                        else:
+                            self._data_mgr_sidecar.watch_output(room, sender)
+                            complete_queue.add(room)
                 except Exception:
                     self.logger.exception("Failed to process request for room=%s", room)
-                    complete_queue.pop(room, None)
                     self.remove(room)
 
-            completed_rooms: List[int] = []
-            for room in list(complete_queue.keys()):
-                sender = self.data_sender.get(room)
-                if sender is None:
-                    completed_rooms.append(room)
-                    continue
-
-                if self.sync_comm:
-                    completed_rooms.append(room)
-                    continue
-
-                status = sender.poll()
-                if status == DataPoll.Success:
-                    completed_rooms.append(room)
-                elif status == DataPoll.Failed:
+            completed_outputs = self._data_mgr_sidecar.pop_completed_outputs()
+            for room, status in completed_outputs:
+                if status == DataPoll.Failed:
                     self.logger.error("DataSender transfer failed for room=%s", room)
-                    completed_rooms.append(room)
-
-            for room in completed_rooms:
-                complete_queue.pop(room, None)
+                complete_queue.discard(room)
                 self.remove(room)
 
             if stop_event is not None and stop_event.is_set() and not req_queue and not exec_queue and not complete_queue:

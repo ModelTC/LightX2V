@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import random
 import socket
@@ -14,6 +15,9 @@ from pyverbs.pd import PD
 from pyverbs.qp import QP, QPAttr, QPCap, QPInitAttr
 from pyverbs.wr import SGE
 from pyverbs.wr import SendWR as WR
+
+
+logger = logging.getLogger(__name__)
 
 
 class IBDevice:
@@ -61,10 +65,10 @@ class RDMAClient:
 
         self.ctx = IBDevice(iface_name).open()
         self.pd = PD(self.ctx)
-        self.cq = CQ(self.ctx, 10)
+        self.cq = CQ(self.ctx, 64)
         self.gid_index = self._resolve_gid_index()
 
-        qp_init_attr = QPCap(max_send_wr=10, max_recv_wr=10, max_send_sge=1, max_recv_sge=1)
+        qp_init_attr = QPCap(max_send_wr=64, max_recv_wr=64, max_send_sge=1, max_recv_sge=1)
         self._qia = QPInitAttr(qp_type=QPType.RC, scq=self.cq, rcq=self.cq, cap=qp_init_attr)
         self._qa = QPAttr(port_num=self.port_num)
         self.qp = QP(self.pd, self._qia, self._qa)
@@ -75,6 +79,37 @@ class RDMAClient:
             raise ValueError("local_buffer_size must be positive")
         self.local_mr = MR(self.pd, self.buffer_size, AccessFlag.LOCAL_WRITE)
         self._io_lock = threading.RLock()
+        self._connected_server_ip: str | None = None
+        self._connected_server_port: int | None = None
+        self._qp_error_state: bool = False
+        self._last_wc_error_message: str = ""
+
+    def has_qp_error(self) -> bool:
+        return self._qp_error_state
+
+    def last_wc_error_message(self) -> str:
+        return self._last_wc_error_message
+
+    def _wc_status_name(self, status: int | None) -> str:
+        if status is None:
+            return "UNKNOWN"
+        status_map = {
+            getattr(e, "IBV_WC_SUCCESS", -1): "IBV_WC_SUCCESS",
+            getattr(e, "IBV_WC_LOC_LEN_ERR", -2): "IBV_WC_LOC_LEN_ERR",
+            getattr(e, "IBV_WC_LOC_QP_OP_ERR", -3): "IBV_WC_LOC_QP_OP_ERR",
+            getattr(e, "IBV_WC_LOC_PROT_ERR", -4): "IBV_WC_LOC_PROT_ERR",
+            getattr(e, "IBV_WC_WR_FLUSH_ERR", -5): "IBV_WC_WR_FLUSH_ERR",
+            getattr(e, "IBV_WC_MW_BIND_ERR", -6): "IBV_WC_MW_BIND_ERR",
+            getattr(e, "IBV_WC_BAD_RESP_ERR", -7): "IBV_WC_BAD_RESP_ERR",
+            getattr(e, "IBV_WC_LOC_ACCESS_ERR", -8): "IBV_WC_LOC_ACCESS_ERR",
+            getattr(e, "IBV_WC_REM_INV_REQ_ERR", -9): "IBV_WC_REM_INV_REQ_ERR",
+            getattr(e, "IBV_WC_REM_ACCESS_ERR", -10): "IBV_WC_REM_ACCESS_ERR",
+            getattr(e, "IBV_WC_REM_OP_ERR", -11): "IBV_WC_REM_OP_ERR",
+            getattr(e, "IBV_WC_RETRY_EXC_ERR", -12): "IBV_WC_RETRY_EXC_ERR",
+            getattr(e, "IBV_WC_RNR_RETRY_EXC_ERR", -13): "IBV_WC_RNR_RETRY_EXC_ERR",
+            getattr(e, "IBV_WC_REM_ABORT_ERR", -14): "IBV_WC_REM_ABORT_ERR",
+        }
+        return status_map.get(status, f"IBV_WC_STATUS_{status}")
 
     def _resolve_gid_index(self):
         env_gid = os.getenv("RDMA_GID_INDEX", "").strip()
@@ -157,6 +192,14 @@ class RDMAClient:
         for attempt in range(1, max_retries + 1):
             sock = None
             try:
+                old_sock = getattr(self, "sock", None)
+                if old_sock is not None:
+                    try:
+                        old_sock.close()
+                    except Exception:
+                        pass
+                    self.sock = None
+
                 self._reset_qp()
                 self._alloc_local_psn()
 
@@ -190,6 +233,10 @@ class RDMAClient:
                 self._modify_qp_to_rts()
                 sock.settimeout(None)
                 self.sock = sock
+                self._connected_server_ip = str(server_ip)
+                self._connected_server_port = int(port)
+                self._qp_error_state = False
+                self._last_wc_error_message = ""
                 print(f"[Client] Connection established (RTS) to {server_ip}:{port} at attempt {attempt}/{max_retries}")
                 return
             except Exception as exc:
@@ -307,6 +354,13 @@ class RDMAClient:
                 self.remote_info["rkey"] = int(rkey)
             try:
                 self.rdma_write(data_bytes, notify_server=False)
+            except Exception as exc:
+                raise RuntimeError(
+                    "rdma_write_to failed "
+                    f"server={self._connected_server_ip}:{self._connected_server_port} "
+                    f"remote_addr={int(remote_addr)} length={len(data_bytes)} "
+                    f"rkey={self.remote_info.get('rkey')}"
+                ) from exc
             finally:
                 self.remote_info["addr"] = old_addr
                 self.remote_info["rkey"] = old_rkey
@@ -321,6 +375,13 @@ class RDMAClient:
                 self.remote_info["rkey"] = int(rkey)
             try:
                 return self.rdma_read(int(length))
+            except Exception as exc:
+                raise RuntimeError(
+                    "rdma_read_from failed "
+                    f"server={self._connected_server_ip}:{self._connected_server_port} "
+                    f"remote_addr={int(remote_addr)} length={int(length)} "
+                    f"rkey={self.remote_info.get('rkey')}"
+                ) from exc
             finally:
                 self.remote_info["addr"] = old_addr
                 self.remote_info["rkey"] = old_rkey
@@ -396,7 +457,28 @@ class RDMAClient:
                     raise RuntimeError(f"Unexpected WC object: {wc}")
                 if status != e.IBV_WC_SUCCESS:
                     vendor_err = getattr(wc, "vendor_err", None)
-                    raise Exception(f"WC Error: {status}, vendor_err: {vendor_err}")
+                    wr_id = getattr(wc, "wr_id", None)
+                    opcode = getattr(wc, "opcode", None)
+                    status_name = self._wc_status_name(status)
+                    self._qp_error_state = True
+                    self._last_wc_error_message = (
+                        f"status={status}({status_name}) vendor_err={vendor_err} wr_id={wr_id} opcode={opcode} "
+                        f"server={self._connected_server_ip}:{self._connected_server_port}"
+                    )
+                    logger.error(
+                        "RDMA CQ failure: status=%s(%s) vendor_err=%s wr_id=%s opcode=%s server=%s:%s",
+                        status,
+                        status_name,
+                        vendor_err,
+                        wr_id,
+                        opcode,
+                        self._connected_server_ip,
+                        self._connected_server_port,
+                    )
+                    raise RuntimeError(
+                        "WC Error: "
+                        f"{status}({status_name}), vendor_err: {vendor_err}, wr_id: {wr_id}, opcode: {opcode}"
+                    )
                 break
             time.sleep(0.0001)
 
