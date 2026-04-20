@@ -175,8 +175,8 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
         full_k = self._a2a_seq_to_heads(k_cache, world_size, shard_heads, self.seq_p_group)
         full_v = self._a2a_seq_to_heads(v_cache, world_size, shard_heads, self.seq_p_group)
 
-        q_lens = torch.tensor([full_q.size(0)], dtype=torch.int32, device=full_q.device)
-        k_lens = torch.tensor([full_k.size(0)], dtype=torch.int32, device=full_k.device)
+        q_lens = torch.tensor([full_q.size(0)], dtype=torch.int32)
+        k_lens = torch.tensor([full_k.size(0)], dtype=torch.int32)
         cu_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
         cu_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
 
@@ -407,7 +407,7 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
 
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
             q,
-            k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
+            k_lens=torch.tensor([k.size(0)], dtype=torch.int32),
         )
         attn_out = phase.cross_attn_1.apply(
             q=q,
@@ -425,7 +425,7 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
 
             cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
                 q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
+                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
             )
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,

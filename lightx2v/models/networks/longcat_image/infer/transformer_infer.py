@@ -138,7 +138,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
+        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         # Use registered attention module
         attn_output = block_weights.calculate.apply(
@@ -248,7 +248,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
+        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         # Use registered attention module
         attn_output = block_weights.calculate.apply(

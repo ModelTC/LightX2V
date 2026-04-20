@@ -226,7 +226,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         key = torch.cat([img_k, txt_k], dim=1)
         value = torch.cat([img_v, txt_v], dim=1)
         seqlen = query.shape[1]
-        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu")
 
         if self.config["seq_parallel"]:
             attn_out = weights.self_attention_parallel.apply(

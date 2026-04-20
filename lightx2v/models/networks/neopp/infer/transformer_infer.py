@@ -57,8 +57,8 @@ class NeoppTransformerInfer(BaseTransformerInfer):
         if self._seqlen_cache.get(_cache_key, {}).get("seqlens") != (seq_len_q, seq_len_k):
             self._seqlen_cache[_cache_key] = {
                 "seqlens": (seq_len_q, seq_len_k),
-                "cu_q": torch.tensor([0, seq_len_q], dtype=torch.int32, device=hidden_states.device),
-                "cu_k": torch.tensor([0, seq_len_k], dtype=torch.int32, device=hidden_states.device),
+                "cu_q": torch.tensor([0, seq_len_q], dtype=torch.int32),
+                "cu_k": torch.tensor([0, seq_len_k], dtype=torch.int32),
             }
         self._cu_seqlens_q = self._seqlen_cache[_cache_key]["cu_q"]
         self._cu_seqlens_k = self._seqlen_cache[_cache_key]["cu_k"]

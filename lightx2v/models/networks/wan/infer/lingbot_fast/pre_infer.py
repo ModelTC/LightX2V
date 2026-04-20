@@ -89,7 +89,7 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
         x = weights.patch_embedding.apply(x.unsqueeze(0))
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
-        seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
+        seq_lens = torch.tensor(x.size(1), dtype=torch.int32).unsqueeze(0)
 
         embed_tmp = sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x)
         embed = self.time_embedding(weights, embed_tmp)

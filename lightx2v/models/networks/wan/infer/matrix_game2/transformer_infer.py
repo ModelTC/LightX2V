@@ -264,7 +264,7 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
 
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
             q,
-            k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
+            k_lens=torch.tensor([k.size(0)], dtype=torch.int32),
         )
 
         attn_out = phase.cross_attn_1.apply(

@@ -125,7 +125,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
+        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         # Use registered attention module
         if self.seq_p_group is not None:
@@ -249,7 +249,7 @@ class Flux2KleinTransformerInfer(BaseTransformerInfer):
         query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
+        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         if self.seq_p_group is not None:
             attn_output = block_weights.calculate_parallel.apply(
