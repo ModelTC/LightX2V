@@ -86,7 +86,7 @@ def main():
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "sr", "recon"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "ltx2_s2v", "sr", "recon"], default="t2v")
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
@@ -103,7 +103,12 @@ def main():
         help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
-    parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
+    parser.add_argument(
+        "--audio_path",
+        type=str,
+        default="",
+        help="Input audio path: Wan s2v / rs2v, or required for LTX-2 task ltx2_s2v.",
+    )
     parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
         "--image_frame_idx", type=str, default="", help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
