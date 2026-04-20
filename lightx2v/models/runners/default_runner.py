@@ -586,9 +586,7 @@ class DefaultRunner(BaseRunner):
                     for k, v in weight_dict.items():
                         if k in merged:
                             merged[k] = merged[k] + v * s
-            logger.info(
-                f"Switching LoRA ({len(resolved_items)} files fused; same _load_lora_file + _update_lora as single): {resolved_items}"
-            )
+            logger.info(f"Switching LoRA ({len(resolved_items)} files fused; same _load_lora_file + _update_lora as single): {resolved_items}")
             self.model._update_lora(merged, 1.0)
             logger.info("LoRA switched successfully")
             return True

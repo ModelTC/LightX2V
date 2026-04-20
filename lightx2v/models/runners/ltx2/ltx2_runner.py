@@ -14,9 +14,8 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.ltx2_media_io import decode_audio_from_file
+from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
-from lightx2v.utils.ltx2_media_io import load_image_conditioning
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
