@@ -28,6 +28,16 @@ class WanScheduler(BaseScheduler):
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
 
+    def refresh_from_config(self, config):
+        self.config = config
+        self.infer_steps = int(self.config["infer_steps"])
+        self.target_video_length = int(self.config["target_video_length"])
+        self.sample_shift = float(self.config["sample_shift"])
+        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.caching_records = [True] * self.infer_steps
+        self.caching_records_2 = [True] * self.infer_steps
+        self.step_index = 0
+
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"]

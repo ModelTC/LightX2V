@@ -157,3 +157,5 @@ while true; do
 	sleep 5
 	wait_seconds=$((wait_seconds + 5))
 done
+
+sleep 30

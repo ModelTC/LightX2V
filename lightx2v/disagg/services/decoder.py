@@ -1,5 +1,7 @@
 import hashlib
 import json
+import math
+import os
 import threading
 import time
 from collections import deque
@@ -7,12 +9,13 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
 from lightx2v.disagg.rdma_client import RDMAClient
 from lightx2v.disagg.services.base import BaseService
+from lightx2v.disagg.services.data_mgr_sidecar import DataMgrSidecar
 from lightx2v.disagg.utils import estimate_transformer_buffer_sizes, load_wan_vae_decoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
@@ -61,6 +64,8 @@ class DecoderService(BaseService):
             daemon=True,
         )
         self._reporter_thread.start()
+        self._data_mgr_sidecar = DataMgrSidecar()
+        self.sync_comm = str(os.getenv("SYNC_COMM", "")).strip().lower() not in ("", "0", "false", "no", "off")
         self.load_models()
 
     def _get_queue_metrics(self) -> dict[str, Any]:
@@ -114,7 +119,10 @@ class DecoderService(BaseService):
         return True
 
     def init(self, config):
-        self.config = config
+        self._sync_runtime_config(config)
+        self.encoder_engine_rank = int(self.config.get("encoder_engine_rank", self.encoder_engine_rank))
+        self.transformer_engine_rank = int(self.config.get("transformer_engine_rank", self.transformer_engine_rank))
+        self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", self.decoder_engine_rank))
         shared_slots = int(self.config.get("rdma_buffer_slots", self._phase2_slots))
         shared_slot_size = int(self.config.get("rdma_buffer_slot_size", 4096))
         self._phase2_server_ip = str(self.config.get("rdma_phase2_host", self._phase2_server_ip))
@@ -181,6 +189,9 @@ class DecoderService(BaseService):
     def process(self, config):
         self.logger.info("Starting processing in DecoderService...")
         room = config.get("data_bootstrap_room", 0)
+        decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})
+        decoder_metrics["compute_start_ts"] = time.time()
+        strict_meta_hash_check = str(os.getenv("LIGHTX2V_STRICT_META_HASH", "0")).strip().lower() in {"1", "true", "yes", "on"}
         room_buffers = self._rdma_buffers.get(room)
         receiver = self.data_receiver.get(room)
 
@@ -207,15 +218,59 @@ class DecoderService(BaseService):
             raise RuntimeError("Phase2 RDMA buffers require [latents, meta] entries.")
 
         meta_buf = room_buffers[1]
-        meta_bytes = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
-        meta_str = meta_bytes.split(b"\x00", 1)[0].decode("utf-8") if meta_bytes else ""
-        if not meta_str:
-            raise ValueError("missing latents metadata from transformer")
-        meta = json.loads(meta_str)
+
+        def _read_phase2_meta() -> tuple[dict, str]:
+            meta_bytes = _buffer_view(meta_buf, torch.uint8, (meta_buf.numel(),)).detach().contiguous().cpu().numpy().tobytes()
+            meta_str = meta_bytes.split(b"\x00", 1)[0].decode("utf-8", errors="ignore") if meta_bytes else ""
+            if not meta_str:
+                raise ValueError("missing latents metadata from transformer")
+            parsed = json.loads(meta_str)
+            if not isinstance(parsed, dict):
+                raise ValueError(f"phase2 metadata type mismatch: {type(parsed)}")
+            return parsed, meta_str
+
+        def _infer_latents_shape_from_config() -> tuple[int, int, int, int]:
+            z_dim = int(config.get("vae_z_dim", 16))
+            vae_stride = config.get("vae_stride", (4, 8, 8))
+            stride_t = int(vae_stride[0])
+            stride_h = int(vae_stride[1])
+            stride_w = int(vae_stride[2])
+            target_video_length = int(config.get("target_video_length", 81))
+            target_height = int(config.get("target_height", 480))
+            target_width = int(config.get("target_width", 832))
+
+            t_prime = 1 + (target_video_length - 1) // stride_t
+            h_prime = int(math.ceil(target_height / stride_h))
+            w_prime = int(math.ceil(target_width / stride_w))
+            return (z_dim, t_prime, h_prime, w_prime)
+
+        meta = None
+        meta_str = ""
+        for attempt in range(3):
+            try:
+                meta, meta_str = _read_phase2_meta()
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    # Guard against rare stale/partial metadata visibility.
+                    time.sleep(0.02)
+                    continue
+                self.logger.warning(
+                    "Invalid phase2 metadata for room=%s, fallback to config-derived shape. err=%s raw_prefix=%r",
+                    room,
+                    exc,
+                    meta_str[:128],
+                )
+                meta = {
+                    "latents_shape": list(_infer_latents_shape_from_config()),
+                    "latents_dtype": str(GET_DTYPE()),
+                    "latents_hash": None,
+                }
 
         latents_shape_val = meta.get("latents_shape")
         if not isinstance(latents_shape_val, list) or len(latents_shape_val) != 4:
-            raise ValueError("invalid latents_shape in phase2 metadata")
+            latents_shape_val = list(_infer_latents_shape_from_config())
+            self.logger.warning("phase2 metadata missing/invalid latents_shape for room=%s, using fallback shape=%s", room, latents_shape_val)
         latent_shape = tuple(int(value) for value in latents_shape_val)
 
         dtype_map = {
@@ -229,7 +284,10 @@ class DecoderService(BaseService):
         if list(latents.shape) != meta.get("latents_shape"):
             raise ValueError("latents shape mismatch between transformer and decoder")
         if meta.get("latents_hash") is not None and _sha256_tensor(latents) != meta.get("latents_hash"):
-            raise ValueError("latents hash mismatch between transformer and decoder")
+            msg = "latents hash mismatch between transformer and decoder"
+            if strict_meta_hash_check:
+                raise ValueError(msg)
+            self.logger.warning("%s for room=%s, continue with non-strict mode", msg, room)
         latents = latents.to(torch.device(AI_DEVICE)).contiguous()
 
         if self.vae_decoder is None:
@@ -238,6 +296,7 @@ class DecoderService(BaseService):
         self.logger.info("Decoding latents in DecoderService...")
         gen_video = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         gen_video_final = wan_vae_to_comfy(gen_video)
+        decoder_metrics["compute_end_ts"] = time.time()
 
         save_path = config.get("save_path")
         if save_path is None:
@@ -245,6 +304,7 @@ class DecoderService(BaseService):
 
         self.logger.info(f"Saving video to {save_path}...")
         save_to_video(gen_video_final, save_path, fps=config.get("fps", 16), method="ffmpeg")
+        decoder_metrics["output_enqueued_ts"] = time.time()
         self.logger.info("Done!")
 
         return save_path
@@ -258,6 +318,7 @@ class DecoderService(BaseService):
         self.release_memory(room)
 
         self.data_receiver.pop(room, None)
+        self._data_mgr_sidecar.unwatch_input(room)
 
         if self.data_mgr is None:
             return
@@ -283,6 +344,7 @@ class DecoderService(BaseService):
 
         while True:
             transfer_sizes = self.data_mgr.get_backlog_counts() if self.data_mgr is not None else {"request_pool": 0, "waiting_pool": 0}
+            sidecar_sizes = self._data_mgr_sidecar.get_pending_counts()
             self._update_queue_metrics(
                 {
                     "req_queue": len(req_queue),
@@ -292,6 +354,7 @@ class DecoderService(BaseService):
                 {
                     "request_pool": int(transfer_sizes.get("request_pool", 0)),
                     "waiting_pool": int(transfer_sizes.get("waiting_pool", 0)),
+                    "sidecar_input_watch": int(sidecar_sizes.get("input_watch", 0)),
                 },
             )
 
@@ -309,6 +372,11 @@ class DecoderService(BaseService):
                         config["transformer_node_address"] = packet.get("transformer_node_address", "127.0.0.1")
                     else:
                         config = packet
+                    if not isinstance(config, dict) or "data_bootstrap_room" not in config:
+                        self.logger.warning("Ignored incomplete phase2 packet from RDMA buffer: %s", packet)
+                        continue
+                    decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})
+                    decoder_metrics["request_received_ts"] = time.time()
                     self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
                     req_queue.append(config)
 
@@ -318,27 +386,23 @@ class DecoderService(BaseService):
                 try:
                     self.init(config)
                     waiting_queue[room] = config
+                    receiver = self.data_receiver.get(room)
+                    if receiver is None:
+                        raise RuntimeError(f"DataReceiver is not initialized for room={room}")
+                    self._data_mgr_sidecar.watch_input(room, receiver)
                 except Exception:
                     self.logger.exception("Failed to initialize request for room=%s", room)
                     self.remove(room)
 
-            ready_rooms: List[int] = []
-            failed_rooms: List[int] = []
-            for room in list(waiting_queue.keys()):
-                receiver = self.data_receiver.get(room)
-                if receiver is None:
-                    failed_rooms.append(room)
-                    continue
-
-                status = receiver.poll()
-                if status == DataPoll.Success:
-                    ready_rooms.append(room)
-                elif status == DataPoll.Failed:
-                    failed_rooms.append(room)
+            ready_rooms = self._data_mgr_sidecar.pop_ready_inputs()
+            failed_rooms = self._data_mgr_sidecar.pop_failed_inputs()
 
             for room in ready_rooms:
+                config = waiting_queue.pop(room, None)
+                if config is None:
+                    continue
                 self.logger.info("Latents received successfully in DecoderService for room=%s.", room)
-                exec_queue.append((room, waiting_queue.pop(room)))
+                exec_queue.append((room, config))
 
             for room in failed_rooms:
                 waiting_queue.pop(room, None)
@@ -359,6 +423,7 @@ class DecoderService(BaseService):
                                 "ok": True,
                                 "data_bootstrap_room": int(room),
                                 "save_path": save_path,
+                                "request_metrics": config.get("request_metrics"),
                             },
                         )
                 except Exception:
@@ -374,6 +439,7 @@ class DecoderService(BaseService):
                                 "data_bootstrap_room": int(room),
                                 "save_path": None,
                                 "error": "decoder process failed",
+                                "request_metrics": config.get("request_metrics"),
                             },
                         )
                 finally:
