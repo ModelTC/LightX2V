@@ -21,10 +21,6 @@ class WanTransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         self.task = config["task"]
-        self.attention_type = config.get("attention_type", "flash_attn2")
-        self.self_attn_1_type = config.get("self_attn_1_type", "flash_attn2")
-        self.cross_attn_1_type = config.get("cross_attn_1_type", "flash_attn2")
-        self.cross_attn_2_type = config.get("cross_attn_2_type", "flash_attn2")
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
         self.has_post_adapter = False
@@ -221,7 +217,6 @@ class WanTransformerInfer(BaseTransformerInfer):
                 slice_qkv_len=img_qkv_len,
                 cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
-                attention_type=self.self_attn_1_type,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,

@@ -287,7 +287,6 @@ class LTX2TransformerInfer:
                 slice_qkv_len=seq_len,
                 cu_seqlens_qkv=self.v_attn_cu_seqlens_qkv,
                 attention_module=attn_phase.attn_func,
-                attention_type=self.config["attn_type"],
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,

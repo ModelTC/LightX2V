@@ -36,7 +36,6 @@ class NeoppTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-        self.cross_attn_type = self.config["attn_type"]
         self.kv_cache = KVCacheManager()
 
     @torch.no_grad()
@@ -173,7 +172,6 @@ class NeoppTransformerInfer(BaseTransformerInfer):
                 slice_qkv_len=self._kvcache_len,
                 cu_seqlens_qkv=self._cu_seqlens_k,
                 attention_module=attn_w.cross_attn,
-                attention_type=self.cross_attn_type,
                 seq_p_group=self.seq_p_group,
                 img_first=False,
                 q_only_img=True,
