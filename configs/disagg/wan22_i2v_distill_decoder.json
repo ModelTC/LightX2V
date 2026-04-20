@@ -45,14 +45,14 @@
     "image_path": "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B/examples/i2v_input.JPG",
     "disagg_mode": "decoder",
     "disagg_config": {
-        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_addr": "192.168.0.166",
         "bootstrap_room": 0,
         "ranks": 8,
         "encoder_engine_rank": 0,
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
         "protocol": "rdma",
-        "local_hostname": "localhost",
+        "local_hostname": "192.168.0.139",
         "metadata_server": "P2PHANDSHAKE"
     }
 }

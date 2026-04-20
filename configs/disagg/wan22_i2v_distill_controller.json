@@ -45,14 +45,77 @@
     "image_path": "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B/examples/i2v_input.JPG",
     "disagg_mode": "controller",
     "disagg_config": {
-        "bootstrap_addr": "127.0.0.1",
+        "bootstrap_addr": "192.168.0.166",
         "bootstrap_room": 0,
         "ranks": 8,
         "encoder_engine_rank": 0,
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
         "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "local_hostname": "192.168.0.166",
+        "metadata_server": "P2PHANDSHAKE",
+        "remote_workdir": "/root/zht/LightX2V",
+        "remote_python_executable": "python",
+        "remote_activate_cmd": "source /root/miniconda3/etc/profile.d/conda.sh && conda activate lightx2v",
+        "remote_log_dir": "/root/zht/LightX2V/save_results",
+        "ssh_user": "root",
+        "ssh_options": [
+            "-i",
+            "/root/.ssh/id_ed25519_zht",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no"
+        ],
+        "static_instance_slots": [
+            {
+                "instance_type": "encoder",
+                "host": "192.168.0.166",
+                "engine_rank": 0,
+                "cuda_device": 0
+            },
+            {
+                "instance_type": "transformer",
+                "host": "192.168.0.139",
+                "engine_rank": 1,
+                "cuda_device": 0
+            },
+            {
+                "instance_type": "transformer",
+                "host": "192.168.0.139",
+                "engine_rank": 2,
+                "cuda_device": 1
+            },
+            {
+                "instance_type": "transformer",
+                "host": "192.168.0.139",
+                "engine_rank": 3,
+                "cuda_device": 2
+            },
+            {
+                "instance_type": "transformer",
+                "host": "192.168.0.139",
+                "engine_rank": 4,
+                "cuda_device": 3
+            },
+            {
+                "instance_type": "transformer",
+                "host": "192.168.0.139",
+                "engine_rank": 5,
+                "cuda_device": 4
+            },
+            {
+                "instance_type": "transformer",
+                "host": "192.168.0.139",
+                "engine_rank": 6,
+                "cuda_device": 5
+            },
+            {
+                "instance_type": "decoder",
+                "host": "192.168.0.139",
+                "engine_rank": 7,
+                "cuda_device": 6
+            }
+        ]
     }
 }
