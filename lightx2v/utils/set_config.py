@@ -57,11 +57,14 @@ def set_args2config(args):
 
 
 def auto_calc_config(config):
+    cli_num_iterations = config.get("num_iterations", None)
     if config.get("config_json", None) is not None:
         logger.info(f"Loading some config from {config['config_json']}")
         with open(config["config_json"], "r") as f:
             config_json = json.load(f)
         config.update(config_json)
+        if cli_num_iterations is not None:
+            config["num_iterations"] = cli_num_iterations
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
@@ -168,7 +171,12 @@ def auto_calc_config(config):
                     model_config = json.load(f)
                 config.update(model_config)
 
-    if config["task"] in ["i2v", "s2v"]:
+    # Some upstream/offical configs use `num_inference_steps`, while the shared
+    # LightX2V scheduler stack expects `infer_steps`.
+    if "infer_steps" not in config and "num_inference_steps" in config:
+        config["infer_steps"] = config["num_inference_steps"]
+
+    if config["task"] in ["i2v", "s2v", "rs2v"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
