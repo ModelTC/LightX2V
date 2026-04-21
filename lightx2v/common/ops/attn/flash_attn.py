@@ -5,16 +5,19 @@ from .utils.sla_util import get_block_map
 from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
 
 try:
-    import flash_attn  # noqa: F401
-    from flash_attn.flash_attn_interface import flash_attn_varlen_func
+    from flash_attn import flash_attn_func_v2
+    from flash_attn.flash_attn_interface import flash_attn_varlen_func_v2
 except ImportError:
-    logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
-    flash_attn_varlen_func = None
+    logger.info("flash_attn2 not found, please install flash_attn2 first")
+    flash_attn_func_v2 = None
+    flash_attn_varlen_func_v2 = None
 
 try:
+    from flash_attn_interface import flash_attn_func as flash_attn_func_v3
     from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v3
 except ImportError:
-    logger.info("flash_attn_varlen_func_v3 not found, please install flash_attn3 first")
+    logger.info("flash_attn3 not found, please install flash_attn3 first")
+    flash_attn_func_v3 = None
     flash_attn_varlen_func_v3 = None
 
 try:
@@ -49,18 +52,37 @@ class FlashAttn2Weight(AttnWeightTemplate):
             bs = 1
         elif len(q.shape) == 4:
             bs = q.shape[0]
-            q = q.reshape(-1, q.shape[-2], q.shape[-1])
-            k = k.reshape(-1, k.shape[-2], k.shape[-1])
-            v = v.reshape(-1, v.shape[-2], v.shape[-1])
-        x = flash_attn_varlen_func(
-            q,
-            k,
-            v,
-            cu_seqlens_q,
-            cu_seqlens_kv,
-            max_seqlen_q,
-            max_seqlen_kv,
-        ).reshape(bs * max_seqlen_q, -1)
+        total_seqlen = bs * max_seqlen_q
+
+        if bs == 1:
+            if len(q.shape) == 3:
+                q = q.unsqueeze(0)
+                k = k.unsqueeze(0)
+                v = v.unsqueeze(0)
+            x = flash_attn_func_v2(q, k, v).reshape(bs * max_seqlen_q, -1)
+        else:
+            if cu_seqlens_q.is_cpu:
+                cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
+            if cu_seqlens_kv.is_cpu:
+                cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
+            if max_seqlen_q.is_cpu:
+                max_seqlen_q = max_seqlen_q.to(q.device, non_blocking=True)
+            if max_seqlen_kv.is_cpu:
+                max_seqlen_kv = max_seqlen_kv.to(k.device, non_blocking=True)
+            if len(q.shape) == 4:
+                q = q.reshape(-1, q.shape[-2], q.shape[-1])
+                k = k.reshape(-1, k.shape[-2], k.shape[-1])
+                v = v.reshape(-1, v.shape[-2], v.shape[-1])
+            x = flash_attn_varlen_func_v2(
+                q,
+                k,
+                v,
+                cu_seqlens_q,
+                cu_seqlens_kv,
+                max_seqlen_q,
+                max_seqlen_kv,
+            ).reshape(total_seqlen, -1)
+
         return x
 
 
@@ -84,18 +106,37 @@ class FlashAttn3Weight(AttnWeightTemplate):
             bs = 1
         elif len(q.shape) == 4:
             bs = q.shape[0]
-            q = q.reshape(-1, q.shape[-2], q.shape[-1])
-            k = k.reshape(-1, k.shape[-2], k.shape[-1])
-            v = v.reshape(-1, v.shape[-2], v.shape[-1])
-        x = flash_attn_varlen_func_v3(
-            q,
-            k,
-            v,
-            cu_seqlens_q,
-            cu_seqlens_kv,
-            max_seqlen_q,
-            max_seqlen_kv,
-        ).reshape(bs * max_seqlen_q, -1)
+        total_seqlen = bs * max_seqlen_q
+
+        if bs == 1:
+            if len(q.shape) == 3:
+                q = q.unsqueeze(0)
+                k = k.unsqueeze(0)
+                v = v.unsqueeze(0)
+            x = flash_attn_func_v3(q, k, v).reshape(bs * max_seqlen_q, -1)
+        else:
+            if cu_seqlens_q.is_cpu:
+                cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
+            if cu_seqlens_kv.is_cpu:
+                cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
+            if max_seqlen_q.is_cpu:
+                max_seqlen_q = max_seqlen_q.to(q.device, non_blocking=True)
+            if max_seqlen_kv.is_cpu:
+                max_seqlen_kv = max_seqlen_kv.to(k.device, non_blocking=True)
+            if len(q.shape) == 4:
+                q = q.reshape(-1, q.shape[-2], q.shape[-1])
+                k = k.reshape(-1, k.shape[-2], k.shape[-1])
+                v = v.reshape(-1, v.shape[-2], v.shape[-1])
+            x = flash_attn_varlen_func_v3(
+                q,
+                k,
+                v,
+                cu_seqlens_q,
+                cu_seqlens_kv,
+                max_seqlen_q,
+                max_seqlen_kv,
+            ).reshape(total_seqlen, -1)
+
         return x
 
 

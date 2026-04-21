@@ -160,8 +160,8 @@ class BagelTransformerInfer(BaseTransformerInfer):
             merged_value_states = packed_value_states
             key_values_lens = query_lens
 
-        cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(query_lens, dim=0), (1, 0)).to(AI_DEVICE)
-        cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(key_values_lens, dim=0), (1, 0)).to(AI_DEVICE)
+        cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(query_lens, dim=0), (1, 0))
+        cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(key_values_lens, dim=0), (1, 0))
 
         packed_attn_output = flash_attn_varlen_func(
             q=packed_query_states,

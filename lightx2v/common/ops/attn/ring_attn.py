@@ -59,7 +59,6 @@ class RingAttnWeight(AttnWeightTemplate):
         slice_qkv_len,
         cu_seqlens_qkv,
         attention_module=None,
-        attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
         use_fp4_comm=False,
@@ -76,7 +75,6 @@ class RingAttnWeight(AttnWeightTemplate):
             v (torch.Tensor): 值张量，形状为 [shard_seqlen, heads, hidden_dims]
             slice_qkv_len (int): 图像查询、键和值的长度
             cu_seqlens_qkv (torch.Tensor): 累积序列长度，包含文本和图像的长度信息
-            attention_type (str): 注意力类型，默认为 "flash_attn2"
             use_fp8_comm: 是否使用 FP8 通信
             use_fp4_comm: 是否使用 FP4 通信
 

@@ -4,7 +4,6 @@ from loguru import logger
 
 from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq
@@ -31,7 +30,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         slice_qkv_len,
         cu_seqlens_qkv,
         attention_module=None,
-        attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
         use_fp4_comm=False,
@@ -51,7 +49,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             v (torch.Tensor): 值张量，形状为 [shard_seqlen, kv_heads, hidden_dims]
             slice_qkv_len (int): 图像或者文本查询、键和值的长度，根据 img_first 确定谁在前半部分
             cu_seqlens_qkv (torch.Tensor): 累积序列长度，包含文本和图像的长度信息
-            attention_type (str): 注意力类型，默认为 "flash_attn2"
             q_only_img (bool): 若为 True，q 只含图像 token，k/v 同时含图像和文本 token。
                                此时只对 k/v 做 img/txt 分割，q 整体参与图像侧 all-to-all。
                                支持 cross-attention 等 q 不含文本 token 的场景。
@@ -108,16 +105,12 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         cu_seqlens_kv[1] = txt_qkv_len + global_img_seqlen
         if txt_mask_len:
             cu_seqlens_kv = torch.cat((cu_seqlens_kv, torch.tensor([txt_mask_len + global_img_seqlen], dtype=torch.int32)))
-        if attention_type == "flash_attn2" or attention_type == "flash_attn3":
-            cu_seqlens_kv = cu_seqlens_kv.to(AI_DEVICE, non_blocking=True)
         max_seqlen_kv = global_img_seqlen + txt_qkv_len
 
         # q_only_img 时 q 只含图像 token，cu_seqlens_q 与 kv 侧不同
         if q_only_img:
             cu_seqlens_q = torch.zeros([2], dtype=torch.int32)
             cu_seqlens_q[1] = global_img_seqlen
-            if attention_type == "flash_attn2" or attention_type == "flash_attn3":
-                cu_seqlens_q = cu_seqlens_q.to(AI_DEVICE, non_blocking=True)
             max_seqlen_q = global_img_seqlen
         else:
             cu_seqlens_q = cu_seqlens_kv
@@ -599,7 +592,6 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         slice_qkv_len,
         cu_seqlens_qkv,
         attention_module=None,
-        attention_type="flash_attn2",
         seq_p_group=None,
         use_fp8_comm=False,
         use_fp4_comm=False,
@@ -616,7 +608,6 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
             v (torch.Tensor): 值张量，形状为 [shard_seqlen, heads, hidden_dims]
             slice_qkv_len (int): 图像或者文本查询、键和值的长度，根据img_first确定谁在前半部分
             cu_seqlens_qkv (torch.Tensor): 累积序列长度，包含文本和图像的长度信息
-            attention_type (str): 注意力类型，默认为 "flash_attn2"
 
         返回:
             torch.Tensor: 计算得到的注意力结果
@@ -748,7 +739,6 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
         max_seqlen_qkv = img_q.shape[0] + txt_q.shape[0]  # 最大序列长度
 
         # 调用注意力函数计算注意力结果
-        # attn = attention(attention_type=attention_type, q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv)
         attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=max_seqlen_qkv, max_seqlen_kv=max_seqlen_qkv, **kwargs)
 
         # 分割图像和文本的注意力结果

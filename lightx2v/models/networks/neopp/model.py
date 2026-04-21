@@ -118,10 +118,8 @@ class NeoppModel(BaseTransformerModel):
             if use_cfg:
                 if cfg_p_rank == 0:
                     v_pred = self._infer_cond_uncond(inputs, pre_infer_out, True)
-                elif cfg_p_rank == 1:
+                else:
                     v_pred = self._infer_cond_uncond(inputs, pre_infer_out, False)
-                elif cfg_p_rank == 2:
-                    v_pred = torch.zeros_like(pre_infer_out.z)
                 v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
                 dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
                 v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
