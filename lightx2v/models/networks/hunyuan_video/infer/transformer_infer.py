@@ -10,7 +10,6 @@ except Exception as e:
     apply_rope_with_cos_sin_cache_inplace = None
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
 from .triton_ops import fuse_scale_shift_kernel
