@@ -75,7 +75,7 @@ class WanMtxg2PreInfer(WanSFPreInfer):
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
         x = x.flatten(2).transpose(1, 2)  # B FHW C'
-        seq_lens = torch.tensor([u.size(0) for u in x], dtype=torch.long, device=torch.device("cuda"))
+        seq_lens = torch.tensor([u.size(0) for u in x], dtype=torch.long)
         assert seq_lens[0] <= 15 * 1 * 880
 
         embed_tmp = sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x)  # torch.Size([3, 256])

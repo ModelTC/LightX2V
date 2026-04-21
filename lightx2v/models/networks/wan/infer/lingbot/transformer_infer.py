@@ -78,15 +78,9 @@ class WanLingbotTransformerInfer(WanTransformerInfer):
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
 
         if self.cross_attn_cu_seqlens_q is None:
-            if self.cross_attn_1_type == "flash_attn2" or self.cross_attn_1_type == "flash_attn3":
-                self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32).to(q.device, non_blocking=True)
-            else:
-                self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
+            self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
         if self.cross_attn_cu_seqlens_kv is None:
-            if self.cross_attn_1_type == "flash_attn2" or self.cross_attn_1_type == "flash_attn3":
-                self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32).to(k.device, non_blocking=True)
-            else:
-                self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
+            self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
@@ -102,10 +96,7 @@ class WanLingbotTransformerInfer(WanTransformerInfer):
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 
             if self.cross_attn_cu_seqlens_kv_img is None:
-                if self.cross_attn_2_type == "flash_attn2" or self.cross_attn_2_type == "flash_attn3":
-                    self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32).to(k_img.device, non_blocking=True)
-                else:
-                    self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
+                self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
 
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,

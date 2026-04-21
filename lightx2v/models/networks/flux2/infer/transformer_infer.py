@@ -95,7 +95,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
+        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         model_cls = self.config.get("model_cls", "flux2_klein")
 
@@ -193,7 +193,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32, device=query.device)
+        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         model_cls = self.config.get("model_cls", "flux2_klein")
 

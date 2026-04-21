@@ -65,7 +65,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         query, key = self.apply_rope_func(query, key, freqs_cis)
 
         total_seq_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu").to(query.device, non_blocking=True)
+        cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")
 
         if self.config["seq_parallel"]:
             hidden_states_out = attn_phase.calculate_parallel.apply(
