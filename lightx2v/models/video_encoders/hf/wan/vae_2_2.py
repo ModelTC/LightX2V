@@ -992,7 +992,6 @@ class WanVAE_(nn.Module):
         return y.transpose(1, 2).to(x)
 
 
-
 def _video_vae(
     pretrained_path=None,
     z_dim=16,
@@ -1005,7 +1004,6 @@ def _video_vae(
     strict=True,
     **kwargs,
 ):
-
     # params
     cfg = dict(
         dim=dim,
