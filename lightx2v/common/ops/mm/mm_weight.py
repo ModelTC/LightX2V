@@ -174,6 +174,11 @@ class MMWeightTemplate(metaclass=ABCMeta):
         out = torch.mm(h, self.lora_up.t())
         return self.lora_strength * self.lora_scale * out
 
+    def _get_lora_target_device(self):
+        if hasattr(self, "weight") and self.weight is not None:
+            return self.weight.device
+        return AI_DEVICE
+
     def set_config(self, config={}):
         self.config = config
 
@@ -192,28 +197,34 @@ class MMWeightTemplate(metaclass=ABCMeta):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
             if self.lora_down_name in weight_dict:
                 self.has_lora_branch = True
-                self.lora_down = weight_dict[self.lora_down_name]
-                self.lora_up = weight_dict[self.lora_up_name]
+                target_device = self._get_lora_target_device()
+                self.lora_down = weight_dict[self.lora_down_name].to(target_device)
+                self.lora_up = weight_dict[self.lora_up_name].to(target_device)
                 self.lora_strength = lora_strength
                 if self.lora_alpha_name in weight_dict:
-                    self.lora_alpha = weight_dict[self.lora_alpha_name]
+                    self.lora_alpha = weight_dict[self.lora_alpha_name].to(target_device)
                     self.lora_scale = self.lora_alpha / self.lora_down.shape[0]
                 else:
-                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                    self.lora_scale = torch.tensor(1.0, device=target_device)
                 logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
 
     def update_lora(self, weight_dict, lora_strength=1):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
             if self.lora_down_name in weight_dict:
+                if not hasattr(self, "lora_down") or self.lora_down is None:
+                    self.register_lora(weight_dict, lora_strength)
+                    logger.debug(f"Register LoRA (first dynamic) on {self.weight_name}")
+                    return
                 self.has_lora_branch = True
-                self.lora_down.copy_(weight_dict[self.lora_down_name])
-                self.lora_up.copy_(weight_dict[self.lora_up_name])
+                target_device = self.lora_down.device
+                self.lora_down.copy_(weight_dict[self.lora_down_name].to(target_device))
+                self.lora_up.copy_(weight_dict[self.lora_up_name].to(target_device))
                 self.lora_strength = lora_strength
                 if self.lora_alpha_name in weight_dict:
-                    self.lora_alpha.copy_(weight_dict[self.lora_alpha_name])
+                    self.lora_alpha.copy_(weight_dict[self.lora_alpha_name].to(target_device))
                     self.lora_scale.copy_(self.lora_alpha / self.lora_down.shape[0])
                 else:
-                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                    self.lora_scale = torch.tensor(1.0, device=target_device)
                 logger.debug(f"Update LoRA to {self.weight_name}")
 
     def remove_lora(self):
