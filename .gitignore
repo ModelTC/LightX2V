@@ -30,5 +30,3 @@ app/.gradio/
 *.pkl
 save_results/*
 *.egg-info/
-Matrix-Game-3
-Matrix-Game-3.0
