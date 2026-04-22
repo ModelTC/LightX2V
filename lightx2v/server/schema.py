@@ -35,6 +35,7 @@ class BaseTaskRequest(DisaggOverrideRequest):
     image_path: str = Field("", description="Base64 encoded image or URL")
     image_mask_path: str = Field("", description="Mask image path (supports URL, base64, or local path)")
     save_result_path: str = Field("", description="Save result path (optional, defaults to task_id, suffix auto-detected)")
+    presigned_url: str = Field("", description="Optional presigned URL for uploading final sync result")
     infer_steps: int = Field(5, description="Inference steps")
     seed: int = Field(default_factory=generate_random_seed, description="Random seed (auto-generated if not set)")
     target_shape: list[int] = Field([], description="Return video or image shape")

@@ -130,6 +130,67 @@ class FileService:
     async def download_audio(self, audio_url: str) -> Path:
         return await self.download_media(audio_url, "audio")
 
+    async def upload_to_presigned_url(
+        self,
+        presigned_url: str,
+        file_content: bytes,
+        content_type: str = "application/octet-stream",
+        max_retries: Optional[int] = None,
+    ) -> None:
+        if max_retries is None:
+            max_retries = self.max_retries
+
+        parsed_url = urlparse(presigned_url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise ValueError(f"Invalid presigned URL format: {presigned_url}")
+
+        last_exception = None
+        retry_delay = self.retry_delay
+
+        for attempt in range(max_retries):
+            try:
+                client = await self._get_http_client()
+                response = await client.put(
+                    presigned_url,
+                    content=file_content,
+                    headers={"Content-Type": content_type},
+                )
+                if 200 <= response.status_code < 300:
+                    logger.info(f"Successfully uploaded result to presigned URL, status: {response.status_code}")
+                    return
+                if response.status_code >= 500:
+                    logger.warning(f"Presigned upload server error {response.status_code}, attempt {attempt + 1}/{max_retries}")
+                    last_exception = httpx.HTTPStatusError(
+                        f"Server returned {response.status_code}",
+                        request=response.request,
+                        response=response,
+                    )
+                else:
+                    raise httpx.HTTPStatusError(
+                        f"Client error {response.status_code}",
+                        request=response.request,
+                        response=response,
+                    )
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+                logger.warning(f"Connection error uploading to presigned URL, attempt {attempt + 1}/{max_retries}: {str(e)}")
+                last_exception = e
+            except httpx.HTTPStatusError as e:
+                if e.response and e.response.status_code < 500:
+                    raise ValueError(f"Failed to upload to presigned URL: HTTP {e.response.status_code}")
+                last_exception = e
+            except Exception as e:
+                logger.error(f"Unexpected error uploading to presigned URL: {str(e)}")
+                last_exception = e
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, self.max_retry_delay)
+
+        error_msg = f"All {max_retries} upload attempts failed for presigned URL"
+        if last_exception:
+            error_msg += f": {str(last_exception)}"
+        raise ValueError(error_msg)
+
     def save_uploaded_file(self, file_content: bytes, filename: str) -> Path:
         file_extension = Path(filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_extension}"
