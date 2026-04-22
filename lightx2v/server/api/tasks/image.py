@@ -30,11 +30,7 @@ async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_
         if status == TaskStatus.COMPLETED.value:
             result_png = task_manager.get_task_result_png(task_id)
             if result_png:
-                return Response(
-                    content=result_png,
-                    media_type="image/png",
-                    headers={"Content-Disposition": 'inline; filename="result.png"'},
-                )
+                return result_png
             raise HTTPException(status_code=500, detail=f"Task completed but no in-memory image found: {task_id}")
 
         if status == TaskStatus.FAILED.value:
@@ -48,6 +44,39 @@ async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_
             raise HTTPException(status_code=504, detail=f"Task {task_id} timed out after {timeout_seconds} seconds")
 
         await asyncio.sleep(poll_interval_seconds)
+
+
+def _build_png_response(result_png: bytes) -> Response:
+    return Response(
+        content=result_png,
+        media_type="image/png",
+        headers={"Content-Disposition": 'inline; filename="result.png"'},
+    )
+
+
+async def _upload_sync_result_if_needed(message: ImageTaskRequest, result_png: bytes):
+    presigned_url = (getattr(message, "presigned_url", "") or "").strip()
+    if not presigned_url:
+        return None
+
+    services = get_services()
+    assert services.file_service is not None, "File service is not initialized"
+
+    try:
+        await services.file_service.upload_to_presigned_url(
+            presigned_url=presigned_url,
+            file_content=result_png,
+            content_type="image/png",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to upload sync result to presigned URL: {str(e)}")
+
+    return {
+        "task_id": message.task_id,
+        "task_status": "completed",
+        "uploaded_to_presigned_url": True,
+        "presigned_url": presigned_url,
+    }
 
 
 async def _watch_client_disconnect(request: Request, task_id: str, poll_interval_seconds: float = 0.2) -> bool:
@@ -105,6 +134,9 @@ async def create_image_task_sync(
         if hasattr(message, "image_mask_path") and message.image_mask_path and message.image_mask_path.startswith("http"):
             if not await validate_url_async(message.image_mask_path):
                 raise HTTPException(status_code=400, detail=f"Image mask URL is not accessible: {message.image_mask_path}")
+        if hasattr(message, "presigned_url") and message.presigned_url:
+            if not message.presigned_url.startswith(("http://", "https://")):
+                raise HTTPException(status_code=400, detail=f"Invalid presigned_url: {message.presigned_url}")
 
         message.prefer_memory_result = True
         task_id = task_manager.create_task(message)
@@ -124,7 +156,11 @@ async def create_image_task_sync(
                 await asyncio.gather(wait_task, return_exceptions=True)
             raise HTTPException(status_code=499, detail=f"Client disconnected, task {task_id} cancelled")
 
-        return wait_task.result()
+        result_png = wait_task.result()
+        upload_result = await _upload_sync_result_if_needed(message, result_png)
+        if upload_result is not None:
+            return upload_result
+        return _build_png_response(result_png)
 
     except asyncio.CancelledError:
         if task_id:
