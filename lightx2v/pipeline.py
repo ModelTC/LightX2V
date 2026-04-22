@@ -460,7 +460,8 @@ class LightX2VPipeline:
             self.modify_config({"task": self.task})
 
         input_info = init_empty_input_info(self.task, self.support_tasks)
-        seed_all(self.seed)
+        if self.seed is not None:
+            seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
         gen_result = self.runner.run_pipeline(input_info)
         logger.info("Generated successfully!")

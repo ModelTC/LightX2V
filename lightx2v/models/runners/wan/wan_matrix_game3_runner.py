@@ -14,8 +14,14 @@ from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, Sch
 from diffusers.utils import deprecate
 from einops import rearrange
 from loguru import logger
-from scipy.interpolate import interp1d
-from scipy.spatial.transform import Rotation, Slerp
+
+try:
+    from scipy.interpolate import interp1d
+    from scipy.spatial.transform import Rotation, Slerp
+except ImportError:
+    interp1d = None
+    Rotation = None
+    Slerp = None
 
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.scheduler import BaseScheduler
