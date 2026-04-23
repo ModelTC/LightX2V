@@ -2,30 +2,18 @@ import torch
 
 from lightx2v.models.networks.wan.infer.lingbot_fast.pre_infer import WanLingbotFastPreInfer
 from lightx2v.models.networks.wan.infer.lingbot_fast.transformer_infer import WanLingbotFastTransformerInfer
-from lightx2v.models.networks.wan.infer.offload.transformer_infer import (
-    WanOffloadTransformerInfer,
-)
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 
 
 class WanLingbotFastModel(WanLingbotModel):
-    """Lingbot fast (autoregressive) model.
-
-    MRO: WanLingbotFastModel -> AutoRegressiveBaseTransformerModel
-         -> WanLingbotModel -> WanModel -> BaseTransformerModel
-
-    - AutoRegressiveBaseTransformerModel adds KVCacheManager lifecycle
-    - WanLingbotModel adds lingbot weights and seq-parallel camera handling
-    """
-
     def __init__(self, model_path, config, device, model_type="wan2.1", lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, model_type, lora_path, lora_strength)
 
     def _init_infer_class(self):
         self.pre_infer_class = WanLingbotFastPreInfer
         self.post_infer_class = WanPostInfer
-        self.transformer_infer_class = WanLingbotFastTransformerInfer if not self.cpu_offload else WanOffloadTransformerInfer
+        self.transformer_infer_class = WanLingbotFastTransformerInfer
 
     @torch.no_grad()
     def infer(self, inputs):
