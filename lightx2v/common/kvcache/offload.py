@@ -51,8 +51,8 @@ class _KVCacheOffloadMixin:
     """
 
     def _init_offload(self):
-        self._load_stream = torch.cuda.Stream()
-        self._store_stream = torch.cuda.Stream()
+        self._load_stream = torch.cuda.Stream(device=self._device)
+        self._store_stream = torch.cuda.Stream(device=self._device)
         # Per-buffer events for fine-grained dependency tracking
         self._load_done = [torch.cuda.Event() for _ in range(2)]
         self._writeback_done = [torch.cuda.Event() for _ in range(2)]
