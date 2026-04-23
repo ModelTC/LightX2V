@@ -39,13 +39,15 @@ class EncoderService(BaseService):
         self._request_rdma_buffer: Optional[RDMABuffer] = None
         self._phase1_rdma_client: Optional[RDMAClient] = None
         self._phase1_rdma_buffer: Optional[RDMABuffer] = None
+        data_bootstrap_addr = str(self.config.get("data_bootstrap_addr", "127.0.0.1"))
+        monitor_bind_host = str(self.config.get("local_hostname", data_bootstrap_addr))
         shared_slots = int(self.config.get("rdma_buffer_slots", "128"))
         shared_slot_size = int(self.config.get("rdma_buffer_slot_size", "4096"))
-        self._request_server_ip = str(self.config.get("rdma_request_host", "127.0.0.1"))
+        self._request_server_ip = str(self.config.get("rdma_request_host", data_bootstrap_addr))
         self._request_handshake_port = int(self.config.get("rdma_request_handshake_port", "5566"))
         self._request_slots = shared_slots
         self._request_slot_size = shared_slot_size
-        self._phase1_server_ip = str(self.config.get("rdma_phase1_host", "127.0.0.1"))
+        self._phase1_server_ip = str(self.config.get("rdma_phase1_host", data_bootstrap_addr))
         self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", "5567"))
         self._phase1_slots = shared_slots
         self._phase1_slot_size = shared_slot_size
@@ -63,7 +65,7 @@ class EncoderService(BaseService):
         self.reporter = Reporter(
             service_type="encoder",
             gpu_id=self.encoder_engine_rank,
-            bind_address=f"tcp://{self.config.get('data_bootstrap_addr', '127.0.0.1')}:{MONITOR_POLLING_PORT + self.encoder_engine_rank}",
+            bind_address=f"tcp://{monitor_bind_host}:{MONITOR_POLLING_PORT + self.encoder_engine_rank}",
         )
         self._queue_metrics_lock = threading.Lock()
         self._queue_metrics: dict[str, Any] = {

@@ -16,6 +16,8 @@ from pyverbs.qp import QP, QPAttr, QPCap, QPInitAttr
 from pyverbs.wr import SGE
 from pyverbs.wr import SendWR as WR
 
+from lightx2v.disagg.rdma_utils import resolve_gid_index
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,25 +113,7 @@ class RDMAClient:
         return status_map.get(status, f"IBV_WC_STATUS_{status}")
 
     def _resolve_gid_index(self):
-        env_gid = os.getenv("RDMA_GID_INDEX", "").strip()
-        if env_gid:
-            idx = int(env_gid)
-            self.ctx.query_gid(port_num=self.port_num, index=idx)
-            return idx
-
-        # Prefer IPv4-mapped RoCE entries for Ethernet-based RDMA devices.
-        preferred = [2, 0, 1, 3, 4, 5, 6, 7]
-        for idx in preferred:
-            try:
-                gid = str(self.ctx.query_gid(port_num=self.port_num, index=idx))
-            except Exception:
-                continue
-            if gid and gid != "::":
-                return idx
-
-        # Last resort: let query_gid raise a descriptive error for index 0.
-        self.ctx.query_gid(port_num=self.port_num, index=0)
-        return 0
+        return resolve_gid_index(self.ctx, self.port_num)
 
     def _alloc_local_psn(self):
         self._next_psn = (self._next_psn + 1) & 0xFFFFFF

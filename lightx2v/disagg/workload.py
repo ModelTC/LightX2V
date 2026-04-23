@@ -39,7 +39,7 @@ except ModuleNotFoundError:
 from lightx2v.disagg.conn import REQUEST_POLLING_PORT, ReqManager
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BASE_CONFIG_JSON = REPO_ROOT / "configs" / "disagg" / "wan22_i2v_distill_controller.json"
+DEFAULT_BASE_CONFIG_JSON = REPO_ROOT / "configs" / "disagg" / "single_node" / "wan22_i2v_distill_controller.json"
 DEFAULT_STAGE_DEFINITIONS_JSON = REPO_ROOT / "configs" / "disagg" / "wan22_i2v_workload_stages.json"
 
 _TEST_START_MONOTONIC: Optional[float] = None

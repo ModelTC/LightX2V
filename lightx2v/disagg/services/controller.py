@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -48,13 +49,19 @@ class ControllerService(BaseService):
         self._gpu_reuse_grace_seconds: float = 5.0
         self._graceful_reclaim_timeout_seconds: float = float(os.getenv("DISAGG_RECLAIM_GRACEFUL_TIMEOUT_SECONDS", "30.0"))
         self._force_kill_wait_seconds: float = float(os.getenv("DISAGG_RECLAIM_FORCE_KILL_WAIT_SECONDS", "1.0"))
+        self._instance_start_timeout_seconds: float = float(os.getenv("DISAGG_INSTANCE_START_TIMEOUT_SECONDS", "90.0"))
         self._sidecar_start_timeout_seconds: float = float(os.getenv("DISAGG_SIDECAR_START_TIMEOUT_SECONDS", "15.0"))
         self._sidecar_drain_idle_seconds: float = float(os.getenv("DISAGG_SIDECAR_DRAIN_IDLE_SECONDS", "1.0"))
         # <= 0 means wait indefinitely until sidecar pending queues are drained.
         self._sidecar_drain_timeout_seconds: float = float(os.getenv("DISAGG_SIDECAR_DRAIN_TIMEOUT_SECONDS", "0"))
+        self._remote_proxy_start_timeout_seconds: float = float(os.getenv("DISAGG_REMOTE_PROXY_START_TIMEOUT_SECONDS", "20.0"))
         self._sidecar_reclaim_threads: list[Thread] = []
         self._shutting_down: bool = False
         self._enable_monitor: bool = False
+        self._static_instance_slots: list[dict[str, Any]] = []
+        self._free_slot_ids: set[int] = set()
+        self._slot_reuse_block_until: dict[int, float] = {}
+        self._local_host_aliases: set[str] = set()
 
     def _is_monitor_enabled(self) -> bool:
         raw = os.getenv("ENABLE_MONITOR")
@@ -76,19 +83,75 @@ class ControllerService(BaseService):
             time.sleep(0.1)
         return self._is_tcp_port_open(host, port) == should_be_open
 
-    def _allocate_free_tcp_port(self) -> int:
+    def _refresh_local_host_aliases(self):
+        aliases: set[str] = {
+            "127.0.0.1",
+            "localhost",
+            str(self._bootstrap_addr),
+        }
+        try:
+            hostname = socket.gethostname()
+            aliases.add(hostname)
+            aliases.add(socket.getfqdn())
+            host_info = socket.gethostbyname_ex(hostname)
+            aliases.update(host_info[1])
+            aliases.update(host_info[2])
+        except Exception:
+            pass
+        self._local_host_aliases = {item.strip() for item in aliases if isinstance(item, str) and item.strip()}
+
+    def _is_local_host(self, host: str) -> bool:
+        normalized = str(host).strip()
+        if not normalized:
+            return False
+        if normalized in self._local_host_aliases:
+            return True
+        try:
+            return socket.gethostbyname(normalized) in self._local_host_aliases
+        except Exception:
+            return False
+
+    def _allocate_free_tcp_port(self, bind_host: str | None = None) -> int:
+        host = str(bind_host or self._bootstrap_addr)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind((self._bootstrap_addr, 0))
+            sock.bind((host, 0))
             return int(sock.getsockname()[1])
 
-    def _query_sidecar(self, req_addr: str, cmd: str) -> dict[str, Any] | None:
+    def _build_service_command(self, instance_type: str, engine_rank: int, instance_cfg: dict[str, Any], service_config_json: str) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "lightx2v.disagg.examples.run_service",
+            "--service",
+            instance_type,
+            "--engine_rank",
+            str(engine_rank),
+            "--model_cls",
+            str(instance_cfg.get("model_cls", "wan2.1")),
+            "--task",
+            str(instance_cfg.get("task", "t2v")),
+            "--model_path",
+            str(instance_cfg.get("model_path")),
+            "--config_json",
+            service_config_json,
+            "--seed",
+            str(instance_cfg.get("seed", 42)),
+            "--prompt",
+            str(instance_cfg.get("prompt", "")),
+            "--negative_prompt",
+            str(instance_cfg.get("negative_prompt", "")),
+            "--save_result_path",
+            str(instance_cfg.get("save_path", "")),
+        ]
+
+    def _query_zmq(self, req_addr: str, payload: dict[str, Any], timeout_ms: int = 1000) -> dict[str, Any] | None:
         context = zmq.Context()
         req = context.socket(zmq.REQ)
-        req.setsockopt(zmq.RCVTIMEO, 1000)
-        req.setsockopt(zmq.SNDTIMEO, 1000)
+        req.setsockopt(zmq.RCVTIMEO, int(timeout_ms))
+        req.setsockopt(zmq.SNDTIMEO, int(timeout_ms))
         req.connect(req_addr)
         try:
-            req.send_pyobj({"cmd": str(cmd)})
+            req.send_pyobj(payload)
             reply = req.recv_pyobj()
             if isinstance(reply, dict):
                 return reply
@@ -99,11 +162,76 @@ class ControllerService(BaseService):
             req.close(0)
             context.term()
 
-    def _start_sidecar_process(self, instance_type: str, gpu_id: int) -> dict[str, Any]:
-        push_port = self._allocate_free_tcp_port()
-        req_port = self._allocate_free_tcp_port()
-        push_addr = f"tcp://{self._bootstrap_addr}:{push_port}"
-        req_addr = f"tcp://{self._bootstrap_addr}:{req_port}"
+    def _query_sidecar(self, req_addr: str, cmd: str) -> dict[str, Any] | None:
+        return self._query_zmq(req_addr, {"cmd": str(cmd)}, timeout_ms=1000)
+
+    def _is_truthy(self, value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _remote_proxy_req_addr(self, slot: dict[str, Any]) -> str:
+        host = str(slot["host"])
+        proxy_req_port = int(slot["proxy_req_port"])
+        return f"tcp://{host}:{proxy_req_port}"
+
+    def _ensure_remote_instance_proxy(self, slot: dict[str, Any]):
+        if not self._is_truthy(slot.get("use_remote_proxy", False)):
+            return
+
+        req_addr = self._remote_proxy_req_addr(slot)
+        reply = self._query_zmq(req_addr, {"cmd": "ping"}, timeout_ms=800)
+        if isinstance(reply, dict) and reply.get("ok", False):
+            return
+
+        python_executable = str(slot.get("python_executable", sys.executable))
+        workdir = str(slot.get("workdir", Path(__file__).resolve().parents[3]))
+        log_dir = str(slot.get("log_dir", "/tmp/lightx2v_disagg"))
+        activate_cmd = str(slot.get("activate_cmd", "")).strip()
+        proxy_req_port = int(slot["proxy_req_port"])
+        proxy_log_path = str(slot.get("proxy_log_path", f"{log_dir}/instance_proxy.log"))
+
+        script_lines = [
+            "set -e",
+            f"mkdir -p {shlex.quote(log_dir)}",
+            f"cd {shlex.quote(workdir)}",
+        ]
+        if activate_cmd:
+            script_lines.append(activate_cmd)
+        script_lines.extend(
+            [
+                (
+                    "nohup env PYTHONUNBUFFERED=1 "
+                    f"{shlex.quote(python_executable)} -m lightx2v.disagg.services.instance_proxy "
+                    f"--bind-addr {shlex.quote(f'tcp://0.0.0.0:{proxy_req_port}')} "
+                    f"--workdir {shlex.quote(workdir)} --log-dir {shlex.quote(log_dir)} "
+                    f"> {shlex.quote(proxy_log_path)} 2>&1 &"
+                ),
+                "echo PROXY_PID=$!",
+            ]
+        )
+        script = "\n".join(script_lines)
+
+        self._run_ssh_script(slot, script, timeout_seconds=30.0, check=True)
+
+        deadline = time.time() + self._remote_proxy_start_timeout_seconds
+        while time.time() < deadline:
+            probe = self._query_zmq(req_addr, {"cmd": "ping"}, timeout_ms=800)
+            if isinstance(probe, dict) and probe.get("ok", False):
+                self.logger.info("Remote instance proxy is ready on host=%s req_addr=%s", slot.get("host"), req_addr)
+                return
+            time.sleep(0.2)
+
+        raise RuntimeError(f"remote instance proxy failed to start on host={slot.get('host')} req_addr={req_addr}")
+
+    def _start_sidecar_process(self, instance_type: str, gpu_id: str | int, bind_host: str | None = None) -> dict[str, Any]:
+        host = str(bind_host or self._bootstrap_addr)
+        push_port = self._allocate_free_tcp_port(host)
+        req_port = self._allocate_free_tcp_port(host)
+        push_addr = f"tcp://{host}:{push_port}"
+        req_addr = f"tcp://{host}:{req_port}"
 
         cmd = [
             sys.executable,
@@ -153,6 +281,245 @@ class ControllerService(BaseService):
             "push_addr": push_addr,
             "req_addr": req_addr,
         }
+
+    def _run_ssh_script(self, slot: dict[str, Any], script: str, timeout_seconds: float = 30.0, check: bool = True) -> subprocess.CompletedProcess:
+        ssh_bin = str(slot.get("ssh_bin", "ssh"))
+        ssh_target = str(slot.get("ssh_target", slot.get("host", ""))).strip()
+        if not ssh_target:
+            raise RuntimeError("remote slot missing ssh target")
+
+        ssh_options = slot.get("ssh_options")
+        ssh_cmd = [ssh_bin]
+        if isinstance(ssh_options, list):
+            ssh_cmd.extend(str(opt) for opt in ssh_options if str(opt).strip())
+        ssh_cmd.extend([ssh_target, "bash", "-lc", script])
+        return subprocess.run(
+            ssh_cmd,
+            check=check,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+        )
+
+    def _launch_remote_instance(self, slot: dict[str, Any], instance_type: str, cmd: list[str], cuda_device: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        if self._is_truthy(slot.get("use_remote_proxy", False)):
+            return self._launch_remote_instance_via_proxy(slot, instance_type, cmd, cuda_device)
+
+        host = str(slot["host"])
+        engine_rank = int(slot["engine_rank"])
+        python_executable = str(slot.get("python_executable", sys.executable))
+        workdir = str(slot.get("workdir", Path(__file__).resolve().parents[3]))
+        log_dir = str(slot.get("log_dir", "/tmp/lightx2v_disagg"))
+        activate_cmd = str(slot.get("activate_cmd", "")).strip()
+        push_port = int(slot["sidecar_push_port"])
+        req_port = int(slot["sidecar_req_port"])
+        push_addr = f"tcp://{host}:{push_port}"
+        req_addr = f"tcp://{host}:{req_port}"
+        service_log = f"{log_dir}/{instance_type}_{engine_rank}_service.log"
+        sidecar_log = f"{log_dir}/{instance_type}_{engine_rank}_sidecar.log"
+
+        extra_env = slot.get("env")
+        normalized_env: dict[str, str] = {}
+        if isinstance(extra_env, dict):
+            for key, value in extra_env.items():
+                normalized_env[str(key)] = str(value)
+
+        sidecar_env_vars = {
+            **normalized_env,
+            "CUDA_VISIBLE_DEVICES": str(cuda_device),
+            "PYTHONUNBUFFERED": "1",
+        }
+        service_env_vars = {
+            **normalized_env,
+            "CUDA_VISIBLE_DEVICES": str(cuda_device),
+            "LIGHTX2V_SIDECAR_PUSH_ADDR": push_addr,
+            "LIGHTX2V_SIDECAR_REQ_ADDR": req_addr,
+            "PYTHONUNBUFFERED": "1",
+        }
+
+        def _to_env_prefix(env_map: dict[str, str]) -> str:
+            return " ".join(f"{key}={shlex.quote(value)}" for key, value in env_map.items())
+
+        def _with_env(base_cmd: str, env_map: dict[str, str]) -> str:
+            env_prefix = _to_env_prefix(env_map)
+            if not env_prefix:
+                return base_cmd
+            return f"env {env_prefix} {base_cmd}"
+
+        sidecar_cmd = _with_env(
+            (
+                f"{shlex.quote(python_executable)} "
+                "-m lightx2v.disagg.services.data_mgr_sidecar "
+                f"--push-addr {shlex.quote(push_addr)} --req-addr {shlex.quote(req_addr)}"
+            ),
+            sidecar_env_vars,
+        )
+        cmd_with_python = [python_executable, *cmd[1:]]
+        service_cmd = _with_env(" ".join(shlex.quote(str(part)) for part in cmd_with_python), service_env_vars)
+
+        script_lines = [
+            "set -e",
+            f"mkdir -p {shlex.quote(log_dir)}",
+            f"cd {shlex.quote(workdir)}",
+        ]
+        if activate_cmd:
+            script_lines.append(activate_cmd)
+        script_lines.extend(
+            [
+                f"nohup {sidecar_cmd} > {shlex.quote(sidecar_log)} 2>&1 &",
+                "sidecar_pid=$!",
+                "sleep 0.5",
+                f"nohup {service_cmd} > {shlex.quote(service_log)} 2>&1 &",
+                "service_pid=$!",
+                "echo SIDECAR_PID=$sidecar_pid",
+                "echo SERVICE_PID=$service_pid",
+            ]
+        )
+        script = "\n".join(script_lines)
+
+        completed = self._run_ssh_script(slot, script, timeout_seconds=45.0, check=True)
+        sidecar_pid: int | None = None
+        service_pid: int | None = None
+        for line in completed.stdout.splitlines():
+            if line.startswith("SIDECAR_PID="):
+                try:
+                    sidecar_pid = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    sidecar_pid = None
+            elif line.startswith("SERVICE_PID="):
+                try:
+                    service_pid = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    service_pid = None
+
+        if sidecar_pid is None or service_pid is None:
+            raise RuntimeError(
+                f"failed to parse remote pids for {instance_type} rank={engine_rank} host={host}: stdout={completed.stdout!r} stderr={completed.stderr!r}"
+            )
+
+        sidecar_meta = {
+            "mode": "remote",
+            "host": host,
+            "req_addr": req_addr,
+            "push_addr": push_addr,
+            "pid": sidecar_pid,
+            "log_path": sidecar_log,
+        }
+        process_meta = {
+            "mode": "remote",
+            "host": host,
+            "pid": service_pid,
+            "log_path": service_log,
+        }
+        return process_meta, sidecar_meta
+
+    def _launch_remote_instance_via_proxy(self, slot: dict[str, Any], instance_type: str, cmd: list[str], cuda_device: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        self._ensure_remote_instance_proxy(slot)
+
+        host = str(slot["host"])
+        engine_rank = int(slot["engine_rank"])
+        python_executable = str(slot.get("python_executable", sys.executable))
+        workdir = str(slot.get("workdir", Path(__file__).resolve().parents[3]))
+        log_dir = str(slot.get("log_dir", "/tmp/lightx2v_disagg"))
+        push_port = int(slot["sidecar_push_port"])
+        req_port = int(slot["sidecar_req_port"])
+        push_addr = f"tcp://{host}:{push_port}"
+        req_addr = f"tcp://{host}:{req_port}"
+        service_log = f"{log_dir}/{instance_type}_{engine_rank}_service.log"
+        sidecar_log = f"{log_dir}/{instance_type}_{engine_rank}_sidecar.log"
+
+        extra_env = slot.get("env")
+        normalized_env: dict[str, str] = {}
+        if isinstance(extra_env, dict):
+            for key, value in extra_env.items():
+                normalized_env[str(key)] = str(value)
+
+        proxy_req_addr = self._remote_proxy_req_addr(slot)
+        payload = {
+            "cmd": "start_instance",
+            "instance_type": str(instance_type),
+            "engine_rank": int(engine_rank),
+            "cuda_device": str(cuda_device),
+            "python_executable": python_executable,
+            "service_argv": [str(part) for part in cmd[1:]],
+            "sidecar_push_addr": push_addr,
+            "sidecar_req_addr": req_addr,
+            "service_log_path": service_log,
+            "sidecar_log_path": sidecar_log,
+            "workdir": workdir,
+            "log_dir": log_dir,
+            "env": normalized_env,
+        }
+        reply = self._query_zmq(proxy_req_addr, payload, timeout_ms=10000)
+        if not isinstance(reply, dict) or not reply.get("ok", False):
+            raise RuntimeError(f"remote proxy failed to start instance on host={host}: {reply}")
+
+        data = reply.get("data") if isinstance(reply.get("data"), dict) else {}
+        sidecar_pid = int(data.get("sidecar_pid", 0) or 0)
+        service_pid = int(data.get("service_pid", 0) or 0)
+        if sidecar_pid <= 0 or service_pid <= 0:
+            raise RuntimeError(f"remote proxy returned invalid pids for host={host}: {reply}")
+
+        sidecar_meta = {
+            "mode": "remote",
+            "host": host,
+            "req_addr": req_addr,
+            "push_addr": push_addr,
+            "pid": sidecar_pid,
+            "log_path": sidecar_log,
+            "proxy_req_addr": proxy_req_addr,
+        }
+        process_meta = {
+            "mode": "remote",
+            "host": host,
+            "pid": service_pid,
+            "log_path": service_log,
+            "proxy_req_addr": proxy_req_addr,
+        }
+        return process_meta, sidecar_meta
+
+    def _stop_remote_pid(self, slot: dict[str, Any], pid: int, graceful_timeout_seconds: float):
+        if self._is_truthy(slot.get("use_remote_proxy", False)):
+            req_addr = self._remote_proxy_req_addr(slot)
+            timeout_seconds = max(1, int(graceful_timeout_seconds))
+            payload = {
+                "cmd": "stop_pid",
+                "pid": int(pid),
+                "timeout_seconds": timeout_seconds,
+            }
+            reply = self._query_zmq(req_addr, payload, timeout_ms=(timeout_seconds + 3) * 1000)
+            if isinstance(reply, dict) and reply.get("ok", False):
+                return
+            self.logger.warning(
+                "Remote proxy stop_pid failed, falling back to ssh kill: host=%s pid=%s reply=%s",
+                slot.get("host"),
+                pid,
+                reply,
+            )
+
+        timeout_seconds = max(1, int(graceful_timeout_seconds))
+        script = "\n".join(
+            [
+                "set +e",
+                f"pid={int(pid)}",
+                "if kill -0 ${pid} >/dev/null 2>&1; then",
+                "  kill -TERM ${pid} >/dev/null 2>&1 || true",
+                f"  deadline=$((SECONDS+{timeout_seconds}))",
+                "  while kill -0 ${pid} >/dev/null 2>&1; do",
+                "    if (( SECONDS >= deadline )); then",
+                "      kill -KILL ${pid} >/dev/null 2>&1 || true",
+                "      break",
+                "    fi",
+                "    sleep 0.2",
+                "  done",
+                "fi",
+            ]
+        )
+        try:
+            self._run_ssh_script(slot, script, timeout_seconds=float(timeout_seconds + 10), check=False)
+        except Exception as exc:
+            self.logger.warning("Failed to stop remote pid=%s on host=%s: %s", pid, slot.get("host"), exc)
 
     def _reclaim_sidecar_when_drained(self, instance_type: str, target_address: str, sidecar_meta: dict[str, Any]):
         req_addr = str(sidecar_meta.get("req_addr", ""))
@@ -628,6 +995,111 @@ class ControllerService(BaseService):
 
     def _init_gpu_pool(self, config: dict):
         disagg_cfg = config.get("disagg_config") if isinstance(config.get("disagg_config"), dict) else {}
+        self._refresh_local_host_aliases()
+
+        static_slots_raw = disagg_cfg.get("static_instance_slots")
+        self._static_instance_slots = []
+        self._free_slot_ids = set()
+        self._slot_reuse_block_until = {}
+
+        if isinstance(static_slots_raw, list) and static_slots_raw:
+            default_workdir = str(disagg_cfg.get("remote_workdir", Path(__file__).resolve().parents[3]))
+            default_python = str(disagg_cfg.get("remote_python_executable", sys.executable))
+            default_log_dir = str(disagg_cfg.get("remote_log_dir", "/tmp/lightx2v_disagg"))
+            default_activate_cmd = str(disagg_cfg.get("remote_activate_cmd", "")).strip()
+            default_ssh_user = str(disagg_cfg.get("ssh_user", "")).strip()
+            default_ssh_bin = str(disagg_cfg.get("ssh_bin", os.getenv("DISAGG_SSH_BIN", "ssh")))
+            default_use_remote_proxy = self._is_truthy(disagg_cfg.get("use_remote_proxy"), default=self._is_truthy(os.getenv("DISAGG_USE_REMOTE_PROXY"), False))
+            default_proxy_req_base_port = int(disagg_cfg.get("remote_proxy_req_base_port", 28000))
+
+            default_ssh_options_raw = disagg_cfg.get("ssh_options", [])
+            if isinstance(default_ssh_options_raw, str):
+                default_ssh_options = shlex.split(default_ssh_options_raw)
+            elif isinstance(default_ssh_options_raw, list):
+                default_ssh_options = [str(opt) for opt in default_ssh_options_raw if str(opt).strip()]
+            else:
+                default_ssh_options = []
+
+            default_slot_env = disagg_cfg.get("service_env", {})
+            normalized_default_slot_env: dict[str, str] = {}
+            if isinstance(default_slot_env, dict):
+                for key, value in default_slot_env.items():
+                    normalized_default_slot_env[str(key)] = str(value)
+
+            sidecar_base_port = int(disagg_cfg.get("sidecar_base_port", 26000))
+            seen_slot_keys: set[tuple[str, int]] = set()
+
+            for index, raw_slot in enumerate(static_slots_raw):
+                if not isinstance(raw_slot, dict):
+                    raise ValueError(f"invalid static_instance_slots[{index}] (expect object)")
+
+                instance_type = str(raw_slot.get("instance_type", "")).strip().lower()
+                if instance_type not in {"encoder", "transformer", "decoder"}:
+                    raise ValueError(f"invalid static_instance_slots[{index}].instance_type={instance_type!r}")
+
+                host = str(raw_slot.get("host", "")).strip()
+                if not host:
+                    raise ValueError(f"static_instance_slots[{index}].host cannot be empty")
+
+                engine_rank = int(raw_slot.get("engine_rank"))
+                cuda_device = str(raw_slot.get("cuda_device", engine_rank))
+                slot_key = (host, engine_rank)
+                if slot_key in seen_slot_keys:
+                    raise ValueError(f"duplicate static slot host/rank: {slot_key}")
+                seen_slot_keys.add(slot_key)
+
+                ssh_user = str(raw_slot.get("ssh_user", default_ssh_user)).strip()
+                ssh_target = f"{ssh_user}@{host}" if ssh_user else host
+                ssh_bin = str(raw_slot.get("ssh_bin", default_ssh_bin))
+
+                ssh_options_raw = raw_slot.get("ssh_options", default_ssh_options)
+                if isinstance(ssh_options_raw, str):
+                    ssh_options = shlex.split(ssh_options_raw)
+                elif isinstance(ssh_options_raw, list):
+                    ssh_options = [str(opt) for opt in ssh_options_raw if str(opt).strip()]
+                else:
+                    ssh_options = list(default_ssh_options)
+
+                slot_env = dict(normalized_default_slot_env)
+                raw_slot_env = raw_slot.get("env", {})
+                if isinstance(raw_slot_env, dict):
+                    for key, value in raw_slot_env.items():
+                        slot_env[str(key)] = str(value)
+
+                push_port = int(raw_slot.get("sidecar_push_port", sidecar_base_port + engine_rank * 2))
+                req_port = int(raw_slot.get("sidecar_req_port", sidecar_base_port + engine_rank * 2 + 1))
+                use_remote_proxy = self._is_truthy(raw_slot.get("use_remote_proxy"), default=default_use_remote_proxy)
+                proxy_req_port = int(raw_slot.get("proxy_req_port", default_proxy_req_base_port + engine_rank))
+                proxy_log_path = str(raw_slot.get("proxy_log_path", f"{default_log_dir}/instance_proxy_{engine_rank}.log"))
+
+                self._static_instance_slots.append(
+                    {
+                        "slot_id": index,
+                        "instance_type": instance_type,
+                        "host": host,
+                        "engine_rank": engine_rank,
+                        "cuda_device": cuda_device,
+                        "workdir": str(raw_slot.get("workdir", default_workdir)),
+                        "python_executable": str(raw_slot.get("python_executable", default_python)),
+                        "log_dir": str(raw_slot.get("log_dir", default_log_dir)),
+                        "activate_cmd": str(raw_slot.get("activate_cmd", default_activate_cmd)).strip(),
+                        "ssh_target": ssh_target,
+                        "ssh_bin": ssh_bin,
+                        "ssh_options": ssh_options,
+                        "sidecar_push_port": push_port,
+                        "sidecar_req_port": req_port,
+                        "use_remote_proxy": use_remote_proxy,
+                        "proxy_req_port": proxy_req_port,
+                        "proxy_log_path": proxy_log_path,
+                        "env": slot_env,
+                    }
+                )
+
+            self._free_slot_ids = {int(slot["slot_id"]) for slot in self._static_instance_slots}
+            self.logger.info("Static multi-node mode enabled with %s slots", len(self._static_instance_slots))
+            self._free_gpus = set()
+            return
+
         total_ranks = int(config.get("ranks", disagg_cfg.get("ranks", 8)))
         if total_ranks <= 0:
             raise ValueError("ranks must be positive")
@@ -642,39 +1114,80 @@ class ControllerService(BaseService):
             raise RuntimeError("controller runtime config is not initialized")
 
         with self._instance_lock:
-            if not self._free_gpus:
-                raise RuntimeError("no idle GPU available")
+            use_static_slots = bool(self._static_instance_slots)
+            selected_slot: dict[str, Any] | None = None
 
-            now = time.time()
-            gpu_id: int | None = None
-            for candidate_gpu in sorted(self._free_gpus):
-                if now < self._gpu_reuse_block_until.get(candidate_gpu, 0.0):
-                    continue
+            if use_static_slots:
+                if not self._free_slot_ids:
+                    raise RuntimeError("no idle static slot available")
 
-                monitor_port = MONITOR_POLLING_PORT + candidate_gpu
-                if self._is_tcp_port_open(self._bootstrap_addr, monitor_port):
-                    self.logger.warning(
-                        "Skip gpu=%s for %s creation because monitor port %s is still in use",
-                        candidate_gpu,
-                        instance_type,
-                        monitor_port,
-                    )
-                    continue
+                now = time.time()
+                for slot_id in sorted(self._free_slot_ids):
+                    slot = self._static_instance_slots[slot_id]
+                    if slot.get("instance_type") != instance_type:
+                        continue
+                    if now < self._slot_reuse_block_until.get(slot_id, 0.0):
+                        continue
 
-                gpu_id = candidate_gpu
-                break
+                    host = str(slot["host"])
+                    engine_rank = int(slot["engine_rank"])
+                    monitor_port = MONITOR_POLLING_PORT + engine_rank
+                    if self._is_tcp_port_open(host, monitor_port):
+                        self.logger.warning(
+                            "Skip static slot=%s host=%s rank=%s for %s creation because monitor port %s is still in use",
+                            slot_id,
+                            host,
+                            engine_rank,
+                            instance_type,
+                            monitor_port,
+                        )
+                        continue
 
-            if gpu_id is None:
-                raise RuntimeError(f"no idle GPU available for {instance_type}: all candidates cooling down or port is in use")
+                    selected_slot = slot
+                    break
+
+                if selected_slot is None:
+                    raise RuntimeError(f"no idle static slot available for {instance_type}: all candidates cooling down or port is in use")
+
+                engine_rank = int(selected_slot["engine_rank"])
+                host = str(selected_slot["host"])
+                cuda_device = str(selected_slot["cuda_device"])
+            else:
+                if not self._free_gpus:
+                    raise RuntimeError("no idle GPU available")
+
+                now = time.time()
+                engine_rank: int | None = None
+                host = self._bootstrap_addr
+                for candidate_gpu in sorted(self._free_gpus):
+                    if now < self._gpu_reuse_block_until.get(candidate_gpu, 0.0):
+                        continue
+
+                    monitor_port = MONITOR_POLLING_PORT + candidate_gpu
+                    if self._is_tcp_port_open(self._bootstrap_addr, monitor_port):
+                        self.logger.warning(
+                            "Skip gpu=%s for %s creation because monitor port %s is still in use",
+                            candidate_gpu,
+                            instance_type,
+                            monitor_port,
+                        )
+                        continue
+
+                    engine_rank = candidate_gpu
+                    break
+
+                if engine_rank is None:
+                    raise RuntimeError(f"no idle GPU available for {instance_type}: all candidates cooling down or port is in use")
+                cuda_device = str(engine_rank)
 
             instance_cfg = self._to_plain(self._runtime_config)
             instance_cfg["disagg_mode"] = instance_type
             if instance_type == "encoder":
-                instance_cfg["encoder_engine_rank"] = gpu_id
+                instance_cfg["encoder_engine_rank"] = engine_rank
             elif instance_type == "transformer":
-                instance_cfg["transformer_engine_rank"] = gpu_id
+                instance_cfg["transformer_engine_rank"] = engine_rank
             else:
-                instance_cfg["decoder_engine_rank"] = gpu_id
+                instance_cfg["decoder_engine_rank"] = engine_rank
 
             model_path = instance_cfg.get("model_path")
             config_json = instance_cfg.get("config_json")
@@ -682,78 +1195,89 @@ class ControllerService(BaseService):
                 raise RuntimeError("model_path and config_json are required to launch service subprocess")
             service_config_json = self._resolve_service_config_json(str(config_json), instance_type)
 
-            cmd = [
-                sys.executable,
-                "-m",
-                "lightx2v.disagg.examples.run_service",
-                "--service",
-                instance_type,
-                "--engine_rank",
-                str(gpu_id),
-                "--model_cls",
-                str(instance_cfg.get("model_cls", "wan2.1")),
-                "--task",
-                str(instance_cfg.get("task", "t2v")),
-                "--model_path",
-                str(model_path),
-                "--config_json",
-                service_config_json,
-                "--seed",
-                str(instance_cfg.get("seed", 42)),
-                "--prompt",
-                str(instance_cfg.get("prompt", "")),
-                "--negative_prompt",
-                str(instance_cfg.get("negative_prompt", "")),
-                "--save_result_path",
-                str(instance_cfg.get("save_path", "")),
-            ]
-            sidecar_meta = self._start_sidecar_process(instance_type, gpu_id)
-            env = os.environ.copy()
-            env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            env["LIGHTX2V_SIDECAR_PUSH_ADDR"] = str(sidecar_meta["push_addr"])
-            env["LIGHTX2V_SIDECAR_REQ_ADDR"] = str(sidecar_meta["req_addr"])
-            process = subprocess.Popen(
-                cmd,
-                env=env,
-                start_new_session=True,
-            )
+            cmd = self._build_service_command(instance_type, engine_rank, instance_cfg, service_config_json)
 
-            monitor_port = MONITOR_POLLING_PORT + gpu_id
-            if not self._wait_for_tcp_port_state(self._bootstrap_addr, monitor_port, should_be_open=True, timeout_seconds=8.0):
-                if process.poll() is None:
+            process: subprocess.Popen | None = None
+            process_meta: dict[str, Any] | None = None
+            sidecar_meta: dict[str, Any]
+            launch_mode = "local"
+
+            try:
+                if use_static_slots and selected_slot is not None and not self._is_local_host(host):
+                    launch_mode = "remote"
+                    process_meta, sidecar_meta = self._launch_remote_instance(selected_slot, instance_type, cmd, cuda_device)
+                else:
+                    sidecar_meta = self._start_sidecar_process(instance_type, cuda_device, bind_host=host)
+                    env = os.environ.copy()
+                    env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
+                    env["LIGHTX2V_SIDECAR_PUSH_ADDR"] = str(sidecar_meta["push_addr"])
+                    env["LIGHTX2V_SIDECAR_REQ_ADDR"] = str(sidecar_meta["req_addr"])
+                    process = subprocess.Popen(
+                        cmd,
+                        env=env,
+                        start_new_session=True,
+                    )
+
+                monitor_port = MONITOR_POLLING_PORT + engine_rank
+                if not self._wait_for_tcp_port_state(host, monitor_port, should_be_open=True, timeout_seconds=self._instance_start_timeout_seconds):
+                    raise RuntimeError(f"service {instance_type} rank={engine_rank} host={host} failed to expose monitor port {monitor_port}")
+            except Exception:
+                if process is not None and process.poll() is None:
                     process.terminate()
                     try:
                         process.wait(timeout=3.0)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                sidecar_process = sidecar_meta.get("process")
-                if sidecar_process is not None and sidecar_process.poll() is None:
-                    sidecar_process.terminate()
-                    try:
-                        sidecar_process.wait(timeout=2.0)
-                    except subprocess.TimeoutExpired:
-                        sidecar_process.kill()
-                raise RuntimeError(f"service {instance_type} on gpu={gpu_id} failed to expose monitor port {monitor_port}")
 
-            instance_address = f"{self._bootstrap_addr}:{REQUEST_POLLING_PORT + gpu_id}"
-            self._free_gpus.remove(gpu_id)
+                if launch_mode == "remote" and selected_slot is not None and process_meta is not None:
+                    remote_pid = process_meta.get("pid")
+                    if isinstance(remote_pid, int) and remote_pid > 0:
+                        self._stop_remote_pid(selected_slot, remote_pid, self._graceful_reclaim_timeout_seconds)
+
+                if "sidecar_meta" in locals():
+                    if launch_mode == "remote" and selected_slot is not None:
+                        sidecar_pid = sidecar_meta.get("pid")
+                        if isinstance(sidecar_pid, int) and sidecar_pid > 0:
+                            self._stop_remote_pid(selected_slot, sidecar_pid, self._force_kill_wait_seconds)
+                    else:
+                        sidecar_process = sidecar_meta.get("process")
+                        if sidecar_process is not None and sidecar_process.poll() is None:
+                            sidecar_process.terminate()
+                            try:
+                                sidecar_process.wait(timeout=2.0)
+                            except subprocess.TimeoutExpired:
+                                sidecar_process.kill()
+                raise
+
+            instance_address = f"{host}:{REQUEST_POLLING_PORT + engine_rank}"
+            if use_static_slots and selected_slot is not None:
+                self._free_slot_ids.remove(int(selected_slot["slot_id"]))
+            else:
+                self._free_gpus.remove(engine_rank)
             # self.add_instance(instance_type, instance_address)
             if self._enable_monitor:
-                monitor_node = f"tcp://{self._bootstrap_addr}:{MONITOR_POLLING_PORT + gpu_id}"
+                monitor_node = f"tcp://{host}:{MONITOR_POLLING_PORT + engine_rank}"
                 if monitor_node not in self.monitor.nodes:
                     self.monitor.nodes.append(monitor_node)
             self._managed_instances[instance_address] = {
                 "instance_type": instance_type,
-                "gpu_id": gpu_id,
+                "gpu_id": engine_rank,
+                "host": host,
+                "launch_mode": launch_mode,
+                "cuda_device": cuda_device,
                 "process": process,
+                "process_meta": process_meta,
                 "sidecar": sidecar_meta,
+                "slot_id": int(selected_slot["slot_id"]) if selected_slot is not None else None,
+                "static_slot": self._to_plain(selected_slot) if selected_slot is not None else None,
             }
             self.started_instances.append((instance_type, instance_address))
             self.logger.info(
-                "Created %s instance on gpu=%s pid=%s address=%s",
+                "Created %s instance host=%s rank=%s mode=%s address=%s",
                 instance_type,
-                gpu_id,
-                process.pid,
+                host,
+                engine_rank,
+                launch_mode,
                 instance_address,
             )
             return instance_address
@@ -785,48 +1309,72 @@ class ControllerService(BaseService):
                 raise RuntimeError(f"instance type mismatch for {target_address}: expected={instance_type} got={meta.get('instance_type')}")
 
             process = meta.get("process")
+            process_meta = meta.get("process_meta") if isinstance(meta.get("process_meta"), dict) else None
             gpu_id = int(meta.get("gpu_id"))
             sidecar_meta = meta.get("sidecar") if isinstance(meta.get("sidecar"), dict) else None
+            host = str(meta.get("host", self._bootstrap_addr))
+            launch_mode = str(meta.get("launch_mode", "local"))
+            static_slot = meta.get("static_slot") if isinstance(meta.get("static_slot"), dict) else None
+            slot_id_raw = meta.get("slot_id")
+            slot_id = int(slot_id_raw) if slot_id_raw is not None else None
 
             # self.remove_instance(instance_type, target_address)
             monitor_node = self._monitor_node_from_instance_address(target_address)
 
-            if process is not None and process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except Exception:
-                    process.terminate()
-                try:
-                    process.wait(timeout=self._graceful_reclaim_timeout_seconds)
-                except subprocess.TimeoutExpired:
+            if launch_mode == "remote":
+                if static_slot is None:
+                    raise RuntimeError(f"remote instance metadata missing static slot for {target_address}")
+
+                remote_service_pid = None
+                if process_meta is not None and isinstance(process_meta.get("pid"), int):
+                    remote_service_pid = int(process_meta["pid"])
+                if remote_service_pid is not None and remote_service_pid > 0:
+                    self._stop_remote_pid(static_slot, remote_service_pid, self._graceful_reclaim_timeout_seconds)
+
+                if sidecar_meta is not None and isinstance(sidecar_meta.get("pid"), int):
+                    self._stop_remote_pid(static_slot, int(sidecar_meta["pid"]), self._force_kill_wait_seconds)
+            else:
+                if process is not None and process.poll() is None:
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
+                        os.killpg(process.pid, signal.SIGTERM)
                     except Exception:
-                        process.kill()
+                        process.terminate()
                     try:
-                        process.wait(timeout=self._force_kill_wait_seconds)
-                    except subprocess.TimeoutExpired as exc:
-                        raise RuntimeError(f"process did not exit after kill for {instance_type} instance {target_address}") from exc
+                        process.wait(timeout=self._graceful_reclaim_timeout_seconds)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except Exception:
+                            process.kill()
+                        try:
+                            process.wait(timeout=self._force_kill_wait_seconds)
+                        except subprocess.TimeoutExpired as exc:
+                            raise RuntimeError(f"process did not exit after kill for {instance_type} instance {target_address}") from exc
 
             if self._enable_monitor and monitor_node in self.monitor.nodes:
                 self.monitor.nodes.remove(monitor_node)
 
             monitor_port = MONITOR_POLLING_PORT + gpu_id
-            if not self._wait_for_tcp_port_state(self._bootstrap_addr, monitor_port, should_be_open=False, timeout_seconds=5.0):
+            if not self._wait_for_tcp_port_state(host, monitor_port, should_be_open=False, timeout_seconds=5.0):
                 self.logger.warning(
-                    "Monitor port still open after reclaim: service=%s gpu=%s port=%s",
+                    "Monitor port still open after reclaim: service=%s host=%s rank=%s port=%s",
                     instance_type,
+                    host,
                     gpu_id,
                     monitor_port,
                 )
 
-            self._free_gpus.add(gpu_id)
-            self._gpu_reuse_block_until[gpu_id] = time.time() + self._gpu_reuse_grace_seconds
+            if slot_id is not None and slot_id in range(len(self._static_instance_slots)):
+                self._free_slot_ids.add(slot_id)
+                self._slot_reuse_block_until[slot_id] = time.time() + self._gpu_reuse_grace_seconds
+            else:
+                self._free_gpus.add(gpu_id)
+                self._gpu_reuse_block_until[gpu_id] = time.time() + self._gpu_reuse_grace_seconds
             self._managed_instances.pop(target_address, None)
             if (instance_type, target_address) in self.started_instances:
                 self.started_instances.remove((instance_type, target_address))
 
-            if sidecar_meta is not None:
+            if sidecar_meta is not None and launch_mode != "remote":
                 reclaim_thread = Thread(
                     target=self._reclaim_sidecar_when_drained,
                     args=(instance_type, target_address, sidecar_meta),
@@ -837,8 +1385,9 @@ class ControllerService(BaseService):
                 self._sidecar_reclaim_threads.append(reclaim_thread)
 
             self.logger.info(
-                "Reclaimed %s instance from gpu=%s address=%s",
+                "Reclaimed %s instance from host=%s rank=%s address=%s",
                 instance_type,
+                host,
                 gpu_id,
                 target_address,
             )
@@ -1078,10 +1627,26 @@ class ControllerService(BaseService):
 
         time.sleep(5.0)
 
-        for instance_type in ("encoder", "transformer", "decoder"):
-            address = self.create_instance(instance_type)
-        for _ in range(5):
-            self.create_instance("transformer")
+        if self._static_instance_slots:
+            self.logger.info(
+                "Starting managed instances from static_instance_slots: %s",
+                [slot["instance_type"] for slot in self._static_instance_slots],
+            )
+            for slot in self._static_instance_slots:
+                self.create_instance(str(slot["instance_type"]))
+        else:
+            for instance_type in ("encoder", "transformer", "decoder"):
+                self.create_instance(instance_type)
+            for _ in range(5):
+                self.create_instance("transformer")
+
+        instance_warmup_wait_s = int(os.getenv("DISAGG_INSTANCE_WARMUP_WAIT_S", "30"))
+        if instance_warmup_wait_s > 0:
+            self.logger.info(
+                "Managed instances created, waiting %ss before accepting requests",
+                instance_warmup_wait_s,
+            )
+            time.sleep(instance_warmup_wait_s)
 
         monitor_stop_event: Event | None = None
         monitor_thread: Thread | None = None

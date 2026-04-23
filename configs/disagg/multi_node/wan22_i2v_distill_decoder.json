@@ -52,7 +52,7 @@
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
         "protocol": "rdma",
-        "local_hostname": "192.168.0.139",
+        "local_hostname": "192.168.0.166",
         "metadata_server": "P2PHANDSHAKE"
     }
 }

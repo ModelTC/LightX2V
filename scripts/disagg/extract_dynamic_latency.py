@@ -8,9 +8,16 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-WAIT_RE = re.compile(r"^\[INFO\]\s+(\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}).*Waiting workload configs on port=")
-LAT_RE = re.compile(r"^\[INFO\]\s+(\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}).*Latency summary room=(\d+) metrics=(\{.*\})")
+WAIT_PATTERNS = [
+    re.compile(r"^\[INFO\]\s+(\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}).*waiting workload configs on port=", re.IGNORECASE),
+    re.compile(r"^\[(?:INFO|WARNING|ERROR|DEBUG|CRITICAL)\]\s+(\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}).*waiting workload configs on port=", re.IGNORECASE),
+]
+LAT_PATTERNS = [
+    re.compile(r"^\[INFO\]\s+(\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}).*Latency summary room=(\d+) metrics=(\{.*\})"),
+    re.compile(r"^\[(?:INFO|WARNING|ERROR|DEBUG|CRITICAL)\]\s+(\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}).*Latency summary room=(\d+) metrics=(\{.*\})"),
+]
 TS_FMT = "%d %b %Y %H:%M:%S"
+LOGURU_TS_FMT = "%Y-%m-%d %H:%M:%S"
 
 
 def _fmt_float3(value):
@@ -18,6 +25,23 @@ def _fmt_float3(value):
         return f"{float(value):.3f}"
     except (TypeError, ValueError):
         return value
+
+
+def _match_any(patterns, line):
+    for pattern in patterns:
+        match = pattern.match(line)
+        if match:
+            return match
+    return None
+
+
+def _parse_timestamp(raw_ts: str):
+    for fmt in (TS_FMT, LOGURU_TS_FMT):
+        try:
+            return datetime.strptime(raw_ts, fmt)
+        except ValueError:
+            pass
+    raise ValueError(f"unsupported timestamp format: {raw_ts}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,16 +74,16 @@ def main() -> int:
     with log_path.open("r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             if wait_ts is None:
-                m_wait = WAIT_RE.match(line)
+                m_wait = _match_any(WAIT_PATTERNS, line)
                 if m_wait:
-                    wait_ts = datetime.strptime(m_wait.group(1), TS_FMT)
+                    wait_ts = _parse_timestamp(m_wait.group(1))
                     continue
 
-            m_lat = LAT_RE.match(line)
+            m_lat = _match_any(LAT_PATTERNS, line)
             if not m_lat:
                 continue
 
-            ts = datetime.strptime(m_lat.group(1), TS_FMT)
+            ts = _parse_timestamp(m_lat.group(1))
             room = int(m_lat.group(2))
             metrics = ast.literal_eval(m_lat.group(3))
             if not isinstance(metrics, dict):

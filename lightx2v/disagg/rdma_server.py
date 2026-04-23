@@ -11,6 +11,8 @@ from pyverbs.mr import MR
 from pyverbs.pd import PD
 from pyverbs.qp import QP, QPAttr, QPCap, QPInitAttr
 
+from lightx2v.disagg.rdma_utils import resolve_gid_index
+
 
 class IBDevice:
     def __init__(self, name: str):
@@ -98,23 +100,7 @@ class RDMAServer:
         print(f"[Server] MR Registered. Addr: {mr_addr}, RKey: {self.mr.rkey}")
 
     def _resolve_gid_index(self):
-        env_gid = os.getenv("RDMA_GID_INDEX", "").strip()
-        if env_gid:
-            idx = int(env_gid)
-            self.ctx.query_gid(port_num=self.port_num, index=idx)
-            return idx
-
-        preferred = [2, 0, 1, 3, 4, 5, 6, 7]
-        for idx in preferred:
-            try:
-                gid = str(self.ctx.query_gid(port_num=self.port_num, index=idx))
-            except Exception:
-                continue
-            if gid and gid != "::":
-                return idx
-
-        self.ctx.query_gid(port_num=self.port_num, index=0)
-        return 0
+        return resolve_gid_index(self.ctx, self.port_num)
 
     def register_memory(self, addr: int, length: int):
         """Validate a requested sub-region against server MR and return registration metadata.

@@ -7,20 +7,20 @@
     "wait_time_s": 0.0,
     "config_variants": [
       {
-        "infer_steps": 1,
+        "infer_steps": 4,
         "sample_shift": 5.0
       }
     ]
   },
   {
     "name": "change",
-    "duration_s": 180,
+    "duration_s": 1000,
     "user_count": 1,
     "spawn_rate": 0.1,
     "wait_time_s": 0.0,
     "config_variants": [
       {
-        "infer_steps": 1,
+        "infer_steps": 4,
         "sample_shift": 5.0
       }
     ]

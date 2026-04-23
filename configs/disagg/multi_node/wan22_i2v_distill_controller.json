@@ -56,8 +56,10 @@
         "metadata_server": "P2PHANDSHAKE",
         "remote_workdir": "/root/zht/LightX2V",
         "remote_python_executable": "python",
-        "remote_activate_cmd": "source /root/miniconda3/etc/profile.d/conda.sh && conda activate lightx2v",
+        "remote_activate_cmd": "source /root/miniconda3/etc/profile.d/conda.sh && conda activate lightx2v && export LD_LIBRARY_PATH=/root/miniconda3/envs/lightx2v/lib:${LD_LIBRARY_PATH:-}",
         "remote_log_dir": "/root/zht/LightX2V/save_results",
+        "use_remote_proxy": true,
+        "remote_proxy_req_base_port": 28000,
         "ssh_user": "root",
         "ssh_options": [
             "-i",
@@ -112,9 +114,9 @@
             },
             {
                 "instance_type": "decoder",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 7,
-                "cuda_device": 6
+                "cuda_device": 7
             }
         ]
     }
