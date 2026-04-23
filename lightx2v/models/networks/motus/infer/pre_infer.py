@@ -1,7 +1,7 @@
 import torch
 
-from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
+from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 
 from .module_io import MotusPreInferModuleOutput
 

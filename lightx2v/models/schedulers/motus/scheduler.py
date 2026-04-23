@@ -74,7 +74,9 @@ class MotusScheduler(WanScheduler):
         if self.action_noise_pred is None:
             raise RuntimeError("MotusScheduler requires action_noise_pred before step_post().")
 
-        dt = self.sigmas[self.step_index + 1].to(device=self.action_latents.device, dtype=self.action_latents.dtype) - self.sigmas[self.step_index].to(device=self.action_latents.device, dtype=self.action_latents.dtype)
+        dt = self.sigmas[self.step_index + 1].to(device=self.action_latents.device, dtype=self.action_latents.dtype) - self.sigmas[self.step_index].to(
+            device=self.action_latents.device, dtype=self.action_latents.dtype
+        )
         self.action_latents = self.action_latents + self.action_noise_pred.to(self.action_latents.dtype) * dt
         self.video_latents[:, :, 0:1] = self.condition_frame_latent.to(device=self.video_latents.device, dtype=self.video_latents.dtype)
         self.latents = self.video_latents.squeeze(0)
