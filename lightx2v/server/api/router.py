@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from .files import router as files_router
+from .openai_images import router as openai_images_router
 from .service_routes import router as service_router
 from .tasks import common_router, image_router, video_router
 
@@ -19,6 +20,7 @@ def create_api_router() -> APIRouter:
     tasks_router.post("/", response_model_exclude_unset=True, deprecated=True)(create_video_task)
 
     api_router.include_router(tasks_router)
+    api_router.include_router(openai_images_router, prefix="/v1/images", tags=["openai-images"])
     api_router.include_router(files_router, prefix="/v1/files", tags=["files"])
     api_router.include_router(service_router, prefix="/v1/service", tags=["service"])
 
