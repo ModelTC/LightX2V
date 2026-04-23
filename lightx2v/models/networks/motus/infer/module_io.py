@@ -3,7 +3,7 @@ from typing import Any
 
 import torch
 
-from lightx2v.models.networks.wan.infer.module_io import WanPreInferModuleOutput
+from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
 
 
 @dataclass(kw_only=True)

@@ -1,7 +1,7 @@
 import torch
 
-from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
+from lightx2v.models.networks.wan.infer.module_io import GridOutput
 
 from .module_io import MotusPreInferModuleOutput
 
@@ -30,8 +30,16 @@ class MotusPreInfer(WanPreInfer):
         image_context = inputs["motus_image_context"]
         und_tokens = inputs["motus_und_tokens"]
 
+        video_latents = self.scheduler.video_latents
+        if video_latents.dim() != 5:
+            raise RuntimeError(f"Expected video latents with shape [B, C, T, H, W], got {tuple(video_latents.shape)}")
         batch_size = state.shape[0]
-        grid_sizes = self.model.model.grid_sizes[:batch_size]
+        _, _, latent_t, latent_h, latent_w = video_latents.shape
+        grid_sizes = torch.tensor(
+            [[latent_t, latent_h // self.model.video_backbone.patch_size[1], latent_w // self.model.video_backbone.patch_size[2]]],
+            dtype=torch.long,
+            device=state.device,
+        ).expand(batch_size, -1)
         grid_output = GridOutput(
             tensor=grid_sizes,
             tuple=tuple(int(v) for v in grid_sizes[0].tolist()),

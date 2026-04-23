@@ -2,7 +2,6 @@
     "wan_path": "/path/to/Wan2.2-TI2V-5B",
     "vlm_path": "/path/to/Qwen3-VL-2B-Instruct",
     "infer_steps": 10,
-    "num_inference_steps": 10,
     "text_len": 512,
     "target_video_length": 9,
     "target_height": 384,
