@@ -4,7 +4,7 @@
     "text_len": 512,
     "target_height": 720,
     "target_width": 1280,
-    "self_attn_1_type": "sage_attn2",
+    "self_attn_1_type": "sage_attn2_k_int8_v_fp8",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": 1.0,
@@ -20,7 +20,12 @@
         "num_frame_per_chunk": 3,
         "timesteps_index": [0, 179, 358, 679],
         "sink_size": 3,
-        "kv_offload": false
+        "kv_quant": {
+            "calibrate": false,
+            "smooth_k": true,
+            "calib_path": "calib_kv.pt"
+        },
+        "kv_offload": true
     },
     "rms_norm_type": "self_forcing"
 }

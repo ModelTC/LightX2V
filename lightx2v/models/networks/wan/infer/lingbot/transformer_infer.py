@@ -1,12 +1,12 @@
 import torch
 
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-class WanLingbotTransformerInfer(WanTransformerInfer):
+class WanLingbotTransformerInfer(WanOffloadTransformerInfer):
     def infer_block(self, block, x, pre_infer_out):
         if hasattr(block.compute_phases[0], "before_proj") and block.compute_phases[0].before_proj.weight is not None:
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x

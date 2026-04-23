@@ -9,7 +9,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torchaudio as ta
+
+# import torchaudio as ta
 import torchvision.transforms.functional as TF
 from PIL import Image, ImageCms, ImageOps
 from einops import rearrange
