@@ -30,7 +30,7 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.attention_type = config.get("attention_type", "flash_attn2")
         self.self_joint_attn_type = config.get("self_joint_attn_type", "flash_attn2")
-        self.cross_attn_type = config.get("cross_attn_type","flash_attn2")
+        self.cross_attn_type = config.get("cross_attn_type", "flash_attn2")
         self.joint_self_attn = RegistryAttention(self.self_joint_attn_type)
         self.cross_attn = RegistryAttention(self.cross_attn_type)
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)

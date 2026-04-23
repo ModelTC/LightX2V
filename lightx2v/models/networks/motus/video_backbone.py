@@ -6,8 +6,9 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
 
-from ._wan_backbone import WanModel
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+
+from ._wan_backbone import WanModel
 
 try:
     from safetensors.torch import load_file as safe_load_file
@@ -26,9 +27,10 @@ def _strip_known_prefixes_for_wan(sd: Dict[str, torch.Tensor]) -> Dict[str, torc
 
 
 class MotusVideoBackbone(nn.Module):
-    '''
+    """
     Adapts Motus checkpoint weights to Wan-style loading.
-    '''
+    """
+
     def __init__(self, model_config: Dict[str, Any], vae_path: Optional[str] = None, device: str = "cuda", precision: str = "bfloat16", load_vae: bool = True):
         super().__init__()
         self.device = torch.device(device)
