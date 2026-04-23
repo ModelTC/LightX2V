@@ -23,8 +23,8 @@ class LingbotFastScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.dtype = torch.bfloat16
-        self.num_frame_per_block = self.config["sf_config"]["num_frame_per_block"]
-        self.timesteps_index = self.config["sf_config"]["timesteps_index"]
+        self.num_frame_per_chunk = self.config["ar_config"]["num_frame_per_chunk"]
+        self.timesteps_index = self.config["ar_config"]["timesteps_index"]
         self.infer_steps = len(self.timesteps_index)
         self.context_noise = 0
 
@@ -89,12 +89,13 @@ class LingbotFastScheduler(WanScheduler):
     def step_pre(self, seg_index, step_index, is_rerun=False):
         self.step_index = step_index
         self.seg_index = seg_index
+        self.is_rerun = is_rerun
 
         if not GET_DTYPE() == GET_SENSITIVE_DTYPE():
             self.latents = self.latents.to(GET_DTYPE())
 
-        seg_start = self.seg_index * self.num_frame_per_block
-        seg_end = min((self.seg_index + 1) * self.num_frame_per_block, self.num_output_frames)
+        seg_start = self.seg_index * self.num_frame_per_chunk
+        seg_end = min((self.seg_index + 1) * self.num_frame_per_chunk, self.num_output_frames)
         self.latents_input = self.latents[:, seg_start:seg_end]
 
         if not is_rerun:
@@ -104,9 +105,9 @@ class LingbotFastScheduler(WanScheduler):
             # Align with: context_timestep = [timesteps[-1] * 0.0]
             t_val = self.context_noise
 
-        # Shape [1, num_frame_per_block] required by infer_non_blocks
+        # Shape [1, num_frame_per_chunk] required by infer_non_blocks
         # (unflatten uses t.shape to reshape embed for head modulation broadcast)
-        self.timestep_input = torch.full([1, self.num_frame_per_block], t_val, device=AI_DEVICE, dtype=torch.long)
+        self.timestep_input = torch.full([1, self.num_frame_per_chunk], t_val, device=AI_DEVICE, dtype=torch.long)
 
     def step_post(self):
         """Align with source denoising loop:
@@ -116,8 +117,8 @@ class LingbotFastScheduler(WanScheduler):
             next_timestep = timesteps[timestep_idx + 1]
             current_latent = scheduler.add_noise(x0, noise, next_timestep)
         """
-        seg_start = self.seg_index * self.num_frame_per_block
-        seg_end = min((self.seg_index + 1) * self.num_frame_per_block, self.num_output_frames)
+        seg_start = self.seg_index * self.num_frame_per_chunk
+        seg_end = min((self.seg_index + 1) * self.num_frame_per_chunk, self.num_output_frames)
 
         flow_pred = self.noise_pred[:, seg_start:seg_end]
         xt = self.latents_input
