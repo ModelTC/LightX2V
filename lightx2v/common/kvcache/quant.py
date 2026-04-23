@@ -217,7 +217,25 @@ class CalibRollingKVCachePool(RollingKVCachePool):
 class QuantRollingKVCachePool(RollingKVCachePool):
     _BLKK = 128
     _SCALES_PER_BLK = 4  # (BLKK // WARPK) * 4, WARPK=128
-    _PERM_16 = torch.tensor([0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15], dtype=torch.long, device="cuda")
+    _PERM_16_VAL = [0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15]
+
+    def __init__(
+        self,
+        num_layers: int,
+        cache_size: int,
+        num_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        *,
+        smooth_k: bool = True,
+        calib_path: str,
+    ) -> None:
+        self._smooth_k_sage = smooth_k
+        self._calib_path = calib_path
+        self.current_step: int = 0
+        self._PERM_16 = torch.tensor(self._PERM_16_VAL, dtype=torch.long, device=device)
+        super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device)
 
     def __init__(
         self,
