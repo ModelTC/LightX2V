@@ -238,12 +238,18 @@ class Flux2TransformerWeights(WeightModule):
             block.to_cuda(non_blocking=non_blocking)
         for block in self.single_blocks:
             block.to_cuda(non_blocking=non_blocking)
+        self.double_stream_modulation_img_linear.to_cuda(non_blocking=non_blocking)
+        self.double_stream_modulation_txt_linear.to_cuda(non_blocking=non_blocking)
+        self.single_stream_modulation_linear.to_cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=True):
         for block in self.double_blocks:
             block.to_cpu(non_blocking=non_blocking)
         for block in self.single_blocks:
             block.to_cpu(non_blocking=non_blocking)
+        self.double_stream_modulation_img_linear.to_cpu(non_blocking=non_blocking)
+        self.double_stream_modulation_txt_linear.to_cpu(non_blocking=non_blocking)
+        self.single_stream_modulation_linear.to_cpu(non_blocking=non_blocking)
 
 
 # Backward-compatible aliases
