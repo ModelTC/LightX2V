@@ -271,7 +271,7 @@ class SageAttn2KInt8VFP8Weight(AttnWeightTemplate):
         k_int8, k_scale = k
         v_fp8, v_scale = v
         q, k_int8, v_fp8 = q.contiguous(), k_int8.contiguous(), v_fp8.contiguous()
-        assert capability == (9, 0)
+        assert torch.cuda.get_device_capability(q.device) == (9, 0)
         assert q.dtype in [torch.float16, torch.bfloat16]
         assert k_int8.dtype == torch.int8
         assert k_scale is not None
