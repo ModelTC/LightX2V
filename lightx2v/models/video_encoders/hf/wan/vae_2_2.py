@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import logging
+import os
 
 import torch
 import torch.nn as nn
@@ -17,6 +18,140 @@ __all__ = [
 ]
 
 CACHE_T = 2
+
+
+def _extract_checkpoint_state_dict(raw):
+    state = raw
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    if isinstance(state, dict) and "gen_model" in state:
+        state = state["gen_model"]
+    if isinstance(state, dict) and "generator" in state:
+        state = state["generator"]
+    if not isinstance(state, dict):
+        raise ValueError("Unsupported checkpoint format: expected a dict-like state_dict.")
+    return state
+
+
+def _map_lightvae_key_to_wanvae(key):
+    def _map_resnet_tail(tail):
+        if tail.startswith("norm1."):
+            return "residual.0." + tail[len("norm1.") :]
+        if tail.startswith("conv1."):
+            return "residual.2." + tail[len("conv1.") :]
+        if tail.startswith("norm2."):
+            return "residual.3." + tail[len("norm2.") :]
+        if tail.startswith("conv2."):
+            return "residual.6." + tail[len("conv2.") :]
+        if tail.startswith("conv_shortcut."):
+            return "shortcut." + tail[len("conv_shortcut.") :]
+        return tail
+
+    if key.startswith("dynamic_feature_projection_heads."):
+        return None
+
+    if key.startswith("quant_conv."):
+        return key.replace("quant_conv.", "conv1.", 1)
+    if key.startswith("post_quant_conv."):
+        return key.replace("post_quant_conv.", "conv2.", 1)
+
+    if key.startswith("encoder.conv_in."):
+        return key.replace("encoder.conv_in.", "encoder.conv1.", 1)
+    if key.startswith("encoder.mid_block.resnets.0."):
+        tail = key[len("encoder.mid_block.resnets.0.") :]
+        return "encoder.middle.0." + _map_resnet_tail(tail)
+    if key.startswith("encoder.mid_block.attentions.0."):
+        return key.replace("encoder.mid_block.attentions.0.", "encoder.middle.1.", 1)
+    if key.startswith("encoder.mid_block.resnets.1."):
+        tail = key[len("encoder.mid_block.resnets.1.") :]
+        return "encoder.middle.2." + _map_resnet_tail(tail)
+    if key.startswith("encoder.norm_out."):
+        return key.replace("encoder.norm_out.", "encoder.head.0.", 1)
+    if key.startswith("encoder.conv_out."):
+        return key.replace("encoder.conv_out.", "encoder.head.2.", 1)
+
+    if key.startswith("encoder.down_blocks."):
+        parts = key.split(".")
+        if len(parts) >= 6 and parts[3] == "resnets":
+            tail = ".".join(parts[5:])
+            return f"encoder.downsamples.{parts[2]}.downsamples.{parts[4]}." + _map_resnet_tail(tail)
+        if len(parts) >= 7 and parts[3] == "downsampler" and parts[4] == "resample":
+            return f"encoder.downsamples.{parts[2]}.downsamples.2.resample.{parts[5]}." + ".".join(parts[6:])
+        if len(parts) >= 6 and parts[3] == "downsampler" and parts[4] == "time_conv":
+            return f"encoder.downsamples.{parts[2]}.downsamples.2.time_conv." + ".".join(parts[5:])
+
+    if key.startswith("decoder.conv_in."):
+        return key.replace("decoder.conv_in.", "decoder.conv1.", 1)
+    if key.startswith("decoder.mid_block.resnets.0."):
+        tail = key[len("decoder.mid_block.resnets.0.") :]
+        return "decoder.middle.0." + _map_resnet_tail(tail)
+    if key.startswith("decoder.mid_block.attentions.0."):
+        return key.replace("decoder.mid_block.attentions.0.", "decoder.middle.1.", 1)
+    if key.startswith("decoder.mid_block.resnets.1."):
+        tail = key[len("decoder.mid_block.resnets.1.") :]
+        return "decoder.middle.2." + _map_resnet_tail(tail)
+    if key.startswith("decoder.norm_out."):
+        return key.replace("decoder.norm_out.", "decoder.head.0.", 1)
+    if key.startswith("decoder.conv_out."):
+        return key.replace("decoder.conv_out.", "decoder.head.2.", 1)
+
+    if key.startswith("decoder.up_blocks."):
+        parts = key.split(".")
+        if len(parts) >= 6 and parts[3] == "resnets":
+            tail = ".".join(parts[5:])
+            return f"decoder.upsamples.{parts[2]}.upsamples.{parts[4]}." + _map_resnet_tail(tail)
+        if len(parts) >= 7 and parts[3] == "upsampler" and parts[4] == "resample":
+            return f"decoder.upsamples.{parts[2]}.upsamples.3.resample.{parts[5]}." + ".".join(parts[6:])
+        if len(parts) >= 6 and parts[3] == "upsampler" and parts[4] == "time_conv":
+            return f"decoder.upsamples.{parts[2]}.upsamples.3.time_conv." + ".".join(parts[5:])
+
+    return key
+
+
+def _normalize_vae_state_dict(raw_state):
+    state = _extract_checkpoint_state_dict(raw_state)
+    norm = {}
+    for key, value in state.items():
+        normalized_key = _map_lightvae_key_to_wanvae(key)
+        if normalized_key is None:
+            continue
+        norm[normalized_key] = value
+    return norm
+
+
+def infer_lightvae_pruning_rate_from_ckpt(vae_pth, full_decoder_conv1_out=1024):
+    if vae_pth is None or not os.path.exists(vae_pth):
+        return None
+    try:
+        raw_state = load_weights(vae_pth)
+        state = _extract_checkpoint_state_dict(raw_state)
+    except Exception as exc:
+        logging.warning(f"Failed to load checkpoint for pruning-rate inference: {exc}")
+        return None
+
+    weight = None
+    if isinstance(state, dict):
+        if "decoder.conv_in.weight" in state:
+            weight = state["decoder.conv_in.weight"]
+        elif "decoder.conv1.weight" in state:
+            weight = state["decoder.conv1.weight"]
+
+    if weight is None:
+        try:
+            norm_state = _normalize_vae_state_dict(state)
+            weight = norm_state.get("decoder.conv1.weight", None)
+        except Exception:
+            weight = None
+
+    if weight is None or not hasattr(weight, "shape") or len(weight.shape) < 1:
+        return None
+
+    student_out = int(weight.shape[0])
+    if full_decoder_conv1_out <= 0:
+        return None
+    pruning_rate = 1.0 - (float(student_out) / float(full_decoder_conv1_out))
+    pruning_rate = max(0.0, min(0.99, pruning_rate))
+    return round(pruning_rate, 6)
 
 
 class CausalConv3d(nn.Conv3d):
@@ -71,7 +206,11 @@ class RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        return F.normalize(x, dim=(1 if self.channel_first else -1)) * self.scale * self.gamma + self.bias
+        dims = 1 if self.channel_first else -1
+        # Match the official Wan2.2 VAE RMS normalization exactly; the generated
+        # MG3 frames are sensitive to tiny decoder math differences.
+        rms = (x.pow(2).mean(dims, keepdim=True) + 1e-6).sqrt()
+        return (x / rms) * self.gamma + self.bias
 
 
 class Upsample(nn.Upsample):
@@ -79,7 +218,7 @@ class Upsample(nn.Upsample):
         """
         Fix bfloat16 support for nearest neighbor interpolation.
         """
-        return super().forward(x.float()).type_as(x)
+        return super().forward(x).type_as(x)
 
 
 class Resample(nn.Module):
@@ -722,6 +861,7 @@ class WanVAE_(nn.Module):
         attn_scales=[],
         temperal_downsample=[True, True, False],
         dropout=0.0,
+        pruning_rate=0.0,
     ):
         super().__init__()
         self.dim = dim
@@ -731,6 +871,9 @@ class WanVAE_(nn.Module):
         self.attn_scales = attn_scales
         self.temperal_downsample = temperal_downsample
         self.temperal_upsample = temperal_downsample[::-1]
+
+        dim = max(1, int(round(dim * (1.0 - pruning_rate))))
+        dec_dim = max(1, int(round(dec_dim * (1.0 - pruning_rate))))
 
         # modules
         self.encoder = Encoder3d(
@@ -849,7 +992,18 @@ class WanVAE_(nn.Module):
         return y.transpose(1, 2).to(x)
 
 
-def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offload=False, dtype=torch.float32, load_from_rank0=False, dummy_model=False, **kwargs):
+def _video_vae(
+    pretrained_path=None,
+    z_dim=16,
+    dim=160,
+    device="cpu",
+    cpu_offload=False,
+    dtype=torch.float32,
+    load_from_rank0=False,
+    normalize_state_dict=False,
+    strict=True,
+    **kwargs,
+):
     # params
     cfg = dict(
         dim=dim,
@@ -870,13 +1024,18 @@ def _video_vae(pretrained_path=None, z_dim=16, dim=160, device="cpu", cpu_offloa
         with torch.device("meta"):
             model = WanVAE_(**cfg)
 
-        # load checkpoint
-        logging.info(f"loading {pretrained_path}")
-        weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
-        for k in weights_dict.keys():
-            if weights_dict[k].dtype != dtype:
-                weights_dict[k] = weights_dict[k].to(dtype)
+    # load checkpoint
+    logging.info(f"loading {pretrained_path}")
+    raw_state = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
+    weights_dict = _normalize_vae_state_dict(raw_state) if normalize_state_dict else raw_state
+    for key in list(weights_dict.keys()):
+        if hasattr(weights_dict[key], "dtype") and weights_dict[key].dtype != dtype:
+            weights_dict[key] = weights_dict[key].to(dtype)
+    if strict:
         model.load_state_dict(weights_dict, assign=True)
+    else:
+        missing, unexpected = model.load_state_dict(weights_dict, strict=False, assign=True)
+        logging.info(f"VAE checkpoint loaded with strict=False (missing={len(missing)}, unexpected={len(unexpected)})")
 
     # Convert Conv3d weights to channels_last_3d for cuDNN optimization
     if GET_USE_CHANNELS_LAST_3D():
@@ -899,13 +1058,17 @@ class Wan2_2_VAE:
         cpu_offload=False,
         offload_cache=False,
         load_from_rank0=False,
-        dummy_model=False,
+        vae_type="wan2.2",
+        lightvae_pruning_rate=None,
+        lightvae_encoder_vae_pth=None,
         **kwargs,
     ):
         self.dtype = dtype
         self.device = device
         self.cpu_offload = cpu_offload
         self.offload_cache = offload_cache
+        self.vae_type = vae_type
+        self.encoder_model = None
 
         self.mean = torch.tensor(
             [
@@ -959,7 +1122,7 @@ class Wan2_2_VAE:
                 -0.0667,
             ],
             dtype=dtype,
-            device=AI_DEVICE,
+            device=device,
         )
         self.std = torch.tensor(
             [
@@ -1013,30 +1176,86 @@ class Wan2_2_VAE:
                 0.7744,
             ],
             dtype=dtype,
-            device=AI_DEVICE,
+            device=device,
         )
         self.inv_std = 1.0 / self.std
         self.scale = [self.mean, self.inv_std]
-        # init model
-        self.model = (
-            _video_vae(
-                pretrained_path=vae_path,
-                z_dim=z_dim,
-                dim=c_dim,
-                dim_mult=dim_mult,
-                temperal_downsample=temperal_downsample,
-                cpu_offload=cpu_offload,
-                dtype=dtype,
-                load_from_rank0=load_from_rank0,
-                dummy_model=dummy_model,
+        if self.vae_type == "wan2.2":
+            self.model = (
+                _video_vae(
+                    pretrained_path=vae_path,
+                    z_dim=z_dim,
+                    dim=c_dim,
+                    dim_mult=dim_mult,
+                    temperal_downsample=temperal_downsample,
+                    cpu_offload=cpu_offload,
+                    dtype=dtype,
+                    load_from_rank0=load_from_rank0,
+                    normalize_state_dict=False,
+                    strict=True,
+                    pruning_rate=0.0,
+                )
+                .eval()
+                .requires_grad_(False)
+                .to(device)
+                .to(dtype)
             )
-            .eval()
-            .requires_grad_(False)
-            .to(device)
-            .to(dtype)
-        )
+        elif self.vae_type == "mg_lightvae":
+            resolved_pruning_rate = lightvae_pruning_rate
+            if resolved_pruning_rate is None:
+                resolved_pruning_rate = infer_lightvae_pruning_rate_from_ckpt(vae_path)
+                if resolved_pruning_rate is None:
+                    resolved_pruning_rate = 0.75
+                    logging.warning("Unable to infer LightVAE pruning rate from checkpoint; fallback to 0.75.")
+
+            teacher_vae_path = lightvae_encoder_vae_pth or vae_path
+            logging.info(f"Loading mg_lightvae decoder from {vae_path} (pruning_rate={resolved_pruning_rate}), while keeping teacher encoder from {teacher_vae_path}.")
+            self.encoder_model = (
+                _video_vae(
+                    pretrained_path=teacher_vae_path,
+                    z_dim=z_dim,
+                    dim=c_dim,
+                    dim_mult=dim_mult,
+                    temperal_downsample=temperal_downsample,
+                    cpu_offload=cpu_offload,
+                    dtype=dtype,
+                    load_from_rank0=load_from_rank0,
+                    normalize_state_dict=True,
+                    strict=False,
+                    pruning_rate=0.0,
+                )
+                .eval()
+                .requires_grad_(False)
+                .to(device)
+                .to(dtype)
+            )
+            self.model = (
+                _video_vae(
+                    pretrained_path=vae_path,
+                    z_dim=z_dim,
+                    dim=c_dim,
+                    dim_mult=dim_mult,
+                    temperal_downsample=temperal_downsample,
+                    cpu_offload=cpu_offload,
+                    dtype=dtype,
+                    load_from_rank0=load_from_rank0,
+                    normalize_state_dict=True,
+                    strict=False,
+                    pruning_rate=resolved_pruning_rate,
+                )
+                .eval()
+                .requires_grad_(False)
+                .to(device)
+                .to(dtype)
+            )
+        else:
+            raise ValueError(f"Unsupported vae_type: {self.vae_type}")
 
     def to_cpu(self):
+        if self.encoder_model is not None:
+            self.encoder_model.encoder = self.encoder_model.encoder.to("cpu")
+            self.encoder_model.decoder = self.encoder_model.decoder.to("cpu")
+            self.encoder_model = self.encoder_model.to("cpu")
         self.model.encoder = self.model.encoder.to("cpu")
         self.model.decoder = self.model.decoder.to("cpu")
         self.model = self.model.to("cpu")
@@ -1045,6 +1264,10 @@ class Wan2_2_VAE:
         self.scale = [self.mean, self.inv_std]
 
     def to_cuda(self):
+        if self.encoder_model is not None:
+            self.encoder_model.encoder = self.encoder_model.encoder.to(AI_DEVICE)
+            self.encoder_model.decoder = self.encoder_model.decoder.to(AI_DEVICE)
+            self.encoder_model = self.encoder_model.to(AI_DEVICE)
         self.model.encoder = self.model.encoder.to(AI_DEVICE)
         self.model.decoder = self.model.decoder.to(AI_DEVICE)
         self.model = self.model.to(AI_DEVICE)
@@ -1055,7 +1278,8 @@ class Wan2_2_VAE:
     def encode(self, video):
         if self.cpu_offload:
             self.to_cuda()
-        out = self.model.encode(video, self.scale).float().squeeze(0)
+        encode_model = self.encoder_model if self.vae_type == "mg_lightvae" and self.encoder_model is not None else self.model
+        out = encode_model.encode(video, self.scale).float().squeeze(0)
         if self.cpu_offload:
             self.to_cpu()
         return out
@@ -1070,7 +1294,8 @@ class Wan2_2_VAE:
         return images
 
     def encode_video(self, vid):
-        return self.model.encode_video(vid)
+        encode_model = self.encoder_model if self.vae_type == "mg_lightvae" and self.encoder_model is not None else self.model
+        return encode_model.encode_video(vid)
 
     def decode_video(self, vid_enc):
         return self.model.decode_video(vid_enc)

@@ -4,7 +4,6 @@ from loguru import logger
 
 from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq

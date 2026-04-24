@@ -45,6 +45,7 @@ class ImageGenerationService(BaseGenerationService):
             task_data["seed"] = message.seed
             prefer_memory_result = bool(getattr(message, "prefer_memory_result", False))
             task_data.pop("prefer_memory_result", None)
+            task_data.pop("presigned_url", None)
             task_data["return_result_tensor"] = prefer_memory_result
 
             result = await self.inference_service.submit_task_async(task_data)

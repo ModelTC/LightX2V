@@ -1,6 +1,7 @@
 import torch
 from loguru import logger
 
+from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_fast_model import WanLingbotFastModel
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.lingbot_fast.scheduler import LingbotFastScheduler
@@ -48,43 +49,19 @@ class LingbotFastRunner(LingbotRunner):
             model = build_wan_model_with_lora(WanLingbotFastModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
 
-    # ---- SF scheduling ----
-
     def init_scheduler(self):
         self.scheduler = LingbotFastScheduler(self.config)
 
-    def set_target_shape(self):
-        num_frame_per_block = self.config["sf_config"].get("num_frame_per_block", 3)
-        latent_shape = self.input_info.latent_shape
-        lat_f = latent_shape[1]
-        lat_h, lat_w = latent_shape[2], latent_shape[3]
-        num_output_frames = lat_f - (lat_f % num_frame_per_block)
-        self.input_info.latent_shape = [latent_shape[0], num_output_frames, lat_h, lat_w]
-        self.config.target_shape = [self.config.get("num_channels_latents", 16), num_output_frames, lat_h, lat_w]
-
-        self.scheduler.num_output_frames = num_output_frames
-        self.scheduler.num_blocks = num_output_frames // num_frame_per_block
-
-        p = self.config.get("patch_size", [1, 2, 2])
-        frame_seq_length = (lat_h // p[1]) * (lat_w // p[2])
-        logger.info(
-            "[lingbot_fast] lat_f={}, num_output_frames={}, frame_seq_length={} (lat_h={}, lat_w={}, patch={})",
-            lat_f,
-            num_output_frames,
-            frame_seq_length,
-            lat_h,
-            lat_w,
-            p,
-        )
-
-        if hasattr(self, "model") and hasattr(self.model, "transformer_infer"):
-            self.model.transformer_infer.reinit_caches(
-                frame_seq_length,
-                num_output_frames,
-            )
+    def init_kv_cache_manager(self):
+        self.model.kv_cache_manager = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
+        self.model.kv_cache_manager._create_kv_caches(self.input_info.latent_shape)
+        self.model.transformer_infer.kv_cache_manager = self.model.kv_cache_manager
+        self.input_info.latent_shape = [self.input_info.latent_shape[0], self.model.kv_cache_manager.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
+        self.scheduler.num_output_frames = self.model.kv_cache_manager.num_output_frames
+        self.scheduler.num_chunks = self.model.kv_cache_manager.num_output_frames // self.config.get("ar_config", {}).get("num_frame_per_chunk", 3)
 
     def get_video_segment_num(self):
-        self.video_segment_num = self.scheduler.num_blocks
+        self.video_segment_num = self.scheduler.num_chunks
 
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
@@ -92,6 +69,7 @@ class LingbotFastRunner(LingbotRunner):
             if self.video_segment_num == 1:
                 self.check_stop()
             logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+            self.model.kv_cache_manager.current_step = step_index
 
             with ProfilingContext4DebugL1("step_pre"):
                 self.model.scheduler.step_pre(seg_index=segment_idx, step_index=step_index, is_rerun=False)
@@ -109,6 +87,14 @@ class LingbotFastRunner(LingbotRunner):
 
         return self.model.scheduler.stream_output
 
+    def init_run(self):
+        self.init_kv_cache_manager()
+        super().init_run()
+
+    def end_run(self):
+        self.model.kv_cache_manager.maybe_save_calibration()
+        super().end_run()
+
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
         """Collect all segment latents, then decode at once with normal VAE.
@@ -117,7 +103,6 @@ class LingbotFastRunner(LingbotRunner):
             pred_latent_chunks = torch.cat(pred_latent_chunks, dim=1)
             videos = self.vae.decode([pred_latent_chunks])
         """
-        self.set_target_shape()
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile(self.input_info)
@@ -153,8 +138,6 @@ class LingbotFastRunner(LingbotRunner):
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
         return gen_video_final
-
-    # ---- Live streaming mode (per-segment decode, kept for future use) ----
 
     def get_rank_and_world_size(self):
         rank = 0
@@ -206,7 +189,6 @@ class LingbotFastRunner(LingbotRunner):
                 self.video_recorder.start(self.width, self.height)
             if world_size > 1 and dist is not None:
                 dist.barrier()
-            self.set_target_shape()
             self.init_run()
             if self.config.get("compile", False):
                 self.model.select_graph_for_compile(self.input_info)

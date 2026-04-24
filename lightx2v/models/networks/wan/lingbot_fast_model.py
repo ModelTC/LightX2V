@@ -7,11 +7,8 @@ from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 
 
 class WanLingbotFastModel(WanLingbotModel):
-    """Lingbot fast (autoregressive) model.
-
-    Inherits WanLingbotModel for lingbot weights and seq-parallel camera handling.
-    Adds SF checkpoint loading and SF inference loop.
-    """
+    def __init__(self, model_path, config, device, model_type="wan2.1", lora_path=None, lora_strength=1.0):
+        super().__init__(model_path, config, device, model_type, lora_path, lora_strength)
 
     def _init_infer_class(self):
         self.pre_infer_class = WanLingbotFastPreInfer
@@ -27,8 +24,8 @@ class WanLingbotFastModel(WanLingbotModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_block
-        current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_block
+        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
+        current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk
         noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
         self.scheduler.noise_pred[:, current_start_frame:current_end_frame] = noise_pred

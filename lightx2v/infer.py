@@ -19,6 +19,7 @@ from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # n
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
@@ -61,6 +62,7 @@ def main():
             "wan2.2_moe",
             "lingbot_world",
             "wan2.2",
+            "wan2.2_matrix_game3",
             "wan2.2_moe_audio",
             "wan2.2_audio",
             "wan2.2_moe_distill",
@@ -86,7 +88,7 @@ def main():
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "sr", "recon"], default="t2v")
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "ltx2_s2v", "sr", "recon"], default="t2v")
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
@@ -103,7 +105,12 @@ def main():
         help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
-    parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
+    parser.add_argument(
+        "--audio_path",
+        type=str,
+        default="",
+        help="Input audio path: Wan s2v / rs2v, or required for LTX-2 task ltx2_s2v.",
+    )
     parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
         "--image_frame_idx", type=str, default="", help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
@@ -190,6 +197,12 @@ def main():
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument("--video_path", type=str, default=None, help="input video path(for sr/v2v task)")
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
+    parser.add_argument(
+        "--num_iterations",
+        type=int,
+        default=None,
+        help="Override the number of Matrix-Game-3 generation segments. Final video length follows 57 + 40 * (num_iterations - 1).",
+    )
 
     args = parser.parse_args()
     # validate_task_arguments(args)
