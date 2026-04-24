@@ -37,7 +37,7 @@ class WanScheduler(BaseScheduler):
         self.caching_records = [True] * self.infer_steps
         self.caching_records_2 = [True] * self.infer_steps
         self.step_index = 0
-        
+
     def _uses_conditioned_latent_prefix(self):
         """Whether this Wan variant keeps a fixed latent prefix during diffusion.
 
