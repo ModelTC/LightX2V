@@ -4,15 +4,15 @@ import socket
 import threading
 
 from lightx2v.disagg.rdma_base import (
-    AccessFlag,
-    AHAttr,
     CQ,
     GID,
-    GlobalRoute,
-    IBDevice,
     MR,
     PD,
     QP,
+    AHAttr,
+    AccessFlag,
+    GlobalRoute,
+    IBDevice,
     QPAttr,
     QPCap,
     QPInitAttr,

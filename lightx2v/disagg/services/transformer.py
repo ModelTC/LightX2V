@@ -6,12 +6,11 @@ import time
 from collections import deque
 from multiprocessing import resource_tracker, shared_memory
 from typing import Any, List, Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 import torch
-import zmq
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.monitor import Reporter

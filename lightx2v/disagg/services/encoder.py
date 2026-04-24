@@ -10,7 +10,6 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 import torch
-import zmq
 
 from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.monitor import Reporter

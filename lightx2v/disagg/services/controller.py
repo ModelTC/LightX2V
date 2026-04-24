@@ -1,15 +1,15 @@
 import ipaddress
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import shlex
-import signal
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import time
 from collections.abc import Mapping
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
@@ -501,11 +501,7 @@ class ControllerService(BaseService):
             return f"env {env_prefix} {base_cmd}"
 
         sidecar_cmd = _with_env(
-            (
-                f"{shlex.quote(python_executable)} "
-                "-m lightx2v.disagg.services.data_mgr_sidecar "
-                f"--push-addr {shlex.quote(push_addr)} --req-addr {shlex.quote(req_addr)}"
-            ),
+            (f"{shlex.quote(python_executable)} -m lightx2v.disagg.services.data_mgr_sidecar --push-addr {shlex.quote(push_addr)} --req-addr {shlex.quote(req_addr)}"),
             sidecar_env_vars,
         )
         cmd_with_python = [python_executable, *cmd[1:]]
@@ -547,9 +543,7 @@ class ControllerService(BaseService):
                     service_pid = None
 
         if sidecar_pid is None or service_pid is None:
-            raise RuntimeError(
-                f"failed to parse remote pids for {instance_type} rank={engine_rank} host={host}: stdout={completed.stdout!r} stderr={completed.stderr!r}"
-            )
+            raise RuntimeError(f"failed to parse remote pids for {instance_type} rank={engine_rank} host={host}: stdout={completed.stdout!r} stderr={completed.stderr!r}")
 
         sidecar_meta = {
             "mode": "remote",

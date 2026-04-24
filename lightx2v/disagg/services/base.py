@@ -1,8 +1,7 @@
-from abc import ABC
 import sys
+from abc import ABC
 
 from loguru import logger as loguru_logger
-
 
 loguru_logger.remove()
 loguru_logger.add(

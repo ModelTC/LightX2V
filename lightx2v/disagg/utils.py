@@ -374,6 +374,7 @@ def load_wan_transformer(config: Dict[str, Any]):
     elif config.get("model_cls") == "wan2.2_moe":
         print("Loading MultiModelStruct module start", flush=True)
         from lightx2v.models.runners.wan.wan_runner import MultiModelStruct
+
         print("Loading MultiModelStruct module done", flush=True)
 
         high_noise_model_path = os.path.join(config["model_path"], "high_noise_model")

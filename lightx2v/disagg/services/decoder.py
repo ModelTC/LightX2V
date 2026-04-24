@@ -143,7 +143,7 @@ class DecoderService(BaseService):
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
 
-        if not str(os.getenv("IS_CENTRALIZED", "0")).strip().lower() in {"1", "true", "yes", "on"}:
+        if str(os.getenv("IS_CENTRALIZED", "0")).strip().lower() not in {"1", "true", "yes", "on"}:
             try:
                 self._ensure_phase2_request_buffer()
             except Exception:
