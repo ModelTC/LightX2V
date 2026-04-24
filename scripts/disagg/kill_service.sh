@@ -6,6 +6,30 @@ SCRIPT_NAMES=("run_wan22_i2v_distill.sh" "run_dynamic.sh")
 
 list_port=(5566 12788 17788 27788)
 
+collect_proxy_ports_from_config() {
+    local config_path="$1"
+
+    if [[ -z "$config_path" || ! -f "$config_path" ]]; then
+        return 0
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local base_port
+    base_port=$(jq -r '.disagg_config.remote_proxy_req_base_port // empty' "$config_path" 2>/dev/null || true)
+    if [[ -z "$base_port" || ! "$base_port" =~ ^[0-9]+$ ]]; then
+        return 0
+    fi
+
+    jq -r '.disagg_config.static_instance_slots[]?.engine_rank // empty' "$config_path" 2>/dev/null | while read -r engine_rank; do
+        [[ -z "$engine_rank" ]] && continue
+        if [[ "$engine_rank" =~ ^[0-9]+$ ]]; then
+            echo $((base_port + engine_rank))
+        fi
+    done
+}
+
 n=30
 list_n=($(seq 0 $((n-1))))
 
@@ -21,6 +45,23 @@ for a in "${list_port[@]}"; do
         PORTS+=($((a + b)))
     done
 done
+
+proxy_config_candidates=(
+    "${DISAGG_CONTROLLER_CFG:-}"
+    "/root/zht/LightX2V/configs/disagg/multi_node/wan22_i2v_distill_controller.json"
+    "/root/zht/LightX2V/configs/disagg/single_node/wan22_i2v_distill_controller.json"
+)
+for config_path in "${proxy_config_candidates[@]}"; do
+    while read -r proxy_port; do
+        [[ -z "$proxy_port" ]] && continue
+        PORTS+=($proxy_port)
+    done < <(collect_proxy_ports_from_config "$config_path")
+done
+
+# Fallback for environments without jq or without a readable config file.
+PORTS+=(28000)
+
+mapfile -t PORTS < <(printf '%s\n' "${PORTS[@]}" | awk 'NF && !seen[$0]++ { print $0 }' | sort -n)
 
 kill_pid_gracefully() {
     local pid="$1"

@@ -8,13 +8,7 @@ import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 
-from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
-from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
-from lightx2v.models.networks.wan.model import WanModel
-from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
-from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
-from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.set_config import set_config as set_config_base
 from lightx2v.utils.utils import find_torch_model_path
@@ -170,6 +164,8 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 
 
 def load_wan_text_encoder(config: Dict[str, Any]):
+    from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
+
     # offload config
     t5_offload = config.get("t5_cpu_offload", config.get("cpu_offload"))
     if t5_offload:
@@ -212,6 +208,8 @@ def load_wan_text_encoder(config: Dict[str, Any]):
 
 
 def load_wan_image_encoder(config: Dict[str, Any]):
+    from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
+
     image_encoder = None
     if config["task"] in ["i2v", "flf2v", "animate", "s2v"] and config.get("use_image_encoder", True):
         # offload config
@@ -259,6 +257,9 @@ def get_vae_parallel(config: Dict[str, Any]):
 
 
 def load_wan_vae_encoder(config: Dict[str, Any]):
+    from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
+    from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+
     vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
     if config.get("model_cls", "") == "wan2.2":
         vae_cls = Wan2_2_VAE
@@ -289,6 +290,10 @@ def load_wan_vae_encoder(config: Dict[str, Any]):
 
 
 def load_wan_vae_decoder(config: Dict[str, Any]):
+    from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
+    from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+    from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
+
     vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
     tiny_vae_name = "taew2_1.pth"
 
@@ -327,6 +332,31 @@ def load_wan_vae_decoder(config: Dict[str, Any]):
 
 
 def load_wan_transformer(config: Dict[str, Any]):
+    print(
+        "Loading WanModel module: model_cls=%s model_path=%s device=%s dit_quantized=%s lazy_load=%s"
+        % (
+            config.get("model_cls"),
+            config.get("model_path"),
+            AI_DEVICE if not config.get("cpu_offload") else "cpu",
+            config.get("dit_quantized", False),
+            config.get("lazy_load", False),
+        ),
+        flush=True,
+    )
+    from lightx2v.models.networks.wan.model import WanModel
+
+    print(
+        "Constructing WanModel: model_cls=%s model_path=%s device=%s dit_quantized=%s lazy_load=%s"
+        % (
+            config.get("model_cls"),
+            config.get("model_path"),
+            AI_DEVICE if not config.get("cpu_offload") else "cpu",
+            config.get("dit_quantized", False),
+            config.get("lazy_load", False),
+        ),
+        flush=True,
+    )
+
     if config["cpu_offload"]:
         init_device = torch.device("cpu")
     else:
@@ -339,9 +369,12 @@ def load_wan_transformer(config: Dict[str, Any]):
             model = WanModel(**wan_model_kwargs)
         else:
             model = build_wan_model_with_lora(WanModel, config, wan_model_kwargs, lora_configs, model_type="wan2.1")
+        logger.info("WanModel construction finished")
         return model
     elif config.get("model_cls") == "wan2.2_moe":
+        print("Loading MultiModelStruct module start", flush=True)
         from lightx2v.models.runners.wan.wan_runner import MultiModelStruct
+        print("Loading MultiModelStruct module done", flush=True)
 
         high_noise_model_path = os.path.join(config["model_path"], "high_noise_model")
         if config.get("dit_quantized", False) and config.get("high_noise_quantized_ckpt", None):
@@ -376,6 +409,7 @@ def load_wan_transformer(config: Dict[str, Any]):
                 high_noise_model = build_wan_model_with_lora(WanModel, config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                 low_noise_model = build_wan_model_with_lora(WanModel, config, low_model_kwargs, lora_configs, model_type="low_noise_model")
 
+            logger.info("WanModel construction finished for wan2.2_moe")
             return MultiModelStruct([high_noise_model, low_noise_model], config, config.get("boundary", 0.875))
         else:
             model_struct = MultiModelStruct([None, None], config, config.get("boundary", 0.875))

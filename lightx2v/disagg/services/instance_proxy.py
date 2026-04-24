@@ -143,7 +143,7 @@ class InstanceProxyServer:
         ]
         service_cmd = [python_executable, *[str(part) for part in service_argv]]
 
-        with open(sidecar_log_path, "a", encoding="utf-8") as sidecar_log:
+        with open(sidecar_log_path, "w", encoding="utf-8") as sidecar_log:
             sidecar_proc = subprocess.Popen(
                 sidecar_cmd,
                 cwd=workdir,
@@ -157,7 +157,7 @@ class InstanceProxyServer:
         if sidecar_proc.poll() is not None:
             raise RuntimeError(f"failed to start sidecar process, exited with code={sidecar_proc.returncode}")
 
-        with open(service_log_path, "a", encoding="utf-8") as service_log:
+        with open(service_log_path, "w", encoding="utf-8") as service_log:
             service_proc = subprocess.Popen(
                 service_cmd,
                 cwd=workdir,

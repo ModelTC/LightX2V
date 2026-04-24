@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, DataArgs, DataManager, DataReceiver, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
@@ -31,6 +31,8 @@ class DecoderService(BaseService):
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", 2))
         self._phase2_rdma_client: Optional[RDMAClient] = None
         self._phase2_rdma_buffer: Optional[RDMABuffer] = None
+        self._centralized_request_mgr = ReqManager()
+        self._centralized_request_port = REQUEST_POLLING_PORT + self.decoder_engine_rank
         data_bootstrap_addr = str(self.config.get("data_bootstrap_addr", "127.0.0.1"))
         monitor_bind_host = str(self.config.get("local_hostname", data_bootstrap_addr))
         shared_slots = int(self.config.get("rdma_buffer_slots", "128"))
@@ -141,10 +143,11 @@ class DecoderService(BaseService):
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
 
-        try:
-            self._ensure_phase2_request_buffer()
-        except Exception:
-            self.logger.exception("Failed to connect phase2 RDMA buffer, will retry")
+        if not str(os.getenv("IS_CENTRALIZED", "0")).strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                self._ensure_phase2_request_buffer()
+            except Exception:
+                self.logger.exception("Failed to connect phase2 RDMA buffer, will retry")
 
         buffer_sizes = estimate_transformer_buffer_sizes(self.config)
         request = AllocationRequest(
@@ -360,27 +363,39 @@ class DecoderService(BaseService):
                 },
             )
 
-            if self._phase2_rdma_buffer is None:
-                try:
-                    self._ensure_phase2_request_buffer()
-                except Exception:
-                    self.logger.exception("Failed to connect phase2 request RDMA buffer, will retry")
-
-            if self._phase2_rdma_buffer is not None:
-                packet = self._phase2_rdma_buffer.consume()
-                if packet is not None:
-                    if isinstance(packet, dict) and "request_config" in packet:
-                        config = dict(packet.get("request_config") or {})
-                        config["transformer_node_address"] = packet.get("transformer_node_address", "127.0.0.1")
-                    else:
-                        config = packet
+            centralized_request_mode = str(os.getenv("IS_CENTRALIZED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+            if centralized_request_mode:
+                config = self._centralized_request_mgr.receive_non_block(self._centralized_request_port)
+                if config is not None:
                     if not isinstance(config, dict) or "data_bootstrap_room" not in config:
-                        self.logger.warning("Ignored incomplete phase2 packet from RDMA buffer: %s", packet)
+                        self.logger.warning("Ignored incomplete request packet from ZMQ: %s", config)
                         continue
                     decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})
                     decoder_metrics["request_received_ts"] = time.time()
-                    self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
+                    self.logger.info("Received request config from ZMQ: %s", {k: v for k, v in config.items()})
                     req_queue.append(config)
+            else:
+                if self._phase2_rdma_buffer is None:
+                    try:
+                        self._ensure_phase2_request_buffer()
+                    except Exception:
+                        self.logger.exception("Failed to connect phase2 request RDMA buffer, will retry")
+
+                if self._phase2_rdma_buffer is not None:
+                    packet = self._phase2_rdma_buffer.consume()
+                    if packet is not None:
+                        if isinstance(packet, dict) and "request_config" in packet:
+                            config = dict(packet.get("request_config") or {})
+                            config["transformer_node_address"] = packet.get("transformer_node_address", "127.0.0.1")
+                        else:
+                            config = packet
+                        if not isinstance(config, dict) or "data_bootstrap_room" not in config:
+                            self.logger.warning("Ignored incomplete phase2 packet from RDMA buffer: %s", packet)
+                            continue
+                        decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})
+                        decoder_metrics["request_received_ts"] = time.time()
+                        self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
+                        req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()

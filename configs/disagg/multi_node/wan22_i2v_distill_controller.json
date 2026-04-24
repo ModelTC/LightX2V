@@ -42,7 +42,7 @@
     "low_noise_quantized_ckpt": "/root/zht/LightX2V/models/lightx2v/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
     "high_noise_original_ckpt": "/root/zht/LightX2V/models/lightx2v/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
     "low_noise_original_ckpt": "/root/zht/LightX2V/models/lightx2v/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
-    "image_path": "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B/examples/i2v_input.JPG",
+    "image_path": "/root/zht/LightX2V/assets/inputs/imgs/img_0.jpg",
     "disagg_mode": "controller",
     "disagg_config": {
         "bootstrap_addr": "192.168.0.166",
@@ -54,6 +54,9 @@
         "protocol": "rdma",
         "local_hostname": "192.168.0.166",
         "metadata_server": "P2PHANDSHAKE",
+        "service_env": {
+            "RDMA_IFACE": "erdma_0"
+        },
         "remote_workdir": "/root/zht/LightX2V",
         "remote_python_executable": "python",
         "remote_activate_cmd": "source /root/miniconda3/etc/profile.d/conda.sh && conda activate lightx2v && export LD_LIBRARY_PATH=/root/miniconda3/envs/lightx2v/lib:${LD_LIBRARY_PATH:-}",
@@ -72,51 +75,83 @@
         "static_instance_slots": [
             {
                 "instance_type": "encoder",
-                "host": "192.168.0.166",
+                "host": "192.168.0.139",
                 "engine_rank": 0,
-                "cuda_device": 0
+                "cuda_device": 0,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.139"
+                }
             },
             {
                 "instance_type": "transformer",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 1,
-                "cuda_device": 0
+                "cuda_device": 0,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.166"
+                }
             },
             {
                 "instance_type": "transformer",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 2,
-                "cuda_device": 1
+                "cuda_device": 1,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.166"
+                }
             },
             {
                 "instance_type": "transformer",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 3,
-                "cuda_device": 2
+                "cuda_device": 2,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.166"
+                }
             },
             {
                 "instance_type": "transformer",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 4,
-                "cuda_device": 3
+                "cuda_device": 3,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.166"
+                }
             },
             {
                 "instance_type": "transformer",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 5,
-                "cuda_device": 4
+                "cuda_device": 4,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.166"
+                }
             },
             {
                 "instance_type": "transformer",
-                "host": "192.168.0.139",
+                "host": "192.168.0.166",
                 "engine_rank": 6,
-                "cuda_device": 5
+                "cuda_device": 5,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.166"
+                }
             },
             {
                 "instance_type": "decoder",
-                "host": "192.168.0.166",
+                "host": "192.168.0.139",
                 "engine_rank": 7,
-                "cuda_device": 7
+                "cuda_device": 1,
+                "env": {
+                    "MOONCAKE_DEVICE_NAME": "eth0",
+                    "MOONCAKE_LOCAL_HOSTNAME": "192.168.0.139"
+                }
             }
         ]
     }

@@ -5,11 +5,14 @@ import threading
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 import torch
+import zmq
 
-from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
@@ -37,6 +40,8 @@ class EncoderService(BaseService):
         self.decoder_engine_rank = int(self.config.get("decoder_engine_rank", "2"))
         self._request_rdma_client: Optional[RDMAClient] = None
         self._request_rdma_buffer: Optional[RDMABuffer] = None
+        self._centralized_request_mgr = ReqManager()
+        self._centralized_request_port = REQUEST_POLLING_PORT + self.encoder_engine_rank
         self._phase1_rdma_client: Optional[RDMAClient] = None
         self._phase1_rdma_buffer: Optional[RDMABuffer] = None
         data_bootstrap_addr = str(self.config.get("data_bootstrap_addr", "127.0.0.1"))
@@ -53,6 +58,7 @@ class EncoderService(BaseService):
         self._phase1_slot_size = shared_slot_size
         self._last_request_connect_retry_ts = 0.0
         self._last_phase1_connect_retry_ts = 0.0
+        self._centralized_request_mode = str(os.getenv("IS_CENTRALIZED", "0")).strip().lower() in {"1", "true", "yes", "on"}
         self.text_encoder = None
         self.image_encoder = None
         self.vae_encoder = None
@@ -92,6 +98,92 @@ class EncoderService(BaseService):
             if status == DataPoll.Failed:
                 raise RuntimeError(f"DataSender transfer failed for room={room}")
             time.sleep(0.001)
+
+    def _report_stage_metrics_to_controller(self, stage_name: str, config: dict[str, Any]):
+        if not self._centralized_request_mode:
+            return
+
+        controller_host = str(config.get("controller_result_host", "127.0.0.1"))
+        controller_port_raw = config.get("controller_result_port")
+        if controller_port_raw is None:
+            return
+
+        try:
+            controller_port = int(controller_port_raw)
+        except (TypeError, ValueError):
+            return
+
+        request_metrics = config.get("request_metrics")
+        if not isinstance(request_metrics, dict):
+            return
+
+        stage_metrics = request_metrics.get("stages", {}).get(stage_name)
+        if not isinstance(stage_metrics, dict):
+            return
+
+        payload_request_metrics: dict[str, Any] = {
+            "request_id": request_metrics.get("request_id", config.get("data_bootstrap_room")),
+            "stages": {stage_name: stage_metrics},
+        }
+        if request_metrics.get("controller_send_ts") is not None:
+            payload_request_metrics["controller_send_ts"] = request_metrics.get("controller_send_ts")
+
+        self._centralized_request_mgr.send(
+            controller_host,
+            controller_port,
+            {
+                "message_type": "stage_metrics",
+                "stage_name": stage_name,
+                "data_bootstrap_room": int(config.get("data_bootstrap_room", 0)),
+                "request_metrics": payload_request_metrics,
+            },
+        )
+        self.logger.info(
+            "Reported %s stage metrics to controller: room=%s target=%s:%s",
+            stage_name,
+            config.get("data_bootstrap_room"),
+            controller_host,
+            controller_port,
+        )
+
+    def _wait_for_controller_ok(self, stage_name: str, config: dict[str, Any]):
+        if not self._centralized_request_mode:
+            return
+
+        controller_host = str(config.get("controller_control_host", config.get("controller_result_host", "127.0.0.1")))
+        controller_port_raw = config.get("controller_control_port")
+        if controller_port_raw is None:
+            return
+
+        try:
+            controller_port = int(controller_port_raw)
+        except (TypeError, ValueError):
+            return
+
+        request_body = json.dumps(
+            {
+                "control": "OK",
+                "stage_name": stage_name,
+                "data_bootstrap_room": int(config.get("data_bootstrap_room", 0)),
+            }
+        ).encode("utf-8")
+        request = Request(
+            f"http://{controller_host}:{controller_port}/ok",
+            data=request_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+            if not isinstance(reply, dict) or not reply.get("ok", False):
+                raise RuntimeError(f"unexpected controller OK reply: {reply}")
+        except URLError:
+            self.logger.exception("Failed to wait for controller OK reply for %s room=%s", stage_name, config.get("data_bootstrap_room"))
+            return
+        except Exception:
+            self.logger.exception("Failed to wait for controller OK reply for %s room=%s", stage_name, config.get("data_bootstrap_room"))
+            return
 
     def _get_queue_metrics(self) -> dict[str, Any]:
         with self._queue_metrics_lock:
@@ -587,6 +679,9 @@ class EncoderService(BaseService):
             buffer_ptrs = [buf.data_ptr() for buf in room_buffers]
             # Publish phase1 request metadata after compute so downstream can see latest metrics.
             encoder_metrics["output_enqueued_ts"] = time.time()
+            if self._centralized_request_mode:
+                self._report_stage_metrics_to_controller("encoder", config)
+                self._wait_for_controller_ok("encoder", config)
             phase1_meta = {
                 "request_config": dict(config),
                 "encoder_node_address": self.data_mgr.get_localhost(),
@@ -651,32 +746,43 @@ class EncoderService(BaseService):
                 },
             )
 
-            if self._request_rdma_buffer is None:
-                try:
-                    self._ensure_request_buffer()
-                except Exception:
-                    self.logger.exception("Failed to connect request RDMA buffer, will retry")
-
-            if self._request_rdma_client is not None and self._request_rdma_client.has_qp_error():
-                self.logger.warning(
-                    "Request RDMA client entered error state, reconnecting: %s",
-                    self._request_rdma_client.last_wc_error_message(),
-                )
-                try:
-                    self._reconnect_request_buffer()
-                except Exception:
-                    self.logger.exception("Failed to reconnect request RDMA buffer after QP error")
-
-            if self._request_rdma_buffer is not None:
-                config = self._request_rdma_buffer.consume()
+            if self._centralized_request_mode:
+                config = self._centralized_request_mgr.receive_non_block(self._centralized_request_port)
                 if config is not None:
                     if not isinstance(config, dict) or "data_bootstrap_room" not in config:
-                        self.logger.warning("Ignored incomplete request packet from RDMA buffer: %s", config)
+                        self.logger.warning("Ignored incomplete request packet from ZMQ: %s", config)
                         continue
                     encoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("encoder", {})
                     encoder_metrics["request_received_ts"] = time.time()
-                    self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
+                    self.logger.info("Received request config from ZMQ: %s", {k: v for k, v in config.items()})
                     req_queue.append(config)
+            else:
+                if self._request_rdma_buffer is None:
+                    try:
+                        self._ensure_request_buffer()
+                    except Exception:
+                        self.logger.exception("Failed to connect request RDMA buffer, will retry")
+
+                if self._request_rdma_client is not None and self._request_rdma_client.has_qp_error():
+                    self.logger.warning(
+                        "Request RDMA client entered error state, reconnecting: %s",
+                        self._request_rdma_client.last_wc_error_message(),
+                    )
+                    try:
+                        self._reconnect_request_buffer()
+                    except Exception:
+                        self.logger.exception("Failed to reconnect request RDMA buffer after QP error")
+
+                if self._request_rdma_buffer is not None:
+                    config = self._request_rdma_buffer.consume()
+                    if config is not None:
+                        if not isinstance(config, dict) or "data_bootstrap_room" not in config:
+                            self.logger.warning("Ignored incomplete request packet from RDMA buffer: %s", config)
+                            continue
+                        encoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("encoder", {})
+                        encoder_metrics["request_received_ts"] = time.time()
+                        self.logger.info("Received request config from RDMA buffer: %s", {k: v for k, v in config.items()})
+                        req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()

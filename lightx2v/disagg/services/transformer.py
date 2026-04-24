@@ -9,8 +9,11 @@ from typing import Any, List, Optional
 
 import numpy as np
 import torch
+import zmq
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
-from lightx2v.disagg.conn import MONITOR_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase
+from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, DataArgs, DataManager, DataPoll, DataReceiver, DataSender, DisaggregationMode, DisaggregationPhase, ReqManager
 from lightx2v.disagg.monitor import Reporter
 from lightx2v.disagg.protocol import AllocationRequest, MemoryHandle, RemoteBuffer
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
@@ -65,10 +68,13 @@ class TransformerService(BaseService):
         self._phase1_rdma_buffer: Optional[RDMABuffer] = None
         self._phase2_rdma_client: Optional[RDMAClient] = None
         self._phase2_rdma_buffer: Optional[RDMABuffer] = None
+        self._centralized_request_mgr = ReqManager()
+        self._centralized_request_port = REQUEST_POLLING_PORT + self.transformer_engine_rank
         data_bootstrap_addr = str(self.config.get("data_bootstrap_addr", "127.0.0.1"))
         monitor_bind_host = str(self.config.get("local_hostname", data_bootstrap_addr))
         shared_slots = int(self.config.get("rdma_buffer_slots", "128"))
         shared_slot_size = int(self.config.get("rdma_buffer_slot_size", "4096"))
+        self._centralized_request_mode = str(os.getenv("IS_CENTRALIZED", "0")).strip().lower() in {"1", "true", "yes", "on"}
         self._phase1_server_ip = str(self.config.get("rdma_phase1_host", data_bootstrap_addr))
         self._phase1_handshake_port = int(self.config.get("rdma_phase1_handshake_port", "5567"))
         self._phase1_slots = shared_slots
@@ -119,6 +125,92 @@ class TransformerService(BaseService):
             if status == DataPoll.Failed:
                 raise RuntimeError(f"DataSender transfer failed for room={room}")
             time.sleep(0.001)
+
+    def _report_stage_metrics_to_controller(self, stage_name: str, config: dict[str, Any]):
+        if not self._centralized_request_mode:
+            return
+
+        controller_host = str(config.get("controller_result_host", "127.0.0.1"))
+        controller_port_raw = config.get("controller_result_port")
+        if controller_port_raw is None:
+            return
+
+        try:
+            controller_port = int(controller_port_raw)
+        except (TypeError, ValueError):
+            return
+
+        request_metrics = config.get("request_metrics")
+        if not isinstance(request_metrics, dict):
+            return
+
+        stage_metrics = request_metrics.get("stages", {}).get(stage_name)
+        if not isinstance(stage_metrics, dict):
+            return
+
+        payload_request_metrics: dict[str, Any] = {
+            "request_id": request_metrics.get("request_id", config.get("data_bootstrap_room")),
+            "stages": {stage_name: stage_metrics},
+        }
+        if request_metrics.get("controller_send_ts") is not None:
+            payload_request_metrics["controller_send_ts"] = request_metrics.get("controller_send_ts")
+
+        self._centralized_request_mgr.send(
+            controller_host,
+            controller_port,
+            {
+                "message_type": "stage_metrics",
+                "stage_name": stage_name,
+                "data_bootstrap_room": int(config.get("data_bootstrap_room", 0)),
+                "request_metrics": payload_request_metrics,
+            },
+        )
+        self.logger.info(
+            "Reported %s stage metrics to controller: room=%s target=%s:%s",
+            stage_name,
+            config.get("data_bootstrap_room"),
+            controller_host,
+            controller_port,
+        )
+
+    def _wait_for_controller_ok(self, stage_name: str, config: dict[str, Any]):
+        if not self._centralized_request_mode:
+            return
+
+        controller_host = str(config.get("controller_control_host", config.get("controller_result_host", "127.0.0.1")))
+        controller_port_raw = config.get("controller_control_port")
+        if controller_port_raw is None:
+            return
+
+        try:
+            controller_port = int(controller_port_raw)
+        except (TypeError, ValueError):
+            return
+
+        request_body = json.dumps(
+            {
+                "control": "OK",
+                "stage_name": stage_name,
+                "data_bootstrap_room": int(config.get("data_bootstrap_room", 0)),
+            }
+        ).encode("utf-8")
+        request = Request(
+            f"http://{controller_host}:{controller_port}/ok",
+            data=request_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+            if not isinstance(reply, dict) or not reply.get("ok", False):
+                raise RuntimeError(f"unexpected controller OK reply: {reply}")
+        except URLError:
+            self.logger.exception("Failed to wait for controller OK reply for %s room=%s", stage_name, config.get("data_bootstrap_room"))
+            return
+        except Exception:
+            self.logger.exception("Failed to wait for controller OK reply for %s room=%s", stage_name, config.get("data_bootstrap_room"))
+            return
 
     def _attach_remote_shared_memory(self, shm_name: str) -> shared_memory.SharedMemory:
         # Python 3.12 supports `track=False`, which avoids duplicate cleanup from non-owner processes.
@@ -310,19 +402,20 @@ class TransformerService(BaseService):
         if data_bootstrap_addr is None or data_bootstrap_room is None:
             return
 
-        phase_deadline = time.time() + 30.0
-        while time.time() < phase_deadline:
-            try:
-                self._ensure_phase1_request_buffer()
-                self._ensure_phase2_meta_buffer()
-            except Exception:
-                self.logger.exception("Failed to connect phase RDMA buffers, will retry")
-            if self._phase1_rdma_buffer is not None and self._phase2_rdma_buffer is not None:
-                break
-            time.sleep(0.1)
+        if not self._centralized_request_mode:
+            phase_deadline = time.time() + 30.0
+            while time.time() < phase_deadline:
+                try:
+                    self._ensure_phase1_request_buffer()
+                    self._ensure_phase2_meta_buffer()
+                except Exception:
+                    self.logger.exception("Failed to connect phase RDMA buffers, will retry")
+                if self._phase1_rdma_buffer is not None and self._phase2_rdma_buffer is not None:
+                    break
+                time.sleep(0.1)
 
-        if self._phase1_rdma_buffer is None or self._phase2_rdma_buffer is None:
-            raise RuntimeError("phase RDMA buffers are not ready")
+            if self._phase1_rdma_buffer is None or self._phase2_rdma_buffer is None:
+                raise RuntimeError("phase RDMA buffers are not ready")
 
         buffer_sizes = estimate_encoder_buffer_sizes(self.config)
         request = AllocationRequest(
@@ -899,37 +992,48 @@ class TransformerService(BaseService):
                 },
             )
 
-            if self._phase1_rdma_buffer is None:
-                try:
-                    self._ensure_phase1_request_buffer()
-                except Exception:
-                    self.logger.exception("Failed to connect phase1 request RDMA buffer, will retry")
-
-            if self._phase1_rdma_client is not None and self._phase1_rdma_client.has_qp_error():
-                self.logger.warning(
-                    "Phase1 request RDMA client entered error state, reconnecting: %s",
-                    self._phase1_rdma_client.last_wc_error_message(),
-                )
-                try:
-                    self._reconnect_phase1_request_buffer()
-                except Exception:
-                    self.logger.exception("Failed to reconnect phase1 request RDMA buffer after QP error")
-
-            if self._phase1_rdma_buffer is not None and len(req_queue) + len(waiting_queue) < 2:
-                packet = self._phase1_rdma_buffer.consume()
-                if packet is not None:
-                    if isinstance(packet, dict) and "request_config" in packet:
-                        config = dict(packet.get("request_config") or {})
-                        config["encoder_node_address"] = packet.get("encoder_node_address", "127.0.0.1")
-                    else:
-                        config = packet
+            if self._centralized_request_mode:
+                config = self._centralized_request_mgr.receive_non_block(self._centralized_request_port)
+                if config is not None:
                     if not isinstance(config, dict) or "data_bootstrap_room" not in config:
-                        self.logger.warning("Ignored incomplete phase1 packet from RDMA buffer: %s", packet)
+                        self.logger.warning("Ignored incomplete request packet from ZMQ: %s", config)
                         continue
                     transformer_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("transformer", {})
                     transformer_metrics["request_received_ts"] = time.time()
-                    self.logger.info("%s Received request config from RDMA buffer: %s", self.transformer_engine_rank, {k: v for k, v in config.items()})
+                    self.logger.info("Received request config from ZMQ: %s", {k: v for k, v in config.items()})
                     req_queue.append(config)
+            else:
+                if self._phase1_rdma_buffer is None:
+                    try:
+                        self._ensure_phase1_request_buffer()
+                    except Exception:
+                        self.logger.exception("Failed to connect phase1 request RDMA buffer, will retry")
+
+                if self._phase1_rdma_client is not None and self._phase1_rdma_client.has_qp_error():
+                    self.logger.warning(
+                        "Phase1 request RDMA client entered error state, reconnecting: %s",
+                        self._phase1_rdma_client.last_wc_error_message(),
+                    )
+                    try:
+                        self._reconnect_phase1_request_buffer()
+                    except Exception:
+                        self.logger.exception("Failed to reconnect phase1 request RDMA buffer after QP error")
+
+                if self._phase1_rdma_buffer is not None and len(req_queue) + len(waiting_queue) < 2:
+                    packet = self._phase1_rdma_buffer.consume()
+                    if packet is not None:
+                        if isinstance(packet, dict) and "request_config" in packet:
+                            config = dict(packet.get("request_config") or {})
+                            config["encoder_node_address"] = packet.get("encoder_node_address", "127.0.0.1")
+                        else:
+                            config = packet
+                        if not isinstance(config, dict) or "data_bootstrap_room" not in config:
+                            self.logger.warning("Ignored incomplete phase1 packet from RDMA buffer: %s", packet)
+                            continue
+                        transformer_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("transformer", {})
+                        transformer_metrics["request_received_ts"] = time.time()
+                        self.logger.info("%s Received request config from RDMA buffer: %s", self.transformer_engine_rank, {k: v for k, v in config.items()})
+                        req_queue.append(config)
 
             if req_queue:
                 config = req_queue.popleft()
@@ -962,6 +1066,9 @@ class TransformerService(BaseService):
                 room, config = exec_queue[0]
                 try:
                     self.process(config)
+                    if self._centralized_request_mode:
+                        self._report_stage_metrics_to_controller("transformer", config)
+                        self._wait_for_controller_ok("transformer", config)
                     if self.sync_comm:
                         self.remove(room)
                     else:

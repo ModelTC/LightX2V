@@ -6,45 +6,33 @@ import socket
 import threading
 import time
 
-import pyverbs.enums as e
-from pyverbs.addr import GID, AHAttr, GlobalRoute
-from pyverbs.cq import CQ
-from pyverbs.device import Context, get_device_list
-from pyverbs.mr import MR
-from pyverbs.pd import PD
-from pyverbs.qp import QP, QPAttr, QPCap, QPInitAttr
-from pyverbs.wr import SGE
-from pyverbs.wr import SendWR as WR
-
-from lightx2v.disagg.rdma_utils import resolve_gid_index
+from lightx2v.disagg.rdma_base import (
+    AccessFlag,
+    AHAttr,
+    CQ,
+    GID,
+    GlobalRoute,
+    IBDevice,
+    MR,
+    PD,
+    QP,
+    QPAttr,
+    QPCap,
+    QPInitAttr,
+    QPType,
+    SGE,
+    WR,
+    WROpcode,
+    e,
+    get_device_list,
+    recv_json_from_stream,
+    resolve_gid_index,
+    rtr_ah_dest_dlid,
+    rtr_path_mtu,
+    rtr_path_mtu_negotiated,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class IBDevice:
-    def __init__(self, name: str):
-        self.name = name
-
-    def open(self):
-        return Context(name=self.name)
-
-
-class QPType:
-    RC = e.IBV_QPT_RC
-
-
-class WROpcode:
-    RDMA_WRITE = e.IBV_WR_RDMA_WRITE
-    RDMA_READ = e.IBV_WR_RDMA_READ
-    ATOMIC_FETCH_AND_ADD = e.IBV_WR_ATOMIC_FETCH_AND_ADD
-    ATOMIC_CMP_AND_SWP = e.IBV_WR_ATOMIC_CMP_AND_SWP
-
-
-class AccessFlag:
-    LOCAL_WRITE = e.IBV_ACCESS_LOCAL_WRITE
-    REMOTE_WRITE = e.IBV_ACCESS_REMOTE_WRITE
-    REMOTE_READ = e.IBV_ACCESS_REMOTE_READ
-    REMOTE_ATOMIC = e.IBV_ACCESS_REMOTE_ATOMIC
 
 
 class RDMAClient:
@@ -133,30 +121,6 @@ class RDMAClient:
                 except Exception:
                     pass
 
-    def _recv_json(self, sock, timeout_sec):
-        decoder = json.JSONDecoder()
-        chunks = []
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            try:
-                chunk = sock.recv(4096)
-            except socket.timeout:
-                continue
-
-            if not chunk:
-                break
-
-            chunks.append(chunk)
-            payload = b"".join(chunks).decode("utf-8", errors="strict")
-            try:
-                obj, _ = decoder.raw_decode(payload)
-                return obj
-            except json.JSONDecodeError:
-                continue
-
-        msg = b"".join(chunks).decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Timed out waiting for complete handshake JSON. payload={msg!r}")
-
     def _ensure_local_mr_capacity(self, required_size: int):
         required = int(required_size)
         if required <= self.buffer_size:
@@ -191,7 +155,7 @@ class RDMAClient:
                 sock.connect((server_ip, port))
 
                 # 1. 接收 Server 信息 (包含 rkey 和 addr)
-                remote_info = self._recv_json(sock, timeout_sec=connect_timeout_sec)
+                remote_info = recv_json_from_stream(sock, timeout_sec=connect_timeout_sec)
                 if not isinstance(remote_info, dict):
                     raise RuntimeError(f"Invalid handshake payload type: {type(remote_info)}")
                 required_keys = {"addr", "rkey", "qpn", "psn", "gid"}
@@ -209,6 +173,7 @@ class RDMAClient:
                     "psn": self.local_psn,
                     "gid": str(gid),
                     "gid_index": self.gid_index,
+                    "active_mtu": int(rtr_path_mtu(self.ctx, self.port_num)),
                 }
                 sock.sendall(json.dumps(my_info).encode())
 
@@ -242,22 +207,58 @@ class RDMAClient:
 
     def _modify_qp_to_rts(self):
         # Follow the standard RC flow: INIT -> RTR -> RTS.
-        init_attr = QPAttr(port_num=self.port_num)
-        init_attr.qp_access_flags = AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ | AccessFlag.REMOTE_ATOMIC
-        self.qp.to_init(init_attr)
-
-        rtr_attr = QPAttr(port_num=self.port_num)
-        rtr_attr.path_mtu = e.IBV_MTU_1024
-        rtr_attr.max_dest_rd_atomic = 1
-        rtr_attr.min_rnr_timer = 12
-        rtr_attr.dest_qp_num = int(self.remote_info["qpn"])
-        rtr_attr.rq_psn = int(self.remote_info["psn"])
-
         remote_lid = int(self.remote_info.get("lid", 0))
-        remote_gid_index = int(self.remote_info.get("gid_index", self.gid_index))
-        gr = GlobalRoute(dgid=GID(self.remote_info["gid"]), sgid_index=remote_gid_index)
-        rtr_attr.ah_attr = AHAttr(port_num=self.port_num, is_global=1, gr=gr, dlid=remote_lid)
-        self.qp.to_rtr(rtr_attr)
+        heuristic_dlid = rtr_ah_dest_dlid(self.ctx, self.port_num, remote_lid)
+        negotiated_mtu = int(rtr_path_mtu_negotiated(self.ctx, self.port_num, self.remote_info.get("active_mtu")))
+        local_mtu = int(rtr_path_mtu(self.ctx, self.port_num))
+        default_mtu = int(e.IBV_MTU_1024)
+
+        # Some eRDMA/RoCE stacks are strict about dlid/mtu combinations; try safe fallbacks.
+        mtu_candidates = []
+        for v in (negotiated_mtu, local_mtu, default_mtu):
+            if v not in mtu_candidates:
+                mtu_candidates.append(v)
+        dlid_candidates = []
+        for v in (heuristic_dlid, 0, remote_lid):
+            if v not in dlid_candidates:
+                dlid_candidates.append(v)
+
+        gr = GlobalRoute(dgid=GID(self.remote_info["gid"]), sgid_index=self.gid_index, hop_limit=1)
+        last_exc = None
+        for rd_atomic in (1, 0):
+            for mtu in mtu_candidates:
+                for dlid in dlid_candidates:
+                    for is_global in (1, 0):
+                        try:
+                            init_attr = QPAttr(port_num=self.port_num)
+                            init_attr.qp_access_flags = AccessFlag.LOCAL_WRITE | AccessFlag.REMOTE_WRITE | AccessFlag.REMOTE_READ | AccessFlag.REMOTE_ATOMIC
+                            self.qp.to_init(init_attr)
+
+                            rtr_attr = QPAttr(port_num=self.port_num)
+                            rtr_attr.path_mtu = int(mtu)
+                            rtr_attr.max_dest_rd_atomic = int(rd_atomic)
+                            rtr_attr.min_rnr_timer = 12
+                            rtr_attr.dest_qp_num = int(self.remote_info["qpn"])
+                            rtr_attr.rq_psn = int(self.remote_info["psn"])
+                            # Some drivers require GRH(is_global=1), others only accept non-GRH.
+                            if is_global == 1:
+                                rtr_attr.ah_attr = AHAttr(port_num=self.port_num, is_global=1, gr=gr, dlid=int(dlid))
+                            else:
+                                rtr_attr.ah_attr = AHAttr(port_num=self.port_num, is_global=0, dlid=int(dlid))
+                            self.qp.to_rtr(rtr_attr)
+                            last_exc = None
+                            break
+                        except Exception as exc:
+                            last_exc = exc
+                            continue
+                    if last_exc is None:
+                        break
+                if last_exc is None:
+                    break
+            if last_exc is None:
+                break
+        if last_exc is not None:
+            raise last_exc
 
         rts_attr = QPAttr(port_num=self.port_num)
         rts_attr.timeout = 14

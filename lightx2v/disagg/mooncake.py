@@ -31,6 +31,25 @@ def _detect_non_loopback_ipv4() -> str | None:
     return None
 
 
+def _collect_local_ipv4_addresses() -> list[str]:
+    candidates: list[str] = []
+
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            address = info[4][0]
+            if address and not address.startswith("127.") and address not in candidates:
+                candidates.append(address)
+    except Exception:
+        pass
+
+    detected = _detect_non_loopback_ipv4()
+    if detected is not None and detected not in candidates:
+        candidates.append(detected)
+
+    return candidates
+
+
 @dataclass
 class MooncakeTransferEngineConfig:
     local_hostname: str
@@ -55,6 +74,7 @@ class MooncakeTransferEngineConfig:
         if config_file_path is None:
             raise ValueError("The environment variable 'MOONCAKE_CONFIG_PATH' is not set.")
         cfg = MooncakeTransferEngineConfig.from_file(config_file_path)
+        local_ipv4s = _collect_local_ipv4_addresses()
 
         env_metadata_server = os.getenv("MOONCAKE_METADATA_SERVER", "").strip()
         if env_metadata_server:
@@ -73,13 +93,36 @@ class MooncakeTransferEngineConfig:
         force_ipv4 = os.getenv("MOONCAKE_FORCE_IPV4_LOOPBACK", "1") not in ("0", "false", "False")
         env_host = os.getenv("MOONCAKE_LOCAL_HOSTNAME", "").strip()
         if env_host:
-            cfg.local_hostname = env_host
+            if env_host in ("localhost", "::1", "127.0.0.1") or env_host in local_ipv4s:
+                cfg.local_hostname = env_host
+            else:
+                detected = _detect_non_loopback_ipv4()
+                if detected is not None:
+                    logger.warning(
+                        "Ignoring MOONCAKE_LOCAL_HOSTNAME=%s because it does not match this host (local_ipv4s=%s); using %s",
+                        env_host,
+                        local_ipv4s,
+                        detected,
+                    )
+                    cfg.local_hostname = detected
+                elif force_ipv4:
+                    cfg.local_hostname = "127.0.0.1"
         elif force_ipv4 and cfg.local_hostname in ("localhost", "::1", "127.0.0.1"):
             detected = _detect_non_loopback_ipv4()
             if detected is not None:
                 cfg.local_hostname = detected
             else:
                 cfg.local_hostname = "127.0.0.1"
+        elif cfg.local_hostname not in local_ipv4s and cfg.local_hostname not in ("localhost", "::1", "127.0.0.1"):
+            detected = _detect_non_loopback_ipv4()
+            if detected is not None:
+                logger.warning(
+                    "Auto-correcting Mooncake local_hostname from %s to %s on this host (local_ipv4s=%s)",
+                    cfg.local_hostname,
+                    detected,
+                    local_ipv4s,
+                )
+                cfg.local_hostname = detected
         return cfg
 
 

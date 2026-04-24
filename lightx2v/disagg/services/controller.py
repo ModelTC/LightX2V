@@ -1,7 +1,10 @@
+import ipaddress
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import shlex
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -62,9 +65,16 @@ class ControllerService(BaseService):
         self._free_slot_ids: set[int] = set()
         self._slot_reuse_block_until: dict[int, float] = {}
         self._local_host_aliases: set[str] = set()
+        self._request_metrics_by_room: dict[int, dict[str, Any]] = {}
 
     def _is_monitor_enabled(self) -> bool:
         raw = os.getenv("ENABLE_MONITOR")
+        if raw is None:
+            return False
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _is_centralized_enabled(self) -> bool:
+        raw = os.getenv("IS_CENTRALIZED")
         if raw is None:
             return False
         return str(raw).strip().lower() in {"1", "true", "yes", "on"}
@@ -111,6 +121,18 @@ class ControllerService(BaseService):
         except Exception:
             return False
 
+    def _ensure_rdma_preferred_ipv4_env(self, host: str, env: dict[str, str]) -> None:
+        """So RoCE gid_index matches the data-plane IP on each worker (multi-node)."""
+        if env.get("RDMA_PREFERRED_IPV4"):
+            return
+        h = str(host).strip()
+        if not h:
+            return
+        try:
+            env["RDMA_PREFERRED_IPV4"] = str(ipaddress.IPv4Address(h))
+        except Exception:
+            pass
+
     def _allocate_free_tcp_port(self, bind_host: str | None = None) -> int:
         host = str(bind_host or self._bootstrap_addr)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -144,6 +166,90 @@ class ControllerService(BaseService):
             str(instance_cfg.get("save_path", "")),
         ]
 
+    def _maybe_wrap_service_command_with_nsys(
+        self,
+        *,
+        host: str,
+        instance_type: str,
+        engine_rank: int,
+        instance_cfg: dict[str, Any],
+        command: list[str],
+    ) -> list[str]:
+        if not self._is_truthy(os.getenv("DISAGG_ENABLE_NSYS"), default=False):
+            return command
+
+        if not self._is_local_host(host):
+            self.logger.info(
+                "Skip nsys profiling for remote %s instance host=%s rank=%s",
+                instance_type,
+                host,
+                engine_rank,
+            )
+            return command
+
+        nsys_bin = shutil.which(os.getenv("DISAGG_NSYS_BIN", "nsys"))
+        if nsys_bin is None:
+            self.logger.warning("DISAGG_ENABLE_NSYS is set but nsys is not available, skip profiling for %s rank=%s", instance_type, engine_rank)
+            return command
+
+        output_dir_raw = os.getenv("DISAGG_NSYS_OUTPUT_DIR")
+        if output_dir_raw:
+            output_dir = Path(output_dir_raw)
+        else:
+            base_save_path = instance_cfg.get("save_path") or (self._runtime_config or {}).get("save_path") or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
+            output_dir = Path(str(base_save_path)).parent / "nsys"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_name = f"{instance_type}_rank{engine_rank}"
+        trace = os.getenv("DISAGG_NSYS_TRACE", "cuda,nvtx,osrt")
+        extra_args = shlex.split(os.getenv("DISAGG_NSYS_EXTRA_ARGS", ""))
+
+        profiled_command = [
+            nsys_bin,
+            "profile",
+            "--force-overwrite=true",
+            "--trace",
+            trace,
+            "-o",
+            str(output_dir / output_name),
+        ]
+        profiled_command.extend(extra_args)
+        profiled_command.extend(command)
+        return profiled_command
+
+    def _merge_request_metrics(self, existing: dict[str, Any] | None, update: dict[str, Any] | None) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        if isinstance(existing, dict):
+            merged.update(existing)
+        if not isinstance(update, dict):
+            return merged
+
+        for key, value in update.items():
+            if key != "stages" or not isinstance(value, dict):
+                merged[key] = value
+                continue
+
+            merged_stages: dict[str, Any] = {}
+            existing_stages = merged.get("stages")
+            if isinstance(existing_stages, dict):
+                for stage_name, stage_metrics in existing_stages.items():
+                    merged_stages[stage_name] = dict(stage_metrics) if isinstance(stage_metrics, dict) else stage_metrics
+
+            for stage_name, stage_metrics in value.items():
+                if not isinstance(stage_metrics, dict):
+                    continue
+                base_stage_metrics = merged_stages.get(stage_name)
+                if isinstance(base_stage_metrics, dict):
+                    combined_stage_metrics = dict(base_stage_metrics)
+                    combined_stage_metrics.update(stage_metrics)
+                else:
+                    combined_stage_metrics = dict(stage_metrics)
+                merged_stages[stage_name] = combined_stage_metrics
+
+            merged["stages"] = merged_stages
+
+        return merged
+
     def _query_zmq(self, req_addr: str, payload: dict[str, Any], timeout_ms: int = 1000) -> dict[str, Any] | None:
         context = zmq.Context()
         req = context.socket(zmq.REQ)
@@ -164,6 +270,48 @@ class ControllerService(BaseService):
 
     def _query_sidecar(self, req_addr: str, cmd: str) -> dict[str, Any] | None:
         return self._query_zmq(req_addr, {"cmd": str(cmd)}, timeout_ms=1000)
+
+    def _run_centralized_ok_server(self, stop_event: Event, bind_host: str, bind_port: int):
+        controller = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                if self.path != "/ok":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+
+                content_length = int(self.headers.get("Content-Length", "0") or "0")
+                raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+                try:
+                    message = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                except Exception:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+
+                controller.logger.info(
+                    "Received centralized OK control message: stage=%s room=%s",
+                    message.get("stage_name"),
+                    message.get("data_bootstrap_room"),
+                )
+                response = json.dumps({"ok": True, "control": "OK"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer((bind_host, bind_port), _Handler)
+        server.timeout = 0.2
+        try:
+            while not stop_event.is_set():
+                server.handle_request()
+        finally:
+            server.server_close()
 
     def _is_truthy(self, value: Any, default: bool = False) -> bool:
         if value is None:
@@ -324,6 +472,11 @@ class ControllerService(BaseService):
         if isinstance(extra_env, dict):
             for key, value in extra_env.items():
                 normalized_env[str(key)] = str(value)
+        if self._is_centralized_enabled():
+            normalized_env["IS_CENTRALIZED"] = "1"
+        if os.getenv("SYNC_COMM") is not None:
+            normalized_env["SYNC_COMM"] = str(os.getenv("SYNC_COMM", "0"))
+        self._ensure_rdma_preferred_ipv4_env(host, normalized_env)
 
         sidecar_env_vars = {
             **normalized_env,
@@ -434,6 +587,7 @@ class ControllerService(BaseService):
         if isinstance(extra_env, dict):
             for key, value in extra_env.items():
                 normalized_env[str(key)] = str(value)
+        self._ensure_rdma_preferred_ipv4_env(host, normalized_env)
 
         proxy_req_addr = self._remote_proxy_req_addr(slot)
         payload = {
@@ -923,17 +1077,44 @@ class ControllerService(BaseService):
         if not isinstance(result, dict):
             self.logger.warning("Ignored non-dict decoder result: %s", result)
             return
+
+        message_type = str(result.get("message_type", "decoder_result"))
         room = result.get("data_bootstrap_room")
         if room is None:
             self.logger.warning("Ignored decoder result without data_bootstrap_room: %s", result)
             return
         room = int(room)
+
+        if message_type == "stage_metrics":
+            request_metrics = result.get("request_metrics")
+            if not isinstance(request_metrics, dict):
+                self.logger.warning("Ignored stage metrics update without request_metrics: %s", result)
+                return
+            merged_metrics = self._merge_request_metrics(self._request_metrics_by_room.get(room), request_metrics)
+            self._request_metrics_by_room[room] = merged_metrics
+            self.logger.info(
+                "Stage metrics updated room=%s stage=%s metrics=%s",
+                room,
+                result.get("stage_name"),
+                request_metrics.get("stages", {}),
+            )
+            return
+
         if room not in expected_rooms:
             self.logger.warning("Ignored decoder result for unexpected room=%s: %s", room, result)
             return
         if room in received_rooms:
             self.logger.info("Duplicate decoder result for room=%s ignored", room)
             return
+
+        stored_metrics = self._request_metrics_by_room.get(room)
+        request_metrics = result.get("request_metrics")
+        if isinstance(request_metrics, dict):
+            merged_metrics = self._merge_request_metrics(stored_metrics, request_metrics)
+            self._request_metrics_by_room[room] = merged_metrics
+            result["request_metrics"] = merged_metrics
+        elif isinstance(stored_metrics, dict):
+            result["request_metrics"] = stored_metrics
 
         controller_recv_ts = time.time()
         latency_summary = self._build_latency_summary(result, controller_recv_ts)
@@ -1196,6 +1377,13 @@ class ControllerService(BaseService):
             service_config_json = self._resolve_service_config_json(str(config_json), instance_type)
 
             cmd = self._build_service_command(instance_type, engine_rank, instance_cfg, service_config_json)
+            cmd = self._maybe_wrap_service_command_with_nsys(
+                host=host,
+                instance_type=instance_type,
+                engine_rank=engine_rank,
+                instance_cfg=instance_cfg,
+                command=cmd,
+            )
 
             process: subprocess.Popen | None = None
             process_meta: dict[str, Any] | None = None
@@ -1209,6 +1397,12 @@ class ControllerService(BaseService):
                 else:
                     sidecar_meta = self._start_sidecar_process(instance_type, cuda_device, bind_host=host)
                     env = os.environ.copy()
+                    if use_static_slots and selected_slot is not None:
+                        slot_env = selected_slot.get("env")
+                        if isinstance(slot_env, dict):
+                            for key, value in slot_env.items():
+                                env[str(key)] = str(value)
+                    self._ensure_rdma_preferred_ipv4_env(host, env)
                     env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
                     env["LIGHTX2V_SIDECAR_PUSH_ADDR"] = str(sidecar_meta["push_addr"])
                     env["LIGHTX2V_SIDECAR_REQ_ADDR"] = str(sidecar_meta["req_addr"])
@@ -1254,7 +1448,6 @@ class ControllerService(BaseService):
                 self._free_slot_ids.remove(int(selected_slot["slot_id"]))
             else:
                 self._free_gpus.remove(engine_rank)
-            # self.add_instance(instance_type, instance_address)
             if self._enable_monitor:
                 monitor_node = f"tcp://{host}:{MONITOR_POLLING_PORT + engine_rank}"
                 if monitor_node not in self.monitor.nodes:
@@ -1272,6 +1465,7 @@ class ControllerService(BaseService):
                 "static_slot": self._to_plain(selected_slot) if selected_slot is not None else None,
             }
             self.started_instances.append((instance_type, instance_address))
+            self.add_instance(instance_type, instance_address)
             self.logger.info(
                 "Created %s instance host=%s rank=%s mode=%s address=%s",
                 instance_type,
@@ -1318,7 +1512,7 @@ class ControllerService(BaseService):
             slot_id_raw = meta.get("slot_id")
             slot_id = int(slot_id_raw) if slot_id_raw is not None else None
 
-            # self.remove_instance(instance_type, target_address)
+            self.remove_instance(instance_type, target_address)
             monitor_node = self._monitor_node_from_instance_address(target_address)
 
             if launch_mode == "remote":
@@ -1415,21 +1609,24 @@ class ControllerService(BaseService):
         config["rdma_phase2_handshake_port"] = phase2_handshake_port
 
         need_bytes = 16 + slots * slot_size
-        self._rdma_server_request = RDMAServer(buffer_size=need_bytes)
-        self.rdma_buffer_request = RDMABuffer(
-            role="server",
-            buffer_size=slots,
-            slot_size=slot_size,
-            rdma_server=self._rdma_server_request,
-        )
+        if not self._is_centralized_enabled():
+            self._rdma_server_request = RDMAServer(buffer_size=need_bytes)
+            self.rdma_buffer_request = RDMABuffer(
+                role="server",
+                buffer_size=slots,
+                slot_size=slot_size,
+                rdma_server=self._rdma_server_request,
+            )
 
-        self._rdma_handshake_thread_request = Thread(
-            target=self._rdma_server_request.handshake,
-            kwargs={"host": bootstrap_addr, "port": handshake_port},
-            name="controller-rdma-handshake",
-            daemon=True,
-        )
-        self._rdma_handshake_thread_request.start()
+            self._rdma_handshake_thread_request = Thread(
+                target=self._rdma_server_request.handshake,
+                kwargs={"host": bootstrap_addr, "port": handshake_port},
+                name="controller-rdma-handshake",
+                daemon=True,
+            )
+            self._rdma_handshake_thread_request.start()
+        else:
+            self.logger.info("IS_CENTRALIZED enabled, skip controller request RDMA ring initialization")
 
         need_bytes_phase1 = 16 + phase1_slots * phase1_slot_size
         self._rdma_server_phase1 = RDMAServer(buffer_size=need_bytes_phase1)
@@ -1464,9 +1661,9 @@ class ControllerService(BaseService):
         self._rdma_handshake_thread_phase2.start()
         self.logger.info(
             "Initialized RDMA buffers: request=(%s,%s,%s) phase1=(%s,%s,%s) phase2=(%s,%s,%s)",
-            slots,
-            slot_size,
-            need_bytes,
+            slots if self.rdma_buffer_request is not None else 0,
+            slot_size if self.rdma_buffer_request is not None else 0,
+            need_bytes if self.rdma_buffer_request is not None else 0,
             phase1_slots,
             phase1_slot_size,
             need_bytes_phase1,
@@ -1498,10 +1695,6 @@ class ControllerService(BaseService):
         if not isinstance(request_metrics, dict):
             return None
 
-        stages = request_metrics.get("stages")
-        if not isinstance(stages, dict):
-            return None
-
         def _as_float(value: Any) -> float | None:
             try:
                 return float(value)
@@ -1509,10 +1702,21 @@ class ControllerService(BaseService):
                 return None
 
         def _stage(name: str) -> dict[str, Any]:
+            stages = request_metrics.get("stages")
+            if not isinstance(stages, dict):
+                return {}
             stage_metrics = stages.get(name)
             return stage_metrics if isinstance(stage_metrics, dict) else {}
 
         controller_send_ts = _as_float(request_metrics.get("controller_send_ts"))
+        if controller_send_ts is None:
+            return None
+
+        centralized_mode = self._is_centralized_enabled()
+        summary: dict[str, float] = {
+            "end_to_end_delay_s": controller_recv_ts - controller_send_ts,
+        }
+
         encoder = _stage("encoder")
         transformer = _stage("transformer")
         decoder = _stage("decoder")
@@ -1532,38 +1736,78 @@ class ControllerService(BaseService):
         decoder_compute_end_ts = _as_float(decoder.get("compute_end_ts"))
         decoder_output_enqueued_ts = _as_float(decoder.get("output_enqueued_ts"))
 
-        required_values = [
-            controller_send_ts,
-            encoder_recv_ts,
-            encoder_compute_start_ts,
-            encoder_compute_end_ts,
-            encoder_output_enqueued_ts,
-            transformer_recv_ts,
-            transformer_compute_start_ts,
-            transformer_compute_end_ts,
-            transformer_output_enqueued_ts,
-            decoder_recv_ts,
-            decoder_compute_start_ts,
-            decoder_compute_end_ts,
-            decoder_output_enqueued_ts,
-        ]
-        if any(value is None for value in required_values):
-            return None
+        if centralized_mode:
+            if encoder_recv_ts is not None:
+                summary["controller_to_encoder_comm_delay_s"] = encoder_recv_ts - controller_send_ts
+            if encoder_recv_ts is not None and encoder_compute_start_ts is not None:
+                summary["encoder_scheduling_delay_s"] = encoder_compute_start_ts - encoder_recv_ts
+            if encoder_compute_start_ts is not None and encoder_compute_end_ts is not None:
+                summary["encoder_compute_delay_s"] = encoder_compute_end_ts - encoder_compute_start_ts
+            if encoder_output_enqueued_ts is not None and transformer_recv_ts is not None:
+                summary["encoder_communication_delay_s"] = transformer_recv_ts - controller_send_ts
+            if transformer_recv_ts is not None and transformer_compute_start_ts is not None:
+                summary["transformer_scheduling_delay_s"] = transformer_compute_start_ts - transformer_recv_ts
+            if transformer_compute_start_ts is not None and transformer_compute_end_ts is not None:
+                summary["transformer_compute_delay_s"] = transformer_compute_end_ts - transformer_compute_start_ts
+            if transformer_recv_ts is not None:
+                summary["transformer_communication_delay_s"] = transformer_recv_ts - controller_send_ts
+            if decoder_recv_ts is not None and decoder_compute_start_ts is not None:
+                summary["decoder_scheduling_delay_s"] = decoder_compute_start_ts - decoder_recv_ts
+            if decoder_compute_start_ts is not None and decoder_compute_end_ts is not None:
+                summary["decoder_compute_delay_s"] = decoder_compute_end_ts - decoder_compute_start_ts
+            if decoder_recv_ts is not None:
+                summary["decoder_communication_delay_s"] = decoder_recv_ts - controller_send_ts
 
-        summary: dict[str, float] = {
-            "controller_to_encoder_comm_delay_s": encoder_recv_ts - controller_send_ts,
-            "encoder_scheduling_delay_s": encoder_compute_start_ts - encoder_recv_ts,
-            "encoder_compute_delay_s": encoder_compute_end_ts - encoder_compute_start_ts,
-            "encoder_communication_delay_s": transformer_recv_ts - encoder_output_enqueued_ts,
-            "transformer_scheduling_delay_s": transformer_compute_start_ts - transformer_recv_ts,
-            "transformer_compute_delay_s": transformer_compute_end_ts - transformer_compute_start_ts,
-            "transformer_communication_delay_s": decoder_recv_ts - transformer_output_enqueued_ts,
-            "decoder_scheduling_delay_s": decoder_compute_start_ts - decoder_recv_ts,
-            "decoder_compute_delay_s": decoder_compute_end_ts - decoder_compute_start_ts,
-            "decoder_communication_delay_s": controller_recv_ts - decoder_output_enqueued_ts,
-            "end_to_end_delay_s": controller_recv_ts - controller_send_ts,
-        }
-        summary["sum_of_components_s"] = sum(value for key, value in summary.items() if key != "end_to_end_delay_s" and key != "sum_of_components_s")
+            component_keys = [
+                "controller_to_encoder_comm_delay_s",
+                "encoder_scheduling_delay_s",
+                "encoder_compute_delay_s",
+                "encoder_communication_delay_s",
+                "transformer_scheduling_delay_s",
+                "transformer_compute_delay_s",
+                "transformer_communication_delay_s",
+                "decoder_scheduling_delay_s",
+                "decoder_compute_delay_s",
+                "decoder_communication_delay_s",
+            ]
+            if all(key in summary for key in component_keys):
+                summary["sum_of_components_s"] = sum(summary[key] for key in component_keys)
+        else:
+            if encoder_recv_ts is not None:
+                summary["controller_to_encoder_comm_delay_s"] = encoder_recv_ts - controller_send_ts
+            if encoder_recv_ts is not None and encoder_compute_start_ts is not None:
+                summary["encoder_scheduling_delay_s"] = encoder_compute_start_ts - encoder_recv_ts
+            if encoder_compute_start_ts is not None and encoder_compute_end_ts is not None:
+                summary["encoder_compute_delay_s"] = encoder_compute_end_ts - encoder_compute_start_ts
+            if encoder_output_enqueued_ts is not None and transformer_recv_ts is not None:
+                summary["encoder_communication_delay_s"] = transformer_recv_ts - encoder_output_enqueued_ts
+            if transformer_recv_ts is not None and transformer_compute_start_ts is not None:
+                summary["transformer_scheduling_delay_s"] = transformer_compute_start_ts - transformer_recv_ts
+            if transformer_compute_start_ts is not None and transformer_compute_end_ts is not None:
+                summary["transformer_compute_delay_s"] = transformer_compute_end_ts - transformer_compute_start_ts
+            if transformer_output_enqueued_ts is not None and decoder_recv_ts is not None:
+                summary["transformer_communication_delay_s"] = decoder_recv_ts - transformer_output_enqueued_ts
+            if decoder_recv_ts is not None and decoder_compute_start_ts is not None:
+                summary["decoder_scheduling_delay_s"] = decoder_compute_start_ts - decoder_recv_ts
+            if decoder_compute_start_ts is not None and decoder_compute_end_ts is not None:
+                summary["decoder_compute_delay_s"] = decoder_compute_end_ts - decoder_compute_start_ts
+            if decoder_output_enqueued_ts is not None:
+                summary["decoder_communication_delay_s"] = controller_recv_ts - decoder_output_enqueued_ts
+
+            component_keys = [
+                "controller_to_encoder_comm_delay_s",
+                "encoder_scheduling_delay_s",
+                "encoder_compute_delay_s",
+                "encoder_communication_delay_s",
+                "transformer_scheduling_delay_s",
+                "transformer_compute_delay_s",
+                "transformer_communication_delay_s",
+                "decoder_scheduling_delay_s",
+                "decoder_compute_delay_s",
+                "decoder_communication_delay_s",
+            ]
+            if all(key in summary for key in component_keys):
+                summary["sum_of_components_s"] = sum(summary[key] for key in component_keys)
         return summary
 
     def add_instance(self, instance_type: str, instance_address: str):
@@ -1599,6 +1843,50 @@ class ControllerService(BaseService):
         if config is None:
             raise ValueError("config cannot be None")
 
+        room_raw = config.get("data_bootstrap_room")
+        try:
+            room = int(room_raw)
+        except (TypeError, ValueError):
+            room = None
+
+        request_metrics = config.get("request_metrics")
+        if room is not None and isinstance(request_metrics, dict):
+            self._request_metrics_by_room[room] = self._merge_request_metrics(None, request_metrics)
+
+        if self._is_centralized_enabled():
+            request_config = self._to_plain(config)
+
+            encoder_address = self.encoder_policy.schedule()
+            transformer_address = self.transformer_policy.schedule()
+            decoder_address = self.decoder_policy.schedule()
+
+            def _address_to_rank(instance_address: str) -> int:
+                _, port_str = instance_address.rsplit(":", 1)
+                return int(port_str) - REQUEST_POLLING_PORT
+
+            encoder_rank = _address_to_rank(encoder_address)
+            transformer_rank = _address_to_rank(transformer_address)
+            decoder_rank = _address_to_rank(decoder_address)
+
+            request_config["encoder_engine_rank"] = encoder_rank
+            request_config["transformer_engine_rank"] = transformer_rank
+            request_config["decoder_engine_rank"] = decoder_rank
+            request_config["encoder_node_address"] = encoder_address
+            request_config["transformer_node_address"] = transformer_address
+            request_config["decoder_node_address"] = decoder_address
+            request_config["controller_control_host"] = request_config.get("controller_result_host", self._bootstrap_addr)
+            request_config["controller_control_port"] = int(request_config.get("controller_control_port", REQUEST_POLLING_PORT - 3))
+
+            for instance_type, target_address in (
+                ("encoder", encoder_address),
+                ("transformer", transformer_address),
+                ("decoder", decoder_address),
+            ):
+                host, port_str = target_address.rsplit(":", 1)
+                self.req_mgr.send(host, int(port_str), request_config)
+                self.logger.info("Request dispatched to %s via ZMQ: target=%s", instance_type, target_address)
+            return
+
         if self.rdma_buffer_request is None:
             raise RuntimeError("RDMA request buffer is not initialized")
         self.rdma_buffer_request.produce(config)
@@ -1614,16 +1902,20 @@ class ControllerService(BaseService):
         bootstrap_addr = config.get("data_bootstrap_addr", "127.0.0.1")
         request_ingress_port = int(config.get("controller_request_port", os.getenv("DISAGG_CONTROLLER_REQUEST_PORT", REQUEST_POLLING_PORT - 2)))
         result_port = int(config.get("controller_result_port", REQUEST_POLLING_PORT - 1))
+        control_port = int(config.get("controller_control_port", REQUEST_POLLING_PORT - 3))
         self._bootstrap_addr = str(bootstrap_addr)
         self._runtime_config = self._to_plain(config)
         self._init_gpu_pool(config)
         self._enable_monitor = self._is_monitor_enabled()
+        centralized_mode = self._is_centralized_enabled()
 
         # self.encoder_policy = RoundRobinPolicy()
         # self.transformer_policy = RoundRobinPolicy()
         # self.decoder_policy = RoundRobinPolicy()
 
         self._init_request_rdma_buffer(bootstrap_addr, config)
+        if centralized_mode:
+            self.logger.info("IS_CENTRALIZED enabled, controller will dispatch requests via ZMQ")
 
         time.sleep(5.0)
 
@@ -1650,6 +1942,8 @@ class ControllerService(BaseService):
 
         monitor_stop_event: Event | None = None
         monitor_thread: Thread | None = None
+        ok_gate_stop_event: Event | None = None
+        ok_gate_thread: Thread | None = None
         self._monitor_runtime = None
 
         if self._enable_monitor:
@@ -1694,6 +1988,17 @@ class ControllerService(BaseService):
             self.logger.info("ENABLE_MONITOR enabled, monitor thread started")
         else:
             self.logger.info("ENABLE_MONITOR is not set, skip monitor logic")
+
+        if centralized_mode:
+            ok_gate_stop_event = Event()
+            ok_gate_thread = Thread(
+                target=self._run_centralized_ok_server,
+                args=(ok_gate_stop_event, self._bootstrap_addr, control_port),
+                name="controller-ok-gate",
+                daemon=True,
+            )
+            ok_gate_thread.start()
+            self.logger.info("Centralized OK gate server started on %s:%s", self._bootstrap_addr, control_port)
 
         time.sleep(5.0)
 
@@ -1825,6 +2130,10 @@ class ControllerService(BaseService):
                 monitor_stop_event.set()
             if monitor_thread is not None:
                 monitor_thread.join(timeout=2.0)
+            if ok_gate_stop_event is not None:
+                ok_gate_stop_event.set()
+            if ok_gate_thread is not None:
+                ok_gate_thread.join(timeout=2.0)
             self._monitor_runtime = None
 
             for instance_type, address in reversed(list(self.started_instances)):

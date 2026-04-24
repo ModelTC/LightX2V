@@ -62,11 +62,30 @@ if command -v jq >/dev/null 2>&1; then
     derived_controller_host=$(jq -r '.disagg_config.bootstrap_addr // empty' "${controller_cfg}")
 fi
 export DISAGG_CONTROLLER_HOST=${DISAGG_CONTROLLER_HOST:-${derived_controller_host:-127.0.0.1}}
+# RoCE gid_index: align with cluster data-plane IP (multi-homed / wrong default route breaks cross-node QP RTR).
+if [[ -z "${RDMA_PREFERRED_IPV4:-}" && -n "${derived_controller_host}" ]]; then
+    if [[ "${derived_controller_host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "${derived_controller_host}" != "127.0.0.1" ]]; then
+        export RDMA_PREFERRED_IPV4="${derived_controller_host}"
+    fi
+fi
 export DISAGG_CONTROLLER_REQUEST_PORT=${DISAGG_CONTROLLER_REQUEST_PORT:-12786}
 export LOAD_FROM_USER=${LOAD_FROM_USER:-0}
-export DISAGG_INSTANCE_START_TIMEOUT_SECONDS=${DISAGG_INSTANCE_START_TIMEOUT_SECONDS:-90}
+# multi_node: remote ranks (e.g. slow encoder/decoder host) may need longer TCP/ready waits.
+if [[ "${topology}" == "single_node" ]]; then
+    export DISAGG_INSTANCE_START_TIMEOUT_SECONDS=${DISAGG_INSTANCE_START_TIMEOUT_SECONDS:-90}
+else
+    export DISAGG_INSTANCE_START_TIMEOUT_SECONDS=${DISAGG_INSTANCE_START_TIMEOUT_SECONDS:-300}
+    export DISAGG_REMOTE_PROXY_START_TIMEOUT_SECONDS=${DISAGG_REMOTE_PROXY_START_TIMEOUT_SECONDS:-120}
+    export DISAGG_SIDECAR_START_TIMEOUT_SECONDS=${DISAGG_SIDECAR_START_TIMEOUT_SECONDS:-60}
+fi
 # Dynamic debug defaults to a smaller request batch; override for stress runs.
-export DISAGG_AUTO_REQUEST_COUNT=${DISAGG_AUTO_REQUEST_COUNT:-1}
+export DISAGG_AUTO_REQUEST_COUNT=${DISAGG_AUTO_REQUEST_COUNT:-30}
+export DISAGG_ENABLE_NSYS=${DISAGG_ENABLE_NSYS:-0}
+export SYNC_COMM=${SYNC_COMM:-0}
+export DISAGG_NSYS_BIN=${DISAGG_NSYS_BIN:-nsys}
+export DISAGG_NSYS_OUTPUT_DIR=${DISAGG_NSYS_OUTPUT_DIR:-${lightx2v_path}/save_results/nsys}
+export DISAGG_NSYS_TRACE=${DISAGG_NSYS_TRACE:-cuda,nvtx,osrt}
+export DISAGG_NSYS_EXTRA_ARGS=${DISAGG_NSYS_EXTRA_ARGS:-}
 user_start_delay_s=${USER_START_DELAY_S:-0}
 if [[ -n "${USER_MAX_REQUESTS:-}" ]]; then
     user_max_requests=${USER_MAX_REQUESTS}
@@ -86,7 +105,11 @@ save_result_path=${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/wan22_i2v_dyn
 controller_log=${lightx2v_path}/save_results/disagg_wan22_i2v_dynamic_controller.log
 user_log=${lightx2v_path}/save_results/disagg_wan22_i2v_dynamic_user.log
 
-controller_wait_timeout_s=${CONTROLLER_WAIT_TIMEOUT_S:-3000}
+if [[ "${topology}" == "single_node" ]]; then
+    controller_wait_timeout_s=${CONTROLLER_WAIT_TIMEOUT_S:-3000}
+else
+    controller_wait_timeout_s=${CONTROLLER_WAIT_TIMEOUT_S:-7200}
+fi
 controller_poll_interval_s=${CONTROLLER_POLL_INTERVAL_S:-5}
 fatal_watch_interval_s=${FATAL_WATCH_INTERVAL_S:-2}
 fatal_flag_file=${lightx2v_path}/save_results/disagg_wan22_i2v_dynamic_fatal.flag
@@ -102,7 +125,10 @@ fi
 echo "disagg topology=${topology}"
 echo "controller_cfg=${controller_cfg}"
 echo "DISAGG_CONTROLLER_HOST=${DISAGG_CONTROLLER_HOST} DISAGG_CONTROLLER_REQUEST_PORT=${DISAGG_CONTROLLER_REQUEST_PORT}"
+echo "RDMA_PREFERRED_IPV4=${RDMA_PREFERRED_IPV4:-}"
 echo "DISAGG_AUTO_REQUEST_COUNT=${DISAGG_AUTO_REQUEST_COUNT}"
+echo "DISAGG_ENABLE_NSYS=${DISAGG_ENABLE_NSYS} DISAGG_NSYS_OUTPUT_DIR=${DISAGG_NSYS_OUTPUT_DIR} DISAGG_NSYS_TRACE=${DISAGG_NSYS_TRACE}"
+echo "SYNC_COMM=${SYNC_COMM}"
 echo "LOAD_FROM_USER=${LOAD_FROM_USER} USER_START_DELAY_S=${user_start_delay_s} USER_MAX_REQUESTS=${user_max_requests}"
 
 rm -f "${fatal_flag_file}"
@@ -220,6 +246,73 @@ sync_remote_configs_once() {
                 echo "warning: failed to sync config to ${host}:${dst_cfg}"
             fi
         done
+    done
+}
+
+# Remote workers import lightx2v from remote_workdir; without syncing, fixes on the controller host never run on peers.
+sync_remote_disagg_sources_once() {
+    if [[ "${is_single_node}" == "1" ]]; then
+        echo "skip remote disagg source sync: single_node topology"
+        return 0
+    fi
+    if [[ "${DISAGG_SYNC_REMOTE_SOURCES:-1}" == "0" || "${DISAGG_SYNC_REMOTE_SOURCES:-}" == "false" ]]; then
+        echo "skip remote disagg source sync: DISAGG_SYNC_REMOTE_SOURCES=${DISAGG_SYNC_REMOTE_SOURCES:-}"
+        return 0
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "skip remote disagg source sync: jq not found"
+        return 0
+    fi
+
+    local bootstrap_host
+    bootstrap_host=$(jq -r '.disagg_config.bootstrap_addr // empty' "${controller_cfg}")
+    local ssh_user
+    ssh_user=$(jq -r '.disagg_config.ssh_user // empty' "${controller_cfg}")
+    local remote_workdir
+    remote_workdir=$(jq -r '.disagg_config.remote_workdir // empty' "${controller_cfg}")
+    if [[ -z "${remote_workdir}" ]]; then
+        remote_workdir="${lightx2v_path}"
+    fi
+
+    mapfile -t remote_hosts < <(jq -r --arg bootstrap "${bootstrap_host}" '.disagg_config.static_instance_slots[]?.host // empty | select(length > 0 and . != $bootstrap)' "${controller_cfg}" | sort -u)
+    if (( ${#remote_hosts[@]} == 0 )); then
+        echo "no remote hosts for disagg source sync"
+        return 0
+    fi
+
+    mapfile -t ssh_opts < <(jq -r '.disagg_config.ssh_options[]? // empty' "${controller_cfg}")
+    local rsync_rsh="ssh"
+    for opt in "${ssh_opts[@]}"; do
+        rsync_rsh+=" $(printf '%q' "${opt}")"
+    done
+
+    local rel_disagg="lightx2v/disagg"
+    local src_dir="${lightx2v_path}/${rel_disagg}/"
+    # Do not overwrite rdma_base.py on peers: pyverbs/rdma-core versions may differ per host.
+    local sync_excludes=(
+        --exclude=rdma_base.py
+    )
+
+    for host in "${remote_hosts[@]}"; do
+        local target="${host}"
+        if [[ -n "${ssh_user}" ]]; then
+            target="${ssh_user}@${host}"
+        fi
+        local dst_dir="${remote_workdir}/${rel_disagg}"
+        ssh "${ssh_opts[@]}" "${target}" "mkdir -p '${dst_dir}'" || true
+        if command -v rsync >/dev/null 2>&1; then
+            if rsync -az -e "${rsync_rsh}" "${sync_excludes[@]}" "${src_dir}" "${target}:${dst_dir}/"; then
+                echo "synced ${rel_disagg}/ to ${host}:${dst_dir}/ (excludes rdma_base.py)"
+            else
+                echo "warning: rsync ${rel_disagg} to ${host} failed"
+            fi
+        else
+            if ( cd "${lightx2v_path}" && tar cf - "${sync_excludes[@]}" "${rel_disagg}" ) | ssh "${ssh_opts[@]}" "${target}" "cd '${remote_workdir}' && tar xf -"; then
+                echo "synced ${rel_disagg}/ to ${host} (tar, excludes rdma_base.py)"
+            else
+                echo "warning: tar-sync ${rel_disagg} to ${host} failed"
+            fi
+        fi
     done
 }
 
@@ -373,7 +466,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 pre_clean_remote_hosts_once
-sync_remote_configs_once
+# sync_remote_configs_once
+sync_remote_disagg_sources_once
 
 python -m lightx2v.disagg.examples.run_service \
     --service controller \
