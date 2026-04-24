@@ -58,7 +58,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         self._initialize_crossattn_cache(self.device, self.dtype)
 
     def _calculate_q_k_len(self, q, k_lens):
-        q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
+        q_lens = torch.tensor([q.size(0)], dtype=torch.int32)
         cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
         cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
         return cu_seqlens_q, cu_seqlens_k
@@ -282,7 +282,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
             q,
-            k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
+            k_lens=torch.tensor([k.size(0)], dtype=torch.int32),
         )
         attn_out = phase.cross_attn_1.apply(
             q=q,
@@ -300,7 +300,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
             cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
                 q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
+                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
             )
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,

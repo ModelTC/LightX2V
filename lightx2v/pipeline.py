@@ -25,6 +25,7 @@ from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAu
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_fast_runner import LingbotFastRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
+from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import WanVaceRunner  # noqa: F401
@@ -106,9 +107,11 @@ class LightX2VPipeline:
             self.vae_stride = (4, 8, 8)
             if self.model_cls.startswith("wan2.2"):
                 self.use_image_encoder = False
-        elif self.model_cls in ["wan2.2"]:
+        elif self.model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 48
+            if self.model_cls == "wan2.2_matrix_game3":
+                self.use_image_encoder = False
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
@@ -327,6 +330,7 @@ class LightX2VPipeline:
             "seko_talk",
             "wan2.2_moe",
             "wan2.2",
+            "wan2.2_matrix_game3",
             "wan2.2_moe_audio",
             "wan2.2_audio",
             "wan2.2_moe_distill",
@@ -417,6 +421,7 @@ class LightX2VPipeline:
         save_result_path="lightx2v_gen_result.png",
         task=None,
         image_path=None,
+        action_path=None,
         video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
         image_frame_idx=None,
@@ -435,6 +440,7 @@ class LightX2VPipeline:
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
         self.seed = seed
         self.image_path = image_path
+        self.action_path = action_path
         self.video_path = video_path  # For SR task
         self.sr_ratio = sr_ratio
         self.last_frame_path = last_frame_path
@@ -454,7 +460,8 @@ class LightX2VPipeline:
             self.modify_config({"task": self.task})
 
         input_info = init_empty_input_info(self.task, self.support_tasks)
-        seed_all(self.seed)
+        if self.seed is not None:
+            seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
         gen_result = self.runner.run_pipeline(input_info)
         logger.info("Generated successfully!")

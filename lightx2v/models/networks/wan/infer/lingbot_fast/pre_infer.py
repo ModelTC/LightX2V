@@ -51,9 +51,9 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
         if c2ws_plucker_emb.dim() != 5:
             return {}
 
-        seg_start = self.scheduler.seg_index * self.scheduler.num_frame_per_block
+        seg_start = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
         seg_end = min(
-            (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_block,
+            (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk,
             self.scheduler.num_output_frames,
         )
         sliced = c2ws_plucker_emb[:, :, seg_start:seg_end, :, :]
@@ -78,9 +78,9 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
         vae_encoder_out = image_encoder_output.get("vae_encoder_out", None)
 
         if vae_encoder_out is not None:
-            seg_start = self.scheduler.seg_index * self.scheduler.num_frame_per_block
+            seg_start = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
             seg_end = min(
-                (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_block,
+                (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk,
                 self.scheduler.num_output_frames,
             )
             vae_chunk = vae_encoder_out[:, seg_start:seg_end]
@@ -89,7 +89,7 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
         x = weights.patch_embedding.apply(x.unsqueeze(0))
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
         x = x.flatten(2).transpose(1, 2).contiguous()
-        seq_lens = torch.tensor(x.size(1), dtype=torch.int32, device=x.device).unsqueeze(0)
+        seq_lens = torch.tensor(x.size(1), dtype=torch.int32).unsqueeze(0)
 
         embed_tmp = sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x)
         embed = self.time_embedding(weights, embed_tmp)

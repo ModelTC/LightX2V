@@ -256,6 +256,28 @@ class I2AVInputInfo:
 
 
 @dataclass
+class LTX2S2VInputInfo:
+    """LTX-2 audio-conditioned video (reference audio + optional reference images)."""
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
+    audio_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
 class WorldPlayI2VInputInfo:
     """Input info for WorldPlay model (image-to-video with action/pose conditioning)."""
 
@@ -338,6 +360,7 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "ltx2_s2v": LTX2S2VInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,
     "recon": WorldMirrorReconInputInfo,
