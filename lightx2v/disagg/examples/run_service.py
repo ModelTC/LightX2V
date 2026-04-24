@@ -4,10 +4,6 @@ import logging
 
 from loguru import logger
 
-from lightx2v.disagg.services.controller import ControllerService
-from lightx2v.disagg.services.decoder import DecoderService
-from lightx2v.disagg.services.encoder import EncoderService
-from lightx2v.disagg.services.transformer import TransformerService
 from lightx2v.disagg.utils import set_config
 from lightx2v.utils.utils import seed_all
 
@@ -124,12 +120,20 @@ def main():
     logger.info("Starting disagg service mode={}", service_mode)
 
     if service_mode == "encoder":
+        from lightx2v.disagg.services.encoder import EncoderService
+
         EncoderService(config).run()
     elif service_mode == "transformer":
+        from lightx2v.disagg.services.transformer import TransformerService
+
         TransformerService(config).run()
     elif service_mode == "decoder":
+        from lightx2v.disagg.services.decoder import DecoderService
+
         DecoderService(config).run()
     elif service_mode == "controller":
+        from lightx2v.disagg.services.controller import ControllerService
+
         ControllerService().run(config)
     else:
         raise ValueError(f"Unsupported service mode: {service_mode}")

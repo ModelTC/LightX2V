@@ -4,6 +4,7 @@ import ctypes
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -15,6 +16,8 @@ except ImportError:
     RDMAServer = None
 
 logger = logging.getLogger(__name__)
+
+_U64_MASK = (1 << 64) - 1
 
 
 @dataclass
@@ -38,11 +41,6 @@ class RDMABuffer:
     - client: consumer side, reads slots remotely and updates head by rdma_faa.
 
     The ring stores serialized JSON configs in fixed-size slots.
-
-    Multi-consumer note: multiple client processes calling ``consume()`` compete on the
-    same head pointer. Unless the backend implements a true remote atomic fetch-add
-    (see ``RDMAClient.rdma_faa``), correctness under heavy parallel consumption is not
-    guaranteed. Prefer one consumer per ring or low parallelism for production.
     """
 
     def __init__(
@@ -91,8 +89,8 @@ class RDMABuffer:
                 base_addr = int(info["addr"])
                 need_bytes = 16 + self.buffer_size * self.slot_size
                 self.rdma_server.register_memory(base_addr, need_bytes)
-                self.rdma_server.write_memory(base_addr, (0).to_bytes(8, byteorder="big", signed=False))
-                self.rdma_server.write_memory(base_addr + 8, (0).to_bytes(8, byteorder="big", signed=False))
+                self.rdma_server.write_memory(base_addr, (0).to_bytes(8, byteorder="little", signed=False))
+                self.rdma_server.write_memory(base_addr + 8, (0).to_bytes(8, byteorder="little", signed=False))
                 self._descriptor = RDMABufferDescriptor(
                     slot_addr=base_addr + 16,
                     slot_bytes=self.buffer_size * self.slot_size,
@@ -125,10 +123,14 @@ class RDMABuffer:
         return self._descriptor
 
     def _write_local_u64(self, buf: bytearray, value: int):
-        buf[:8] = int(value).to_bytes(8, byteorder="big", signed=False)
+        buf[:8] = (int(value) & _U64_MASK).to_bytes(8, byteorder="little", signed=False)
 
     def _read_local_u64(self, buf: bytearray) -> int:
-        return int.from_bytes(bytes(buf[:8]), byteorder="big", signed=False)
+        return int.from_bytes(bytes(buf[:8]), byteorder="little", signed=False)
+
+    def _u64_distance(self, newer: int, older: int) -> int:
+        """Return unsigned circular distance on a 64-bit counter space."""
+        return (int(newer) - int(older)) & _U64_MASK
 
     def _rdma_faa(self, ptr_addr: int, add_value: int) -> int:
         if self.rdma_client is not None:
@@ -138,20 +140,51 @@ class RDMABuffer:
             with self._lock:
                 old = self._read_remote_u64(ptr_addr)
                 new = (old + int(add_value)) & ((1 << 64) - 1)
-                self._rdma_write_bytes(ptr_addr, new.to_bytes(8, byteorder="big", signed=False))
+                self._rdma_write_bytes(ptr_addr, new.to_bytes(8, byteorder="little", signed=False))
                 return old
 
         # Fallback: local atomic emulation (useful for single-process validation).
         with self._lock:
             if ptr_addr == self.descriptor.head_addr:
                 old = self._read_local_u64(self._head_mem)
-                self._write_local_u64(self._head_mem, old + int(add_value))
+                self._write_local_u64(self._head_mem, (old + int(add_value)) & _U64_MASK)
                 return old
             if ptr_addr == self.descriptor.tail_addr:
                 old = self._read_local_u64(self._tail_mem)
-                self._write_local_u64(self._tail_mem, old + int(add_value))
+                self._write_local_u64(self._tail_mem, (old + int(add_value)) & _U64_MASK)
                 return old
         raise RuntimeError("rdma_faa failed and no local fallback for ptr")
+
+    def _rdma_cas(self, ptr_addr: int, compare_value: int, swap_value: int) -> int:
+        if self.rdma_client is not None:
+            return self.rdma_client.rdma_cas(
+                ptr_addr,
+                int(compare_value),
+                int(swap_value),
+                rkey=self.descriptor.rkey,
+            )
+
+        if self.rdma_server is not None:
+            with self._lock:
+                old = self._read_remote_u64(ptr_addr)
+                if old == (int(compare_value) & _U64_MASK):
+                    new = int(swap_value) & _U64_MASK
+                    self._rdma_write_bytes(ptr_addr, new.to_bytes(8, byteorder="little", signed=False))
+                return old
+
+        # Local fallback for single-process testing.
+        with self._lock:
+            if ptr_addr == self.descriptor.head_addr:
+                old = self._read_local_u64(self._head_mem)
+                if old == (int(compare_value) & _U64_MASK):
+                    self._write_local_u64(self._head_mem, int(swap_value) & _U64_MASK)
+                return old
+            if ptr_addr == self.descriptor.tail_addr:
+                old = self._read_local_u64(self._tail_mem)
+                if old == (int(compare_value) & _U64_MASK):
+                    self._write_local_u64(self._tail_mem, int(swap_value) & _U64_MASK)
+                return old
+        raise RuntimeError("rdma_cas failed and no local fallback for ptr")
 
     def _rdma_read_bytes(self, remote_addr: int, length: int) -> bytes:
         if self.rdma_server is not None and self._descriptor is not None:
@@ -207,7 +240,7 @@ class RDMABuffer:
 
     def _read_remote_u64(self, remote_addr: int) -> int:
         raw = self._rdma_read_bytes(remote_addr, 8)
-        return int.from_bytes(raw, byteorder="big", signed=False)
+        return int.from_bytes(raw, byteorder="little", signed=False)
 
     def _slot_offset(self, index: int) -> int:
         return (index % self.buffer_size) * self.slot_size
@@ -223,38 +256,40 @@ class RDMABuffer:
             raise ValueError("invalid slot payload")
         plen = int.from_bytes(raw_slot[:4], byteorder="little", signed=False)
         if plen == 0:
-            return {}
+            raise ValueError("slot payload is not committed yet")
+        if plen > self.slot_size - 4:
+            raise ValueError(f"invalid slot payload length: {plen}")
         data = raw_slot[4 : 4 + plen]
-        return json.loads(data.decode("utf-8"))
+        try:
+            return json.loads(data.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("slot payload is incomplete or corrupted") from exc
 
     def produce(self, config: Dict[str, Any]) -> int:
         """Produce one config into ring buffer and advance tail by rdma_faa."""
         if self.rdma_server is None and self.rdma_client is None:
             raise RuntimeError("produce requires rdma_server or rdma_client")
 
-        # Reserve one slot by atomically incrementing tail.
-        old_tail = self._rdma_faa(self.descriptor.tail_addr, 1)
+        # Read current indices first, write the slot fully, then publish by advancing tail.
+        old_tail = self._read_remote_u64(self.descriptor.tail_addr)
         cur_head = self._read_remote_u64(self.descriptor.head_addr)
-        used = (old_tail + 1) - cur_head
-        if used > self.buffer_size:
-            self._rdma_faa(self.descriptor.tail_addr, -1)
-            logger.error(
-                "Ring buffer full: old_tail=%d cur_head=%d used=%d buffer_size=%d",
-                old_tail,
-                cur_head,
-                used,
-                self.buffer_size,
-            )
+        if self._u64_distance(old_tail, cur_head) >= self.buffer_size:
             raise BufferError("ring buffer is full")
 
         slot_idx = old_tail % self.buffer_size
         offset = self._slot_offset(slot_idx)
         payload = self._serialize_config(config)
+        payload_len_header = payload[:4]
+        payload_body = payload[4:]
 
         # Write payload to the selected slot (works for both server-local and client-remote paths).
         slot_addr = self.descriptor.slot_addr + offset
         self._rdma_write_bytes(slot_addr, b"\x00" * self.slot_size)
-        self._rdma_write_bytes(slot_addr, payload)
+        if payload_body:
+            self._rdma_write_bytes(slot_addr + 4, payload_body)
+        # Write length header last so consumers never parse a half-written payload.
+        self._rdma_write_bytes(slot_addr, payload_len_header)
+        self._rdma_faa(self.descriptor.tail_addr, 1)
         logger.info("Produced config to RDMA buffer slot %d", slot_idx)
         return slot_idx
 
@@ -263,38 +298,74 @@ class RDMABuffer:
         if self.role != "client":
             raise RuntimeError("consume is only allowed in client role")
 
-        try:
-            cur_head = self._read_remote_u64(self.descriptor.head_addr)
-            cur_tail = self._read_remote_u64(self.descriptor.tail_addr)
-        except Exception as exc:
-            return None
+        max_claim_retries = max(8, self.buffer_size * 2)
+        claim_retry_sleep_seconds = 0.001
 
-        if cur_head >= cur_tail:
-            return None
-
-        try:
-            old_head = self._rdma_faa(self.descriptor.head_addr, 1)
-        except Exception as exc:
-            return None
-
-        if old_head >= cur_tail:
+        for _ in range(max_claim_retries):
             try:
-                self._rdma_faa(self.descriptor.head_addr, -1)
-            except Exception as exc:
-                logger.warning("RDMA buffer rollback failed on empty consume: %s", exc)
-            logger.debug(
-                "Consume race lost: old_head=%d cur_tail=%d (rolled back)",
-                old_head,
-                cur_tail,
-            )
-            return None
+                cur_head = self._read_remote_u64(self.descriptor.head_addr)
+                cur_tail = self._read_remote_u64(self.descriptor.tail_addr)
+            except Exception:
+                return None
 
-        slot_idx = old_head % self.buffer_size
-        slot_addr = self.descriptor.slot_addr + self._slot_offset(slot_idx)
-        try:
-            raw = self._rdma_read_bytes(slot_addr, self.slot_size)
-        except Exception as exc:
-            logger.warning("RDMA buffer slot read failed for slot %d: %s", slot_idx, exc)
-            return None
-        logger.info("Consumed config from RDMA buffer slot %d", slot_idx)
-        return self._deserialize_config(raw)
+            # Fast path: empty queue, do not touch head.
+            if self._u64_distance(cur_tail, cur_head) == 0:
+                return None
+
+            slot_idx = cur_head % self.buffer_size
+            slot_addr = self.descriptor.slot_addr + self._slot_offset(slot_idx)
+            max_read_retries = 5
+            retry_sleep_seconds = 0.002
+            last_error: Optional[Exception] = None
+            config: Optional[Dict[str, Any]] = None
+
+            for _ in range(max_read_retries):
+                try:
+                    raw = self._rdma_read_bytes(slot_addr, self.slot_size)
+                    config = self._deserialize_config(raw)
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    time.sleep(retry_sleep_seconds)
+
+            if config is None:
+                # Keep head unchanged so this slot can be retried later.
+                logger.warning(
+                    "RDMA buffer slot %d read incomplete after retries, keeping head unchanged: %s",
+                    slot_idx,
+                    last_error,
+                )
+                return None
+
+            try:
+                old_head = self._rdma_cas(
+                    self.descriptor.head_addr,
+                    cur_head,
+                    (cur_head + 1) & _U64_MASK,
+                )
+            except Exception as exc:
+                logger.warning("RDMA buffer head CAS failed for slot %d: %s", slot_idx, exc)
+                return None
+
+            if old_head != cur_head:
+                # Another consumer advanced head first; retry from latest head.
+                time.sleep(claim_retry_sleep_seconds)
+                continue
+
+            logger.info("Consumed config from RDMA buffer slot %d", slot_idx)
+            return config
+
+        logger.warning("RDMA buffer consume contention is too high, skip this round")
+        return None
+
+    def pending_count(self) -> int:
+        """Return current queue length inferred from ring tail/head counters."""
+        cur_head = self._read_remote_u64(self.descriptor.head_addr)
+        cur_tail = self._read_remote_u64(self.descriptor.tail_addr)
+        pending = int(self._u64_distance(cur_tail, cur_head))
+        if pending <= 0:
+            return 0
+        if pending > self.buffer_size:
+            return self.buffer_size
+        return pending
