@@ -55,7 +55,7 @@ def calculate_dimensions(target_area, ratio):
 class Qwen25_VLForConditionalGeneration_TextEncoder:
     def __init__(self, config):
         self.config = config
-        self.tokenizer_max_length = 1024
+        self.tokenizer_max_length = config.get("tokenizer_max_length", 4096)
         self.prompt_template_encode = config["prompt_template_encode"]
         self.prompt_template_encode_start_idx = config["prompt_template_encode_start_idx"]
         """
