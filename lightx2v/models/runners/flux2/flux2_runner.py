@@ -13,6 +13,8 @@ from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4D
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
@@ -45,8 +47,11 @@ class Flux2BaseRunner(DefaultRunner):
 
     def init_modules(self):
         logger.info(f"Initializing {self.config['model_cls']} modules...")
-        self.load_model()
-        self.model.set_scheduler(self.scheduler)
+        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
+            self.load_model()
+            self.model.set_scheduler(self.scheduler)
+        elif self.config.get("lazy_load", False):
+            assert self.config.get("cpu_offload", False)
 
         task = self.config.get("task", "t2i")
         if task == "i2i":
@@ -59,8 +64,12 @@ class Flux2BaseRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-        torch.cuda.empty_cache()
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
+        torch_device_module.empty_cache()
         gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
@@ -70,7 +79,11 @@ class Flux2BaseRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders I2I")
     def _run_input_encoder_local_i2i(self):
         prompt = self.input_info.prompt
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
 
         image_path = self.input_info.image_path
         from PIL import Image
@@ -108,7 +121,7 @@ class Flux2BaseRunner(DefaultRunner):
             if index == 0:
                 self.input_info.target_shape = (image_height, image_width)
 
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
 
         return {
@@ -244,6 +257,9 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae = self.load_vae()
+
         B, _, C = latents.shape
 
         H = int((self.input_info.latent_image_ids[0, :, 1].max() + 1).item())
@@ -252,7 +268,7 @@ class Flux2BaseRunner(DefaultRunner):
         latents = latents.view(B, H, W, C).permute(0, 3, 1, 2)
 
         bn_mean = self.vae.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
-        bn_std = torch.sqrt(self.vae.vae.bn.running_var.view(1, -1, 1, 1) + self.vae.vae.config.batch_norm_eps)
+        bn_std = torch.sqrt(self.vae.vae.bn.running_var.view(1, -1, 1, 1) + self.vae.vae.config.batch_norm_eps).to(latents.device, latents.dtype)
         latents = latents * bn_std + bn_mean
 
         latents = latents.reshape(B, C // 4, 2, 2, H, W)
@@ -260,6 +276,12 @@ class Flux2BaseRunner(DefaultRunner):
         latents = latents.reshape(B, C // 4, H * 2, W * 2)
 
         images = self.vae.decode(latents, self.input_info)
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae
+            torch_device_module.empty_cache()
+            gc.collect()
+
         return images
 
     @ProfilingContext4DebugL1("RUN pipeline")
@@ -279,7 +301,7 @@ class Flux2BaseRunner(DefaultRunner):
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")
 
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
         gc.collect()
 
         if input_info.return_result_tensor:
