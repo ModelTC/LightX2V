@@ -78,7 +78,10 @@ class ImageGenerationService(BaseGenerationService):
                 )
             else:
                 error_msg = result.get("error", "Inference failed")
-                raise RuntimeError(error_msg)
+                error_type = result.get("error_type", "")
+                exc = RuntimeError(error_msg)
+                exc.original_error_type = error_type
+                raise exc
 
         except Exception as e:
             logger.exception(f"Task {message.task_id} processing failed: {str(e)}")

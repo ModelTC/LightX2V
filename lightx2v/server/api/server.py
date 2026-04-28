@@ -145,7 +145,8 @@ class ApiServer:
 
         except Exception as e:
             logger.exception(f"Task {task_id} processing failed: {str(e)}")
-            task_manager.fail_task(task_id, str(e))
+            original_et = getattr(e, "original_error_type", "") or ""
+            task_manager.fail_task(task_id, str(e), error_type=original_et or None)
         finally:
             if lock_acquired:
                 task_manager.release_processing_lock(task_id)

@@ -68,6 +68,7 @@ class TorchrunInferenceWorker:
     async def process_request(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         has_error = False
         error_msg = ""
+        error_type = ""
         pipeline_return = None
 
         try:
@@ -103,6 +104,7 @@ class TorchrunInferenceWorker:
         except Exception as e:
             has_error = True
             error_msg = str(e)
+            error_type = type(e).__name__
             logger.exception(f"Rank {self.rank} inference failed: {error_msg}")
 
         if self.world_size > 1:
@@ -114,6 +116,7 @@ class TorchrunInferenceWorker:
                     "task_id": task_data.get("task_id", "unknown"),
                     "status": "failed",
                     "error": error_msg,
+                    "error_type": error_type,
                     "message": f"Inference failed: {error_msg}",
                 }
             else:
