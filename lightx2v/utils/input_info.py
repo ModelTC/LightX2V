@@ -46,6 +46,9 @@ class I2VInputInfo:
     pose: str = field(default_factory=lambda: None)
     # Lingbot i2v camera/action conditioning (optional)
     action_path: str = field(default_factory=str)
+    # Motus i2v action_expert conditioning (optional)
+    state_path: str = field(default_factory=str)
+    save_action_path: str = field(default_factory=str)
 
 
 @dataclass
