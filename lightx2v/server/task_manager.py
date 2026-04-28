@@ -27,6 +27,7 @@ class TaskInfo:
     start_time: datetime = field(default_factory=datetime.now)
     end_time: Optional[datetime] = None
     error: Optional[str] = None
+    error_type: Optional[str] = None
     save_result_path: Optional[str] = None
     result_png: Optional[bytes] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -97,7 +98,7 @@ class TaskManager:
             self.completed_tasks += 1
             self._emit_queue_metrics_unlocked()
 
-    def fail_task(self, task_id: str, error: str):
+    def fail_task(self, task_id: str, error: str, error_type: Optional[str] = None):
         with self._lock:
             if task_id not in self._tasks:
                 logger.warning(f"Task {task_id} not found for failure")
@@ -107,6 +108,7 @@ class TaskManager:
             task.status = TaskStatus.FAILED
             task.end_time = datetime.now()
             task.error = error
+            task.error_type = error_type
 
             self.failed_tasks += 1
             self._emit_queue_metrics_unlocked()
@@ -154,7 +156,15 @@ class TaskManager:
         if not task:
             return None
 
-        return {"task_id": task.task_id, "status": task.status.value, "start_time": task.start_time, "end_time": task.end_time, "error": task.error, "save_result_path": task.save_result_path}
+        return {
+            "task_id": task.task_id,
+            "status": task.status.value,
+            "start_time": task.start_time,
+            "end_time": task.end_time,
+            "error": task.error,
+            "error_type": task.error_type or "",
+            "save_result_path": task.save_result_path,
+        }
 
     def get_all_tasks(self):
         with self._lock:

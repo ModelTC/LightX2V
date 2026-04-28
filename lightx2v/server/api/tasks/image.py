@@ -34,7 +34,11 @@ async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_
             raise HTTPException(status_code=500, detail=f"Task completed but no in-memory image found: {task_id}")
 
         if status == TaskStatus.FAILED.value:
-            raise HTTPException(status_code=500, detail=task_status.get("error", "Task failed"))
+            error_type = task_status.get("error_type", "")
+            error_detail = task_status.get("error", "Task failed")
+            if error_type == "ValueError":
+                raise HTTPException(status_code=413, detail=error_detail)
+            raise HTTPException(status_code=500, detail=error_detail)
 
         if status == TaskStatus.CANCELLED.value:
             raise HTTPException(status_code=409, detail=task_status.get("error", "Task cancelled"))
@@ -108,6 +112,8 @@ async def create_image_task(message: ImageTaskRequest):
             save_result_path=message.save_result_path,
         )
     except RuntimeError as e:
+        if getattr(e, "original_error_type", "") == "ValueError":
+            raise HTTPException(status_code=413, detail=str(e))
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create image task: {e}")
@@ -168,6 +174,8 @@ async def create_image_task_sync(
         raise
 
     except RuntimeError as e:
+        if getattr(e, "original_error_type", "") == "ValueError":
+            raise HTTPException(status_code=413, detail=str(e))
         raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
@@ -229,6 +237,8 @@ async def create_image_task_form(
             save_result_path=message.save_result_path,
         )
     except RuntimeError as e:
+        if getattr(e, "original_error_type", "") == "ValueError":
+            raise HTTPException(status_code=413, detail=str(e))
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create image form task: {e}")
