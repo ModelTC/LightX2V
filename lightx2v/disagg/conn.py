@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import struct
 import threading
 from collections.abc import Mapping
@@ -81,6 +82,14 @@ DATASENDER_POLLING_PORT = 17788
 DATARECEIVER_POLLING_PORT = 27788
 
 
+def _normalize_loopback_host(host: str) -> str:
+    normalized = (host or "").strip()
+    if os.getenv("DISAGG_FORCE_IPV4_LOOPBACK", "1") not in ("0", "false", "False"):
+        if normalized in ("localhost", "::1", ""):
+            return "127.0.0.1"
+    return normalized or "127.0.0.1"
+
+
 class DataManager:
     # TODO: make it general and support multiple transfer backend before merging
     def __init__(self, disaggregation_phase: DisaggregationPhase, disaggregation_mode: DisaggregationMode):
@@ -146,18 +155,25 @@ class DataManager:
                         sender_data_ptrs = self.request_pool.pop(pending_room)
 
                     self.sync_status_to_transformer_endpoint(endpoint, pending_room)
-                    ret = self.send_data(
-                        pending_room,
-                        mooncake_session_id,
-                        sender_data_ptrs,
-                        receiver_ptrs,
-                    )
+                    try:
+                        ret = self.send_data(
+                            pending_room,
+                            mooncake_session_id,
+                            sender_data_ptrs,
+                            receiver_ptrs,
+                        )
+                    except Exception:
+                        logger.exception("Transfer loop exception room=%s session=%s", pending_room, mooncake_session_id)
+                        ret = -1
                     with self.pool_lock:
                         if ret != 0:
                             self.request_status[pending_room] = DataPoll.Failed
                         else:
                             self.request_status[pending_room] = DataPoll.Success
-                    self.sync_status_to_transformer_endpoint(endpoint, pending_room)
+                    try:
+                        self.sync_status_to_transformer_endpoint(endpoint, pending_room)
+                    except Exception:
+                        logger.exception("Failed to sync final status room=%s endpoint=%s", pending_room, endpoint)
 
         self.transfer_thread = threading.Thread(target=transfer_loop, name="data-transfer-thread")
         self.transfer_thread.start()
@@ -295,25 +311,35 @@ class DataManager:
         # TODO: transfer data in batch if there are many tensors or large tensors, instead of sending one by one.
         args = self.data_args[room]
         tensor_num = int(len(args.data_ptrs))
+        chunk_bytes = int(os.getenv("MOONCAKE_TRANSFER_CHUNK_BYTES", str(1024 * 1024)))
+        if chunk_bytes <= 0:
+            chunk_bytes = 1024 * 1024
         for tensor_id in range(tensor_num):
             sender_addr = sender_data_ptrs[tensor_id]
             item_len = args.data_item_lens[tensor_id]
             receiver_addr = receiver_ptrs[tensor_id]
 
-            # TODO: mooncake transfer engine can do async transfer. Do async later
-            status = self.engine.transfer_sync(
-                mooncake_session_id,
-                sender_addr,
-                receiver_addr,
-                item_len,
-            )
-            if status != 0:
-                return status
+            offset = 0
+            remaining = int(item_len)
+            while remaining > 0:
+                transfer_len = min(chunk_bytes, remaining)
+                # TODO: mooncake transfer engine can do async transfer. Do async later
+                status = self.engine.transfer_sync(
+                    mooncake_session_id,
+                    sender_addr + offset,
+                    receiver_addr + offset,
+                    transfer_len,
+                )
+                if status != 0:
+                    return status
+                offset += transfer_len
+                remaining -= transfer_len
         return 0
 
     def sync_status_to_transformer_endpoint(self, remote: str, room: int):
         if ":" in remote:
             remote = remote.split(":")[0]
+        remote = _normalize_loopback_host(remote)
         receiver_rank = self.data_args[room].receiver_engine_rank
         receiver_rank_port = DATARECEIVER_POLLING_PORT + receiver_rank + room * 10
         self._connect("tcp://" + remote + ":" + str(receiver_rank_port)).send_multipart(
@@ -335,12 +361,14 @@ class DataManager:
                 try:
                     (
                         endpoint,
+                        receiver_engine_rank_raw,
                         mooncake_session_id,
                         bootstrap_room,
                         transformer_ptrs,
                     ) = room_socket.recv_multipart()
                 except zmq.Again:
                     continue
+                receiver_engine_rank = int.from_bytes(receiver_engine_rank_raw, byteorder="big")
                 if bootstrap_room.decode("ascii") == "None":
                     continue
                 endpoint = endpoint.decode("ascii")
@@ -348,10 +376,11 @@ class DataManager:
                 bootstrap_room = int(bootstrap_room.decode("ascii"))
                 transformer_ptrs = list(struct.unpack(f"{len(transformer_ptrs) // 8}Q", transformer_ptrs))
                 logger.info(
-                    "Encoder received ZMQ: endpoint=%s session_id=%s room=%s transformer_ptrs=%s",
+                    "Encoder received ZMQ: endpoint=%s session_id=%s room=%s receiver_engine_rank=%s transformer_ptrs=%s",
                     endpoint,
                     mooncake_session_id,
                     bootstrap_room,
+                    receiver_engine_rank,
                     transformer_ptrs,
                 )
                 with self.pool_lock:
@@ -360,6 +389,8 @@ class DataManager:
                         mooncake_session_id,
                         transformer_ptrs,
                     )
+                    if bootstrap_room in self.data_args:
+                        self.data_args[bootstrap_room].receiver_engine_rank = receiver_engine_rank
                 if self.transfer_event is not None:
                     self.transfer_event.set()
 
@@ -405,12 +436,14 @@ class DataManager:
                 try:
                     (
                         endpoint,
+                        receiver_engine_rank_raw,
                         mooncake_session_id,
                         bootstrap_room,
                         decode_ptrs,
                     ) = room_socket.recv_multipart()
                 except zmq.Again:
                     continue
+                receiver_engine_rank = int.from_bytes(receiver_engine_rank_raw, byteorder="big")
                 if bootstrap_room.decode("ascii") == "None":
                     continue
                 endpoint = endpoint.decode("ascii")
@@ -418,10 +451,11 @@ class DataManager:
                 bootstrap_room = int(bootstrap_room.decode("ascii"))
                 decode_ptrs = list(struct.unpack(f"{len(decode_ptrs) // 8}Q", decode_ptrs))
                 logger.info(
-                    "Transformer received ZMQ: endpoint=%s session_id=%s room=%s decode_ptrs=%s",
+                    "Transformer received ZMQ: endpoint=%s session_id=%s room=%s receiver_engine_rank=%s decode_ptrs=%s",
                     endpoint,
                     mooncake_session_id,
                     bootstrap_room,
+                    receiver_engine_rank,
                     decode_ptrs,
                 )
                 with self.pool_lock:
@@ -430,6 +464,8 @@ class DataManager:
                         mooncake_session_id,
                         decode_ptrs,
                     )
+                    if bootstrap_room in self.data_args:
+                        self.data_args[bootstrap_room].receiver_engine_rank = receiver_engine_rank
                 if self.transfer_event is not None:
                     self.transfer_event.set()
 
@@ -541,9 +577,10 @@ class DataReceiver:
             raise ValueError("bootstrap_room is required for DataReceiver")
         args = self.data_mgr.data_args[self.bootstrap_room]
         sender_rank_port = DATASENDER_POLLING_PORT + args.sender_engine_rank + self.bootstrap_room * 10
-        self.sender_server_url = bootstrap_addr.split(":")[0] + ":" + str(sender_rank_port)
+        sender_host = _normalize_loopback_host(bootstrap_addr.split(":")[0])
+        self.sender_server_url = sender_host + ":" + str(sender_rank_port)
         logger.info("DataReceiver sender_server_url=%s", self.sender_server_url)
-        self.receiver_ip = self.data_mgr.get_localhost()
+        self.receiver_ip = _normalize_loopback_host(self.data_mgr.get_localhost())
         self.session_id = self.data_mgr.get_session_id()
         self.data_mgr.set_status(bootstrap_room, DataPoll.WaitingForInput)
 
@@ -560,6 +597,7 @@ class DataReceiver:
         self._connect("tcp://" + self.sender_server_url).send_multipart(
             [
                 self.receiver_ip.encode("ascii"),
+                args.receiver_engine_rank.to_bytes(4, byteorder="big"),
                 self.session_id.encode("ascii"),
                 str(self.bootstrap_room).encode("ascii"),
                 packed_data_ptrs,

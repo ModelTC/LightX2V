@@ -1,0 +1,15 @@
+{
+    "model_cls": "flux2_dev",
+    "task": "t2i",
+    "infer_steps": 50,
+    "sample_guide_scale": 4.0,
+    "vae_scale_factor": 16,
+    "feature_caching": "None",
+    "enable_cfg": false,
+    "patch_size": 2,
+    "tokenizer_max_length": 512,
+    "rope_type": "flashinfer",
+    "text_encoder_out_layers": [10, 20, 30],
+    "cpu_offload": true,
+    "offload_granularity": "block"
+}

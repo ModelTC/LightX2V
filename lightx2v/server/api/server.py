@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from loguru import logger
 from starlette.responses import RedirectResponse
 
+from ..metrics import monitor_cli
 from ..services import DistributedInferenceService
 from ..task_manager import TaskStatus, task_manager
 from .deps import ServiceContainer, get_services
@@ -25,6 +26,40 @@ class ApiServer:
         self._setup_routes()
 
     def _setup_routes(self):
+        @self.app.middleware("http")
+        async def metrics_middleware(request, call_next):
+            start_time = time.monotonic()
+            method = request.method
+            endpoint = request.url.path
+            monitor_cli.lightx2v_api_request_total.labels(method=method, endpoint=endpoint).inc()
+
+            try:
+                response = await call_next(request)
+                status_code = response.status_code
+                status_label = "success" if status_code < 400 else "error"
+                if status_code >= 400:
+                    monitor_cli.lightx2v_api_request_error_total.labels(
+                        method=method,
+                        endpoint=endpoint,
+                        error_type=f"http_{status_code}",
+                    ).inc()
+                return response
+            except Exception as e:
+                status_label = "error"
+                monitor_cli.lightx2v_api_request_error_total.labels(
+                    method=method,
+                    endpoint=endpoint,
+                    error_type=type(e).__name__,
+                ).inc()
+                raise
+            finally:
+                duration = time.monotonic() - start_time
+                monitor_cli.lightx2v_api_request_e2e_duration_seconds.labels(
+                    method=method,
+                    endpoint=endpoint,
+                    status=status_label,
+                ).observe(duration)
+
         @self.app.get("/")
         def redirect_to_docs():
             return RedirectResponse(url="/docs")
@@ -94,7 +129,11 @@ class ApiServer:
             result = await generation_service.generate_with_stop_event(message, task_info.stop_event)
 
             if result:
-                task_manager.complete_task(task_id, result.save_result_path)
+                task_manager.complete_task(
+                    task_id,
+                    save_result_path=result.save_result_path or None,
+                    result_png=getattr(result, "result_png", None),
+                )
                 logger.info(f"Task {task_id} completed successfully")
             else:
                 if task_info.stop_event.is_set():
@@ -106,7 +145,8 @@ class ApiServer:
 
         except Exception as e:
             logger.exception(f"Task {task_id} processing failed: {str(e)}")
-            task_manager.fail_task(task_id, str(e))
+            original_et = getattr(e, "original_error_type", "") or ""
+            task_manager.fail_task(task_id, str(e), error_type=original_et or None)
         finally:
             if lock_acquired:
                 task_manager.release_processing_lock(task_id)

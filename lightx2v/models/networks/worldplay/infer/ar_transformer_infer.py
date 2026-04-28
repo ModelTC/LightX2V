@@ -327,7 +327,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
         # Use bidirectional attention for full-video inference
         # (causal=False, same as distill model)
         seqlen = query.shape[1]
-        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu")
         attn_out = weights.self_attention.apply(
             q=query,
             k=key,
@@ -541,7 +541,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                 block_weights = self.offload_manager.cuda_buffers[0]
                 txt_q, txt_k, txt_v, txt_branch_out = self._infer_txt_branch_before_attn(block_weights, infer_module_out)
                 txt_seqlen = txt_q.shape[1]
-                cu_seqlens_qkv = torch.tensor([0, txt_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+                cu_seqlens_qkv = torch.tensor([0, txt_seqlen], dtype=torch.int32, device="cpu")
                 txt_attn = block_weights.self_attention.apply(
                     q=txt_q,
                     k=txt_k,
@@ -603,8 +603,8 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                     value_full = value_full.transpose(1, 2)
                     img_seqlen = query.shape[1]
                     kv_seqlen = key_full.shape[1]
-                    cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
-                    cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+                    cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu")
+                    cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu")
                     attn_out = block_weights.self_attention.apply(
                         q=query,
                         k=key_full,
@@ -644,8 +644,8 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                     value = value.transpose(1, 2)
                     img_seqlen = img_q.shape[1]
                     kv_seqlen = key.shape[1]
-                    cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
-                    cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+                    cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu")
+                    cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu")
                     img_attn = block_weights.self_attention.apply(
                         q=img_q,
                         k=key,
@@ -702,7 +702,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
 
             # Text self-attention (is_causal=False)
             txt_seqlen = txt_q.shape[1]
-            cu_seqlens_qkv = torch.tensor([0, txt_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+            cu_seqlens_qkv = torch.tensor([0, txt_seqlen], dtype=torch.int32, device="cpu")
             txt_attn = block_weights.self_attention.apply(
                 q=txt_q,
                 k=txt_k,
@@ -817,8 +817,8 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                 kv_seqlen = key_full.shape[1]
 
                 # cu_seqlens for 2 sequences (normal and prope)
-                cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
-                cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+                cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu")
+                cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu")
 
                 # Single attention call for both streams
                 attn_out = block_weights.self_attention.apply(
@@ -878,8 +878,8 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
                 # Attention computation
                 img_seqlen = img_q.shape[1]
                 kv_seqlen = key.shape[1]
-                cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
-                cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu").to(AI_DEVICE, non_blocking=True)
+                cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu")
+                cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu")
 
                 img_attn = block_weights.self_attention.apply(
                     q=img_q,

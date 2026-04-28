@@ -175,6 +175,40 @@ HYBRID_30_900S_BUCKETS = (
 
 
 METRICS_INFO = {
+    "lightx2v_api_request_total": MetricsConfig(
+        name="lightx2v_api_request_total",
+        desc="Total number of API requests",
+        type_="counter",
+        labels=["method", "endpoint"],
+    ),
+    "lightx2v_api_request_error_total": MetricsConfig(
+        name="lightx2v_api_request_error_total",
+        desc="Total number of API request errors",
+        type_="counter",
+        labels=["method", "endpoint", "error_type"],
+    ),
+    "lightx2v_api_request_e2e_duration_seconds": MetricsConfig(
+        name="lightx2v_api_request_e2e_duration_seconds",
+        desc="End-to-end API request latency (s)",
+        type_="histogram",
+        labels=["method", "endpoint", "status"],
+        buckets=HYBRID_1_30S_BUCKETS,
+    ),
+    "lightx2v_task_queue_pending_size": MetricsConfig(
+        name="lightx2v_task_queue_pending_size",
+        desc="Current number of pending tasks in queue",
+        type_="gauge",
+    ),
+    "lightx2v_task_queue_active_size": MetricsConfig(
+        name="lightx2v_task_queue_active_size",
+        desc="Current number of active tasks (pending + processing)",
+        type_="gauge",
+    ),
+    "lightx2v_task_queue_capacity": MetricsConfig(
+        name="lightx2v_task_queue_capacity",
+        desc="Configured queue capacity",
+        type_="gauge",
+    ),
     "lightx2v_worker_request_count": MetricsConfig(
         name="lightx2v_worker_request_count",
         desc="The total number of requests",

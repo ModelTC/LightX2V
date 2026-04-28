@@ -1,4 +1,9 @@
+import base64
+
+import numpy as np
 import torch
+import torch.nn.functional as F
+import torchvision.io as io
 from PIL import Image
 
 from lightx2v.models.networks.neopp.model import NeoppModel
@@ -30,6 +35,10 @@ class NeoppRunner(DefaultRunner):
         self.past_key_values_text_uncond = None
         self.past_key_values_img_uncond = None
         self.num_input_images = config.get("num_input_images", 1)
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def init_scheduler(self):
         self.scheduler = NeoppMoeScheduler(self.config)
@@ -73,60 +82,47 @@ class NeoppRunner(DefaultRunner):
             token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
-            if self.config["task"] == "i2i":
-                N = self.num_input_images  # Need Check !!!!!!!!!!!
-                t_offset_img_uncond = self.past_key_values_img_uncond.shape[-3]
-                t_offset_text_uncond = t_offset_img_uncond + 3 * N
-                t_offset_cond = t_offset_text_uncond + (self.past_key_values_cond.shape[-3] - self.past_key_values_text_uncond.shape[-3])
+            indexes_cond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_cond, device=self.init_device)
+            indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_uncond, device=self.init_device)
 
-                indexes_cond = self._build_t2i_image_indexes(token_h, token_w, t_offset_cond, device=self.init_device)
-                indexes_text_uncond = self._build_t2i_image_indexes(token_h, token_w, t_offset_text_uncond, device=self.init_device)
-                indexes_img_uncond = self._build_t2i_image_indexes(token_h, token_w, t_offset_img_uncond, device=self.init_device)
+            cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
+            cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
+            cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
 
-                cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
+            cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
+            cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
+            cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
 
-                cos_t_text_uncond, sin_t_text_uncond = self._compute_rope(indexes_text_uncond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_text_uncond, sin_h_text_uncond = self._compute_rope(indexes_text_uncond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_text_uncond, sin_w_text_uncond = self._compute_rope(indexes_text_uncond[2].unsqueeze(0), self.inv_freq_hw)
+            if self.seq_p_group is not None:
+                world_size = dist.get_world_size(self.seq_p_group)
+                cur_rank = dist.get_rank(self.seq_p_group)
+                seq_len = cos_t_cond.shape[1]
+                padding_size = (world_size - (seq_len % world_size)) % world_size
 
-                cos_t_img_uncond, sin_t_img_uncond = self._compute_rope(indexes_img_uncond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_img_uncond, sin_h_img_uncond = self._compute_rope(indexes_img_uncond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_img_uncond, sin_w_img_uncond = self._compute_rope(indexes_img_uncond[2].unsqueeze(0), self.inv_freq_hw)
+                def _pad_and_chunk(t):
+                    if padding_size > 0:
+                        t = F.pad(t, (0, 0, 0, padding_size))
+                    return torch.chunk(t, world_size, dim=1)[cur_rank]
 
-                return {
-                    "past_key_values_cond": self.past_key_values_cond,
-                    "past_key_values_text_uncond": self.past_key_values_text_uncond,
-                    "past_key_values_img_uncond": self.past_key_values_img_uncond,
-                    "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
-                    "cos_sin_text_uncond": (cos_t_text_uncond, sin_t_text_uncond, cos_h_text_uncond, sin_h_text_uncond, cos_w_text_uncond, sin_w_text_uncond),
-                    "cos_sin_img_uncond": (cos_t_img_uncond, sin_t_img_uncond, cos_h_img_uncond, sin_h_img_uncond, cos_w_img_uncond, sin_w_img_uncond),
-                }
-            elif self.config["task"] == "t2i":
-                input_len_cond = self.past_key_values_cond.shape[-3]
-                input_len_uncond = self.past_key_values_uncond.shape[-3]
+                cos_t_cond = _pad_and_chunk(cos_t_cond)
+                sin_t_cond = _pad_and_chunk(sin_t_cond)
+                cos_h_cond = _pad_and_chunk(cos_h_cond)
+                sin_h_cond = _pad_and_chunk(sin_h_cond)
+                cos_w_cond = _pad_and_chunk(cos_w_cond)
+                sin_w_cond = _pad_and_chunk(sin_w_cond)
+                cos_t_uncond = _pad_and_chunk(cos_t_uncond)
+                sin_t_uncond = _pad_and_chunk(sin_t_uncond)
+                cos_h_uncond = _pad_and_chunk(cos_h_uncond)
+                sin_h_uncond = _pad_and_chunk(sin_h_uncond)
+                cos_w_uncond = _pad_and_chunk(cos_w_uncond)
+                sin_w_uncond = _pad_and_chunk(sin_w_uncond)
 
-                indexes_cond = self._build_t2i_image_indexes(token_h, token_w, input_len_cond, device=self.init_device)
-                indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, input_len_uncond, device=self.init_device)
-
-                cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
-
-                cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
-                cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
-                cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
-
-                return {
-                    "past_key_values_cond": self.past_key_values_cond,
-                    "past_key_values_uncond": self.past_key_values_uncond,
-                    "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
-                    "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
-                }
-            else:
-                print(f"self.config['task'] : {self.config['task']}")
-                raise ValueError(f"Unsupported task: {self.config['task']}")
+            return {
+                "past_key_values_cond": self.past_key_values_cond,
+                "past_key_values_uncond": self.past_key_values_uncond,
+                "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
+                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
+            }
 
     def get_latent_shape_with_target_hw(self):
         target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
@@ -134,54 +130,106 @@ class NeoppRunner(DefaultRunner):
         latent_shape = [1, 3, target_height, target_width]
         return latent_shape
 
-    def run_pipeline(self, input_info):
+    def multi_pipeline_run_debug(self, input_info):
         self.input_info = input_info
         if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
-            if self.config["task"] == "i2i":
-                if self.config.get("version", "moe") == "moe":
-                    pass
-                else:
-                    self.load_kvcache_i2i(
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor_it2i/to_x2v_cond_kv.pt",
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor_it2i/to_x2v_uncond_kv_text.pt",
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor_it2i/to_x2v_uncond_kv_img.pt",
-                    )
-            elif self.config["task"] == "t2i":
-                if self.config.get("version", "moe") == "moe":
-                    self.load_kvcache_t2i(
-                        "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_cond_kv.pt",
-                        "/data/nvme1/yongyang/FL/neo_test/vlm_tensor/to_x2v_uncond_kv.pt",
-                    )
-                else:
-                    self.load_kvcache_t2i(
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_cond_kv.pt",
-                        "/data/nvme1/yongyang/FL/neo_test9b/vlm_tensor/to_x2v_uncond_kv.pt",
-                    )
-        assert self.past_key_values_cond is not None, "cond KV cache must be loaded"
+            self.load_kvcache(
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0_289.pt",
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0_9.pt",
+            )
+            self.set_inference_params(
+                index_offset_cond=289,
+                index_offset_uncond=9,
+                cfg_interval=(-1, 2),
+                cfg_scale=4.0,
+                cfg_norm="global",
+                timestep_shift=3.0,
+            )
+            self.input_info.save_result_path = self.input_info.save_result_path.replace(".png", "_0.png")
+
+        self.inputs = self.run_input_encoder()
+        gen_result = self.run_main()
+        self.clear_kvcache()
+
+        self.input_info = self.input_info
+        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+            self.load_kvcache(
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_1_346.pt",
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_1_12.pt",
+            )
+            self.set_inference_params(
+                index_offset_cond=346,
+                index_offset_uncond=12,
+                cfg_interval=(-1, 2),
+                cfg_scale=4.0,
+                cfg_norm="global",
+                timestep_shift=3.0,
+            )
+            self.input_info.save_result_path = self.input_info.save_result_path.replace("_0.png", "_1.png")
 
         self.inputs = self.run_input_encoder()
         gen_result = self.run_main()
         self.clear_kvcache()
         return gen_result
 
-    def load_kvcache_t2i(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        logger.info(f"Loaded KV cache from {to_x2v_cond_kv_path} and {to_x2v_uncond_kv_path}")
-        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+    def run_pipeline(self, input_info):
+        self.input_info = input_info
+        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
+            self.load_kvcache(
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0_289.pt",
+                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0_9.pt",
+            )
+            self.set_inference_params(
+                index_offset_cond=289,
+                index_offset_uncond=9,
+                cfg_interval=(-1, 2),
+                cfg_scale=4.0,
+                cfg_norm="global",
+                timestep_shift=3.0,
+            )
 
-    def load_kvcache_i2i(self, to_x2v_cond_path, to_x2v_text_uncond_path, to_x2v_img_uncond_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_text_uncond = torch.load(to_x2v_text_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        logger.info(f"Loaded i2i KV caches: cond={self.past_key_values_cond.shape}, text_uncond={self.past_key_values_text_uncond.shape}, img_uncond={self.past_key_values_img_uncond.shape}")
+        self.inputs = self.run_input_encoder()
+        gen_result = self.run_main()
+        self.clear_kvcache()
+        return gen_result
+
+    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
+        cfg_p_rank = self._get_cfg_p_rank()
+        if cfg_p_rank != 1:  # rank 0 只做 cond，无需加载 uncond
+            self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+            logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
+        if cfg_p_rank != 0:  # rank 1 只做 uncond，无需加载 cond
+            self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+            logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
+
+    def set_inference_params(self, index_offset_cond, index_offset_uncond, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
+        self.index_offset_cond = index_offset_cond
+        self.index_offset_uncond = index_offset_uncond
+        self.scheduler.timestep_shift = timestep_shift
+        self.model.cfg_interval = cfg_interval
+        self.model.cfg_scale = cfg_scale
+        self.model.cfg_norm = cfg_norm
+
+    def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor):
+        cfg_p_rank = self._get_cfg_p_rank()
+        if cfg_p_rank != 1:
+            self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
+            logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
+        if cfg_p_rank != 0:
+            self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
+            logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
+
+    def _get_cfg_p_rank(self):
+        """返回当前进程在 cfg_p 组内的 rank；未开启 cfg_parallel 时返回 None（两份 kvcache 都需要加载）。"""
+        if self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            return dist.get_rank(cfg_p_group)
+        return None
 
     def clear_kvcache(self):
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
-        self.past_key_values_text_uncond = None
-        self.past_key_values_img_uncond = None
+        self.model.transformer_infer.kv_cache.clear()
 
     def init_run(self):
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape)
@@ -201,10 +249,18 @@ class NeoppRunner(DefaultRunner):
             with ProfilingContext4DebugL1("step_post"):
                 self.scheduler.step_post()
 
-        gen_result = self.process_images_after_vae_decoder()
+        if self.config.get("save_result_for_debug", True):
+            gen_result = self.process_images_after_vae_decoder_for_debug()
+        else:
+            gen_result = self.process_images_after_vae_decoder()
         return gen_result
 
     def process_images_after_vae_decoder(self):
+        image = self._denorm(self.scheduler.image_prediction.float())
+        image = (image.clamp(0, 1) * 255.0).round().to(torch.uint8).cpu()
+        return base64.b64encode(io.encode_jpeg(image[0]).numpy()).decode("utf-8")
+
+    def process_images_after_vae_decoder_for_debug(self):
         image = self._denorm(self.scheduler.image_prediction.float())
         image = (image.clamp(0, 1).permute(0, 2, 3, 1).cpu().numpy() * 255.0).round().astype(np.uint8)
         grid_image = Image.fromarray(image[0])

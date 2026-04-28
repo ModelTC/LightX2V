@@ -174,6 +174,11 @@ class MMWeightTemplate(metaclass=ABCMeta):
         out = torch.mm(h, self.lora_up.t())
         return self.lora_strength * self.lora_scale * out
 
+    def _get_lora_target_device(self):
+        if hasattr(self, "weight") and self.weight is not None:
+            return self.weight.device
+        return AI_DEVICE
+
     def set_config(self, config={}):
         self.config = config
 
@@ -192,28 +197,34 @@ class MMWeightTemplate(metaclass=ABCMeta):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
             if self.lora_down_name in weight_dict:
                 self.has_lora_branch = True
-                self.lora_down = weight_dict[self.lora_down_name]
-                self.lora_up = weight_dict[self.lora_up_name]
+                target_device = self._get_lora_target_device()
+                self.lora_down = weight_dict[self.lora_down_name].to(target_device)
+                self.lora_up = weight_dict[self.lora_up_name].to(target_device)
                 self.lora_strength = lora_strength
                 if self.lora_alpha_name in weight_dict:
-                    self.lora_alpha = weight_dict[self.lora_alpha_name]
+                    self.lora_alpha = weight_dict[self.lora_alpha_name].to(target_device)
                     self.lora_scale = self.lora_alpha / self.lora_down.shape[0]
                 else:
-                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                    self.lora_scale = torch.tensor(1.0, device=target_device)
                 logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
 
     def update_lora(self, weight_dict, lora_strength=1):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
             if self.lora_down_name in weight_dict:
+                if not hasattr(self, "lora_down") or self.lora_down is None:
+                    self.register_lora(weight_dict, lora_strength)
+                    logger.debug(f"Register LoRA (first dynamic) on {self.weight_name}")
+                    return
                 self.has_lora_branch = True
-                self.lora_down.copy_(weight_dict[self.lora_down_name])
-                self.lora_up.copy_(weight_dict[self.lora_up_name])
+                target_device = self.lora_down.device
+                self.lora_down.copy_(weight_dict[self.lora_down_name].to(target_device))
+                self.lora_up.copy_(weight_dict[self.lora_up_name].to(target_device))
                 self.lora_strength = lora_strength
                 if self.lora_alpha_name in weight_dict:
-                    self.lora_alpha.copy_(weight_dict[self.lora_alpha_name])
+                    self.lora_alpha.copy_(weight_dict[self.lora_alpha_name].to(target_device))
                     self.lora_scale.copy_(self.lora_alpha / self.lora_down.shape[0])
                 else:
-                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                    self.lora_scale = torch.tensor(1.0, device=target_device)
                 logger.debug(f"Update LoRA to {self.weight_name}")
 
     def remove_lora(self):
@@ -336,6 +347,46 @@ class MMWeight(MMWeightTemplate):
                 bias_tensor = lazy_load_file.get_tensor(self.bias_name)
                 self.pin_bias.copy_(bias_tensor)
                 del bias_tensor
+
+
+@MM_WEIGHT_REGISTER("Default-ForceFp32")
+class MMWeightForceFp32(MMWeight):
+    """Weight variant that keeps weights in fp32 regardless of global dtype.
+
+    Semantics-wise identical to the ``Default`` scheme (plain ``torch.addmm`` /
+    ``torch.mm``), except the weight and bias are always materialized in
+    fp32. Used for numerically sensitive layers (e.g. ``MlpFP32.fc2``) where
+    running in bf16/fp16 degrades final predictions.
+    """
+
+    def load(self, weight_dict):
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            weight = device_tensors.get("weight")
+            bias = device_tensors.get("bias")
+            if weight is not None:
+                weight = weight.to(torch.float32)
+            if bias is not None:
+                bias = bias.to(torch.float32)
+            self.weight = weight
+            self.bias = bias
+            pin_weight = pin_tensors.get("weight")
+            pin_bias = pin_tensors.get("bias")
+            if pin_weight is not None:
+                pin_weight = pin_weight.to(torch.float32)
+            if pin_bias is not None:
+                pin_bias = pin_bias.to(torch.float32)
+            self.pin_weight = pin_weight
+            self.pin_bias = pin_bias
+        else:
+            # Fall back to the Default load path, then force fp32 on the
+            # tensors we expose (buffers for CUDA/CPU streams are left alone
+            # so the copy mechanics keep working; apply() will cast as needed).
+            super().load(weight_dict)
+            if getattr(self, "weight", None) is not None:
+                self.weight = self.weight.to(torch.float32)
+            if getattr(self, "bias", None) is not None:
+                self.bias = self.bias.to(torch.float32)
 
 
 class MMWeightQuantTemplate(MMWeightTemplate):
@@ -1257,6 +1308,68 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             del weight_scale_tensor
 
 
+@MM_WEIGHT_REGISTER("CalibMax")
+class MMCalibMax(MMWeight):
+    """Max-absmax calibration: record max(|input|) across every forward.
+
+    Unlike the EMA-based ``Calib`` variant (which was designed for NVFP4 and
+    smooths over outliers), this records the *worst-case* absolute value
+    observed during the calibration sweep. Feeding the resulting
+    ``input_scale = absmax / 448`` into ``fp8-pertensor`` eliminates clipping
+    on the calibration corpus — essential when the model has occasional
+    high-magnitude outliers (the WorldMirror ViT backbone's attention
+    projections do).
+    """
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path,
+        )
+        self.running_absmax = None
+
+    def apply(self, input_tensor):
+        shape = (input_tensor.shape[0], self.weight.shape[1])
+        dtype, device = input_tensor.dtype, input_tensor.device
+
+        current_absmax = torch.max(torch.abs(input_tensor)).detach().to("cpu").to(torch.float32)
+        if self.running_absmax is None:
+            self.running_absmax = current_absmax
+        else:
+            self.running_absmax = torch.maximum(self.running_absmax, current_absmax)
+        CALIB["absmax"][self.weight_name] = self.running_absmax
+
+        weight = self.weight
+        bias = getattr(self, "bias", None)
+        if weight.dtype != dtype and dtype in (torch.float16, torch.bfloat16):
+            weight = weight.to(dtype)
+            if bias is not None:
+                bias = bias.to(dtype)
+
+        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        if bias is not None:
+            return torch.addmm(bias, input_tensor, weight, out=output_tensor)
+        return torch.mm(input_tensor, weight, out=output_tensor)
+
+
 @MM_WEIGHT_REGISTER("Calib")
 class MMCalibNvfp4(MMWeight):
     """
@@ -1306,10 +1419,23 @@ class MMCalibNvfp4(MMWeight):
             CALIB["absmax"][self.weight_name] = self.running_absmax
         self.count = self.count + 1
 
+        # Under ``torch.amp.autocast(bf16)``, callers feed the layer bf16 but
+        # the weight is still loaded fp32 — ``torch.addmm`` rejects the
+        # mixed dtype. Down-cast the weight to match the input (same
+        # semantics as ``nn.Linear`` under autocast). This keeps the
+        # recorded absmax consistent with what the eventual fp8 activation
+        # quantizer will see at inference time.
+        weight = self.weight
+        bias = getattr(self, "bias", None)
+        if weight.dtype != dtype and dtype in (torch.float16, torch.bfloat16):
+            weight = weight.to(dtype)
+            if bias is not None:
+                bias = bias.to(dtype)
+
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
-        if hasattr(self, "bias") and self.bias is not None:
-            return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
-        return torch.mm(input_tensor, self.weight, out=output_tensor)
+        if bias is not None:
+            return torch.addmm(bias, input_tensor, weight, out=output_tensor)
+        return torch.mm(input_tensor, weight, out=output_tensor)
 
 
 @MM_WEIGHT_REGISTER("fp8-q8f")
@@ -2168,7 +2294,44 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
 
     def load_fp8_pertensor_sym(self, weight_dict):
         if self.config.get("weight_auto_quant", False):
-            raise NotImplementedError
+            # On-the-fly symmetric fp8 weight quantization. Used when the
+            # source checkpoint stores plain fp32 weights (no
+            # ``.weight_scale`` key), typically paired with a pre-collected
+            # per-layer ``input_scale`` from a calibration run — caller
+            # supplies that via ``weight_dict[self.input_scale_name]``, we
+            # just materialize ``weight`` and ``weight_scale`` here.
+            #
+            # Two weight-scale granularities, selected by
+            # ``weight_scale_granularity`` in the caller's runtime config:
+            #   * ``"tensor"`` (default): one scalar scale for the whole
+            #     matrix — mirrors the pre-quantized load_quantized path.
+            #   * ``"channel"``: one scale per output channel. Activation
+            #     quantization stays per-tensor (static from calibration),
+            #     but weight precision improves dramatically because each
+            #     row of the weight matrix uses the full fp8 dynamic range
+            #     independently. Empirically the only way to get
+            #     WorldMirror's quantized point counts below 1% diff.
+            w = weight_dict[self.weight_name].to(torch.float32)
+            granularity = self.config.get("weight_scale_granularity", "tensor")
+            if granularity == "channel":
+                # w shape: [out, in]; scale shape [out, 1] for row-wise quant.
+                w_absmax = w.abs().amax(dim=1, keepdim=True)
+                w_absmax = torch.clamp(w_absmax, min=1e-8)
+                scale_rowwise = (w_absmax / 448.0).to(torch.float32)
+                quantized = torch.clamp(w / scale_rowwise, -448.0, 448.0).to(torch.float8_e4m3fn)
+                self.weight = quantized.to(AI_DEVICE)
+                # torch._scaled_mm wants scale_b shape (1, N) where N is
+                # the *output* dimension — post our .t() transpose the mat
+                # is [in, out], so N = w.shape[0]. Store that shape here.
+                self.weight_scale = scale_rowwise.squeeze(1).unsqueeze(0).to(AI_DEVICE)
+            else:
+                w_absmax = w.abs().max()
+                scale = (w_absmax / 448.0).to(torch.float32)
+                if float(scale) == 0.0:
+                    scale = torch.tensor(1.0, dtype=torch.float32, device=scale.device)
+                self.weight_scale = scale.to(AI_DEVICE)
+                quantized = torch.clamp(w / self.weight_scale.to(w.device), -448.0, 448.0)
+                self.weight = quantized.to(torch.float8_e4m3fn).to(AI_DEVICE)
         else:
             self.load_quantized(weight_dict)
 
@@ -2177,20 +2340,38 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
         return quantized
 
     def apply(self, input_tensor):
-        shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
-        device = input_tensor.device
-        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        # ``torch._scaled_mm`` on H100 refuses ``bias`` when ``out_dtype`` is
+        # fp32 — the fused epilogue only supports bf16/fp16 accumulators.
+        # Emit at bf16 when the caller wants fp32 + bias, then cast back.
+        bias = self._get_actual_bias()
+        use_bf16_accum = (dtype == torch.float32) and (bias is not None)
+        mm_dtype = torch.bfloat16 if use_bf16_accum else dtype
+        if bias is not None and bias.dtype != mm_dtype:
+            bias = bias.to(mm_dtype)
         input_tensor_quant = self.act_quant_func(input_tensor)
+        # weight_scale shape: () / (1,) for per-tensor, (1, N) for
+        # per-output-channel. ``torch._scaled_mm`` wants scale_b shape
+        # (1, 1) for per-tensor or (1, N) for per-channel — and when
+        # *either* scale is 2D (RowWise/ColWise scaling), both must be 2D.
+        ws = self.weight_scale
+        if ws.dim() == 2:
+            scale_b = ws
+            scale_a = self.input_scale.reshape(1, 1)
+        else:
+            scale_b = ws.reshape(1)
+            scale_a = self.input_scale
         output_tensor = torch._scaled_mm(
             input_tensor_quant,
             self.weight,
-            scale_a=self.input_scale,
-            scale_b=self.weight_scale.reshape(1),
-            bias=self._get_actual_bias(),
-            out_dtype=dtype,
+            scale_a=scale_a,
+            scale_b=scale_b,
+            bias=bias,
+            out_dtype=mm_dtype,
             use_fast_accum=True,
         )
+        if use_bf16_accum:
+            output_tensor = output_tensor.to(dtype)
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor

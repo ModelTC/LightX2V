@@ -2,6 +2,7 @@ import math
 from typing import List, Optional, Union
 
 import torch
+from loguru import logger
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -56,6 +57,7 @@ class NeoppMoeScheduler(BaseScheduler):
         mu: Optional[Union[float, None]] = None,
         shift: Optional[Union[float, None]] = None,
     ):
+        logger.info(f"scheduler: timestep_shift={shift}")
         timesteps = torch.linspace(0.0, 1.0, self.infer_steps + 1, device=device)
         self.timesteps = self._apply_time_schedule(timesteps, timestep_shift=shift)
 

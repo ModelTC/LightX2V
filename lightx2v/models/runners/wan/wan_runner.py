@@ -16,6 +16,7 @@ except ImportError:
     Rotation = None
     Slerp = None
 
+from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
@@ -70,7 +71,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 
 
 @RUNNER_REGISTER("wan2.1")
-class WanRunner(DefaultRunner):
+class WanRunner(DisaggMixin, DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
         self.vae_cls = WanVAE
@@ -121,6 +122,7 @@ class WanRunner(DefaultRunner):
                 cpu_offload=clip_offload,
                 use_31_block=self.config.get("use_31_block", True),
                 load_from_rank0=self.config.get("load_from_rank0", False),
+                dummy_model=self.config.get("dummy_model", False),
             )
 
         return image_encoder
@@ -161,6 +163,7 @@ class WanRunner(DefaultRunner):
             quant_scheme=t5_quant_scheme,
             load_from_rank0=self.config.get("load_from_rank0", False),
             lazy_load=self.config.get("t5_lazy_load", False),
+            dummy_model=self.config.get("dummy_model", False),
         )
         text_encoders = [text_encoder]
         return text_encoders
@@ -189,6 +192,7 @@ class WanRunner(DefaultRunner):
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
@@ -212,6 +216,7 @@ class WanRunner(DefaultRunner):
             "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
@@ -229,6 +234,10 @@ class WanRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
+        super().init_scheduler()
+        if self.config.get("disagg_mode") == "decode":
+            return
+
         if self.config["feature_caching"] == "NoCaching":
             scheduler_class = WanScheduler
         elif self.config["feature_caching"] == "TaylorSeer":
@@ -242,6 +251,123 @@ class WanRunner(DefaultRunner):
             self.scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
         else:
             self.scheduler = scheduler_class(self.config)
+
+    def init_modules(self):
+        if self.config.get("disagg_mode"):
+            self.init_disagg(self.config)
+        super().init_modules()
+
+    @ProfilingContext4DebugL2("Load models")
+    def load_model(self):
+        disagg_mode = self.config.get("disagg_mode")
+        if disagg_mode == "encoder":
+            logger.info("[Disagg] Loading models for ENCODER role (Wan)...")
+            self.model = None
+            self.text_encoders = self.load_text_encoder()
+            self.image_encoder = self.load_image_encoder()
+            self.vae_encoder, self.vae_decoder = self.load_vae()
+            self.vfi_model = None
+            self.vsr_model = None
+        elif disagg_mode == "transformer":
+            logger.info("[Disagg] Loading models for TRANSFORMER role (Wan)...")
+            self.model = self.load_transformer()
+            self.text_encoders = None
+            self.image_encoder = None
+            # Skip VAE if a dedicated Decoder service handles Phase 2
+            if self.config.get("disagg_config", {}).get("decoder_engine_rank") is not None:
+                self.vae_encoder, self.vae_decoder = None, None
+            else:
+                self.vae_encoder, self.vae_decoder = self.load_vae()
+            self.vfi_model = None
+            self.vsr_model = None
+        elif disagg_mode == "decode":
+            logger.info("[Disagg] Loading models for DECODE role (Wan)...")
+            self.model = None
+            self.text_encoders = None
+            self.image_encoder = None
+            self.vae_encoder = None
+            self.vae_decoder = self.load_vae_decoder()
+            self.vfi_model = None
+            self.vsr_model = None
+        else:
+            super().load_model()
+
+    def _run_transformer_role(self):
+        """Run DiT; send latents to Phase 2 Decoder if configured, else VAE-decode locally."""
+        self.init_run()
+        for segment_idx in range(self.video_segment_num):
+            logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
+            self.check_stop()
+            self.init_run_segment(segment_idx)
+            latents = self.run_segment(segment_idx)
+            if self._disagg_p2_sender is not None:
+                self.send_transformer_outputs(latents)
+                self.end_run()
+                return None
+            else:
+                if self.config.get("use_stream_vae", False):
+                    frames = []
+                    for frame_segment in self.run_vae_decoder_stream(latents):
+                        frames.append(frame_segment)
+                    self.gen_video = torch.cat(frames, dim=2)
+                else:
+                    self.gen_video = self.run_vae_decoder(latents)
+                self.end_run_segment(segment_idx)
+        gen_video_final = self.process_images_after_vae_decoder()
+        self.end_run()
+        return gen_video_final
+
+    def _run_pipeline_local(self):
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+        self.inputs = self.run_input_encoder()
+        return self.run_main()
+
+    def _run_pipeline_disagg_encoder(self):
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+        self.inputs = self.run_input_encoder()
+        latent_shape = list(self.input_info.latent_shape)
+        self.send_encoder_outputs(self.inputs, latent_shape)
+        logger.info("[Disagg] Encoder role completed.")
+        return None
+
+    def _run_pipeline_disagg_transformer(self):
+        if self.config["use_prompt_enhancer"]:
+            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
+        self.inputs = self.receive_encoder_outputs()
+        latent_shape = self.inputs.get("latent_shape")
+        if latent_shape:
+            self.input_info.latent_shape = latent_shape
+        return self._run_transformer_role()
+
+    def _run_pipeline_disagg_decode(self):
+        # Decoder role: receive DiT latents, run VAE, save video
+        latents = self.receive_transformer_outputs()
+        self.gen_video = self.run_vae_decoder(latents)
+        self.gen_video_final = self.gen_video
+        return self.process_images_after_vae_decoder()
+
+    @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["WanRunner"])
+    def run_pipeline(self, input_info):
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_count.inc()
+        self.input_info = input_info
+        disagg_mode = self.config.get("disagg_mode")
+
+        if disagg_mode == "encoder":
+            gen_video_final = self._run_pipeline_disagg_encoder()
+        elif disagg_mode == "transformer":
+            gen_video_final = self._run_pipeline_disagg_transformer()
+        elif disagg_mode == "decode":
+            gen_video_final = self._run_pipeline_disagg_decode()
+        else:
+            # Keep default runner pipeline behavior unchanged in local mode.
+            gen_video_final = self._run_pipeline_local()
+
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_success.inc()
+        return gen_video_final
 
     @ProfilingContext4DebugL1(
         "Run Text Encoder",
@@ -684,6 +810,63 @@ class Wan22DenseRunner(WanRunner):
         self.vae_name = "Wan2.2_VAE.pth"
         self.tiny_vae_name = "taew2_2.pth"
 
+    def _resolve_wan22_vae_paths(self):
+        requested_vae_type = str(self.config.get("vae_type", "wan")).lower()
+        if requested_vae_type not in {"wan", "wan2.2", "mg_lightvae", "mg_lightvae_v2"}:
+            raise ValueError(f"Unsupported wan2.2 vae_type: {requested_vae_type}")
+
+        if requested_vae_type in {"wan", "wan2.2"}:
+            decoder_filename = "Wan2.2_VAE.pth"
+            resolved_vae_type = "wan2.2"
+            default_pruning_rate = None
+        elif requested_vae_type == "mg_lightvae":
+            decoder_filename = "MG-LightVAE.pth"
+            resolved_vae_type = "mg_lightvae"
+            default_pruning_rate = 0.5
+        else:
+            decoder_filename = "MG-LightVAE_v2.pth"
+            resolved_vae_type = "mg_lightvae"
+            default_pruning_rate = 0.75
+
+        decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
+        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+
+        return {
+            "vae_path": decoder_path,
+            "vae_type": resolved_vae_type,
+            "lightvae_pruning_rate": self.config.get("lightvae_pruning_rate", default_pruning_rate),
+            "lightvae_encoder_vae_pth": teacher_encoder_path,
+        }
+
+    def _build_wan22_vae_config(self, vae_offload):
+        vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
+        resolved_paths = self._resolve_wan22_vae_paths()
+        return {
+            "vae_path": resolved_paths["vae_path"],
+            "device": vae_device,
+            "parallel": self.get_vae_parallel(),
+            "use_tiling": self.config.get("use_tiling_vae", False),
+            "cpu_offload": vae_offload,
+            "dtype": GET_DTYPE(),
+            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "vae_type": resolved_paths["vae_type"],
+            "lightvae_pruning_rate": resolved_paths["lightvae_pruning_rate"],
+            "lightvae_encoder_vae_pth": resolved_paths["lightvae_encoder_vae_pth"],
+        }
+
+    def load_vae_encoder(self):
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
+            return None
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
+
+    def load_vae_decoder(self):
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if self.config.get("use_tae", False):
+            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+            return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+        return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
+
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -720,18 +903,8 @@ class Wan22DenseRunner(WanRunner):
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
     def __init__(self, config):
-        with config.temporarily_unlocked():
-            if "use_image_encoder" not in config:
-                config["use_image_encoder"] = False
-            config["enable_lingbot_cam_ctrl"] = bool(config.get("enable_lingbot_cam_ctrl", True))
         super().__init__(config)
-        model_path = str(self.config.get("model_path", "")).lower()
-        if "cam" in model_path:
-            self.control_type = "cam"
-        elif "act" in model_path:
-            self.control_type = "act"
-        else:
-            self.control_type = "cam"
+        self.control_type = config.get("control_type", "cam")
 
     def set_inputs(self, inputs):
         super().set_inputs(inputs)

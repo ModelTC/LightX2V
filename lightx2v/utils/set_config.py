@@ -38,15 +38,33 @@ def get_default_config():
 def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
+
+    # Snapshot worldmirror-specific CLI flags so they can win over JSON
+    # defaults after auto_calc_config merges the JSON in. See the
+    # ``worldmirror`` branch of ``auto_calc_config`` for the replay logic.
+    _wm_cli_keys = (
+        "subfolder",
+        "disable_heads",
+        "enable_bf16",
+        "save_rendered",
+        "render_interp_per_pair",
+        "render_depth",
+        "wm_config_path",
+        "wm_ckpt_path",
+    )
+    config["_wm_cli_snapshot"] = {k: getattr(args, k, None) for k in _wm_cli_keys if hasattr(args, k)}
     return config
 
 
 def auto_calc_config(config):
+    cli_num_iterations = config.get("num_iterations", None)
     if config.get("config_json", None) is not None:
         logger.info(f"Loading some config from {config['config_json']}")
         with open(config["config_json"], "r") as f:
             config_json = json.load(f)
         config.update(config_json)
+        if cli_num_iterations is not None:
+            config["num_iterations"] = cli_num_iterations
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
@@ -62,6 +80,44 @@ def auto_calc_config(config):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "worldmirror":
+        # WorldMirror weights live under {model_path}/{subfolder}/, with a config.json
+        # alongside model.safetensors. The runner loads this config directly; here we
+        # only expose the resolved transformer path for logging.
+        subfolder = config.get("subfolder", "HY-WorldMirror-2.0")
+        candidate = os.path.join(config["model_path"], subfolder)
+        if os.path.isdir(candidate):
+            config["transformer_model_path"] = candidate
+        else:
+            config["transformer_model_path"] = config["model_path"]
+
+        # Re-apply worldmirror-specific CLI overrides. ``auto_calc_config`` just
+        # finished merging the JSON, which will have clobbered any store_true /
+        # default-bearing CLI flags that the user set on the command line. We
+        # pull those specific keys back from the original args snapshot so that
+        # ``--enable_bf16`` / ``--save_rendered`` / ``--disable_heads`` etc.
+        # always win over JSON defaults.
+        #
+        # Caveat: ``argparse``'s ``store_true`` flags look the same (value
+        # ``False``) whether the user omitted them or explicitly wants False,
+        # so we only treat non-False, non-None values as explicit overrides.
+        # This matches the documented "CLI overrides JSON-true is not possible
+        # without a dedicated --no_xxx flag" behaviour.
+        _cli_snapshot = config.pop("_wm_cli_snapshot", None)
+        if isinstance(_cli_snapshot, dict):
+            for k, v in _cli_snapshot.items():
+                if v is None or v is False:
+                    continue
+                config[k] = v
+            # Translate the ``--wm_config_path`` / ``--wm_ckpt_path`` CLI
+            # aliases to the runner-visible keys, and don't leave the
+            # aliases lying around in the printed/locked config.
+            wm_config = config.pop("wm_config_path", None)
+            wm_ckpt = config.pop("wm_ckpt_path", None)
+            if wm_config:
+                config["config_path"] = wm_config
+            if wm_ckpt:
+                config["ckpt_path"] = wm_ckpt
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -115,7 +171,12 @@ def auto_calc_config(config):
                     model_config = json.load(f)
                 config.update(model_config)
 
-    if config["task"] in ["i2v", "s2v"]:
+    # Some upstream/offical configs use `num_inference_steps`, while the shared
+    # LightX2V scheduler stack expects `infer_steps`.
+    if "infer_steps" not in config and "num_inference_steps" in config:
+        config["infer_steps"] = config["num_inference_steps"]
+
+    if config["task"] in ["i2v", "s2v", "rs2v", "ltx2_s2v"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1

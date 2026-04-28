@@ -15,7 +15,19 @@ class TalkObject(BaseModel):
     mask: str = Field(..., description="Mask path")
 
 
-class BaseTaskRequest(BaseModel):
+class DisaggOverrideRequest(BaseModel):
+    """Optional Mooncake / disagg overrides (merged into runner.config per request)."""
+
+    data_bootstrap_room: Optional[int] = Field(None, description="Per-request Mooncake bootstrap room (disagg)")
+    disagg_phase1_receiver_engine_rank: Optional[int] = Field(
+        None,
+        description="Transformer receiver rank for phase1 send (decentralized / multi-transformer)",
+    )
+    disagg_bootstrap_room: Optional[int] = Field(None, description="Alias for data_bootstrap_room in some clients")
+    disagg_decoder_bootstrap_room: Optional[int] = Field(None, description="Phase2 Mooncake room override")
+
+
+class BaseTaskRequest(DisaggOverrideRequest):
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     prompt: str = Field("", description="Generation prompt")
     use_prompt_enhancer: bool = Field(False, description="Whether to use prompt enhancer")
@@ -23,11 +35,14 @@ class BaseTaskRequest(BaseModel):
     image_path: str = Field("", description="Base64 encoded image or URL")
     image_mask_path: str = Field("", description="Mask image path (supports URL, base64, or local path)")
     save_result_path: str = Field("", description="Save result path (optional, defaults to task_id, suffix auto-detected)")
+    presigned_url: str = Field("", description="Optional presigned URL for uploading final sync result")
     infer_steps: int = Field(5, description="Inference steps")
     seed: int = Field(default_factory=generate_random_seed, description="Random seed (auto-generated if not set)")
     target_shape: list[int] = Field([], description="Return video or image shape")
     lora_name: Optional[str] = Field(None, description="LoRA filename to load from lora_dir, None to disable LoRA")
     lora_strength: float = Field(1.0, description="LoRA strength")
+    # Internal switch: sync API sets this True to return image from memory only.
+    prefer_memory_result: bool = Field(default=False, exclude=True)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -71,6 +86,8 @@ class TaskResponse(BaseModel):
     task_id: str
     task_status: str
     save_result_path: str
+    # Filled after image generation in-process; never serialized in JSON responses.
+    result_png: Optional[bytes] = Field(default=None, exclude=True)
 
 
 class StopTaskResponse(BaseModel):

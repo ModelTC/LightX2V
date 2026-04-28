@@ -1,6 +1,6 @@
 import inspect
 from dataclasses import MISSING, dataclass, field, fields, make_dataclass
-from typing import Any
+from typing import Any, Optional
 
 import torch
 
@@ -235,6 +235,7 @@ class T2AVInputInfo:
     audio_latent_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -245,6 +246,7 @@ class I2AVInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -253,6 +255,29 @@ class I2AVInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
+class LTX2S2VInputInfo:
+    """LTX-2 audio-conditioned video (reference audio + optional reference images)."""
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
+    audio_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -280,6 +305,25 @@ class WorldPlayI2VInputInfo:
     viewmats: torch.Tensor = field(default_factory=lambda: None)
     Ks: torch.Tensor = field(default_factory=lambda: None)
     action: torch.Tensor = field(default_factory=lambda: None)
+
+
+@dataclass
+class WorldMirrorReconInputInfo:
+    """Input info for HY-WorldMirror-2.0 3D reconstruction.
+
+    Unlike the diffusion tasks, this task takes a directory / video / image
+    and saves multi-view depth / normal / Gaussian-splat results to disk.
+    """
+
+    seed: int = field(default_factory=int)
+    # Input may be a directory of images, a single image, or a video.
+    input_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)  # output root dir
+    strict_output_path: str = field(default_factory=lambda: None)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # Optional priors
+    prior_cam_path: str = field(default_factory=lambda: None)
+    prior_depth_path: str = field(default_factory=lambda: None)
 
 
 @dataclass
@@ -319,15 +363,17 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "ltx2_s2v": LTX2S2VInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,
+    "recon": WorldMirrorReconInputInfo,
 }
 
 
 def init_empty_input_info(task, support_tasks=[]):
     if len(support_tasks) == 0:
         support_tasks = [task]
-    assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
+    # assert task in support_tasks, f"Task {task} not in support tasks {support_tasks}"
 
     if len(support_tasks) == 1:
         support_task = support_tasks[0]

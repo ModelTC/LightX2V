@@ -11,7 +11,9 @@ This base class provides common functionality for:
 
 import gc
 import glob
+import json
 import os
+import struct
 from abc import ABC, abstractmethod
 
 import torch
@@ -24,6 +26,19 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import load_gguf_sd_ckpt
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+SAFETENSORS_DTYPE_MAP = {
+    "F64": torch.float64,
+    "F32": torch.float32,
+    "F16": torch.float16,
+    "BF16": torch.bfloat16,
+    "I64": torch.int64,
+    "I32": torch.int32,
+    "I16": torch.int16,
+    "I8": torch.int8,
+    "U8": torch.uint8,
+    "BOOL": torch.bool,
+}
 
 
 class BaseTransformerModel(CompiledMethodsMixin, ABC):
@@ -126,25 +141,105 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         """
         pass
 
+    @staticmethod
+    def _read_safetensors_metadata(file_path):
+        """Read tensor metadata (names, shapes, dtypes) from safetensors file header without loading data.
+
+        Supports two kinds of safetensors files:
+        1. Full model files: metadata is extracted from normal tensor header entries.
+        2. Lightweight dummy-meta files (exported by tools/convert/export_dummy_meta.py):
+           all tensor metadata is stored in ``__metadata__._tensor_meta`` as a JSON string,
+           with ``__metadata__._is_dummy_meta == "true"`` as the marker.
+        """
+        with open(file_path, "rb") as f:
+            header_size = struct.unpack("<Q", f.read(8))[0]
+            header_json = f.read(header_size).decode("utf-8")
+        header = json.loads(header_json)
+
+        metadata = header.get("__metadata__", {})
+        if metadata.get("_is_dummy_meta") == "true" and "_tensor_meta" in metadata:
+            return json.loads(metadata["_tensor_meta"])
+
+        tensors = {}
+        for key, info in header.items():
+            if key == "__metadata__":
+                continue
+            tensors[key] = {"shape": info["shape"], "dtype": info["dtype"]}
+        return tensors
+
+    def _load_dummy_ckpt(self, unified_dtype, sensitive_layer):
+        """Generate random weight dict by reading safetensors metadata, without loading actual pretrained data.
+
+        When dummy_model is enabled, this reads only the file headers to determine tensor names/shapes,
+        then allocates random tensors on self.device (derived from AI_DEVICE / cpu_offload).
+        """
+        dummy_device = str(self.device)
+        logger.info(f"[DummyModel] Generating random weights on device={dummy_device}")
+
+        if self.config.get("dit_original_ckpt", None):
+            safetensors_path = self.config["dit_original_ckpt"]
+        elif self.config.get("dit_quantized_ckpt", None) and self.dit_quantized:
+            safetensors_path = self.config["dit_quantized_ckpt"]
+        else:
+            safetensors_path = self.model_path
+
+        if os.path.isdir(safetensors_path):
+            safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+        else:
+            safetensors_files = [safetensors_path]
+
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+        preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None
+
+        weight_dict = {}
+        for file_path in safetensors_files:
+            if self.config.get("adapter_model_path", None) is not None:
+                if self.config["adapter_model_path"] == file_path:
+                    continue
+            logger.info(f"[DummyModel] Reading metadata from {file_path}")
+            tensors_meta = self._read_safetensors_metadata(file_path)
+            for key, meta in tensors_meta.items():
+                if any(rk in key for rk in remove_keys):
+                    continue
+                if preserve_keys is not None and not any(pk in key for pk in preserve_keys):
+                    continue
+                shape = meta["shape"]
+                st_dtype_str = meta["dtype"]
+                if unified_dtype or all(s not in key for s in sensitive_layer):
+                    dtype = GET_DTYPE()
+                else:
+                    dtype = GET_SENSITIVE_DTYPE()
+                original_dtype = SAFETENSORS_DTYPE_MAP.get(st_dtype_str)
+                if original_dtype is not None and not original_dtype.is_floating_point:
+                    dtype = original_dtype
+                weight_dict[key] = torch.randn(shape, dtype=dtype, device=dummy_device) if dtype.is_floating_point else torch.zeros(shape, dtype=dtype, device=dummy_device)
+
+        return weight_dict
+
     def _init_weights(self, weight_dict=None):
         unified_dtype = GET_DTYPE() == GET_SENSITIVE_DTYPE()
         # Some layers run with float32 to achieve high accuracy
         sensitive_layer = self.sensitive_layer
         if weight_dict is None:
-            is_weight_loader = self._should_load_weights()
-            if is_weight_loader:
-                if not self.dit_quantized:
-                    # Load original weights
-                    weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
-                else:
-                    # Load quantized weights
-                    weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
+            if self.config.get("dummy_model", False):
+                weight_dict = self._load_dummy_ckpt(unified_dtype, sensitive_layer)
+                if hasattr(self, "_load_adapter_ckpt"):
+                    weight_dict.update(self._load_adapter_ckpt())
+            else:
+                is_weight_loader = self._should_load_weights()
+                if is_weight_loader:
+                    if not self.dit_quantized:
+                        # Load original weights
+                        weight_dict = self._load_ckpt(unified_dtype, sensitive_layer)
+                    else:
+                        # Load quantized weights
+                        weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
 
-            if (self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False)) or (hasattr(self, "use_tp") and self.use_tp):
-                weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
+                if (self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False)) or (hasattr(self, "use_tp") and self.use_tp):
+                    weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
 
-            if hasattr(self, "_load_adapter_ckpt"):
-                weight_dict.update(self._load_adapter_ckpt())
+                if hasattr(self, "_load_adapter_ckpt"):
+                    weight_dict.update(self._load_adapter_ckpt())
 
             self.original_weight_dict = weight_dict
         else:
@@ -266,7 +361,10 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         self.transformer_weights.register_diff(lora_weight)
 
     def _update_lora(self, lora_path, strength):
-        lora_weight = self._load_lora_file(lora_path)
+        if isinstance(lora_path, dict):
+            lora_weight = lora_path
+        else:
+            lora_weight = self._load_lora_file(lora_path)
         self.pre_weight.update_lora(lora_weight, strength)
         self.transformer_weights.update_lora(lora_weight, strength)
         self.post_weight.update_lora(lora_weight, strength)

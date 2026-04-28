@@ -8,7 +8,9 @@ from loguru import logger
 
 from .api import ApiServer
 from .config import server_config
+from .metrics import server_process
 from .services import DistributedInferenceService
+from .task_manager import task_manager
 
 _shutdown_requested = False
 
@@ -39,6 +41,11 @@ def run_server(args):
             server_config.host = args.host
         if hasattr(args, "port") and args.port:
             server_config.port = args.port
+        if hasattr(args, "max_queue_size") and args.max_queue_size:
+            server_config.max_queue_size = int(args.max_queue_size)
+
+        task_manager.set_max_queue_size(server_config.max_queue_size)
+        logger.info(f"Task queue size set to {server_config.max_queue_size}")
 
         if not server_config.validate():
             raise RuntimeError("Invalid server configuration")
@@ -49,6 +56,12 @@ def run_server(args):
         logger.info(f"Rank {rank}: Inference service started successfully")
 
         if rank == 0:
+            metric_port = int(os.environ.get("LIGHTX2V_METRIC_PORT", 8001))
+            if hasattr(args, "metric_port") and args.metric_port:
+                metric_port = int(args.metric_port)
+            server_process(metric_port=metric_port)
+            logger.info(f"Metrics server started on {server_config.host}:{metric_port}")
+
             cache_dir = Path(server_config.cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
 
