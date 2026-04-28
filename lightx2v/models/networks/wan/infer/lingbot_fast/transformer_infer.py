@@ -1,8 +1,10 @@
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from loguru import logger
 
 from lightx2v.common.kvcache.quant import CalibRollingKVCachePool
+from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.wan.infer.lingbot.transformer_infer import WanLingbotTransformerInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import causal_rope_apply
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -13,9 +15,36 @@ torch_device_module = getattr(torch, AI_DEVICE)
 class WanLingbotFastTransformerInfer(WanLingbotTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
-        self.num_frame_per_chunk = config.get("ar_config", {}).get("num_frame_per_chunk", 3)
-        if config.get("ar_config", {}).get("kv_offload", False):
-            self.infer_func = self.infer_with_kvcache_offload
+        ar = config.get("ar_config", {})
+        self.num_frame_per_chunk = ar.get("num_frame_per_chunk", 3)
+        self._ar_kv_offload: bool = bool(ar.get("kv_offload", False))
+        if self._ar_kv_offload:
+            self.infer_block_func = self.infer_block_with_kvoffload
+        else:
+            self.infer_block_func = self.infer_block_with_kvcache
+
+        # Weight CPU↔GPU block streaming (WeightAsyncStreamManager) — independent of
+        # ``infer_block_func`` (KV cache CPU offload vs on-GPU).
+        self._weight_offload_block_compute = False
+        cpu_off = self.config.get("cpu_offload", False)
+        gran = self.config.get("offload_granularity", "block")
+        if cpu_off and gran == "block":
+            self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
+            self.lazy_load = self.config.get("lazy_load", False)
+            if self.lazy_load:
+                self.offload_manager.init_lazy_load(
+                    num_workers=self.config.get("num_disk_workers", 4),
+                )
+            self.infer_func = self.infer_with_kvcache_blocks_offload
+            self._weight_offload_block_compute = True
+        elif cpu_off:
+            logger.warning(
+                "[WanLingbotFastTransformerInfer] cpu_offload with offload_granularity={!r} does not use "
+                "block weight streaming; falling back to infer_with_kvcache. Use offload_granularity='block' "
+                "to enable infer_with_kvcache_blocks_offload (WeightAsyncStreamManager).",
+                gran,
+            )
+            self.infer_func = self.infer_with_kvcache
         else:
             self.infer_func = self.infer_with_kvcache
 
@@ -49,52 +78,17 @@ class WanLingbotFastTransformerInfer(WanLingbotTransformerInfer):
         k = torch.view_as_real(k_c * pos_freqs).flatten(2).type_as(k)
         return q, k
 
-    @staticmethod
-    def _a2a_seq_to_heads(x, world_size, shard_heads, group):
-        """[local_seq, all_heads, dim] -> [full_seq, shard_heads, dim]"""
-        local_seq, _, dim = x.shape
-        x = x.reshape(local_seq, world_size, shard_heads, dim).permute(1, 0, 2, 3).contiguous()
-        out = torch.empty_like(x)
-        dist.all_to_all_single(out, x, group=group)
-        return out.reshape(local_seq * world_size, shard_heads, dim)
-
-    @staticmethod
-    def _a2a_heads_to_seq(x, world_size, shard_heads, group):
-        """[full_seq, shard_heads, dim] -> [local_seq, all_heads, dim]"""
-        full_seq, _, dim = x.shape
-        local_seq = full_seq // world_size
-        x = x.reshape(world_size, local_seq, shard_heads, dim).contiguous()
-        out = torch.empty_like(x)
-        dist.all_to_all_single(out, x, group=group)
-        return out.permute(1, 0, 2, 3).reshape(local_seq, world_size * shard_heads, dim)
-
-    def _sp_kvcache_attn(self, q, k_cache, v_cache, phase):
-        world_size = dist.get_world_size(self.seq_p_group)
-        shard_heads = self.num_heads // world_size
-        d = self.head_dim
-
-        full_q = self._a2a_seq_to_heads(q, world_size, shard_heads, self.seq_p_group)
-        full_k = self._a2a_seq_to_heads(k_cache, world_size, shard_heads, self.seq_p_group)
-        full_v = self._a2a_seq_to_heads(v_cache, world_size, shard_heads, self.seq_p_group)
-
-        q_lens = torch.tensor([full_q.size(0)], dtype=torch.int32)
-        k_lens = torch.tensor([full_k.size(0)], dtype=torch.int32)
-        cu_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
-        cu_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
-
-        attn_out = phase.self_attn_1.apply(
-            q=full_q,
-            k=full_k,
-            v=full_v,
-            cu_seqlens_q=cu_q,
-            cu_seqlens_kv=cu_k,
-            max_seqlen_q=full_q.size(0),
-            max_seqlen_kv=full_k.size(0),
-        )
-
-        attn_out = attn_out.view(full_q.size(0), shard_heads, d)
-        attn_out = self._a2a_heads_to_seq(attn_out, world_size, shard_heads, self.seq_p_group)
-        return attn_out.reshape(q.size(0), self.num_heads * d)
+    # def _sp_kvcache_attn(self, q, k_cache, v_cache, phase):
+    #     kv_cache = self.kv_cache_manager.self_attn_kv_cache
+    #     return kv_cache.sp_kvcache_attn(
+    #         q=q,
+    #         k_cache=k_cache,
+    #         v_cache=v_cache,
+    #         attention_module=phase.self_attn_1,
+    #         seq_p_group=self.seq_p_group,
+    #         num_heads=self.num_heads,
+    #         head_dim=self.head_dim,
+    #     )
 
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
@@ -106,29 +100,119 @@ class WanLingbotFastTransformerInfer(WanLingbotTransformerInfer):
         mgr = self.kv_cache_manager
         self.kv_cache_size = mgr.kv_size
         self.max_attention_size = mgr.max_attention_size
-        self._kv_offload = False
-        for block_idx in range(len(blocks)):
-            self.block_idx = block_idx
-            x = self.infer_block_with_kvcache(blocks[block_idx], x, pre_infer_out)
-        return x
-
-    def infer_with_kvcache_offload(self, blocks, x, pre_infer_out):
-        mgr = self.kv_cache_manager
-        self.kv_cache_size = mgr.kv_size
-        self.max_attention_size = mgr.max_attention_size
-        self._kv_offload = True
+        self._kv_offload = self._ar_kv_offload
         kv_cache = mgr.self_attn_kv_cache
         num_blocks = len(blocks)
 
-        kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
+        if self._kv_offload:
+            kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
 
         for block_idx in range(num_blocks):
             self.block_idx = block_idx
-            self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
-            kv_cache.begin_layer(block_idx)
-            x = self.infer_block_with_kvcache(blocks[block_idx], x, pre_infer_out)
+            if self._kv_offload:
+                self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
+            x = self.infer_block_func(blocks[block_idx], x, pre_infer_out)
 
-        kv_cache.sync_all()
+        if self._kv_offload:
+            comp = getattr(kv_cache, "compute_stream", None)
+            if comp is not None:
+                comp.synchronize()
+            kv_cache.sync_all()
+        return x
+
+    def infer_with_kvcache_blocks_offload(self, blocks, x, pre_infer_out):
+        mgr = self.kv_cache_manager
+        self.kv_cache_size = mgr.kv_size
+        self.max_attention_size = mgr.max_attention_size
+        self._kv_offload = self._ar_kv_offload
+        kv_cache = mgr.self_attn_kv_cache
+        num_blocks = len(blocks)
+
+        if self._kv_offload:
+            kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
+
+        for block_idx in range(num_blocks):
+            self.block_idx = block_idx
+            if self._kv_offload:
+                self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
+
+            if self.offload_manager.need_init_first_buffer:
+                self.offload_manager.init_first_buffer(blocks)
+    
+            self.offload_manager.prefetch_weights((block_idx + 1) % num_blocks, blocks)
+            gpu_block = self.offload_manager.cuda_buffers[0]
+            if AI_DEVICE == "xpu":
+                x = self.infer_block_func(gpu_block, x, pre_infer_out)
+            else:
+                with torch_device_module.stream(self.offload_manager.compute_stream):
+                    x = self.infer_block_func(gpu_block, x, pre_infer_out)
+
+            self.offload_manager.swap_blocks()
+
+        if self.clean_cuda_cache:
+            del pre_infer_out.embed0, pre_infer_out.context
+            torch_device_module.empty_cache()
+
+        if self._kv_offload:
+            if self._weight_offload_block_compute and AI_DEVICE == "cuda":
+                self.offload_manager.compute_stream.synchronize()
+            else:
+                comp = getattr(kv_cache, "compute_stream", None)
+                if comp is not None:
+                    comp.synchronize()
+            kv_cache.sync_all()
+        return x
+
+    def infer_block_with_kvoffload(self, block, x, pre_infer_out):
+        """``begin_layer`` + optional ``kvcache.compute_stream`` around :meth:`infer_block_with_kvcache`.
+
+        When weight block offload is active, compute already runs on ``offload_manager.compute_stream``;
+        do not nest ``kvcache.compute_stream`` so ``begin_layer`` / attention share that stream.
+        """
+        kv_cache = self.kv_cache_manager.self_attn_kv_cache
+        if self._weight_offload_block_compute:
+            kv_cache.begin_layer(self.block_idx)
+            return self.infer_block_with_kvcache(block, x, pre_infer_out)
+        comp = getattr(kv_cache, "compute_stream", None)
+        if comp is not None:
+            with torch_device_module.stream(comp):
+                kv_cache.begin_layer(self.block_idx)
+                return self.infer_block_with_kvcache(block, x, pre_infer_out)
+        kv_cache.begin_layer(self.block_idx)
+        return self.infer_block_with_kvcache(block, x, pre_infer_out)
+
+    def infer_block_with_kvcache(self, block, x, pre_infer_out):
+        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.pre_process(
+            block.compute_phases[0].modulation,
+            pre_infer_out.embed0,
+        )
+
+        y_out = self.infer_self_attn_with_kvcache(
+            block.compute_phases[0],
+            pre_infer_out.grid_sizes.tensor,
+            x,
+            pre_infer_out.seq_lens,
+            pre_infer_out.freqs,
+            shift_msa,
+            scale_msa,
+        )
+
+        x, attn_out = self.infer_cross_attn_with_kvcache(
+            block.compute_phases[1],
+            x,
+            pre_infer_out.context,
+            y_out,
+            gate_msa,
+            block=block,
+            conditional_dict=pre_infer_out.conditional_dict,
+        )
+
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        x = self.post_process(x, y, c_gate_msa, pre_infer_out)
+
+        if self.has_post_adapter:
+            x = self.infer_post_adapter(block.compute_phases[3], x, pre_infer_out)
+
         return x
 
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
@@ -189,7 +273,17 @@ class WanLingbotFastTransformerInfer(WanLingbotTransformerInfer):
         if self.config.get("seq_parallel", False):
             attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
-            attn_out = self._sp_kvcache_attn(q, attn_k, attn_v, phase)
+            attn_out = kv_cache.sp_kvcache_attn(
+                q=q,
+                k_cache=attn_k,
+                v_cache=attn_v,
+                attention_module=phase.self_attn_1,
+                seq_p_group=self.seq_p_group,
+                num_heads=self.num_heads,
+                head_dim=self.head_dim,
+                attn_start=attn_start,
+                local_end=local_end_idx,
+            )
         else:
             attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
@@ -220,48 +314,12 @@ class WanLingbotFastTransformerInfer(WanLingbotTransformerInfer):
         if self.clean_cuda_cache:
             del q, k, v, attn_out
             torch_device_module.empty_cache()
-
-        return y
-
-    def infer_block_with_kvcache(self, block, x, pre_infer_out):
-        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.pre_process(
-            block.compute_phases[0].modulation,
-            pre_infer_out.embed0,
-        )
-
-        y_out = self.infer_self_attn_with_kvcache(
-            block.compute_phases[0],
-            pre_infer_out.grid_sizes.tensor,
-            x,
-            pre_infer_out.seq_lens,
-            pre_infer_out.freqs,
-            shift_msa,
-            scale_msa,
-        )
-
         if self._kv_offload:
             self.kv_cache_manager.self_attn_kv_cache.end_layer(
                 self.block_idx,
                 next_prefetch=self._next_prefetch,
             )
-
-        x, attn_out = self.infer_cross_attn_with_kvcache(
-            block.compute_phases[1],
-            x,
-            pre_infer_out.context,
-            y_out,
-            gate_msa,
-            block=block,
-            conditional_dict=pre_infer_out.conditional_dict,
-        )
-
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
-        x = self.post_process(x, y, c_gate_msa, pre_infer_out)
-
-        if self.has_post_adapter:
-            x = self.infer_post_adapter(block.compute_phases[3], x, pre_infer_out)
-
-        return x
+        return y
 
     def infer_cross_attn_with_kvcache(self, phase, x, context, y_out, gate_msa, block=None, conditional_dict=None):
         num_frames = gate_msa.shape[0]

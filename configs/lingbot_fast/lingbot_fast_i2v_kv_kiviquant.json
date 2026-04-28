@@ -4,13 +4,14 @@
     "text_len": 512,
     "target_height": 720,
     "target_width": 1280,
-    "self_attn_1_type": "sage_attn2_k_int8_v_fp8",
+    "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": 1.0,
     "sample_shift": 10.0,
     "enable_cfg": false,
-    "cpu_offload": false,
+    "cpu_offload": true,
+    "offload_granularity": "block",
     "t5_cpu_offload": true,
     "vae_cpu_offload": true,
     "use_image_encoder": false,
@@ -21,9 +22,10 @@
         "timesteps_index": [0, 179, 358, 679],
         "sink_size": 3,
         "kv_quant": {
-            "calibrate": false,
-            "smooth_k": true,
-            "calib_path": "calib_kv.pt"
+            "quant_scheme": "kivi",
+            "k_cache_type": "int4",
+            "v_cache_type": "int4",
+            "group_size": 64
         },
         "kv_offload": true
     },

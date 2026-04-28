@@ -5,56 +5,58 @@ from loguru import logger
 from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
-from .quant import CalibRollingKVCachePool, QuantRollingKVCachePool
+from .quant import CalibRollingKVCachePool, SageQuantRollingKVCachePool, KIVIQuantRollingKVCachePool
 from .rolling import RollingKVCachePool
 
 
-def _self_attn_pool_from_config(config, ar_config, kv_size, dtype, device):
+def _ranked_calib_path(path: str, rank: int) -> str:
+    if not path:
+        return path
+    dot = path.rfind(".")
+    if dot <= 0:
+        return f"{path}.rank{rank}"
+    return f"{path[:dot]}.rank{rank}{path[dot:]}"
+
+
+def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
     kv_offload = ar_config.get("kv_offload", False)
-    sq = ar_config.get("kv_quant")
-
-    if not sq:
-        if kv_offload:
-            from .offload import OffloadRollingKVCachePool
-
-            return OffloadRollingKVCachePool(
-                num_layers=config["num_layers"],
-                cache_size=kv_size,
-                num_heads=config["num_heads"],
-                head_dim=config["dim"] // config["num_heads"],
-                dtype=dtype,
-                device=device,
-            )
-        return RollingKVCachePool(
-            num_layers=config["num_layers"],
-            cache_size=kv_size,
-            num_heads=config["num_heads"],
-            head_dim=config["dim"] // config["num_heads"],
-            dtype=dtype,
-            device=device,
-        )
+    kv_quant = ar_config.get("kv_quant")
+    common = dict(
+        num_layers=config["num_layers"],
+        cache_size=kv_size,
+        num_heads=config["num_heads"],
+        head_dim=config["dim"] // config["num_heads"],
+        dtype=dtype,
+        device=device,
+    )
+    if not kv_quant:
+        return RollingKVCachePool(**common, kv_offload=kv_offload)
     else:
-        common = dict(
-            num_layers=config["num_layers"],
-            cache_size=kv_size,
-            num_heads=config["num_heads"],
-            head_dim=config["dim"] // config["num_heads"],
-            dtype=dtype,
-            device=device,
-            smooth_k=sq.get("smooth_k", True),
-        )
+        quant_scheme = kv_quant.get("quant_scheme", "sage")
+        assert quant_scheme in ["sage", "kivi"], f"Invalid quant_scheme: {quant_scheme}"
 
-        calibrate = sq.get("calibrate", False)
-        calib_path = sq.get("calib_path", None)
-        if not calibrate:
-            if kv_offload:
-                from .offload import OffloadQuantRollingKVCachePool
+        calibrate = kv_quant.get("calibrate", False)
+        calib_path = kv_quant.get("calib_path", None)
+        if calibrate:
+            return CalibRollingKVCachePool(**common, num_steps=config.get("infer_steps", 1))
 
-                return OffloadQuantRollingKVCachePool(**common, calib_path=calib_path)
-            return QuantRollingKVCachePool(**common, calib_path=calib_path)
-        else:
-            num_steps = config.get("infer_steps", 1)
-            return CalibRollingKVCachePool(**common, num_steps=num_steps)
+        if quant_scheme == "sage":
+            return SageQuantRollingKVCachePool(
+                **common,
+                k_cache_type=kv_quant.get("k_cache_type", "int8"),
+                v_cache_type=kv_quant.get("v_cache_type", "fp8"),
+                calib_path=calib_path,
+                kv_offload=kv_offload,
+            )
+        elif quant_scheme == "kivi":
+            return KIVIQuantRollingKVCachePool(
+                **common,
+                k_cache_type=kv_quant.get("k_cache_type", "int4"),
+                v_cache_type=kv_quant.get("v_cache_type", "int4"),
+                group_size=kv_quant.get("group_size", 64),
+                kv_offload=kv_offload,
+            )
+
 
 
 class KVCacheManager:
@@ -81,7 +83,7 @@ class KVCacheManager:
             pool.current_step = value
 
     def _create_self_attn_kv_cache(self):
-        return _self_attn_pool_from_config(
+        return build_self_attn_kv_cache(
             self.config,
             self.ar_config,
             self.kv_size,
@@ -146,22 +148,36 @@ class KVCacheManager:
             bool(self.ar_config.get("kv_offload")),
         )
 
-    def maybe_save_calibration(self) -> None:
+    def save_calibration(self) -> None:
         """Auto-save calibration if running in calibrate mode with calib_path."""
-        sq = self.ar_config.get("kv_quant")
-        if not sq or not isinstance(sq, dict):
+        kv_quant = self.ar_config.get("kv_quant")
+        if not kv_quant or not isinstance(kv_quant, dict):
             return
-        if not sq.get("calibrate", False):
+        if not kv_quant.get("calibrate", False):
             return
-        output_path = sq.get("calib_path", "calib_kv.pt")
+        output_path = kv_quant.get("calib_path", "calib_kv.pt")
         pool = self.self_attn_kv_cache
         if not isinstance(pool, CalibRollingKVCachePool):
             return
         calib = pool.export_calibration()
-        torch.save(calib, output_path)
+        save_path = output_path
+        rank = 0
+        world_size = 1
+        if dist.is_available() and dist.is_initialized():
+            if self.sp_group is not None:
+                rank = dist.get_rank(self.sp_group)
+                world_size = dist.get_world_size(self.sp_group)
+            else:
+                rank = dist.get_rank()
+                world_size = dist.get_world_size()
+            if world_size > 1:
+                save_path = _ranked_calib_path(output_path, rank)
+        torch.save(calib, save_path)
         logger.info(
-            "[KVCacheManager] calibration saved to {} — km {}, v_scale {}, k_block_scale {}",
-            output_path,
+            "[KVCacheManager] calibration saved to {} (rank {}/{}) — km {}, v_scale {}, k_block_scale {}",
+            save_path,
+            rank,
+            world_size,
             list(calib["km"].shape),
             list(calib["v_scale"].shape),
             list(calib["k_block_scale"].shape),

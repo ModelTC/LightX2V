@@ -92,7 +92,7 @@ class LingbotFastRunner(LingbotRunner):
         super().init_run()
 
     def end_run(self):
-        self.model.kv_cache_manager.maybe_save_calibration()
+        self.model.kv_cache_manager.save_calibration()
         super().end_run()
 
     @ProfilingContext4DebugL2("Run DiT")

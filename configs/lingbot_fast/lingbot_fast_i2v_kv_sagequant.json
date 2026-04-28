@@ -10,7 +10,8 @@
     "sample_guide_scale": 1.0,
     "sample_shift": 10.0,
     "enable_cfg": false,
-    "cpu_offload": false,
+    "cpu_offload": true,
+    "offload_granularity": "block",
     "t5_cpu_offload": true,
     "vae_cpu_offload": true,
     "use_image_encoder": false,
@@ -26,7 +27,8 @@
             "quant_scheme": "sage",
             "k_cache_type": "int8",
             "v_cache_type": "fp8"
-        }
+        },
+        "kv_offload": true
     },
     "rms_norm_type": "self_forcing"
 }
