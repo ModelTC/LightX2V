@@ -14,6 +14,7 @@
 - 摩尔线程 MUSA
 - 燧原 Enflame S60 (GCU)
 - Intel AIPC PTL
+- 天数智芯 iluvatar
 
 相关的docker环境可以参考：https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 

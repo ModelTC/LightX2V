@@ -20,7 +20,7 @@ class IluvatarFlashAttnWeight(AttnWeightTemplate):
     def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, **kwds):
         half_dtypes = (torch.float16, torch.bfloat16)
         device = q.device
-        dtype =  q.dtype
+        dtype = q.dtype
 
         def half(x):
             return x if x.dtype in half_dtypes else x.to(dtype)

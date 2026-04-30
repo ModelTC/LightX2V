@@ -213,5 +213,5 @@ def apply_rotary(
         conjugate,
         BLOCK_M=BLOCK_M,
         BLOCK_H=2,
-        )
+    )
     return output
