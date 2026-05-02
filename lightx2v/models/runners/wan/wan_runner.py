@@ -852,6 +852,7 @@ class Wan22DenseRunner(WanRunner):
             "vae_type": resolved_paths["vae_type"],
             "lightvae_pruning_rate": resolved_paths["lightvae_pruning_rate"],
             "lightvae_encoder_vae_pth": resolved_paths["lightvae_encoder_vae_pth"],
+            "dummy_model": self.config.get("dummy_model", False),
         }
 
     def load_vae_encoder(self):
