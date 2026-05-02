@@ -346,18 +346,26 @@ class RopeEmbedder:
         assert ids.ndim == 2
         assert ids.shape[-1] == len(self.axes_dims)
         device = ids.device
+        # Ascend aclnnIndex does not support indexing into complex64 tensors; keep LUT on CPU and gather there.
+        use_cpu_freqs_index = (PLATFORM or "") == "ascend_npu"
 
         if self.freqs_cis is None:
             self.freqs_cis = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
-            self.freqs_cis = [freqs_cis.to(device) for freqs_cis in self.freqs_cis]
-        else:
-            if self.freqs_cis[0].device != device:
+            if not use_cpu_freqs_index:
                 self.freqs_cis = [freqs_cis.to(device) for freqs_cis in self.freqs_cis]
+        elif not use_cpu_freqs_index and self.freqs_cis[0].device != device:
+            self.freqs_cis = [freqs_cis.to(device) for freqs_cis in self.freqs_cis]
+
+        if use_cpu_freqs_index:
+            ids_cpu = ids.detach().to(dtype=torch.long, device="cpu")
+            result = []
+            for i in range(len(self.axes_dims)):
+                result.append(self.freqs_cis[i][ids_cpu[:, i]])
+            return torch.cat(result, dim=-1).to(device)
 
         result = []
         for i in range(len(self.axes_dims)):
-            index = ids[:, i]
-            result.append(self.freqs_cis[i][index])
+            result.append(self.freqs_cis[i][ids[:, i]])
         return torch.cat(result, dim=-1)
 
 
