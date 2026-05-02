@@ -7,7 +7,11 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+
+try:
+    from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+except (ImportError, ModuleNotFoundError) as e:
+    logger.warning(f"Flux2 runners not available: {e}")
 
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401

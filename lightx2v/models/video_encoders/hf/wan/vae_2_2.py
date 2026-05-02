@@ -992,7 +992,6 @@ class WanVAE_(nn.Module):
         return y.transpose(1, 2).to(x)
 
 
-
 def _video_vae(
     pretrained_path=None,
     z_dim=16,
@@ -1003,9 +1002,9 @@ def _video_vae(
     load_from_rank0=False,
     normalize_state_dict=False,
     strict=True,
+    dummy_model=False,
     **kwargs,
 ):
-
     # params
     cfg = dict(
         dim=dim,
@@ -1026,18 +1025,18 @@ def _video_vae(
         with torch.device("meta"):
             model = WanVAE_(**cfg)
 
-    # load checkpoint
-    logging.info(f"loading {pretrained_path}")
-    raw_state = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
-    weights_dict = _normalize_vae_state_dict(raw_state) if normalize_state_dict else raw_state
-    for key in list(weights_dict.keys()):
-        if hasattr(weights_dict[key], "dtype") and weights_dict[key].dtype != dtype:
-            weights_dict[key] = weights_dict[key].to(dtype)
-    if strict:
-        model.load_state_dict(weights_dict, assign=True)
-    else:
-        missing, unexpected = model.load_state_dict(weights_dict, strict=False, assign=True)
-        logging.info(f"VAE checkpoint loaded with strict=False (missing={len(missing)}, unexpected={len(unexpected)})")
+        # load checkpoint
+        logging.info(f"loading {pretrained_path}")
+        raw_state = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
+        weights_dict = _normalize_vae_state_dict(raw_state) if normalize_state_dict else raw_state
+        for key in list(weights_dict.keys()):
+            if hasattr(weights_dict[key], "dtype") and weights_dict[key].dtype != dtype:
+                weights_dict[key] = weights_dict[key].to(dtype)
+        if strict:
+            model.load_state_dict(weights_dict, assign=True)
+        else:
+            missing, unexpected = model.load_state_dict(weights_dict, strict=False, assign=True)
+            logging.info(f"VAE checkpoint loaded with strict=False (missing={len(missing)}, unexpected={len(unexpected)})")
 
     # Convert Conv3d weights to channels_last_3d for cuDNN optimization
     if GET_USE_CHANNELS_LAST_3D():
@@ -1063,6 +1062,7 @@ class Wan2_2_VAE:
         vae_type="wan2.2",
         lightvae_pruning_rate=None,
         lightvae_encoder_vae_pth=None,
+        dummy_model=False,
         **kwargs,
     ):
         self.dtype = dtype
@@ -1196,6 +1196,7 @@ class Wan2_2_VAE:
                     normalize_state_dict=False,
                     strict=True,
                     pruning_rate=0.0,
+                    dummy_model=dummy_model,
                 )
                 .eval()
                 .requires_grad_(False)
@@ -1225,6 +1226,7 @@ class Wan2_2_VAE:
                     normalize_state_dict=True,
                     strict=False,
                     pruning_rate=0.0,
+                    dummy_model=dummy_model,
                 )
                 .eval()
                 .requires_grad_(False)
@@ -1244,6 +1246,7 @@ class Wan2_2_VAE:
                     normalize_state_dict=True,
                     strict=False,
                     pruning_rate=resolved_pruning_rate,
+                    dummy_model=dummy_model,
                 )
                 .eval()
                 .requires_grad_(False)
