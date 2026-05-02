@@ -124,6 +124,7 @@ class WanMtxg3PreInfer(WanPreInfer):
 
         if self.scheduler.infer_condition:
             plucker_emb = memory_plucker
+            # use memory_plucker first
             if plucker_emb is None:
                 plucker_emb = camera_plucker
             mouse_cond = dit_cond_dict.get("mouse_cond", None)
