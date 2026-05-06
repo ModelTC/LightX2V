@@ -191,6 +191,9 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
             )
             self.scheduler.noise_pred = noise_pred
 
+        if self.cpu_offload:
+            self.to_cpu()
+
 
 class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     """Flux2 Dev transformer: single forward pass with embedded guidance (no CFG)."""
@@ -220,3 +223,6 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
             img_ids=img_ids,
         )
         self.scheduler.noise_pred = noise_pred
+
+        if self.cpu_offload:
+            self.to_cpu()
