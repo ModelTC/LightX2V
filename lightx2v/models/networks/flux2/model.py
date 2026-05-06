@@ -3,6 +3,7 @@ import torch.distributed as dist
 from torch.nn import functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.flux2.infer.offload.transformer_infer import Flux2OffloadTransformerInfer
 from lightx2v.models.networks.flux2.infer.post_infer import Flux2PostInfer
 from lightx2v.models.networks.flux2.infer.pre_infer import Flux2DevPreInfer, Flux2PreInfer
 from lightx2v.models.networks.flux2.infer.transformer_infer import Flux2TransformerInfer
@@ -30,8 +31,12 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
-        if hasattr(self.transformer_infer, "offload_manager"):
+        if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
             self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
+        self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True, txt_ids=None, img_ids=None):
@@ -98,7 +103,10 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     pre_weight_class = Flux2PreWeights
 
     def _init_infer_class(self):
-        self.transformer_infer_class = Flux2TransformerInfer
+        if self.cpu_offload and self.offload_granularity == "block":
+            self.transformer_infer_class = Flux2OffloadTransformerInfer
+        else:
+            self.transformer_infer_class = Flux2TransformerInfer
         self.pre_infer_class = Flux2PreInfer
         self.post_infer_class = Flux2PostInfer
 
@@ -106,7 +114,12 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
-            self.to_cuda()
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
+                self.to_cuda()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cuda()
+                self.post_weight.to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
 
         latents = self.scheduler.latents
         do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
@@ -191,6 +204,14 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
             )
             self.scheduler.noise_pred = noise_pred
 
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                self.to_cpu()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cpu()
+                self.post_weight.to_cpu()
+                self.transformer_weights.non_block_weights_to_cpu()
+
 
 class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     """Flux2 Dev transformer: single forward pass with embedded guidance (no CFG)."""
@@ -198,7 +219,10 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     pre_weight_class = Flux2DevPreWeights
 
     def _init_infer_class(self):
-        self.transformer_infer_class = Flux2TransformerInfer
+        if self.cpu_offload and self.offload_granularity == "block":
+            self.transformer_infer_class = Flux2OffloadTransformerInfer
+        else:
+            self.transformer_infer_class = Flux2TransformerInfer
         self.pre_infer_class = Flux2DevPreInfer
         self.post_infer_class = Flux2PostInfer
 
@@ -206,7 +230,12 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
-            self.to_cuda()
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
+                self.to_cuda()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cuda()
+                self.post_weight.to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
 
         latents = self.scheduler.latents
         txt_ids = inputs["text_encoder_output"].get("text_ids", None)
@@ -220,3 +249,11 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
             img_ids=img_ids,
         )
         self.scheduler.noise_pred = noise_pred
+
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                self.to_cpu()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cpu()
+                self.post_weight.to_cpu()
+                self.transformer_weights.non_block_weights_to_cpu()
