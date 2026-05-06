@@ -143,3 +143,10 @@ class QwenImageTransformerModel(BaseTransformerModel):
             if self.config["task"] == "i2i":
                 noise_pred = noise_pred[:, : latents.size(1)]
             self.scheduler.noise_pred = noise_pred
+
+        if self.cpu_offload:
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                self.to_cpu()
+            elif self.offload_granularity != "model":
+                self.pre_weight.to_cpu()
+                self.post_weight.to_cpu()
