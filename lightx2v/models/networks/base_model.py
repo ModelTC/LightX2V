@@ -425,7 +425,10 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
                 else:
                     raise ValueError(f"Non-block file not found in {safetensors_path}. Please check the model path.")
             else:
-                safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
+                if self.config["model_cls"] == "hunyuan_video_1.5":
+                    safetensors_files = glob.glob(os.path.join(safetensors_path, "transformer", self.config["transformer_model_name"], "*.safetensors"))
+                else:
+                    safetensors_files = glob.glob(os.path.join(safetensors_path, "*.safetensors"))
         else:
             if self.lazy_load:
                 self.lazy_load_path = safetensors_path
