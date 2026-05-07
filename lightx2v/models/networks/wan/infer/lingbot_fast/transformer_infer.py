@@ -3,7 +3,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.common.kvcache.quant import CalibRollingKVCachePool
+from lightx2v.common.kvcache.calib import CalibRollingKVCachePool
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.wan.infer.lingbot.transformer_infer import WanLingbotTransformerInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import causal_rope_apply
@@ -138,7 +138,7 @@ class WanLingbotFastTransformerInfer(WanLingbotTransformerInfer):
 
             if self.offload_manager.need_init_first_buffer:
                 self.offload_manager.init_first_buffer(blocks)
-    
+
             self.offload_manager.prefetch_weights((block_idx + 1) % num_blocks, blocks)
             gpu_block = self.offload_manager.cuda_buffers[0]
             if AI_DEVICE == "xpu":

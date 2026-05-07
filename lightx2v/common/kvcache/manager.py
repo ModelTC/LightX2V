@@ -8,29 +8,21 @@ from loguru import logger
 from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
+from .calib import CalibRollingKVCachePool
 from .quant import (
-    CalibRollingKVCachePool,
-    build_turboquant_codebooks_from_calib_histograms,
     KIVIQuantRollingKVCachePool,
     SageAttn3FP4RollingKVCachePool,
     SageQuantRollingKVCachePool,
     TurboQuantRollingKVCachePool,
 )
 from .rolling import RollingKVCachePool
-
-
-def _ranked_calib_path(path: str, rank: int) -> str:
-    if not path:
-        return path
-    dot = path.rfind(".")
-    if dot <= 0:
-        return f"{path}.rank{rank}"
-    return f"{path[:dot]}.rank{rank}{path[dot:]}"
+from .utils import *
 
 
 def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
     kv_offload = ar_config.get("kv_offload", False)
     kv_quant = ar_config.get("kv_quant")
+
     common = dict(
         num_layers=config["num_layers"],
         cache_size=kv_size,
@@ -43,21 +35,20 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
         return RollingKVCachePool(**common, kv_offload=kv_offload)
     else:
         quant_scheme = kv_quant.get("quant_scheme", "sage")
+        if config.get("parallel"):
+            assert quant_scheme == "kivi", f"Invalid quant_scheme: {quant_scheme} for parallel inference"
         assert quant_scheme in ["sage", "sage3_fp4", "turboquant", "kivi"], f"Invalid quant_scheme: {quant_scheme}"
 
         calibrate = kv_quant.get("calibrate", False)
         calib_path = kv_quant.get("calib_path", None)
         if calibrate:
             tq_extra = {}
-            if kv_quant.get("turboquant_calibrate", False) or kv_quant.get("quant_scheme") == "turboquant":
+            if kv_quant.get("quant_scheme") == "turboquant":
                 tq_extra = dict(
                     turboquant_calibrate=True,
-                    key_bits=kv_quant.get("key_bits", 4),
-                    value_bits=kv_quant.get("value_bits", 2),
-                    use_qjl=kv_quant.get("use_qjl", False),
+                    key_bits=kv_quant.get("key_bits", 3),
                     turboquant_seed=kv_quant.get("turboquant_seed", kv_quant.get("seed", 42)),
                     per_layer_compressors=kv_quant.get("per_layer_compressors", True),
-                    value_quant_mode=kv_quant.get("value_quant_mode", "mse"),
                 )
             return CalibRollingKVCachePool(
                 **common,
@@ -83,17 +74,14 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
         elif quant_scheme == "turboquant":
             return TurboQuantRollingKVCachePool(
                 **common,
-                key_bits=kv_quant.get("key_bits", 4),
+                key_bits=kv_quant.get("key_bits", 3),
                 value_bits=kv_quant.get("value_bits", 2),
                 seed=kv_quant.get("turboquant_seed", kv_quant.get("seed", 42)),
                 per_layer_compressors=kv_quant.get("per_layer_compressors", True),
                 kv_offload=kv_offload,
-                turboquant_engine=kv_quant.get("turboquant_engine", "legacy"),
-                use_qjl=kv_quant.get("use_qjl", False),
                 codebook_dir=kv_quant.get("codebook_dir"),
                 codebook_cache_dir=kv_quant.get("codebook_cache_dir"),
                 export_missing_codebooks=kv_quant.get("export_missing_codebooks", False),
-                value_quant_mode=kv_quant.get("value_quant_mode", "mse"),
                 value_group_size=kv_quant.get("value_group_size", 32),
             )
         elif quant_scheme == "kivi":
@@ -104,7 +92,6 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
                 group_size=kv_quant.get("group_size", 64),
                 kv_offload=kv_offload,
             )
-
 
 
 class KVCacheManager:
@@ -209,7 +196,6 @@ class KVCacheManager:
             return
         calib = pool.export_calibration()
         hk = calib.pop("_turboquant_hist_k", None)
-        hv = calib.pop("_turboquant_hist_v", None)
 
         rank = 0
         world_size = 1
@@ -225,28 +211,18 @@ class KVCacheManager:
 
         if hk is not None:
             hk_acc = hk.to(device=self.device, dtype=torch.int64)
-            if hv is not None:
-                hv_acc = hv.to(device=self.device, dtype=torch.int64)
-            else:
-                hv_acc = None
             if world_size > 1:
                 dist.all_reduce(hk_acc, op=dist.ReduceOp.SUM, group=pg)
-                if hv_acc is not None:
-                    dist.all_reduce(hv_acc, op=dist.ReduceOp.SUM, group=pg)
             if rank == 0:
-                out_dir = kv_quant.get("turboquant_codebook_out_dir")
+                out_dir = kv_quant.get("codebook_dir")
                 if not out_dir:
                     out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
                 os.makedirs(out_dir, exist_ok=True)
                 head_dim = self.config["dim"] // self.config["num_heads"]
                 books = build_turboquant_codebooks_from_calib_histograms(
                     hk_acc.cpu(),
-                    hv_acc.cpu() if hv_acc is not None else None,
                     head_dim=head_dim,
-                    key_bits=kv_quant.get("key_bits", 4),
-                    value_bits=kv_quant.get("value_bits", 2),
-                    use_qjl=kv_quant.get("use_qjl", False),
-                    value_quant_mode=kv_quant.get("value_quant_mode", "mse"),
+                    key_bits=kv_quant.get("key_bits", 3),
                 )
                 for fname, cb_dict in books.items():
                     fpath = os.path.join(out_dir, fname)
@@ -254,9 +230,12 @@ class KVCacheManager:
                         json.dump(cb_dict, f, indent=2)
                     logger.info("[KVCacheManager] TurboQuant empirical codebook written {!r}", fpath)
 
+        if not calib:
+            return
+
         save_path = output_path
         if world_size > 1:
-            save_path = _ranked_calib_path(output_path, rank)
+            save_path = ranked_calib_path(output_path, rank)
         torch.save(calib, save_path)
         logger.info(
             "[KVCacheManager] calibration saved to {} (rank {}/{}) — km {}, v_scale {}, k_block_scale {}",

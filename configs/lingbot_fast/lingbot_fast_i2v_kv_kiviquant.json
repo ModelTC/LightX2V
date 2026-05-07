@@ -10,10 +10,10 @@
     "sample_guide_scale": 1.0,
     "sample_shift": 10.0,
     "enable_cfg": false,
-    "cpu_offload": true,
+    "cpu_offload": false,
     "offload_granularity": "block",
-    "t5_cpu_offload": true,
-    "vae_cpu_offload": true,
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
     "use_image_encoder": false,
     "dit_original_ckpt": "/data/nvme4/models/lingbot-world-base-cam/lingbot_world_fast/",
     "ar_config": {
@@ -27,7 +27,7 @@
             "v_cache_type": "int4",
             "group_size": 64
         },
-        "kv_offload": true
+        "kv_offload": false
     },
     "rms_norm_type": "self_forcing"
 }
