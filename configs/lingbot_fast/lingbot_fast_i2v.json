@@ -4,29 +4,35 @@
     "text_len": 512,
     "target_height": 720,
     "target_width": 1280,
-    "self_attn_1_type": "sage_attn2_k_int8_v_fp8",
+    "self_attn_1_type": "sage_attn3",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": 1.0,
     "sample_shift": 10.0,
     "enable_cfg": false,
-    "cpu_offload": false,
+    "cpu_offload": true,
+    "offload_granularity": "block",
     "t5_cpu_offload": true,
     "vae_cpu_offload": true,
     "use_image_encoder": false,
-    "dit_original_ckpt": "/data/nvme4/models/lingbot-world-base-cam/lingbot_world_fast/",
     "ar_config": {
         "local_attn_size": 21,
         "num_frame_per_chunk": 3,
         "timesteps_index": [0, 179, 358, 679],
         "sink_size": 3,
         "kv_quant": {
-            "calibrate": false,
-            "calib_path": "calib_kv.pt",
-            "quant_scheme": "sage",
-            "k_cache_type": "int8",
-            "v_cache_type": "fp8"
-        }
+            "quant_scheme": "turboquant",
+            "calibrate": true,
+            "calib_path": "save_results/my_kv_calib.pt",
+            "turboquant_codebook_out_dir": "save_results/turboquant_codebooks",
+            "key_bits": 4,
+            "value_bits": 2,
+            "use_qjl": false,
+            "turboquant_seed": 42,
+            "per_layer_compressors": true,
+            "value_quant_mode": "mse"
+          },
+        "kv_offload": true
     },
     "rms_norm_type": "self_forcing"
 }
