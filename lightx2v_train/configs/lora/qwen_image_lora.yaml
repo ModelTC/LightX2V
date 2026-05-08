@@ -46,7 +46,7 @@ training:
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output/qwen_image_lora
+    output_dir: ./train_output/qwen_image_lora
 
 inference:
     width: 1024
