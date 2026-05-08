@@ -1,0 +1,56 @@
+model:
+    name: qwen_image
+    pretrained_model_name_or_path: /data/nvme1/models/Qwen/Qwen-Image-2512
+    max_sequence_length: 1024
+    dtype: bf16
+
+data:
+    train:
+        name: image_dataset
+        num_workers: 8
+        prompt_dropout_rate: 0.1
+        image_size: 1024
+        random_ratio: false
+        shuffle: true
+        data_path:
+            - /data/nvme1/yongyang/kkk/lightx2v_train_dataset/dataset_v1/train.jsonl
+    val:
+        name: image_dataset
+        num_workers: 8
+        image_size: 1024
+        shuffle: false
+        data_path:
+            - /data/nvme1/yongyang/kkk/lightx2v_train_dataset/dataset_v1/val.jsonl
+
+training:
+    method: lora
+    max_train_iters: 3000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 250
+    save_total_limit: 10
+    lora:
+        rank: 16
+        alpha: 16
+        target_modules:
+            - to_k
+            - to_q
+            - to_v
+            - to_out.0
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.01
+        adam_epsilon: 0.00000001
+    output_dir: ./output/qwen_image_lora
+
+inference:
+    width: 1024
+    height: 1024
+    num_inference_steps: 50
+    true_cfg_scale: 4.0
+    negative_prompt: " "
