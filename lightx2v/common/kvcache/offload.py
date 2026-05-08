@@ -1,4 +1,5 @@
 from collections.abc import Callable
+
 import torch
 from packaging.version import parse
 

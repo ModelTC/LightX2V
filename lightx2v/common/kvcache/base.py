@@ -110,10 +110,7 @@ class BaseKVCachePool:
         attn_start: int | None = None,
         local_end: int | None = None,
     ):
-        raise TypeError(
-            f"{self.__class__.__name__} does not support tuple K/V in SP path. "
-            "Please use a cache class that implements _sp_quant_kv_to_head_shard."
-        )
+        raise TypeError(f"{self.__class__.__name__} does not support tuple K/V in SP path. Please use a cache class that implements _sp_quant_kv_to_head_shard.")
 
     @property
     def device(self) -> torch.device:
