@@ -84,49 +84,49 @@ class BaseModel:
     def init_training_scheduler(self):
         self.scheduler_copy = copy.deepcopy(self.scheduler)
 
-    def sample_timesteps(self, batch_size, latents_device):
+    def sample_timesteps(self, num_samples, latent_device):
         u = compute_density_for_timestep_sampling(
             weighting_scheme="none",
-            batch_size=batch_size,
+            batch_size=num_samples,
             logit_mean=0.0,
             logit_std=1.0,
             mode_scale=1.29,
         )
         indices = (u * self.scheduler_copy.config.num_train_timesteps).long()
-        return self.scheduler_copy.timesteps[indices].to(device=latents_device)
+        return self.scheduler_copy.timesteps[indices].to(device=latent_device)
 
     def get_sigmas(self, timesteps, n_dim, dtype):
         sigmas = self.scheduler_copy.sigmas.to(device=self.device, dtype=dtype)
         schedule_timesteps = self.scheduler_copy.timesteps.to(self.device)
         timesteps = timesteps.to(self.device)
-        step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-        sigma = sigmas[step_indices].flatten()
+        sigma_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
+        sigma = sigmas[sigma_indices].flatten()
         while len(sigma.shape) < n_dim:
             sigma = sigma.unsqueeze(-1)
         return sigma
 
-    def add_noise(self, latents, noise, sigmas):
-        return (1.0 - sigmas) * latents + sigmas * noise
+    def add_noise(self, latent, noise, sigmas):
+        return (1.0 - sigmas) * latent + sigmas * noise
 
     def loss_weighting(self, sigmas):
         return compute_loss_weighting_for_sd3(weighting_scheme="none", sigmas=sigmas)
 
-    def build_target(self, latents, noise):
-        return noise - latents
+    def build_train_gt(self, latent, noise):
+        return noise - latent
 
-    def encode_media(self, batch):
+    def encode_to_latent(self, sample):
         raise NotImplementedError
 
-    def encode_conditions(self, batch):
+    def encode_condition(self, sample):
         raise NotImplementedError
 
-    def prepare_denoiser_input(self, noisy_latents, batch, conditions):
+    def prepare_denoiser_input(self, noisy_latent, sample, condition):
         raise NotImplementedError
 
-    def denoise(self, denoiser_input, timesteps, conditions):
+    def denoise(self, denoiser_input, timesteps, condition):
         raise NotImplementedError
 
-    def unpack_prediction(self, prediction, denoiser_input):
+    def postprocess_denoiser_output(self, prediction, denoiser_input):
         raise NotImplementedError
 
     def save_lora_weights(self, save_dir):

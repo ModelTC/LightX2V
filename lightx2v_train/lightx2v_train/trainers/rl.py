@@ -8,4 +8,4 @@ from .base import BaseTrainer
 @TRAINER_REGISTER("rl")
 class RLTrainer(BaseTrainer):
     def train(self, dataloader):
-        raise NotImplementedError("RLTrainer is reserved for the next step.")
+        raise NotImplementedError("RLTrainer is reserved for a future phase.")

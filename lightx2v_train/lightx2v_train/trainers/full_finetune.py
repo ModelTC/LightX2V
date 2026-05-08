@@ -32,8 +32,8 @@ class FullFinetuneTrainer(LoraTrainer):
             num_training_steps=self.config["max_train_steps"],
         )
 
-    def save_checkpoint(self, step: int, checkpoint_limit: int | None) -> None:
+    def save_checkpoint(self, iteration: int, checkpoint_limit: int | None) -> None:
         output_dir = self.config["output_dir"]
-        save_dir = os.path.join(output_dir, f"checkpoint-{step}")
+        save_dir = os.path.join(output_dir, f"checkpoint-{iteration}")
         os.makedirs(save_dir, exist_ok=True)
         self.model.save_full_model(save_dir)

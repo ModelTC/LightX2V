@@ -8,4 +8,4 @@ from .base import BaseTrainer
 @TRAINER_REGISTER("distill")
 class DistillTrainer(BaseTrainer):
     def train(self, dataloader):
-        raise NotImplementedError("DistillTrainer is reserved for the next step.")
+        raise NotImplementedError("DistillTrainer is reserved for a future phase.")

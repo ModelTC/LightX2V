@@ -60,22 +60,22 @@ class LoraTrainer(BaseTrainer):
             num_training_steps=self.max_train_iters,
         )
 
-    def train_step(self, batch):
+    def compute_loss_on_sample(self, sample):
         with torch.no_grad():
-            latents = self.model.encode_media(batch)
-            batch_size = latents.shape[0]
-            noise = torch.randn_like(latents, dtype=self.model.dtype)
-            timesteps = self.model.sample_timesteps(batch_size, latents.device)
-            sigmas = self.model.get_sigmas(timesteps, n_dim=latents.ndim, dtype=latents.dtype)
-            noisy_latents = self.model.add_noise(latents, noise, sigmas)
-            conditions = self.model.encode_conditions(batch)
+            latent = self.model.encode_to_latent(sample)
+            n = latent.shape[0]
+            noise = torch.randn_like(latent, dtype=self.model.dtype)
+            timesteps = self.model.sample_timesteps(n, latent.device)
+            sigmas = self.model.get_sigmas(timesteps, n_dim=latent.ndim, dtype=latent.dtype)
+            noisy_latent = self.model.add_noise(latent, noise, sigmas)
+            condition = self.model.encode_condition(sample)
 
-        denoiser_input = self.model.prepare_denoiser_input(noisy_latents, batch, conditions)
-        prediction = self.model.denoise(denoiser_input, timesteps, conditions)
-        prediction = self.model.unpack_prediction(prediction, denoiser_input)
+        denoiser_input = self.model.prepare_denoiser_input(noisy_latent, sample, condition)
+        prediction = self.model.denoise(denoiser_input, timesteps, condition)
+        prediction = self.model.postprocess_denoiser_output(prediction, denoiser_input)
 
         weighting = self.model.loss_weighting(sigmas)
-        target = self.model.build_target(latents, noise)
+        target = self.model.build_train_gt(latent, noise)
         loss = torch.mean(
             (weighting.float() * (prediction.float() - target.float()) ** 2).reshape(target.shape[0], -1),
             dim=1,
@@ -92,16 +92,18 @@ class LoraTrainer(BaseTrainer):
         save_every_iters = self.save_every_iters
         save_total_limit = self.save_total_limit
         current_iter = 0
+        grad_accum_counter = 0
         running_loss = 0.0
 
         progress = tqdm(total=max_train_iters, desc="Training iterations")
         while current_iter < max_train_iters:
-            for step, batch in enumerate(self.dataloader):
-                loss = self.train_step(batch)
+            for sample in self.dataloader:
+                loss = self.compute_loss_on_sample(sample)
                 (loss / grad_accum_iters).backward()
                 running_loss += loss.item() / grad_accum_iters
 
-                if (step + 1) % grad_accum_iters != 0:
+                grad_accum_counter += 1
+                if grad_accum_counter % grad_accum_iters != 0:
                     continue
 
                 torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), max_grad_norm)
@@ -122,10 +124,10 @@ class LoraTrainer(BaseTrainer):
 
         progress.close()
 
-    def save_checkpoint(self, iter, save_total_limit):
+    def save_checkpoint(self, iteration, save_total_limit):
         output_dir = self.output_dir
         prune_checkpoints(output_dir, save_total_limit)
 
-        save_dir = os.path.join(output_dir, f"checkpoint-{iter}")
+        save_dir = os.path.join(output_dir, f"checkpoint-{iteration}")
         os.makedirs(save_dir, exist_ok=True)
         self.model.save_lora_weights(save_dir)
