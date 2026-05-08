@@ -4,12 +4,12 @@ from loguru import logger
 from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_fast_model import WanLingbotFastModel
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
-from lightx2v.models.schedulers.wan.lingbot_fast.scheduler import LingbotFastScheduler
+from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import wan_vae_to_comfy
+from lightx2v.utils.utils import get_rank_and_world_size, wan_vae_to_comfy
 from lightx2v.utils.video_recorder import VideoRecorder
 
 try:
@@ -50,7 +50,7 @@ class LingbotFastRunner(LingbotRunner):
         return model
 
     def init_scheduler(self):
-        self.scheduler = LingbotFastScheduler(self.config)
+        self.scheduler = WanSFScheduler(self.config)
 
     def init_kv_cache_manager(self):
         self.model.kv_cache_manager = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
@@ -139,21 +139,13 @@ class LingbotFastRunner(LingbotRunner):
         self.end_run()
         return gen_video_final
 
-    def get_rank_and_world_size(self):
-        rank = 0
-        world_size = 1
-        if dist is not None and dist.is_initialized():
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-        return rank, world_size
-
     def init_video_recorder(self):
         output_video_path = self.input_info.save_result_path
         self.video_recorder = None
         if isinstance(output_video_path, dict):
             output_video_path = output_video_path["data"]
         logger.info(f"init video_recorder with output_video_path: {output_video_path}")
-        rank, world_size = self.get_rank_and_world_size()
+        rank, world_size = get_rank_and_world_size()
         if output_video_path and rank == world_size - 1:
             record_fps = self.config.get("target_fps", 16)
             if "video_frame_interpolation" in self.config and self.vfi_model is not None:
@@ -183,7 +175,7 @@ class LingbotFastRunner(LingbotRunner):
         try:
             self.init_video_recorder()
             logger.info(f"init video_recorder: {self.video_recorder}")
-            rank, world_size = self.get_rank_and_world_size()
+            rank, world_size = get_rank_and_world_size()
             if rank == world_size - 1:
                 assert self.video_recorder is not None
                 self.video_recorder.start(self.width, self.height)

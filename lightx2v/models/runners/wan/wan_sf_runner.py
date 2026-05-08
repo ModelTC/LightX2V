@@ -3,6 +3,7 @@ import gc
 import torch
 from loguru import logger
 
+from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.sf_model import WanSFModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
@@ -11,7 +12,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import wan_vae_to_comfy
+from lightx2v.utils.utils import get_rank_and_world_size, wan_vae_to_comfy
 from lightx2v.utils.video_recorder import VideoRecorder
 
 
@@ -38,12 +39,16 @@ class WanSFRunner(WanRunner):
     def init_scheduler(self):
         self.scheduler = WanSFScheduler(self.config)
 
-    def set_target_shape(self):
-        self.num_output_frames = 21
-        self.config.target_shape = [16, self.num_output_frames, 60, 104]
+    def init_kv_cache_manager(self):
+        self.model.kv_cache_manager = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
+        self.model.kv_cache_manager._create_kv_caches(self.input_info.latent_shape)
+        self.model.transformer_infer.kv_cache_manager = self.model.kv_cache_manager
+        self.input_info.latent_shape = [self.input_info.latent_shape[0], self.model.kv_cache_manager.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
+        self.scheduler.num_output_frames = self.model.kv_cache_manager.num_output_frames
+        self.scheduler.num_chunks = self.model.kv_cache_manager.num_output_frames // self.config.get("ar_config", {}).get("num_frame_per_chunk", 3)
 
     def get_video_segment_num(self):
-        self.video_segment_num = self.scheduler.num_blocks
+        self.video_segment_num = self.scheduler.num_chunks
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
@@ -57,7 +62,12 @@ class WanSFRunner(WanRunner):
         return images
 
     def init_run(self):
+        self.init_kv_cache_manager()
         super().init_run()
+
+    def end_run(self):
+        self.model.kv_cache_manager.save_calibration()
+        super().end_run()
 
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
@@ -66,6 +76,8 @@ class WanSFRunner(WanRunner):
             if self.video_segment_num == 1:
                 self.check_stop()
             logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+
+            self.model.kv_cache_manager.current_step = step_index
 
             with ProfilingContext4DebugL1("step_pre"):
                 self.model.scheduler.step_pre(seg_index=segment_idx, step_index=step_index, is_rerun=False)
@@ -83,24 +95,15 @@ class WanSFRunner(WanRunner):
 
         return self.model.scheduler.stream_output
 
-    def get_rank_and_world_size(self):
-        rank = 0
-        world_size = 1
-        if dist.is_initialized():
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-        return rank, world_size
-
     def init_video_recorder(self):
         output_video_path = self.input_info.save_result_path
         self.video_recorder = None
         if isinstance(output_video_path, dict):
             output_video_path = output_video_path["data"]
         logger.info(f"init video_recorder with output_video_path: {output_video_path}")
-        rank, world_size = self.get_rank_and_world_size()
+        rank, world_size = get_rank_and_world_size()
         if output_video_path and rank == world_size - 1:
             record_fps = self.config.get("target_fps", 16)
-            audio_sr = self.config.get("audio_sr", 16000)
             if "video_frame_interpolation" in self.config and self.vfi_model is not None:
                 record_fps = self.config["video_frame_interpolation"]["target_fps"]
 
@@ -129,7 +132,7 @@ class WanSFRunner(WanRunner):
         try:
             self.init_video_recorder()
             logger.info(f"init video_recorder: {self.video_recorder}")
-            rank, world_size = self.get_rank_and_world_size()
+            rank, world_size = get_rank_and_world_size()
             if rank == world_size - 1:
                 assert self.video_recorder is not None, "video_recorder is required for stream audio input for rank 2"
                 self.video_recorder.start(self.width, self.height)

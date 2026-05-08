@@ -238,11 +238,7 @@ class WanSelfAttention(WeightModule):
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-
-        if self.config.get("sf_config", False):
-            self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
-        else:
-            self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         self.add_module(
             "modulation",
@@ -475,11 +471,7 @@ class WanCrossAttention(WeightModule):
         self.config = config
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
-
-        if self.config.get("sf_config", False):
-            self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
-        else:
-            self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+        self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
 
         self.add_module(
             "norm3",

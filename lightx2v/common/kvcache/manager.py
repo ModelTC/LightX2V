@@ -11,7 +11,6 @@ from .base import BaseKVCachePool
 from .calib import CalibRollingKVCachePool
 from .quant import (
     KIVIQuantRollingKVCachePool,
-    SageAttn3FP4RollingKVCachePool,
     SageQuantRollingKVCachePool,
     TurboQuantRollingKVCachePool,
 )
@@ -37,7 +36,7 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
         quant_scheme = kv_quant.get("quant_scheme", "sage")
         if config.get("parallel"):
             assert quant_scheme == "kivi", f"Invalid quant_scheme: {quant_scheme} for parallel inference"
-        assert quant_scheme in ["sage", "sage3_fp4", "turboquant", "kivi"], f"Invalid quant_scheme: {quant_scheme}"
+        assert quant_scheme in ["sage", "turboquant", "kivi"], f"Invalid quant_scheme: {quant_scheme}"
 
         calibrate = kv_quant.get("calibrate", False)
         calib_path = kv_quant.get("calib_path", None)
@@ -62,13 +61,6 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device):
                 k_cache_type=kv_quant.get("k_cache_type", "int8"),
                 v_cache_type=kv_quant.get("v_cache_type", "fp8"),
                 calib_path=calib_path,
-                kv_offload=kv_offload,
-            )
-        elif quant_scheme == "sage3_fp4":
-            return SageAttn3FP4RollingKVCachePool(
-                **common,
-                k_cache_type=kv_quant.get("k_cache_type", "fp4"),
-                v_cache_type=kv_quant.get("v_cache_type", "fp4"),
                 kv_offload=kv_offload,
             )
         elif quant_scheme == "turboquant":

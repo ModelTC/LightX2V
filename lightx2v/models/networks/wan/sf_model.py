@@ -12,9 +12,12 @@ class WanSFModel(WanModel):
         super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
-        file_path = self.config["sf_model_path"]
-        _weight_dict = torch.load(file_path)
-        _weight_dict = _weight_dict.get("generator_ema", _weight_dict)
+        file_path = self.config["dit_original_ckpt"]
+        if file_path.endswith(".safetensors"):
+            _weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
+        else:
+            _weight_dict = torch.load(file_path)
+            _weight_dict = _weight_dict.get("generator_ema", _weight_dict)
         weight_dict = {}
         for k, v in _weight_dict.items():
             name = k[6:]
@@ -45,8 +48,8 @@ class WanSFModel(WanModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_block
-        current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_block
+        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
+        current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk
         noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
         self.scheduler.noise_pred[:, current_start_frame:current_end_frame] = noise_pred

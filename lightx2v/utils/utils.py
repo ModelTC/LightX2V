@@ -758,3 +758,12 @@ def validate_config_paths(config: dict) -> None:
             logger.debug(f"✓ Verified low_noise_quantized_ckpt: {config['low_noise_quantized_ckpt']}")
 
     logger.info("✓ Config checkpoint paths validated successfully")
+
+
+def get_rank_and_world_size():
+    rank = 0
+    world_size = 1
+    if dist.is_initialized():
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+    return rank, world_size

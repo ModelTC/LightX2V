@@ -39,13 +39,6 @@ except ImportError:
     sageattn3_blackwell = None
 
 try:
-    from sageattn3.api import scale_and_quant_fp4, blockscaled_fp4_attn
-except ImportError:
-    scale_and_quant_fp4 = None
-    blockscaled_fp4_attn = None
-    logger.info("sageattn3 api not found, please install sageattention3 package with api exports")
-
-try:
     from sageattn3_sparse import sparse_sageattn3
 except ImportError:
     logger.info("sageattn3_sparse not found, please install sageattention sparse first")
@@ -319,75 +312,3 @@ class SageAttn2KInt8VFP8Weight(AttnWeightTemplate):
         )
         o = o.view(bs * max_seqlen_q, -1)
         return o
-
-
-@ATTN_WEIGHT_REGISTER("sage_attn3_k_fp4_v_fp4")
-class SageAttn3KFP4VFP4Weight(AttnWeightTemplate):
-    def __init__(self):
-        self.config = {}
-
-    def apply(
-        self,
-        q,
-        k,
-        v,
-        cu_seqlens_q=None,
-        cu_seqlens_kv=None,
-        max_seqlen_q=None,
-        max_seqlen_kv=None,
-        sm_scale=None,
-        **kwargs,
-    ):
-        if scale_and_quant_fp4 is None or blockscaled_fp4_attn is None:
-            raise ImportError("sageattn3.api (scale_and_quant_fp4, blockscaled_fp4_attn) is required.")
-        if not (isinstance(k, tuple) and isinstance(v, tuple)):
-            raise TypeError("sage_attn3_k_fp4_v_fp4 expects quantized KV tuples from KV cache.")
-
-        if len(k) < 2 or len(v) < 2:
-            raise ValueError("Invalid quantized KV tuple format for sage_attn3_k_fp4_v_fp4.")
-
-        k_fp4, k_scale = k[0], k[1]
-        v_fp4, v_scale = v[0], v[1]
-        kv_len = int(k[2]) if len(k) > 2 else max_seqlen_kv
-        if kv_len is None:
-            raise ValueError("KV length is required for sage_attn3_k_fp4_v_fp4.")
-
-        q = q.contiguous()
-        if len(q.shape) == 3:
-            bs = 1
-            q = q.unsqueeze(0)
-        elif len(q.shape) == 4:
-            bs = q.shape[0]
-
-        q_bhnd = q.transpose(1, 2).contiguous()  # [B, H, QL, D]
-        qlist = scale_and_quant_fp4(q_bhnd)
-
-        if k_fp4.dim() == 3:
-            k_fp4 = k_fp4.unsqueeze(0)
-        if k_scale.dim() == 3:
-            k_scale = k_scale.unsqueeze(0)
-        if v_fp4.dim() == 3:
-            v_fp4 = v_fp4.unsqueeze(0)
-        if v_scale.dim() == 3:
-            v_scale = v_scale.unsqueeze(0)
-
-        q_len = q_bhnd.size(2)
-        is_bf16 = q.dtype == torch.bfloat16
-        # fp4attn_cuda.fwd requires delta_s to be a Tensor; use zeros to
-        # disable mean-compensation while keeping the ABI contract.
-        delta_s = torch.zeros(
-            (q_bhnd.size(0), q_bhnd.size(1), 1, int(kv_len)),
-            device=q.device,
-            dtype=torch.float32,
-        )
-        o = blockscaled_fp4_attn(
-            qlist,
-            (k_fp4.contiguous(), k_scale.contiguous()),
-            (v_fp4.contiguous(), v_scale.contiguous()),
-            delta_s,
-            kv_len,
-            False,
-            False,
-            is_bf16,
-        )[0][:, :, :q_len, :].contiguous()
-        return o.transpose(1, 2).reshape(bs * q_len, -1)
