@@ -1520,19 +1520,6 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         x = super().decode(z, return_dict=return_dict, tiled=tiled, tile_size=tile_size, tile_overlap=tile_overlap).sample.squeeze(2)
         return CausalDecoderOutput(x)
 
-    # def encode(self, x: torch.FloatTensor) -> CausalEncoderOutput:
-    #     if x.ndim == 4:
-    #         x = x.unsqueeze(2)
-    #     p = super().encode(x).latent_dist
-    #     z = p.sample().squeeze(2)
-    #     return CausalEncoderOutput(z, p)
-
-    # def decode(self, z: torch.FloatTensor) -> CausalDecoderOutput:
-    #     if z.ndim == 4:
-    #         z = z.unsqueeze(2)
-    #     x = super().decode(z).sample.squeeze(2)
-    #     return CausalDecoderOutput(x)
-
     def preprocess(self, x: torch.Tensor):
         # x should in [B, C, T, H, W], [B, C, H, W]
         assert x.ndim == 4 or x.size(2) % 4 == 1
