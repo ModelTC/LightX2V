@@ -1,11 +1,10 @@
-import copy
-
 import torch
-from diffusers.training_utils import compute_density_for_timestep_sampling, compute_loss_weighting_for_sd3
 from diffusers.utils import convert_state_dict_to_diffusers
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
+
+from lightx2v_train.schedulers import FlowMatchingScheduler
 
 
 class DenoiserInput:
@@ -26,8 +25,7 @@ class BaseModel:
         self.dtype = self.get_dtype(config["model"]["dtype"])
         self.device = torch.device("cuda")
         self.pipeline = None
-        self.scheduler = None
-        self.scheduler_copy = None
+        self.flow_matching = None
         self.transformer = None
         self.vae = None
 
@@ -81,38 +79,23 @@ class BaseModel:
         if hasattr(self.transformer, "enable_gradient_checkpointing"):
             self.transformer.enable_gradient_checkpointing()
 
-    def init_training_scheduler(self):
-        self.scheduler_copy = copy.deepcopy(self.scheduler)
+    def init_training_scheduler(self, num_train_timesteps: int = 1000):
+        self.flow_matching = FlowMatchingScheduler(num_train_timesteps, self.device)
 
     def sample_timesteps(self, num_samples, latent_device):
-        u = compute_density_for_timestep_sampling(
-            weighting_scheme="none",
-            batch_size=num_samples,
-            logit_mean=0.0,
-            logit_std=1.0,
-            mode_scale=1.29,
-        )
-        indices = (u * self.scheduler_copy.config.num_train_timesteps).long()
-        return self.scheduler_copy.timesteps[indices].to(device=latent_device)
+        return self.flow_matching.sample_timesteps(num_samples, latent_device)
 
     def get_sigmas(self, timesteps, n_dim, dtype):
-        sigmas = self.scheduler_copy.sigmas.to(device=self.device, dtype=dtype)
-        schedule_timesteps = self.scheduler_copy.timesteps.to(self.device)
-        timesteps = timesteps.to(self.device)
-        sigma_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-        sigma = sigmas[sigma_indices].flatten()
-        while len(sigma.shape) < n_dim:
-            sigma = sigma.unsqueeze(-1)
-        return sigma
+        return self.flow_matching.get_sigmas(timesteps, n_dim, dtype)
 
     def add_noise(self, latent, noise, sigmas):
-        return (1.0 - sigmas) * latent + sigmas * noise
+        return self.flow_matching.add_noise(latent, noise, sigmas)
 
     def loss_weighting(self, sigmas):
-        return compute_loss_weighting_for_sd3(weighting_scheme="none", sigmas=sigmas)
+        return self.flow_matching.loss_weighting(sigmas)
 
     def build_train_gt(self, latent, noise):
-        return noise - latent
+        return self.flow_matching.build_train_gt(latent, noise)
 
     def encode_to_latent(self, sample):
         raise NotImplementedError

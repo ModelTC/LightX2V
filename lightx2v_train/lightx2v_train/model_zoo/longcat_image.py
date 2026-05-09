@@ -1,4 +1,4 @@
-from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler, LongCatImagePipeline
+from diffusers import AutoencoderKL, LongCatImagePipeline
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
@@ -21,13 +21,12 @@ class LongCatImageModel(BaseModel):
         ).to(self.device)
         self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.dtype)
         self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.dtype)
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_path, subfolder="scheduler")
         self.vae.requires_grad_(False)
         self.init_training_scheduler()
 
     def build_pipeline(self):
         pipe = LongCatImagePipeline(
-            scheduler=self.scheduler,
+            scheduler=self.flow_matching,
             vae=self.vae,
             text_encoder=self.text_pipeline.text_encoder,
             tokenizer=self.text_pipeline.tokenizer,

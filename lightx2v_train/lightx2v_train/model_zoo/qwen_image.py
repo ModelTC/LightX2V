@@ -1,5 +1,5 @@
 import torch
-from diffusers import AutoencoderKLQwenImage, FlowMatchEulerDiscreteScheduler, QwenImagePipeline, QwenImageTransformer2DModel
+from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
 
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
@@ -25,13 +25,12 @@ class QwenImageModel(BaseModel):
         ).to(self.device)
         self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.dtype)
         self.transformer = QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.dtype)
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_path, subfolder="scheduler")
         self.vae.requires_grad_(False)
         self.init_training_scheduler()
 
     def build_pipeline(self):
         pipe = QwenImagePipeline(
-            scheduler=self.scheduler,
+            scheduler=self.flow_matching,
             vae=self.vae,
             text_encoder=self.text_pipeline.text_encoder,
             tokenizer=self.text_pipeline.tokenizer,
