@@ -1,7 +1,10 @@
 {
   "target_video_length": 81,
-  "target_height": 720,
-  "target_width": 1280,
+  "target_height": 1080,
+  "target_width": 1920,
   "infer_steps": 1,
-  "fps": 16
+  "fps": 16,
+  "use_tiling_vae": true,
+  "cpu_offload": true,
+  "offload_granularity": "model"
 }

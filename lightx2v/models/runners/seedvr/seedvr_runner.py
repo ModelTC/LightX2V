@@ -36,7 +36,10 @@ class SeedVRRunner(DefaultRunner):
         self.text_encoder_output = None
 
         model_path_base = config.get("model_path", "ByteDance-Seed/SeedVR2-3B")
-        self.model_path = os.path.join(model_path_base, "seedvr2_ema_3b.pth")
+        if self.config.get("dit_quantized_ckpt", None):
+            self.model_path = self.config.get("dit_quantized_ckpt")
+        else:
+            self.model_path = os.path.join(model_path_base, "seedvr2_ema_3b.pth")
         self.vae_path = os.path.join(model_path_base, "ema_vae.pth")
         self.pos_emb_path = os.path.join(model_path_base, "pos_emb.pt")
         self.neg_emb_path = os.path.join(model_path_base, "neg_emb.pt")
@@ -227,6 +230,7 @@ class SeedVRRunner(DefaultRunner):
             weights_mmap=True,
             strict=False,
             cpu_offload=self.config.get("cpu_offload", False),
+            use_tiling=self.config.get("use_tiling_vae", False),
         )
         vae.requires_grad_(False).eval()
         vae.set_causal_slicing(split_size=4, memory_device="same")

@@ -1119,8 +1119,12 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             self.decoder.mid_block.attentions = torch.nn.ModuleList([None])
 
     @apply_forward_hook
-    def encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
-        h = self.slicing_encode(x)
+    def encode(self, x: torch.FloatTensor, return_dict: bool = True, tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)) -> AutoencoderKLOutput:
+        if tiled:
+            h = self.tiled_encode(x, tile_size=tile_size, tile_overlap=tile_overlap)
+        else:
+            h = self.slicing_encode(x)
+
         posterior = DiagonalGaussianDistribution(h)
 
         if not return_dict:
@@ -1129,8 +1133,13 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         return AutoencoderKLOutput(latent_dist=posterior)
 
     @apply_forward_hook
-    def decode(self, z: torch.Tensor, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
-        decoded = self.slicing_decode(z)
+    def decode(
+        self, z: torch.Tensor, return_dict: bool = True, tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)
+    ) -> Union[DecoderOutput, torch.Tensor]:
+        if tiled:
+            decoded = self.tiled_decode(z, tile_size=tile_size, tile_overlap=tile_overlap)
+        else:
+            decoded = self.slicing_decode(z)
 
         if not return_dict:
             return (decoded,)
@@ -1189,11 +1198,265 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         else:
             return self._decode(z)
 
-    def tiled_encode(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
-        raise NotImplementedError
+    def tiled_encode(self, x: torch.Tensor, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)) -> torch.Tensor:
+        r"""
+        Encodes an input tensor `x` by splitting it into spatial tiles in latent space. Temporal is handled by `slicing_encode`.
+        `tile_size` and `tile_overlap` are interpreted in output-space pixels and converted to latent-space.
+        """
+        # Ensure 5D [B, C, F, H, W]
+        if x.ndim != 5:
+            x = x.unsqueeze(2)
 
-    def tiled_decode(self, z: torch.Tensor, **kwargs) -> torch.Tensor:
-        raise NotImplementedError
+        b, c, f, H, W = x.shape
+        tile_h, tile_w = tile_size
+
+        # Only tile if input resolution requires multiple tiles
+        if H <= tile_h and W <= tile_w:
+            return self.slicing_encode(x)
+
+        # Spatial scale factor (output/latent)
+        scale_factor = self.spatial_downsample_factor
+
+        # Convert output-space tiling params to latent-space
+        tile_h, tile_w = tile_size
+        overlap_h, overlap_w = tile_overlap
+
+        latent_tile_h = max(1, tile_h // scale_factor)
+        latent_tile_w = max(1, tile_w // scale_factor)
+        latent_overlap_h = max(0, min((overlap_h // scale_factor), latent_tile_h - 1))
+        latent_overlap_w = max(0, min((overlap_w // scale_factor), latent_tile_w - 1))
+
+        stride_h = max(1, latent_tile_h - latent_overlap_h)
+        stride_w = max(1, latent_tile_w - latent_overlap_w)
+
+        H_lat_total = (H + scale_factor - 1) // scale_factor
+        W_lat_total = (W + scale_factor - 1) // scale_factor
+
+        result = None
+        count = None
+
+        num_tiles = ((max(H_lat_total - latent_overlap_h, 1) + stride_h - 1) // stride_h) * ((max(W_lat_total - latent_overlap_w, 1) + stride_w - 1) // stride_w)
+
+        # Pre-compute common ramp values
+        ramp_cache = {}
+        if latent_overlap_h > 0:
+            t_h = torch.linspace(0, 1, steps=latent_overlap_h, device=x.device, dtype=x.dtype)
+            ramp_cache["h"] = 0.5 - 0.5 * torch.cos(t_h * torch.pi)
+        if latent_overlap_w > 0:
+            t_w = torch.linspace(0, 1, steps=latent_overlap_w, device=x.device, dtype=x.dtype)
+            ramp_cache["w"] = 0.5 - 0.5 * torch.cos(t_w * torch.pi)
+
+        tile_id = 0
+        for y_lat in range(0, H_lat_total, stride_h):
+            y_lat_end = min(y_lat + latent_tile_h, H_lat_total)
+            for x_lat in range(0, W_lat_total, stride_w):
+                x_lat_end = min(x_lat + latent_tile_w, W_lat_total)
+
+                # Skip if fully within overlap of previous tiles
+                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_overlap_h) or (x_lat > 0 and (x_lat_end - x_lat) <= latent_overlap_w):
+                    continue
+
+                # Map latent tile to output-space crop
+                y_out = y_lat * scale_factor
+                x_out = x_lat * scale_factor
+                y_out_end = min(y_lat_end * scale_factor, H)
+                x_out_end = min(x_lat_end * scale_factor, W)
+
+                tile_id += 1
+
+                tile_sample = x[:, :, :, y_out:y_out_end, x_out:x_out_end]
+
+                encoded_tile = self.slicing_encode(tile_sample)
+
+                # Initialize output size using first encoded tile
+                if result is None:
+                    b_out, c_out, f_lat, _, _ = encoded_tile.shape
+
+                    # Accumulate on offload device if specified and different, else on inference device
+                    device = getattr(self, "tensor_offload_device", None)
+                    if device is None or device == encoded_tile.device:
+                        device = encoded_tile.device
+
+                    result = torch.zeros(
+                        (b_out, c_out, f_lat, H_lat_total, W_lat_total),
+                        device=device,
+                        dtype=encoded_tile.dtype,
+                    )
+                    count = torch.zeros((1, 1, 1, H_lat_total, W_lat_total), device=device, dtype=encoded_tile.dtype)
+
+                eff_h_lat = min(y_lat_end - y_lat, encoded_tile.shape[3], result.shape[3] - y_lat)
+                eff_w_lat = min(x_lat_end - x_lat, encoded_tile.shape[4], result.shape[4] - x_lat)
+
+                encoded_tile = encoded_tile[:, :, : result.shape[2], :eff_h_lat, :eff_w_lat]
+
+                # Build faded masks
+                ov_h = max(0, min(latent_overlap_h, eff_h_lat - 1))
+                ov_w = max(0, min(latent_overlap_w, eff_w_lat - 1))
+
+                weight_h = torch.ones((eff_h_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype)
+                weight_w = torch.ones((eff_w_lat,), device=encoded_tile.device, dtype=encoded_tile.dtype)
+
+                # Apply fades only on interior edges using cached ramps (avoid fading on outer image borders)
+                if ov_h > 0:
+                    if y_lat > 0:  # Not top edge
+                        weight_h[:ov_h] = ramp_cache["h"][:ov_h]
+                    if y_lat_end < H_lat_total:  # Not bottom edge
+                        weight_h[-ov_h:] = 1 - ramp_cache["h"][:ov_h]
+                if ov_w > 0:
+                    if x_lat > 0:  # Not left edge
+                        weight_w[:ov_w] = ramp_cache["w"][:ov_w]
+                    if x_lat_end < W_lat_total:  # Not right edge
+                        weight_w[-ov_w:] = 1 - ramp_cache["w"][:ov_w]
+
+                # Separable application (no 2D mask to save memory)
+                weight_h_5d = weight_h.view(1, 1, 1, eff_h_lat, 1)
+                weight_w_5d = weight_w.view(1, 1, 1, 1, eff_w_lat)
+                encoded_tile.mul_(weight_h_5d).mul_(weight_w_5d)
+
+                # Accumulate (move to result device if different)
+                if result.device != encoded_tile.device:
+                    encoded_tile = encoded_tile.to(result.device)
+                    weight_h_5d = weight_h_5d.to(result.device)
+                    weight_w_5d = weight_w_5d.to(result.device)
+
+                result[:, :, : encoded_tile.shape[2], y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat] += encoded_tile
+                count[:, :, :, y_lat : y_lat + eff_h_lat, x_lat : x_lat + eff_w_lat].addcmul_(weight_h_5d, weight_w_5d)
+
+        # Move result back to inference device if needed and normalize
+        if result.device != x.device:
+            result = result.to(x.device)
+            count = count.to(x.device)
+        result.div_(count.clamp(min=1e-6))
+
+        if x.shape[2] == 1:  # single frame
+            result = result.squeeze(2)
+
+        return result
+
+    def tiled_decode(self, z: torch.Tensor, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)) -> torch.Tensor:  # noqa: F821
+        r"""
+        Decodes a latent tensor `z` by splitting it into spatial tiles only. Temporal is handled by `slicing_decode`.
+        """
+        if z.ndim != 5:
+            z = z.unsqueeze(2)
+
+        b, c, f, H, W = z.shape
+
+        # Spatial scale factor (output/latent)
+        scale_factor = self.spatial_downsample_factor
+
+        # Convert output-space tiling params to latent-space for spatial tiling
+        tile_h, tile_w = tile_size
+        overlap_h, overlap_w = tile_overlap
+
+        latent_tile_h = max(1, tile_h // scale_factor)
+        latent_tile_w = max(1, tile_w // scale_factor)
+
+        # Only tile if latent resolution requires multiple tiles
+        if H <= latent_tile_h and W <= latent_tile_w:
+            return self.slicing_decode(z)
+
+        latent_overlap_h = max(0, min((overlap_h // scale_factor), latent_tile_h - 1))
+        latent_overlap_w = max(0, min((overlap_w // scale_factor), latent_tile_w - 1))
+
+        stride_h = max(1, latent_tile_h - latent_overlap_h)
+        stride_w = max(1, latent_tile_w - latent_overlap_w)
+
+        # Allocate later using first decoded results
+        result = None
+        count = None
+
+        num_tiles = ((max(H - latent_overlap_h, 1) + stride_h - 1) // stride_h) * ((max(W - latent_overlap_w, 1) + stride_w - 1) // stride_w)
+
+        # Pre-compute common ramp values (small memory, big time save)
+        ramp_cache = {}
+        if overlap_h > 0:
+            t_h = torch.linspace(0, 1, steps=overlap_h, device=z.device, dtype=z.dtype)
+            ramp_cache["h"] = 0.5 - 0.5 * torch.cos(t_h * torch.pi)
+        if overlap_w > 0:
+            t_w = torch.linspace(0, 1, steps=overlap_w, device=z.device, dtype=z.dtype)
+            ramp_cache["w"] = 0.5 - 0.5 * torch.cos(t_w * torch.pi)
+
+        tile_id = 0
+        for y_lat in range(0, H, stride_h):
+            y_lat_end = min(y_lat + latent_tile_h, H)
+            for x_lat in range(0, W, stride_w):
+                x_lat_end = min(x_lat + latent_tile_w, W)
+
+                # Skip if fully within overlap of previous tiles
+                if (y_lat > 0 and (y_lat_end - y_lat) <= latent_overlap_h) or (x_lat > 0 and (x_lat_end - x_lat) <= latent_overlap_w):
+                    continue
+
+                tile_id += 1
+
+                tile_latent = z[:, :, :, y_lat:y_lat_end, x_lat:x_lat_end]
+
+                decoded_tile = self.slicing_decode(tile_latent)
+
+                # Initialize result tensors using actual decoded shapes on first tile
+                if result is None:
+                    b_out, c_out, out_f_tile, _, _ = decoded_tile.shape
+                    output_h = H * scale_factor
+                    output_w = W * scale_factor
+
+                    # Accumulate on offload device if specified and different, else on inference device
+                    device = getattr(self, "tensor_offload_device", None)
+                    if device is None or device == decoded_tile.device:
+                        device = decoded_tile.device
+
+                    result = torch.zeros((b_out, c_out, out_f_tile, output_h, output_w), device=device, dtype=decoded_tile.dtype)
+                    count = torch.zeros((1, 1, 1, output_h, output_w), device=device, dtype=decoded_tile.dtype)
+
+                # Corresponding output-space placement
+                y_out, y_out_end = y_lat * scale_factor, y_lat_end * scale_factor
+                x_out, x_out_end = x_lat * scale_factor, x_lat_end * scale_factor
+
+                h_out = y_out_end - y_out
+                w_out = x_out_end - x_out
+
+                # Build faded masks
+                ov_h_out = max(0, min(overlap_h, h_out - 1))
+                ov_w_out = max(0, min(overlap_w, w_out - 1))
+
+                weight_h = torch.ones((h_out,), device=decoded_tile.device, dtype=decoded_tile.dtype)
+                weight_w = torch.ones((w_out,), device=decoded_tile.device, dtype=decoded_tile.dtype)
+
+                # Apply fades only on interior edges using cached ramps (avoid fading on outer image borders)
+                if ov_h_out > 0:
+                    if y_lat > 0:  # Not top edge
+                        weight_h[:ov_h_out] = ramp_cache["h"][:ov_h_out]
+                    if y_lat_end < H:  # Not bottom edge
+                        weight_h[-ov_h_out:] = 1 - ramp_cache["h"][:ov_h_out]
+                if ov_w_out > 0:
+                    if x_lat > 0:  # Not left edge
+                        weight_w[:ov_w_out] = ramp_cache["w"][:ov_w_out]
+                    if x_lat_end < W:  # Not right edge
+                        weight_w[-ov_w_out:] = 1 - ramp_cache["w"][:ov_w_out]
+
+                # Separable application (no 2D mask to save memory)
+                weight_h_5d = weight_h.view(1, 1, 1, h_out, 1)
+                weight_w_5d = weight_w.view(1, 1, 1, 1, w_out)
+                decoded_tile.mul_(weight_h_5d).mul_(weight_w_5d)
+
+                # Accumulate (move to result device if different)
+                if result.device != decoded_tile.device:
+                    decoded_tile = decoded_tile.to(result.device)
+                    weight_h_5d = weight_h_5d.to(result.device)
+                    weight_w_5d = weight_w_5d.to(result.device)
+
+                result[:, :, : decoded_tile.shape[2], y_out:y_out_end, x_out:x_out_end] += decoded_tile
+                count[:, :, :, y_out:y_out_end, x_out:x_out_end].addcmul_(weight_h_5d, weight_w_5d)
+
+        # Move result back to inference device if needed and normalize
+        if result.device != z.device:
+            result = result.to(z.device)
+            count = count.to(z.device)
+        result.div_(count.clamp(min=1e-6))  # In-place normalize
+
+        if z.shape[2] == 1:  # single frame
+            result = result.squeeze(2)
+
+        return result
 
     def forward(self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs):
         # x: [b c t h w]
@@ -1227,6 +1490,7 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         temporal_downsample_factor: int,
         freeze_encoder: bool,
         cpu_offload: bool = False,
+        use_tiling: bool = False,
         **kwargs,
     ):
         self.spatial_downsample_factor = spatial_downsample_factor
@@ -1234,6 +1498,7 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         self.freeze_encoder = freeze_encoder
         self.cpu_offload = cpu_offload
         super().__init__(*args, **kwargs)
+        self.use_tiling = use_tiling
 
     def forward(self, x: torch.FloatTensor) -> CausalAutoencoderOutput:
         with torch.no_grad() if self.freeze_encoder else nullcontext():
@@ -1241,18 +1506,32 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         x = self.decode(z).sample
         return CausalAutoencoderOutput(x, z, p)
 
-    def encode(self, x: torch.FloatTensor) -> CausalEncoderOutput:
+    def encode(self, x: torch.FloatTensor, return_dict: bool = True, tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)) -> CausalEncoderOutput:
         if x.ndim == 4:
             x = x.unsqueeze(2)
-        p = super().encode(x).latent_dist
-        z = p.sample().squeeze(2)
+        p = super().encode(x, return_dict=return_dict, tiled=tiled, tile_size=tile_size, tile_overlap=tile_overlap).latent_dist
+        # Use deterministic mode for tiled encoding to avoid artifacts
+        z = p.mode().squeeze(2)
         return CausalEncoderOutput(z, p)
 
-    def decode(self, z: torch.FloatTensor) -> CausalDecoderOutput:
+    def decode(self, z: torch.Tensor, return_dict: bool = True, tiled: bool = False, tile_size: Tuple[int, int] = (512, 512), tile_overlap: Tuple[int, int] = (64, 64)) -> CausalDecoderOutput:
         if z.ndim == 4:
             z = z.unsqueeze(2)
-        x = super().decode(z).sample.squeeze(2)
+        x = super().decode(z, return_dict=return_dict, tiled=tiled, tile_size=tile_size, tile_overlap=tile_overlap).sample.squeeze(2)
         return CausalDecoderOutput(x)
+
+    # def encode(self, x: torch.FloatTensor) -> CausalEncoderOutput:
+    #     if x.ndim == 4:
+    #         x = x.unsqueeze(2)
+    #     p = super().encode(x).latent_dist
+    #     z = p.sample().squeeze(2)
+    #     return CausalEncoderOutput(z, p)
+
+    # def decode(self, z: torch.FloatTensor) -> CausalDecoderOutput:
+    #     if z.ndim == 4:
+    #         z = z.unsqueeze(2)
+    #     x = super().decode(z).sample.squeeze(2)
+    #     return CausalDecoderOutput(x)
 
     def preprocess(self, x: torch.Tensor):
         # x should in [B, C, T, H, W], [B, C, H, W]
@@ -1306,10 +1585,10 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
                 if hasattr(self, "preprocess"):
                     sample = self.preprocess(sample)
                 if use_sample:
-                    latent = self.encode(sample).latent
+                    latent = self.encode(sample, tiled=self.use_tiling).latent
                 else:
                     # Deterministic vae encode, only used for i2v inference (optionally)
-                    latent = self.encode(sample).posterior.mode().squeeze(2)
+                    latent = self.encode(sample, tiled=self.use_tiling).posterior.mode().squeeze(2)
                 latent = latent.unsqueeze(2) if latent.ndim == 4 else latent
                 latent = rearrange(latent, "b c ... -> b ... c")
                 latent = (latent - shift) * scale
@@ -1348,7 +1627,7 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
                 latent = latent / scale + shift
                 latent = rearrange(latent, "b ... c -> b c ...")
                 latent = latent.squeeze(2)
-                sample = self.decode(latent).sample
+                sample = self.decode(latent, tiled=self.use_tiling).sample
                 if hasattr(self, "postprocess"):
                     sample = self.postprocess(sample)
                 samples.append(sample)
@@ -1375,6 +1654,7 @@ def attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
     weights_mmap: bool = False,
     strict: bool = True,
     cpu_offload: bool = False,
+    use_tiling: bool = False,
 ) -> VideoAutoencoderKLWrapper:
     """Example: initialize VideoAutoencoderKLWrapper with SD3 inflation config params."""
     model = VideoAutoencoderKLWrapper(
@@ -1405,6 +1685,7 @@ def attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
         temporal_downsample_factor=4,
         freeze_encoder=False,
         cpu_offload=cpu_offload,
+        use_tiling=use_tiling,
     )
 
     if weights_path is not None:
