@@ -7,7 +7,7 @@
   "use_tiling_vae": true,
   "cpu_offload": true,
   "offload_granularity": "model",
-  "dit_quantized_ckpt": "/data/nvme0/gushiqiao/models/seedvr2-3b/seedvr2_ema_3b_fp8.safetensors",
+  "dit_quantized_ckpt": "path/to/seedvr2_ema_3b_fp8.safetensors",
   "dit_quant_scheme": "fp8-sgl",
   "dit_quantized": true
 }
