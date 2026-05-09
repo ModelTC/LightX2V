@@ -20,9 +20,9 @@ from lightx2v.utils.video_recorder import VideoRecorder
 class WanSFRunner(WanRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.vae_cls = WanSFVAE
         self.is_live = config.get("is_live", False)
         if self.is_live:
+            self.vae_cls = WanSFVAE
             self.width = self.config["target_width"]
             self.height = self.config["target_height"]
             self.run_main = self.run_main_live
@@ -54,7 +54,10 @@ class WanSFRunner(WanRunner):
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.decode(latents.to(GET_DTYPE()), use_cache=True)
+        if self.is_live:
+            images = self.vae_decoder.decode(latents.to(GET_DTYPE()), use_cache=True)
+        else:
+            images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
             torch.cuda.empty_cache()
@@ -126,6 +129,50 @@ class WanSFRunner(WanRunner):
                 self.video_recorder.pub_video(stream_video)
 
         torch.cuda.empty_cache()
+
+    @ProfilingContext4DebugL2("Run DiT")
+    def run_main(self, total_steps=None):
+        """Collect all segment latents, then decode at once with normal VAE.
+
+        This matches the source code behavior in image2video_fast.py:
+            pred_latent_chunks = torch.cat(pred_latent_chunks, dim=1)
+            videos = self.vae.decode([pred_latent_chunks])
+        """
+        self.init_run()
+        if self.config.get("compile", False):
+            self.model.select_graph_for_compile(self.input_info)
+
+        all_latents = []
+        for segment_idx in range(self.video_segment_num):
+            logger.info(f"start segment {segment_idx + 1}/{self.video_segment_num}")
+            with ProfilingContext4DebugL1(
+                f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                metrics_labels=["DefaultRunner"],
+            ):
+                self.check_stop()
+                self.init_run_segment(segment_idx)
+                latents = self.run_segment(segment_idx)
+                all_latents.append(latents)
+
+                with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                    self.model.scheduler.step_pre(
+                        seg_index=segment_idx,
+                        step_index=self.model.scheduler.infer_steps - 1,
+                        is_rerun=True,
+                    )
+                with ProfilingContext4DebugL1("infer_main_in_rerun"):
+                    self.model.infer(self.inputs)
+
+                torch.cuda.empty_cache()
+
+        all_latents = torch.cat(all_latents, dim=1)
+        self.gen_video = self.run_vae_decoder(all_latents)
+        self.gen_video_final = self.gen_video
+        gen_video_final = self.process_images_after_vae_decoder()
+        self.end_run()
+        return gen_video_final
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main_live(self, total_steps=None):
