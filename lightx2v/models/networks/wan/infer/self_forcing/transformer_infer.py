@@ -206,9 +206,12 @@ class WanSFTransformerInfer(WanTransformerInfer):
         return x
 
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
-        norm1_weight = 1 + scale_msa.squeeze()
-        norm1_bias = shift_msa.squeeze()
-
+        if hasattr(phase, "smooth_norm1_weight"):
+            norm1_weight = (1 + scale_msa.squeeze()) * phase.smooth_norm1_weight.tensor
+            norm1_bias = shift_msa.squeeze() * phase.smooth_norm1_bias.tensor
+        else:
+            norm1_weight = 1 + scale_msa.squeeze()
+            norm1_bias = shift_msa.squeeze()
         norm1_out = phase.norm1.apply(x)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.sensitive_layer_dtype)
