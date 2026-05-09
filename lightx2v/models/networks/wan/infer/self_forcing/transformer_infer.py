@@ -396,8 +396,12 @@ class WanSFTransformerInfer(WanTransformerInfer):
         num_frames = c_shift_msa.shape[0]
         frame_seqlen = x.shape[0] // c_shift_msa.shape[0]
 
-        norm2_weight = 1 + c_scale_msa
-        norm2_bias = c_shift_msa
+        if hasattr(phase, "smooth_norm2_weight"):
+            norm2_weight = (1 + c_scale_msa.squeeze()) * phase.smooth_norm2_weight.tensor
+            norm2_bias = c_shift_msa.squeeze() * phase.smooth_norm2_bias.tensor
+        else:
+            norm2_weight = 1 + c_scale_msa
+            norm2_bias = c_shift_msa
 
         norm2_out = phase.norm2.apply(x)
         norm2_out = norm2_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
