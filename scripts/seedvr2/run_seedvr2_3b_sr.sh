@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/mnt/devsft_afs_2/gushiqiao/new/LightX2V
-model_path=/models/seedvr2-3b/
+lightx2v_path=
+model_path=path/to/seedvr2-3b/
 
-video_path=/mnt/devsft_afs_2/gushiqiao/output_lightx2v_lingbot_fast_i2v_quant.mp4
+video_path=path/to/test.mp4
 
 export CUDA_VISIBLE_DEVICES=0
 
