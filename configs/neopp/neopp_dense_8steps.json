@@ -1,0 +1,16 @@
+{
+    "version": "dense",
+    "load_kv_cache_in_pipeline_for_debug": true,
+    "infer_steps": 8,
+    "attn_type": "flash_attn3",
+    "timestep_shift": 3.0,
+    "cfg_interval": [-1, 2],
+    "enable_cfg": false,
+    "use_triton_qknorm_rope": true,
+    "lora_configs": [
+        {
+          "path": "/data/nvme1/yongyang/kkk/models/sensenova/SenseNova-U1-8B-MoT-LoRAs/SenseNova-U1-8B-MoT-LoRA-8step-V1.0.safetensors",
+          "strength": 1.0
+        }
+    ]
+}

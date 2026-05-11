@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import torchvision.io as io
 from PIL import Image
 
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
@@ -14,6 +15,24 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs):
+    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+
+    if lora_dynamic_apply:
+        lora_path = lora_configs[0]["path"]
+        lora_strength = lora_configs[0]["strength"]
+        model_kwargs["lora_path"] = lora_path
+        model_kwargs["lora_strength"] = lora_strength
+        model = neopp_module(**model_kwargs)
+    else:
+        assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
+        assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
+        model = neopp_module(**model_kwargs)
+        lora_adapter = LoraAdapter(model)
+        lora_adapter.apply_lora(lora_configs)
+    return model
 
 
 @RUNNER_REGISTER("neopp")
@@ -53,7 +72,16 @@ class NeoppRunner(DefaultRunner):
         MoT: Mixture-of-Transformer-Experts (MoT) architecture
         https://arxiv.org/abs/2505.14683
         """
-        model = NeoppModel(self.config["model_path"], self.config, self.init_device)
+        neopp_model_kwargs = {
+            "model_path": self.config["model_path"],
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = NeoppModel(**neopp_model_kwargs)
+        else:
+            model = build_neopp_model_with_lora(NeoppModel, self.config, neopp_model_kwargs, lora_configs)
         return model
 
     def _build_inv_freq(self, half_head_dim, theta):
