@@ -23,11 +23,11 @@ pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False, "save_result_f
 # -------------------------------------------------
 pipe.runner.load_kvcache(
     "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_2k/to_x2v_cond_kv_0_298.pt",
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_2k/to_x2v_uncond_kv_0_9.pt",
+    None,
 )
 pipe.runner.set_inference_params(
     index_offset_cond=298,
-    index_offset_uncond=9,
+    index_offset_uncond=None,
     cfg_interval=(-1, 2),
     cfg_scale=4.0,
     cfg_norm="none",

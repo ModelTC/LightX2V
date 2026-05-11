@@ -49,6 +49,7 @@ class NeoppRunner(DefaultRunner):
         head_dim = llm_config["head_dim"]
         self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
+        self.enable_cfg = self.config.get("enable_cfg", True)
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
         self.past_key_values_text_uncond = None
@@ -111,15 +112,17 @@ class NeoppRunner(DefaultRunner):
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
             indexes_cond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_cond, device=self.init_device)
-            indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_uncond, device=self.init_device)
-
             cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
             cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
             cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
 
-            cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
-            cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
-            cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
+            if self.enable_cfg:
+                indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_uncond, device=self.init_device)
+                cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
+                cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
+                cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
+            else:
+                cos_t_uncond = sin_t_uncond = cos_h_uncond = sin_h_uncond = cos_w_uncond = sin_w_uncond = None
 
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
@@ -138,18 +141,19 @@ class NeoppRunner(DefaultRunner):
                 sin_h_cond = _pad_and_chunk(sin_h_cond)
                 cos_w_cond = _pad_and_chunk(cos_w_cond)
                 sin_w_cond = _pad_and_chunk(sin_w_cond)
-                cos_t_uncond = _pad_and_chunk(cos_t_uncond)
-                sin_t_uncond = _pad_and_chunk(sin_t_uncond)
-                cos_h_uncond = _pad_and_chunk(cos_h_uncond)
-                sin_h_uncond = _pad_and_chunk(sin_h_uncond)
-                cos_w_uncond = _pad_and_chunk(cos_w_uncond)
-                sin_w_uncond = _pad_and_chunk(sin_w_uncond)
+                if self.enable_cfg:
+                    cos_t_uncond = _pad_and_chunk(cos_t_uncond)
+                    sin_t_uncond = _pad_and_chunk(sin_t_uncond)
+                    cos_h_uncond = _pad_and_chunk(cos_h_uncond)
+                    sin_h_uncond = _pad_and_chunk(sin_h_uncond)
+                    cos_w_uncond = _pad_and_chunk(cos_w_uncond)
+                    sin_w_uncond = _pad_and_chunk(sin_w_uncond)
 
             return {
                 "past_key_values_cond": self.past_key_values_cond,
                 "past_key_values_uncond": self.past_key_values_uncond,
                 "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
-                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
+                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond) if self.enable_cfg else None,
             }
 
     def get_latent_shape_with_target_hw(self):
@@ -221,29 +225,29 @@ class NeoppRunner(DefaultRunner):
         self.clear_kvcache()
         return gen_result
 
-    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
+    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path=None):
         cfg_p_rank = self._get_cfg_p_rank()
         if cfg_p_rank != 1:  # rank 0 只做 cond，无需加载 uncond
             self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
             logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
-        if cfg_p_rank != 0:  # rank 1 只做 uncond，无需加载 cond
+        if self.enable_cfg and cfg_p_rank != 0:  # rank 1 只做 uncond，无需加载 cond
             self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
             logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
-    def set_inference_params(self, index_offset_cond, index_offset_uncond, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
+    def set_inference_params(self, index_offset_cond, index_offset_uncond=None, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
         self.index_offset_cond = index_offset_cond
-        self.index_offset_uncond = index_offset_uncond
+        self.index_offset_uncond = index_offset_uncond if self.enable_cfg else None
         self.scheduler.timestep_shift = timestep_shift
         self.model.cfg_interval = cfg_interval
         self.model.cfg_scale = cfg_scale
         self.model.cfg_norm = cfg_norm
 
-    def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor):
+    def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor = None):
         cfg_p_rank = self._get_cfg_p_rank()
         if cfg_p_rank != 1:
             self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
             logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
-        if cfg_p_rank != 0:
+        if self.enable_cfg and cfg_p_rank != 0:
             self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
             logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
