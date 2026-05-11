@@ -103,5 +103,5 @@ class QwenImageModel(BaseModel):
             vae_scale_factor=self.vae_scale_factor,
         )
 
-    def build_train_gt(self, latent, noise):
-        return (noise - latent).permute(0, 2, 1, 3, 4)
+    def prepare_flow_matching_target(self, velocity):
+        return velocity.permute(0, 2, 1, 3, 4)

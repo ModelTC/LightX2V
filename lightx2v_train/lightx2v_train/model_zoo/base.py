@@ -82,20 +82,9 @@ class BaseModel:
     def init_training_scheduler(self, num_train_timesteps: int = 1000):
         self.flow_matching = FlowMatchingScheduler(num_train_timesteps)
 
-    def sample_timesteps(self, num_samples, latent_device):
-        return self.flow_matching.sample_timesteps(num_samples, latent_device)
-
-    def get_sigmas(self, timesteps, n_dim, dtype):
-        return self.flow_matching.get_sigmas(timesteps, n_dim, dtype)
-
-    def add_noise(self, latent, noise, sigmas):
-        return self.flow_matching.add_noise(latent, noise, sigmas)
-
-    def loss_weighting(self, sigmas):
-        return self.flow_matching.loss_weighting(sigmas)
-
-    def build_train_gt(self, latent, noise):
-        return self.flow_matching.build_train_gt(latent, noise)
+    def prepare_flow_matching_target(self, velocity):
+        """Layout/format alignment between flow-matching velocity and denoiser output. Override when needed."""
+        return velocity
 
     def encode_to_latent(self, sample):
         raise NotImplementedError
