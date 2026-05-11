@@ -23,5 +23,6 @@
             "group_size": 64
         },
         "kv_offload": false
-    }
+    },
+    "causal_rope_type": "triton"
 }

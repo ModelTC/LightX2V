@@ -24,5 +24,6 @@
             "value_bits": 2
         },
         "kv_offload": false
-    }
+    },
+    "causal_rope_type": "triton"
 }

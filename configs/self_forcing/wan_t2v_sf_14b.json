@@ -17,5 +17,6 @@
         "num_frame_per_chunk": 3,
         "timesteps_index": [0, 179, 358, 679],
         "kv_offload": false
-    }
+    },
+    "causal_rope_type": "triton"
 }

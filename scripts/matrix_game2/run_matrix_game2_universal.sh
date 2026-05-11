@@ -1,10 +1,11 @@
 #!/bin/bash
+#!/bin/bash
 
 # set path firstly
 lightx2v_path=path to Lightx2v
 model_path=path to Skywork/Matrix-Game-2.0
 
-export CUDA_VISIBLE_DEVICES=
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

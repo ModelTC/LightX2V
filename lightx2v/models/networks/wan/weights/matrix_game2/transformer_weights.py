@@ -132,6 +132,10 @@ class WanActionModule(WeightModule):
 
         self.add_module("cross_attn_2", ATTN_WEIGHT_REGISTER[self.config["cross_attn_2_type"]]())
 
+        _ac = self.config.get("action_config") or {}
+        _action_attn_type = _ac.get("action_attn_type", self.config.get("self_attn_1_type", "flash_attn2"))
+        self.add_module("action_attn_1", ATTN_WEIGHT_REGISTER[_action_attn_type]())
+
         self.add_module(
             "mouse_attn_q",
             MM_WEIGHT_REGISTER[self.mm_type](
@@ -173,7 +177,7 @@ class WanActionModule(WeightModule):
             )
             self.add_module(
                 "mouse_mlp_3",
-                LN_WEIGHT_REGISTER[self.mm_type](
+                LN_WEIGHT_REGISTER["torch"](
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.weight",
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.bias",
                     eps=1e-6,
@@ -189,7 +193,7 @@ class WanActionCrossAttention(WeightModule):
         self.task = task
         self.config = config
 
-        if self.config.get("sf_config", False):
+        if self.config.get("ar_config"):
             self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
         else:
             self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
