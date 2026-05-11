@@ -4,7 +4,7 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
 
-from lightx2v_train.schedulers import FlowMatchingScheduler
+from lightx2v_train.schedulers import RectifiedFlowMatchingScheduler
 
 
 class DenoiserInput:
@@ -80,7 +80,7 @@ class BaseModel:
             self.transformer.enable_gradient_checkpointing()
 
     def init_training_scheduler(self, num_train_timesteps: int = 1000):
-        self.flow_matching = FlowMatchingScheduler(num_train_timesteps)
+        self.noise_scheduler = RectifiedFlowMatchingScheduler(num_train_timesteps)
 
     def prepare_flow_matching_target(self, velocity):
         """Layout/format alignment between flow-matching velocity and denoiser output. Override when needed."""

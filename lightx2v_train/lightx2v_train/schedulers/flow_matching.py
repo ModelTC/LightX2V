@@ -5,7 +5,7 @@ from diffusers.schedulers.scheduling_utils import SchedulerOutput
 from diffusers.training_utils import compute_density_for_timestep_sampling, compute_loss_weighting_for_sd3
 
 
-class FlowMatchingScheduler:
+class RectifiedFlowMatchingScheduler:
     def __init__(self, num_train_timesteps=1000):
         self.num_train_timesteps = num_train_timesteps
         self.device = torch.device("cuda")

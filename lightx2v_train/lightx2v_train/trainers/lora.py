@@ -65,17 +65,17 @@ class LoraTrainer(BaseTrainer):
             latent = self.model.encode_to_latent(sample)
             n = latent.shape[0]
             noise = torch.randn_like(latent, dtype=self.model.dtype)
-            timesteps = self.flow_matching.sample_timesteps(n, latent.device)
-            sigmas = self.flow_matching.get_sigmas(timesteps, n_dim=latent.ndim, dtype=latent.dtype)
-            noisy_latent = self.flow_matching.add_noise(latent, noise, sigmas)
+            timesteps = self.noise_scheduler.sample_timesteps(n, latent.device)
+            sigmas = self.noise_scheduler.get_sigmas(timesteps, n_dim=latent.ndim, dtype=latent.dtype)
+            noisy_latent = self.noise_scheduler.add_noise(latent, noise, sigmas)
             condition = self.model.encode_condition(sample)
 
         denoiser_input = self.model.prepare_denoiser_input(noisy_latent, sample, condition)
         prediction = self.model.denoise(denoiser_input, timesteps, condition)
         prediction = self.model.postprocess_denoiser_output(prediction, denoiser_input)
 
-        weighting = self.flow_matching.loss_weighting(sigmas)
-        target = self.model.prepare_flow_matching_target(self.flow_matching.build_train_gt(latent, noise))
+        weighting = self.noise_scheduler.loss_weighting(sigmas)
+        target = self.model.prepare_flow_matching_target(self.noise_scheduler.build_train_gt(latent, noise))
         loss = torch.mean(
             (weighting.float() * (prediction.float() - target.float()) ** 2).reshape(target.shape[0], -1),
             dim=1,

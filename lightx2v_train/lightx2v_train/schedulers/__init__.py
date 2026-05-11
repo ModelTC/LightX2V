@@ -1,3 +1,3 @@
-from .flow_matching import FlowMatchingScheduler
+from .flow_matching import RectifiedFlowMatchingScheduler
 
-__all__ = ["FlowMatchingScheduler"]
+__all__ = ["RectifiedFlowMatchingScheduler"]

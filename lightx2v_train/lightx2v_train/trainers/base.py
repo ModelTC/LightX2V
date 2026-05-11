@@ -7,7 +7,7 @@ class BaseTrainer:
 
     def set_model(self, model):
         self.model = model
-        self.flow_matching = model.flow_matching
+        self.noise_scheduler = model.noise_scheduler
 
     def set_data(self, dataloader, dataloader_eval=None):
         self.dataloader = dataloader
