@@ -80,7 +80,7 @@ class BaseModel:
             self.transformer.enable_gradient_checkpointing()
 
     def init_training_scheduler(self, num_train_timesteps: int = 1000):
-        self.flow_matching = FlowMatchingScheduler(num_train_timesteps, self.device)
+        self.flow_matching = FlowMatchingScheduler(num_train_timesteps)
 
     def sample_timesteps(self, num_samples, latent_device):
         return self.flow_matching.sample_timesteps(num_samples, latent_device)

@@ -6,9 +6,9 @@ from diffusers.training_utils import compute_density_for_timestep_sampling, comp
 
 
 class FlowMatchingScheduler:
-    def __init__(self, num_train_timesteps=1000, device=None):
+    def __init__(self, num_train_timesteps=1000):
         self.num_train_timesteps = num_train_timesteps
-        self.device = device or torch.device("cpu")
+        self.device = torch.device("cuda")
         self.config = SimpleNamespace(num_train_timesteps=num_train_timesteps)
 
         _sigmas = torch.linspace(1.0, 1.0 / num_train_timesteps, num_train_timesteps)
