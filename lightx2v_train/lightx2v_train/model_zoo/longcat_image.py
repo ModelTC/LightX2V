@@ -12,17 +12,16 @@ class LongCatImageModel(BaseModel):
     pipeline_cls = LongCatImagePipeline
 
     def load_components(self):
-        model_path = self.config["pretrained_model_name_or_path"]
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
         self.text_pipeline = LongCatImagePipeline.from_pretrained(
             model_path,
             transformer=None,
             vae=None,
-            torch_dtype=self.dtype,
+            torch_dtype=self.running_dtype,
         ).to(self.device)
-        self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.dtype)
-        self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.dtype)
+        self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
+        self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
         self.vae.requires_grad_(False)
-        self.init_training_scheduler()
 
     def build_pipeline(self):
         pipe = LongCatImagePipeline(
@@ -40,7 +39,7 @@ class LongCatImageModel(BaseModel):
         return 2 ** (len(self.vae.config.block_out_channels) - 1)
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.dtype)
+        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
         latent = self.vae.encode(image).latent_dist.sample()
         shift = getattr(self.vae.config, "shift_factor", 0.0)
         scale = getattr(self.vae.config, "scaling_factor", 1.0)
@@ -49,9 +48,10 @@ class LongCatImageModel(BaseModel):
     def encode_condition(self, sample):
         prompt = sample["prompt"]
         if self.config.get("enable_prompt_rewrite_training", False):
-            prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
+            prompt = self.text_pipeline.rewrite_prompt(prompt, self.device)
         prompt_embed, text_ids = self.text_pipeline.encode_prompt(
             prompt=prompt,
+            device=self.device,
             num_images_per_prompt=1,
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
@@ -84,10 +84,10 @@ class LongCatImageModel(BaseModel):
             },
         )
 
-    def denoise(self, denoiser_input, timesteps, condition):
+    def denoise(self, denoiser_input, timestep_or_sigma, condition):
         return self.transformer(
             hidden_states=denoiser_input.hidden_states,
-            timestep=timesteps / 1000,
+            timestep=timestep_or_sigma,
             guidance=None,
             encoder_hidden_states=condition["prompt_embed"],
             txt_ids=condition["text_ids"],

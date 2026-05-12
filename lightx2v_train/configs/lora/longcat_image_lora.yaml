@@ -17,9 +17,22 @@ data:
     val:
         name: image_dataset
         num_workers: 8
+        image_size: 1024
         shuffle: false
         data_path:
             - /path/to/image_dataset/val.jsonl
+
+scheduler:
+    training:
+        num_train_timesteps: 1000
+        timestep_distribution: logitnormal
+        logitnormal_mean: 0.0
+        logitnormal_std: 1.0
+        min_t: 0.001
+        max_t: 1.0
+        do_time_shift: true
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
 
 training:
     method: lora
@@ -51,6 +64,5 @@ inference:
     width: 1024
     height: 1024
     num_inference_steps: 50
-    guidance_scale: 4.5
-    enable_cfg_renorm: true
-    enable_prompt_rewrite: true
+    cfg_guidance_scale: 4.0
+    negative_prompt: " "
