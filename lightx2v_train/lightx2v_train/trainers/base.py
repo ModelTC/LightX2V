@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
+
 
 class BaseTrainer:
     def __init__(self, config):
         self.config = config
+        self.noise_scheduler = RectifiedFlowMatchingScheduler(config)
 
     def set_model(self, model):
         self.model = model
-        self.noise_scheduler = model.noise_scheduler
 
     def set_data(self, dataloader, dataloader_eval=None):
         self.dataloader = dataloader

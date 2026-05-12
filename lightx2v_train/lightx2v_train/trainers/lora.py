@@ -6,6 +6,7 @@ from tqdm.auto import tqdm
 
 from lightx2v_train.runtime import prune_checkpoints
 from lightx2v_train.utils.registry import TRAINER_REGISTER
+from lightx2v_train.utils.utils import get_running_dtype
 
 from .base import BaseTrainer
 
@@ -13,6 +14,9 @@ from .base import BaseTrainer
 @TRAINER_REGISTER("lora")
 class LoraTrainer(BaseTrainer):
     def get_configs(self):
+        model_config = self.config["model"]
+        self.running_dtype = get_running_dtype(model_config["running_dtype"])
+
         training_config = self.config["training"]
 
         lora_config = training_config.get("lora", {})
@@ -64,22 +68,17 @@ class LoraTrainer(BaseTrainer):
         with torch.no_grad():
             latent = self.model.encode_to_latent(sample)
             n = latent.shape[0]
-            noise = torch.randn_like(latent, dtype=self.model.dtype)
-            timesteps = self.noise_scheduler.sample_timesteps(n, latent.device)
-            sigmas = self.noise_scheduler.get_sigmas(timesteps, n_dim=latent.ndim, dtype=latent.dtype)
-            noisy_latent = self.noise_scheduler.add_noise(latent, noise, sigmas)
+            noise = torch.randn_like(latent, dtype=self.running_dtype)
+            timestep_or_sigma = self.noise_scheduler.sample_timestep_or_sigma(n)
+            noisy_latent = self.noise_scheduler.add_noise(latent, noise, timestep_or_sigma)
             condition = self.model.encode_condition(sample)
 
         denoiser_input = self.model.prepare_denoiser_input(noisy_latent, sample, condition)
-        prediction = self.model.denoise(denoiser_input, timesteps, condition)
+        prediction = self.model.denoise(denoiser_input, timestep_or_sigma, condition)
         prediction = self.model.postprocess_denoiser_output(prediction, denoiser_input)
 
-        weighting = self.noise_scheduler.loss_weighting(sigmas)
         target = self.model.prepare_flow_matching_target(self.noise_scheduler.build_train_gt(latent, noise))
-        loss = torch.mean(
-            (weighting.float() * (prediction.float() - target.float()) ** 2).reshape(target.shape[0], -1),
-            dim=1,
-        )
+        loss = torch.mean(((prediction.float() - target.float()) ** 2).reshape(target.shape[0], -1), dim=1)
         return loss.mean()
 
     def train(self):

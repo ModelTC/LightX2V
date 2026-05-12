@@ -4,7 +4,7 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
 
-from lightx2v_train.schedulers import RectifiedFlowMatchingScheduler
+from lightx2v_train.utils.utils import get_running_dtype
 
 
 class DenoiserInput:
@@ -22,22 +22,12 @@ class BaseModel:
 
     def __init__(self, config):
         self.config = config
-        self.dtype = self.get_dtype(config["model"]["dtype"])
+        self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
         self.device = torch.device("cuda")
         self.pipeline = None
         self.flow_matching = None
         self.transformer = None
         self.vae = None
-
-    def get_dtype(self, name):
-        if name == "bf16":
-            return torch.bfloat16
-        elif name == "fp16":
-            return torch.float16
-        elif name == "fp32":
-            return torch.float32
-        else:
-            raise ValueError(f"Invalid dtype: {name}")
 
     def load_components(self):
         raise NotImplementedError
@@ -78,9 +68,6 @@ class BaseModel:
     def enable_gradient_checkpointing(self):
         if hasattr(self.transformer, "enable_gradient_checkpointing"):
             self.transformer.enable_gradient_checkpointing()
-
-    def init_training_scheduler(self, num_train_timesteps: int = 1000):
-        self.noise_scheduler = RectifiedFlowMatchingScheduler(num_train_timesteps)
 
     def prepare_flow_matching_target(self, velocity):
         """Layout/format alignment between flow-matching velocity and denoiser output. Override when needed."""

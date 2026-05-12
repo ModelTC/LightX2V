@@ -1,53 +1,60 @@
-from types import SimpleNamespace
-
 import torch
 from diffusers.schedulers.scheduling_utils import SchedulerOutput
-from diffusers.training_utils import compute_density_for_timestep_sampling, compute_loss_weighting_for_sd3
+
+from lightx2v_train.utils.utils import get_running_dtype
 
 
 class RectifiedFlowMatchingScheduler:
-    def __init__(self, num_train_timesteps=1000):
-        self.num_train_timesteps = num_train_timesteps
+    def __init__(self, config):
+        self.config = config
         self.device = torch.device("cuda")
-        self.config = SimpleNamespace(num_train_timesteps=num_train_timesteps)
 
-        _sigmas = torch.linspace(1.0, 1.0 / num_train_timesteps, num_train_timesteps)
+        scheduler_training_config = config["scheduler"]["training"]
+        self.num_train_timesteps = scheduler_training_config.get("num_train_timesteps", 1000)
+        self.timestep_distribution = scheduler_training_config.get("timestep_distribution", "logitnormal")
+
+        self.logitnormal_mean = scheduler_training_config.get("logitnormal_mean", 0.0)
+        self.logitnormal_std = scheduler_training_config.get("logitnormal_std", 1.0)
+
+        self.min_t = scheduler_training_config.get("min_t", 0.001)
+        self.max_t = scheduler_training_config.get("max_t", 1.0)
+
+        self.do_time_shift = scheduler_training_config.get("do_time_shift", False)
+        self.time_shift_mu = scheduler_training_config.get("time_shift_mu", 5.0)
+        self.time_shift_power = scheduler_training_config.get("time_shift_power", 1.0)
+
+        _sigmas = torch.linspace(1.0, 1.0 / self.num_train_timesteps, self.num_train_timesteps)
         self._train_sigmas = _sigmas
-        self._train_timesteps = _sigmas * num_train_timesteps
+        self._train_timesteps = _sigmas * self.num_train_timesteps
 
         self.sigmas = torch.cat([_sigmas, torch.zeros(1)])
         self.timesteps = self._train_timesteps
         self.num_inference_steps = None
 
-    def sample_timesteps(self, num_samples, latent_device):
-        u = compute_density_for_timestep_sampling(
-            weighting_scheme="none",
-            batch_size=num_samples,
-            logit_mean=0.0,
-            logit_std=1.0,
-            mode_scale=1.29,
-        )
-        indices = (u * self.num_train_timesteps).long()
-        return self._train_timesteps[indices].to(device=latent_device)
+        self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
 
-    def get_sigmas(self, timesteps, n_dim, dtype):
-        sigmas = self._train_sigmas.to(device=self.device, dtype=dtype)
-        schedule_timesteps = self._train_timesteps.to(self.device)
-        timesteps = timesteps.to(self.device)
-        sigma_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-        sigma = sigmas[sigma_indices].flatten()
-        while len(sigma.shape) < n_dim:
-            sigma = sigma.unsqueeze(-1)
-        return sigma
+    def sample_timestep_or_sigma(self, num_samples):
+        if self.timestep_distribution == "logitnormal":
+            timestep_or_sigma = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
+            timestep_or_sigma = torch.sigmoid(timestep_or_sigma)
+            timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
+        elif self.timestep_distribution == "uniform":
+            timestep_or_sigma = torch.rand((num_samples,), device=self.device)
+            timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
+        else:
+            raise ValueError(f"Unsupported timestep distribution: {self.timestep_distribution}")
+        if self.do_time_shift:
+            timestep_or_sigma = self.time_shift(timestep_or_sigma)
+        return timestep_or_sigma.to(self.running_dtype)
+
+    def time_shift(self, t):
+        return self.time_shift_mu / (self.time_shift_mu + (1 / t - 1) ** self.time_shift_power)
 
     def add_noise(self, latent, noise, sigmas):
         return (1.0 - sigmas) * latent + sigmas * noise
 
     def build_train_gt(self, latent, noise):
         return noise - latent
-
-    def loss_weighting(self, sigmas):
-        return compute_loss_weighting_for_sd3(weighting_scheme="none", sigmas=sigmas)
 
     def set_timesteps(self, num_inference_steps, device=None):
         self.num_inference_steps = num_inference_steps

@@ -21,12 +21,11 @@ class QwenImageModel(BaseModel):
             model_path,
             transformer=None,
             vae=None,
-            torch_dtype=self.dtype,
+            torch_dtype=self.running_dtype,
         ).to(self.device)
-        self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.dtype)
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.dtype)
+        self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
+        self.transformer = QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
         self.vae.requires_grad_(False)
-        self.init_training_scheduler()
 
     def build_pipeline(self):
         pipe = QwenImagePipeline(
@@ -43,13 +42,13 @@ class QwenImageModel(BaseModel):
         return 2 ** len(self.vae.temperal_downsample)
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.dtype)
+        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)
         latent = self.vae.encode(pixel_values).latent_dist.sample()
         latent = latent.permute(0, 2, 1, 3, 4)
 
-        latent_mean = torch.tensor(self.vae.config.latents_mean, device=self.device, dtype=self.dtype).view(1, 1, self.vae.config.z_dim, 1, 1)
-        latent_std = 1.0 / torch.tensor(self.vae.config.latents_std, device=self.device, dtype=self.dtype).view(1, 1, self.vae.config.z_dim, 1, 1)
+        latent_mean = torch.tensor(self.vae.config.latents_mean, device=self.device, dtype=self.running_dtype).view(1, 1, self.vae.config.z_dim, 1, 1)
+        latent_std = 1.0 / torch.tensor(self.vae.config.latents_std, device=self.device, dtype=self.running_dtype).view(1, 1, self.vae.config.z_dim, 1, 1)
         return (latent - latent_mean) * latent_std
 
     def encode_condition(self, sample):
@@ -84,10 +83,10 @@ class QwenImageModel(BaseModel):
             },
         )
 
-    def denoise(self, denoiser_input, timesteps, condition):
+    def denoise(self, denoiser_input, timestep_or_sigma, condition):
         return self.transformer(
             hidden_states=denoiser_input.hidden_states,
-            timestep=timesteps / 1000,
+            timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
             guidance=None,
             encoder_hidden_states_mask=condition["prompt_embed_mask"],
             encoder_hidden_states=condition["prompt_embed"],

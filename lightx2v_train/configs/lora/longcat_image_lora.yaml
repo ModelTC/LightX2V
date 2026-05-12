@@ -1,10 +1,8 @@
-runtime:
-    dtype: bf16
-
 model:
     name: longcat_image
     pretrained_model_name_or_path: meituan-longcat/LongCat-Image
     enable_prompt_rewrite_training: false
+    running_dtype: bf16
 
 data:
     train:

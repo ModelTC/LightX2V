@@ -2,7 +2,7 @@ model:
     name: qwen_image
     pretrained_model_name_or_path: /data/nvme1/models/Qwen/Qwen-Image-2512
     max_sequence_length: 1024
-    dtype: bf16
+    running_dtype: bf16
 
 data:
     train:
@@ -21,6 +21,18 @@ data:
         shuffle: false
         data_path:
             - /data/nvme1/yongyang/kkk/lightx2v_train_dataset/dataset_v1/val.jsonl
+
+scheduler:
+    training:
+        num_train_timesteps: 1000
+        timestep_distribution: logitnormal
+        logitnormal_mean: 0.0
+        logitnormal_std: 1.0
+        min_t: 0.001
+        max_t: 1.0
+        do_time_shift: true
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
 
 training:
     method: lora
