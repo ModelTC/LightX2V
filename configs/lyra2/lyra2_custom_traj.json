@@ -1,0 +1,30 @@
+{
+    "model_cls": "lyra2_custom_traj",
+
+    "lyra_repo": "/data/nvme1/wushuo/lyra_proj/Lyra-2",
+
+    "experiment": "lyra2",
+    "checkpoint_dir": "checkpoints/model",
+
+    "num_frames": 81,
+    "num_sampling_step": 35,
+    "fps": 16,
+    "resolution": "480,832",
+    "pose_scale": 1.1,
+
+    "guidance": 5.0,
+    "shift": 5.0,
+
+    "use_dmd": false,
+    "use_moge_scale": true,
+
+    "da3_model_path_custom": "checkpoints/recon/model.pt",
+    "da3_frame_interval": 8,
+    "da3_max_history_frames": 10,
+
+    "negative_prompt_pt": "checkpoints/text_encoder/negative_prompt.pt",
+
+    "offload": false,
+    "offload_when_prompt": false,
+    "context_parallel_size": 1
+}

@@ -1,0 +1,26 @@
+{
+    "model_cls": "lyra2_gs_recon",
+
+    "lyra_repo": "/data/nvme1/wushuo/lyra_proj/Lyra-2",
+
+    "no_vipe": false,
+    "vipe_full_mode": false,
+
+    "max_frames": 0,
+    "da3_max_frames": 128,
+    "da3_model_name": "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+    "da3_process_res": null,
+    "da3_process_method": "upper_bound_resize",
+    "max_resolution": 0,
+
+    "gs_down_ratio": 2,
+    "gs_scale_extra_multiplier": 1.0,
+    "gs_ply_prune_opacity_percentile": null,
+    "gs_ds_feature_mode": true,
+
+    "use_da3_render_pose": true,
+    "render_fps": null,
+    "render_chunk_size": 1,
+
+    "force": false
+}

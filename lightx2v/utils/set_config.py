@@ -118,6 +118,10 @@ def auto_calc_config(config):
                 config["config_path"] = wm_config
             if wm_ckpt:
                 config["ckpt_path"] = wm_ckpt
+    elif config["model_cls"] in ("lyra2_zoomgs", "lyra2_custom_traj", "lyra2_gs_recon"):
+        # Lyra-2 models manage their own checkpoint loading;
+        # there is no transformer config.json to merge here.
+        pass
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -176,7 +180,8 @@ def auto_calc_config(config):
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]
 
-    if config["task"] in ["i2v", "s2v", "rs2v", "ltx2_s2v"]:
+    _lyra2_model_cls = {"lyra2_zoomgs", "lyra2_custom_traj", "lyra2_gs_recon"}
+    if config["task"] in ["i2v", "s2v", "rs2v", "ltx2_s2v"] and config.get("model_cls") not in _lyra2_model_cls:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
