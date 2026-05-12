@@ -1,11 +1,8 @@
-from __future__ import annotations
-
 import argparse
 
-import lightx2v_train  # noqa: F401 - makes the local diffusers checkout importable.
 from lightx2v_train.data import build_data
 from lightx2v_train.model_zoo import build_model
-from lightx2v_train.runtime import load_config
+from lightx2v_train.runtime.config import load_config
 from lightx2v_train.trainers import build_trainer
 
 

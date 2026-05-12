@@ -4,7 +4,7 @@ import torch
 from diffusers.optimization import get_scheduler
 from tqdm.auto import tqdm
 
-from lightx2v_train.runtime import prune_checkpoints
+from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
