@@ -14,7 +14,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning
+from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning, load_video_conditioning
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -75,6 +75,8 @@ class LTX2Runner(DefaultRunner):
         super().init_modules()
         if self.config["task"] == "ltx2_s2v":
             self.run_input_encoder = self._run_input_encoder_local_ltx2_s2v
+        elif self.config["task"] == "v2av":
+            self.run_input_encoder = self._run_input_encoder_local_v2av
 
     def init_scheduler(self):
         self.scheduler = LTX2Scheduler(self.config)
@@ -173,7 +175,7 @@ class LTX2Runner(DefaultRunner):
             checkpoint_path=ckpt_path,
             device=vae_device,
             dtype=GET_DTYPE(),
-            load_encoder=self.config["task"] in ("i2av", "ltx2_s2v") or self.config.get("use_upsampler", False),
+            load_encoder=self.config["task"] in ("i2av", "ltx2_s2v", "v2av") or self.config.get("use_upsampler", False),
             use_tiling=self.config.get("use_tiling_vae", False),
             cpu_offload=vae_offload,
         )
@@ -222,9 +224,20 @@ class LTX2Runner(DefaultRunner):
         self.audio_denoise_mask = None
         self._ltx2_s2v_mux_audio = None
 
+    def _clear_ltx2_reference_video_state(self) -> None:
+        """Avoid leaking v2av reference-video conditioning across runs / between stages."""
+        self._ref_video_latent = None
+
+    def _get_ref_downscale_factor(self) -> float:
+        try:
+            return float(self.config.get("ref_downscale_factor", 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2av(self):
         self._clear_ltx2_reference_audio_state()
+        self._clear_ltx2_reference_video_state()
         self.video_denoise_mask = None
         self.initial_video_latent = None
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
@@ -256,6 +269,7 @@ class LTX2Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2av(self):
         self._clear_ltx2_reference_audio_state()
+        self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
@@ -266,6 +280,89 @@ class LTX2Runner(DefaultRunner):
         return {
             "text_encoder_output": text_encoder_output,
         }
+
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_v2av(self):
+        """IC-LoRA video-to-video.
+
+        Pre-processed control / source video at ``input_info.video_path`` is loaded at
+        ``target_shape * ref_downscale_factor`` resolution, capped to ``target_video_length``
+        frames (or ``reference_video_frame_cap`` if explicitly set), VAE-encoded, and stashed
+        in ``self._ref_video_latent`` for the scheduler. Optional character / keyframe image
+        conditioning re-uses the existing i2av VAE encode path.
+        """
+        self._clear_ltx2_reference_audio_state()
+        self._clear_ltx2_reference_video_state()
+        self._normalize_i2av_input_fields()
+        self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
+        text_encoder_output = self.run_text_encoder(self.input_info)
+        # Optional image conditioning (e.g. a character image for motion transfer).
+        self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
+
+        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        if ref_path:
+            self._encode_reference_video(ref_path)
+        else:
+            logger.info("v2av: video_path empty, running without reference-video conditioning")
+
+        torch_device_module.empty_cache()
+        gc.collect()
+
+        return {
+            "text_encoder_output": text_encoder_output,
+        }
+
+    @ProfilingContext4DebugL1(
+        "Run VAE Encoder (reference video)",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+        metrics_labels=["LTX2Runner-v2av"],
+    )
+    def _encode_reference_video(self, ref_path: str) -> None:
+        """Load a pre-processed reference video, VAE-encode it, and stash for the scheduler.
+
+        The reference latent is stored as ``(encoded_latent, strength, ref_downscale_factor)``
+        so the scheduler can patchify and append it as frozen IC-LoRA tokens.
+        """
+        target_h = int(self.input_info.target_shape[0])
+        target_w = int(self.input_info.target_shape[1])
+        ref_downscale = self._get_ref_downscale_factor()
+        ref_h = max(2, int(round(target_h * ref_downscale)))
+        ref_w = max(2, int(round(target_w * ref_downscale)))
+        # Snap to even for codec / VAE compatibility.
+        ref_h = (ref_h // 2) * 2
+        ref_w = (ref_w // 2) * 2
+
+        target_video_length = self.input_info.target_video_length or self.config.get("target_video_length", 1)
+        frame_cap_override = getattr(self.input_info, "reference_video_frame_cap", None)
+        frame_cap = int(frame_cap_override) if frame_cap_override else int(target_video_length)
+
+        strength = float(getattr(self.input_info, "reference_video_strength", None) or self.config.get("reference_video_strength", 1.0))
+
+        logger.info(
+            f"  reference video: {ref_path} -> resize={ref_h}x{ref_w}, frame_cap={frame_cap}, "
+            f"ref_downscale={ref_downscale}, strength={strength}"
+        )
+
+        ref_video = load_video_conditioning(
+            video_path=ref_path,
+            height=ref_h,
+            width=ref_w,
+            frame_cap=frame_cap,
+            dtype=GET_DTYPE(),
+            device=AI_DEVICE,
+        )
+        if ref_video is None:
+            logger.warning(f"v2av: failed to load reference video from {ref_path!r}, falling back to no IC conditioning")
+            return
+
+        with torch.no_grad():
+            encoded = self.video_vae.encode(ref_video)
+        if encoded.dim() == 5:
+            encoded = encoded.squeeze(0)
+
+        self._ref_video_latent = (encoded.to(dtype=GET_DTYPE(), device=AI_DEVICE), strength, ref_downscale)
+        logger.info(f"  ✓ Reference video encoded to latent shape {tuple(encoded.shape)}")
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_ltx2_s2v(self):
@@ -554,6 +651,10 @@ class LTX2Runner(DefaultRunner):
         # Prepare scheduler using the shared method
         stage2_audio_mask = getattr(self, "audio_denoise_mask", None)
 
+        # IC-LoRA reference-video tokens belong only to stage 1; clear before stage 2 prepare
+        # so the upsampler runs on a clean main grid.
+        self._clear_ltx2_reference_video_state()
+
         self._prepare_scheduler(
             initial_video_latent=upsampled_v_latent,  # Use upsampled video latent
             initial_audio_latent=a_latent,  # Keep audio from stage 1 (aligned with distilled.py:183)
@@ -627,6 +728,10 @@ class LTX2Runner(DefaultRunner):
         vg = self._build_i2av_video_guiding_latents()
         if vg:
             prepare_kwargs["video_guiding_latents"] = vg
+
+        ref = getattr(self, "_ref_video_latent", None)
+        if ref is not None:
+            prepare_kwargs["reference_video_latent"] = ref
 
         self.model.scheduler.prepare(**prepare_kwargs)
 

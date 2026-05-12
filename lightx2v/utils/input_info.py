@@ -179,6 +179,8 @@ class AnimateInputInfo:
     src_ref_images: str = field(default_factory=str)
     src_bg_path: str = field(default_factory=str)
     src_mask_path: str = field(default_factory=str)
+    # None: use config_json replace_flag; True/False: per-request (e.g. worker frontend)
+    replace_flag: Optional[bool] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -247,6 +249,41 @@ class I2AVInputInfo:
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
     image_frame_idx: Optional[list[int]] = None
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
+class V2AVInputInfo:
+    """LTX-2.3 IC-LoRA video-to-audio-video.
+
+    Drives both motion-transfer (Union / Pose / Motion-Track-Control) and
+    ICEdit-Insight editing (restoration / HD / watermark / subtitle removal).
+    The reference / control video is provided pre-processed via ``video_path``.
+    Optional character image conditioning is supported through the i2av-style
+    ``image_path`` / ``image_strength`` / ``image_frame_idx`` fields.
+    """
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    # Optional character / keyframe image conditioning (motion transfer).
+    image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
+    # Pre-processed reference / control video (pose / canny / depth / track for
+    # motion transfer, or the degraded source video for ICEdit).
+    video_path: str = field(default_factory=str)
+    reference_video_strength: float = field(default_factory=lambda: 1.0)
+    reference_video_frame_cap: Optional[int] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -363,6 +400,7 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "v2av": V2AVInputInfo,
     "ltx2_s2v": LTX2S2VInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,

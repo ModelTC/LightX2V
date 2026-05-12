@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
@@ -63,12 +64,14 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
 
         q = phase.q_norm.apply(q).view(T, q.shape[0] // T, q.shape[1], q.shape[2])
         k = phase.k_norm.apply(k)
-        attn = phase.adapter_attn.apply(
-            q=q,
-            k=k,
-            v=v,
-            max_seqlen_q=q.shape[1],
-        )
+        # Post-adapter is cross-attn per time step: Q seq len (from x) and K/V seq len (from motion)
+        # often differ. FlashAttn3 varlen merge requires equal total Q/K token counts and raises
+        # RuntimeError: batch_size must be equal to batch_size_k. Use SDPA on batch dim T instead.
+        q_b = q.permute(0, 2, 1, 3).contiguous()
+        k_b = k.permute(0, 2, 1, 3).contiguous()
+        v_b = v.permute(0, 2, 1, 3).contiguous()
+        attn_b = F.scaled_dot_product_attention(q_b, k_b, v_b)
+        attn = attn_b.permute(0, 2, 1, 3).reshape(T * q.shape[1], -1)
 
         output = phase.linear2.apply(attn)
         x = x.add_(output)

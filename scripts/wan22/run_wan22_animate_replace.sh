@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=
-model_path=
-video_path=
-refer_path=
+lightx2v_path=/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V
+model_path=/mtc/gongruihao/qinxinyi/Wan2.2-Animate-14B
+video_path=/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V/scripts/wan22/video_replace.mp4
+refer_path=/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V/scripts/wan22/image_replace.jpeg
+
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -16,7 +17,7 @@ python ${lightx2v_path}/tools/preprocess/preprocess_data.py \
     --ckpt_path ${model_path}/process_checkpoint \
     --video_path $video_path  \
     --refer_path $refer_path \
-    --save_path ${lightx2v_path}/save_results/replace/process_results \
+    --save_path ${lightx2v_path}/save_results/animate/process_results \
     --resolution_area 1280 720 \
     --iterations 3 \
     --k 7 \
@@ -28,7 +29,7 @@ python -m lightx2v.infer \
 --model_cls wan2.2_animate \
 --task animate \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/wan22/wan_animate_replace_4090.json \
+--config_json ${lightx2v_path}/configs/wan22/wan_animate_replace.json \
 --src_pose_path ${lightx2v_path}/save_results/animate/process_results/src_pose.mp4 \
 --src_face_path ${lightx2v_path}/save_results/animate/process_results/src_face.mp4 \
 --src_ref_images ${lightx2v_path}/save_results/animate/process_results/src_ref.png \
