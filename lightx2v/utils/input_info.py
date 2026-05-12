@@ -46,9 +46,6 @@ class I2VInputInfo:
     pose: str = field(default_factory=lambda: None)
     # Lingbot i2v camera/action conditioning (optional)
     action_path: str = field(default_factory=str)
-    # Motus i2v action_expert conditioning (optional)
-    state_path: str = field(default_factory=str)
-    save_action_path: str = field(default_factory=str)
 
 
 @dataclass
@@ -177,6 +174,7 @@ class AnimateInputInfo:
     src_pose_path: str = field(default_factory=str)
     src_face_path: str = field(default_factory=str)
     src_ref_images: str = field(default_factory=str)
+    video_path: str = field(default_factory=str)
     src_bg_path: str = field(default_factory=str)
     src_mask_path: str = field(default_factory=str)
     # None: use config_json replace_flag; True/False: per-request (e.g. worker frontend)

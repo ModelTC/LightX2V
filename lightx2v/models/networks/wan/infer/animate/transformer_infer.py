@@ -64,9 +64,6 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
 
         q = phase.q_norm.apply(q).view(T, q.shape[0] // T, q.shape[1], q.shape[2])
         k = phase.k_norm.apply(k)
-        # Post-adapter is cross-attn per time step: Q seq len (from x) and K/V seq len (from motion)
-        # often differ. FlashAttn3 varlen merge requires equal total Q/K token counts and raises
-        # RuntimeError: batch_size must be equal to batch_size_k. Use SDPA on batch dim T instead.
         q_b = q.permute(0, 2, 1, 3).contiguous()
         k_b = k.permute(0, 2, 1, 3).contiguous()
         v_b = v.permute(0, 2, 1, 3).contiguous()
