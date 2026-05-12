@@ -228,6 +228,10 @@ def auto_calc_config(config):
                 config["target_video_length"] = config["num_frames"]
             if "out_dim" in config:
                 config["num_channels_latents"] = config["out_dim"]
+    elif config["model_cls"] in ("lyra2_zoomgs", "lyra2_custom_traj", "lyra2_gs_recon"):
+        # Lyra-2 models manage their own checkpoint loading;
+        # there is no transformer config.json to merge here.
+        pass
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -361,7 +365,14 @@ def auto_calc_config(config):
         config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if config["model_cls"] != "minimax_h3" and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
+    _lyra2_model_cls = {"lyra2_zoomgs", "lyra2_custom_traj", "lyra2_gs_recon"}
+    if (
+        config["model_cls"] != "minimax_h3"
+        and config["model_cls"] not in _lyra2_model_cls
+        and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
+        and "target_video_length" in config
+        and "vae_stride" in config
+    ):
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1

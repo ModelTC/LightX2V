@@ -505,6 +505,38 @@ class SenseNovaVisionInputInfo:
     postprocess_predictions: Optional[bool] = None
 
 
+@dataclass
+class Lyra2GSReconInputInfo:
+    """Input info for Lyra-2 GS reconstruction (video → Gaussian splats + rendered video).
+
+    input_video_path: path to the source .mp4 video file.
+    save_result_path: output directory for reconstructed_scene.ply, gs_trajectory.mp4, etc.
+    """
+
+    seed: int = field(default_factory=int)
+    video_path: str = field(default_factory=str)  # source video
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+
+
+@dataclass
+class Lyra2CustomTrajInputInfo:
+    """Input info for Lyra-2 custom camera trajectory (i2v) inference.
+
+    trajectory_path: path to a .npz file (w2c + intrinsics) OR a directory
+        containing per-image .npz files.
+    prompt: text caption string OR path to a per-chunk captions .json file.
+        If a .json is given, per-AR-chunk captions are used automatically.
+    """
+
+    seed: int = field(default_factory=int)
+    image_path: str = field(default_factory=str)
+    trajectory_path: str = field(default_factory=str)
+    prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+
+
 task_dict = {
     "t2v": T2VInputInfo,
     "i2v": I2VInputInfo,
@@ -532,6 +564,8 @@ task_dict = {
     "recon": WorldMirrorReconInputInfo,
     "i23d": Hunyuan3DShapeInputInfo,
     "omni_vision_task": SenseNovaVisionInputInfo,
+    "lyra2_custom_traj": Lyra2CustomTrajInputInfo,
+    "lyra2_gs_recon": Lyra2GSReconInputInfo,
 }
 
 

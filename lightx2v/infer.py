@@ -23,6 +23,9 @@ from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatIm
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx25_runner import LTX25Runner  # noqa: F401
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
+from lightx2v.models.runners.lyra2.lyra2_custom_traj_runner import Lyra2CustomTrajRunner  # noqa: F401
+from lightx2v.models.runners.lyra2.lyra2_gs_recon_runner import Lyra2GSReconRunner  # noqa: F401
+from lightx2v.models.runners.lyra2.lyra2_zoomgs_runner import Lyra2ZoomGSRunner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
@@ -45,7 +48,6 @@ from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
-from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
 from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
 from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
 from lightx2v.utils.envs import *
@@ -145,6 +147,9 @@ def main():
             "infinitetalk",
             "fastwam",
             "lingbot_video",
+            "lyra2_zoomgs",
+            "lyra2_custom_traj",
+            "lyra2_gs_recon",
         ],
         default="wan2.1",
     )
@@ -177,6 +182,8 @@ def main():
             "recon",
             "i23d",
             "omni_vision_task",
+            "lyra2_custom_traj",
+            "lyra2_gs_recon",
         ],
         default="t2v",
     )
@@ -306,6 +313,12 @@ def main():
     parser.add_argument("--wm_config_path", type=str, default=None, help="(worldmirror/recon) Optional training YAML (pair with --wm_ckpt_path).")
     parser.add_argument("--wm_ckpt_path", type=str, default=None, help="(worldmirror/recon) Optional .ckpt/.safetensors (pair with --wm_config_path).")
 
+    parser.add_argument(
+        "--trajectory_path",
+        type=str,
+        default=None,
+        help="(lyra2_custom_traj) Path to .npz camera trajectory file (w2c + intrinsics) or a directory of per-image .npz files.",
+    )
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
