@@ -14,12 +14,6 @@ class DenoiserInput:
 
 
 class BaseModel:
-    """Framework-level model object.
-
-    Subclasses wrap the real diffusers pipeline/model components and expose only
-    the small surface that training algorithms need.
-    """
-
     def __init__(self, config):
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])

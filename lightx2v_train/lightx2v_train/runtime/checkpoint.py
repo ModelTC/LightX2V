@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 import os
 import shutil
 
 
-def prune_checkpoints(output_dir: str, total_limit: int | None) -> None:
+def prune_checkpoints(output_dir, total_limit):
     if total_limit is None:
         return
     if not os.path.exists(output_dir):

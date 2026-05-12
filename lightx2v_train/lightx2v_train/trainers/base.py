@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 
 
