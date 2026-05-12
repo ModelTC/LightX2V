@@ -12,15 +12,16 @@ data:
         image_size: 1024
         random_ratio: false
         shuffle: true
+        # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
-            - /data/nvme1/yongyang/kkk/lightx2v_train_dataset/dataset_v1/train.jsonl
+            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
         image_size: 1024
         shuffle: false
         data_path:
-            - /data/nvme1/yongyang/kkk/lightx2v_train_dataset/dataset_v1/val.jsonl
+            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
     training:
