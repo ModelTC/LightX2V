@@ -24,8 +24,12 @@ class QwenImageModel(BaseModel):
             torch_dtype=self.running_dtype,
         ).to(self.device)
         self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.transformer = self.load_transformer()
         self.vae.requires_grad_(False)
+
+    def load_transformer(self):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
     def build_pipeline(self):
         pipe = QwenImagePipeline(
@@ -53,6 +57,9 @@ class QwenImageModel(BaseModel):
 
     def encode_condition(self, sample):
         prompt = sample["prompt"]
+        return self.encode_prompt_condition(prompt)
+
+    def encode_prompt_condition(self, prompt):
         prompt_embed, prompt_embed_mask = self.text_pipeline.encode_prompt(
             prompt=prompt,
             device=self.device,
@@ -84,7 +91,10 @@ class QwenImageModel(BaseModel):
         )
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
-        return self.transformer(
+        return self.denoise_with_transformer(self.transformer, denoiser_input, timestep_or_sigma, condition)
+
+    def denoise_with_transformer(self, transformer, denoiser_input, timestep_or_sigma, condition):
+        return transformer(
             hidden_states=denoiser_input.hidden_states,
             timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
             guidance=None,
