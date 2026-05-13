@@ -30,12 +30,11 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import cv2
 import numpy as np
 import torch
-
 from loguru import logger
 
 from lightx2v.models.runners.base_runner import BaseRunner
@@ -46,10 +45,7 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 def _ensure_lyra2_on_path(lyra_repo: str) -> None:
     if not os.path.isdir(lyra_repo):
-        raise FileNotFoundError(
-            f"[Lyra2GSRecon] Lyra-2 repo not found: '{lyra_repo}'. "
-            "Set 'lyra_repo' in the config JSON."
-        )
+        raise FileNotFoundError(f"[Lyra2GSRecon] Lyra-2 repo not found: '{lyra_repo}'. Set 'lyra_repo' in the config JSON.")
     if lyra_repo not in sys.path:
         sys.path.insert(0, lyra_repo)
         logger.info(f"[Lyra2GSRecon] Added to sys.path: {lyra_repo}")
@@ -58,6 +54,7 @@ def _ensure_lyra2_on_path(lyra_repo: str) -> None:
 # ---------------------------------------------------------------------------
 # Video utilities (adapted from vipe_da3_gs_recon.py)
 # ---------------------------------------------------------------------------
+
 
 def _probe_video(video_path: str):
     cap = cv2.VideoCapture(video_path)
@@ -181,9 +178,7 @@ def _interpolate_w2c(w2c_keyframes: np.ndarray, key_indices: List[int], n_total:
     times_all = np.arange(n_total, dtype=np.float64)
     times_clamped = np.clip(times_all, times_key[0], times_key[-1])
     rot_interp = slerp(times_clamped)
-    trans_interp = np.column_stack(
-        [np.interp(times_clamped, times_key, translations[:, dim]) for dim in range(3)]
-    )
+    trans_interp = np.column_stack([np.interp(times_clamped, times_key, translations[:, dim]) for dim in range(3)])
     c2w_dense = np.zeros((n_total, 4, 4), dtype=np.float64)
     c2w_dense[:, :3, :3] = rot_interp.as_matrix()
     c2w_dense[:, :3, 3] = trans_interp
@@ -269,6 +264,7 @@ def _load_gaussian_ply_to_gaussians(ply_path: str, device: torch.device):
 # Runner
 # ---------------------------------------------------------------------------
 
+
 @RUNNER_REGISTER("lyra2_gs_recon")
 class Lyra2GSReconRunner(BaseRunner):
     """LightX2V runner for Lyra-2 GS Reconstruction (video → Gaussians + rendered video)."""
@@ -292,10 +288,7 @@ class Lyra2GSReconRunner(BaseRunner):
         _ensure_lyra2_on_path(lyra_repo)
 
         if not os.path.isfile(model_path):
-            raise FileNotFoundError(
-                f"[Lyra2GSRecon] DA3 checkpoint not found: '{model_path}'. "
-                "Set 'model_path' to the absolute path of the DA3 .pt file."
-            )
+            raise FileNotFoundError(f"[Lyra2GSRecon] DA3 checkpoint not found: '{model_path}'. Set 'model_path' to the absolute path of the DA3 .pt file.")
         logger.info(f"[Lyra2GSRecon] DA3 checkpoint: {model_path}")
 
         self._prev_cwd = os.getcwd()
@@ -331,28 +324,21 @@ class Lyra2GSReconRunner(BaseRunner):
         cfg = self.config
         video_path = self.input_info.video_path
         if not video_path or not os.path.isfile(video_path):
-            raise FileNotFoundError(
-                f"[Lyra2GSRecon] Video not found: '{video_path}'. "
-                "Pass --video_path to the launch script."
-            )
+            raise FileNotFoundError(f"[Lyra2GSRecon] Video not found: '{video_path}'. Pass --video_path to the launch script.")
 
         with ProfilingContext4DebugL1("Read video frames"):
             max_frames = cfg.get("max_frames", 0)
             images_all, indices_all, fps = _collect_video_frames(video_path, max_frames)
             if not images_all:
                 raise RuntimeError(f"[Lyra2GSRecon] No frames read from video: {video_path}")
-            logger.info(
-                f"[Lyra2GSRecon] Video: {len(images_all)} frames, fps={fps:.2f}  → {video_path}"
-            )
+            logger.info(f"[Lyra2GSRecon] Video: {len(images_all)} frames, fps={fps:.2f}  → {video_path}")
 
         da3_max_frames = cfg.get("da3_max_frames", 128)
         indices_da3_rel = _uniform_subsample_indices(len(images_all), da3_max_frames)
         images_da3 = [images_all[i] for i in indices_da3_rel]
         indices_da3 = [indices_all[i] for i in indices_da3_rel]
 
-        logger.info(
-            f"[Lyra2GSRecon] DA3 frames: {len(images_da3)} / {len(images_all)} total"
-        )
+        logger.info(f"[Lyra2GSRecon] DA3 frames: {len(images_da3)} / {len(images_all)} total")
 
         return {
             "images_all": images_all,
@@ -375,8 +361,8 @@ class Lyra2GSReconRunner(BaseRunner):
         # Lazy import – VIPE lives inside lyra_repo which is on sys.path
         from lyra_2._src.inference.vipe_da3_gs_recon import (  # type: ignore
             _import_vipe_class,
-            _vipe_default_overrides,
             _intrinsics_vec_to_k33,
+            _vipe_default_overrides,
         )
 
         VIPE = _import_vipe_class()
@@ -411,11 +397,15 @@ class Lyra2GSReconRunner(BaseRunner):
             logger.info(f"[Lyra2GSRecon] DA3 pass 1 (pose): views={len(images_da3)}, infer_gs=False")
             pred_pose = self.da3_model.inference(
                 image=images_da3,
-                extrinsics=None, intrinsics=None,
-                align_to_input_extrinsics=False, align_to_input_ext_scale=False,
+                extrinsics=None,
+                intrinsics=None,
+                align_to_input_extrinsics=False,
+                align_to_input_ext_scale=False,
                 infer_gs=False,
-                process_res=da3_process_res, process_res_method=da3_process_method,
-                export_dir=None, export_format="mini_npz",
+                process_res=da3_process_res,
+                process_res_method=da3_process_method,
+                export_dir=None,
+                export_format="mini_npz",
             )
             if pred_pose.extrinsics is None or pred_pose.intrinsics is None:
                 raise RuntimeError("[Lyra2GSRecon] DA3 pass 1 did not return poses.")
@@ -430,11 +420,15 @@ class Lyra2GSReconRunner(BaseRunner):
         logger.info(f"[Lyra2GSRecon] DA3 GS recon: views={len(images_da3)}, infer_gs=True")
         pred = self.da3_model.inference(
             image=images_da3,
-            extrinsics=w2c_np_da3, intrinsics=k_np_da3,
-            align_to_input_extrinsics=False, align_to_input_ext_scale=False,
+            extrinsics=w2c_np_da3,
+            intrinsics=k_np_da3,
+            align_to_input_extrinsics=False,
+            align_to_input_ext_scale=False,
             infer_gs=True,
-            process_res=da3_process_res, process_res_method=da3_process_method,
-            export_dir=None, export_format="mini_npz",
+            process_res=da3_process_res,
+            process_res_method=da3_process_method,
+            export_dir=None,
+            export_format="mini_npz",
             use_aligned_pred_cam=True,
             gs_down_ratio=cfg.get("gs_down_ratio", 2),
             gs_scale_extra_multiplier=cfg.get("gs_scale_extra_multiplier", 1.0),
@@ -450,18 +444,12 @@ class Lyra2GSReconRunner(BaseRunner):
         video_path = self.input_info.video_path
         video_stem = Path(video_path).stem
 
-        output_dir = Path(
-            getattr(self.input_info, "save_result_path", None)
-            or cfg.get("output_path", "outputs/lyra2_gs_recon")
-        ) / video_stem
+        output_dir = Path(getattr(self.input_info, "save_result_path", None) or cfg.get("output_path", "outputs/lyra2_gs_recon")) / video_stem
         output_dir.mkdir(parents=True, exist_ok=True)
 
         done_marker = output_dir / ".done"
         if done_marker.is_file() and not cfg.get("force", False):
-            logger.info(
-                f"[Lyra2GSRecon] Skipping {video_stem}: {done_marker} exists. "
-                "Set 'force': true in config to re-run."
-            )
+            logger.info(f"[Lyra2GSRecon] Skipping {video_stem}: {done_marker} exists. Set 'force': true in config to re-run.")
             return {"output_dir": str(output_dir)}
 
         images_all = enc["images_all"]
@@ -487,6 +475,7 @@ class Lyra2GSReconRunner(BaseRunner):
 
         # Ensure DA3 sys.path entries are set for depth_anything_3 helpers
         from lyra_2._src.inference.vipe_da3_gs_recon import _ensure_da3_on_syspath  # type: ignore
+
         _ensure_da3_on_syspath()
 
         from depth_anything_3.utils.gsply_helpers import save_gaussian_ply  # type: ignore
@@ -502,9 +491,7 @@ class Lyra2GSReconRunner(BaseRunner):
 
             if not skip_vipe:
                 with ProfilingContext4DebugL1("Run VIPE"):
-                    w2c_np_vipe, k_np_vipe, w2c_np_da3, k_np_da3 = self._run_vipe(
-                        images_all, indices_da3_rel, fps, Path(tmpdir) / "vipe_out"
-                    )
+                    w2c_np_vipe, k_np_vipe, w2c_np_da3, k_np_da3 = self._run_vipe(images_all, indices_da3_rel, fps, Path(tmpdir) / "vipe_out")
                     np.savez(
                         output_dir / "vipe_predictions.npz",
                         w2c_vipe=w2c_np_vipe,
@@ -519,8 +506,12 @@ class Lyra2GSReconRunner(BaseRunner):
             # ---- DA3 depth + GS reconstruction ----
             with ProfilingContext4DebugL1("Run DA3 GS recon"):
                 pred, da3_pred_w2c, da3_pred_k = self._run_da3_recon(
-                    images_da3, w2c_np_da3, k_np_da3,
-                    da3_process_res, da3_process_method, output_dir,
+                    images_da3,
+                    w2c_np_da3,
+                    k_np_da3,
+                    da3_process_res,
+                    da3_process_method,
+                    output_dir,
                 )
 
             # ---- Save PLY ----
@@ -542,9 +533,7 @@ class Lyra2GSReconRunner(BaseRunner):
                 w2c_render = _interpolate_w2c(da3_pred_w2c, indices_da3_rel, len(images_all))
                 k_render = np.repeat(da3_pred_k[:1], len(images_all), axis=0).astype(np.float32)
             elif cfg.get("use_da3_render_pose", True) and pred.extrinsics is not None:
-                aligned_w2c_da3 = _compute_aligned_pred_w2c(
-                    np.asarray(pred.extrinsics, dtype=np.float32), w2c_np_da3
-                )
+                aligned_w2c_da3 = _compute_aligned_pred_w2c(np.asarray(pred.extrinsics, dtype=np.float32), w2c_np_da3)
                 w2c_render = _interpolate_w2c(aligned_w2c_da3, indices_da3_rel, len(images_all))
                 k_render = k_np_vipe
             else:
@@ -585,10 +574,7 @@ class Lyra2GSReconRunner(BaseRunner):
                 render_h, render_w = images_all[0].shape[:2]
                 render_fps_cfg = cfg.get("render_fps", None)
                 render_fps = float(render_fps_cfg) if render_fps_cfg is not None else float(max(1, round(fps)))
-                logger.info(
-                    f"[Lyra2GSRecon] Rendering {render_extr.shape[1]} frames "
-                    f"at {render_h}x{render_w} fps={render_fps:.2f}"
-                )
+                logger.info(f"[Lyra2GSRecon] Rendering {render_extr.shape[1]} frames at {render_h}x{render_w} fps={render_fps:.2f}")
                 color, depth = run_renderer_in_chunk_w_trj_mode(
                     gaussians=gaussians,
                     extrinsics=render_extr,
@@ -632,10 +618,7 @@ class Lyra2GSReconRunner(BaseRunner):
         self.input_info = input_info
 
         logger.info(f"[Lyra2GSRecon] Starting  video={input_info.video_path}")
-        logger.info(
-            f"[Lyra2GSRecon] Output → "
-            f"{getattr(input_info, 'save_result_path', None) or self.config.get('output_path')}"
-        )
+        logger.info(f"[Lyra2GSRecon] Output → {getattr(input_info, 'save_result_path', None) or self.config.get('output_path')}")
 
         self.inputs = self.run_input_encoder()
         result = self.run_main()

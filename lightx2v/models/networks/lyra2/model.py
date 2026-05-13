@@ -23,19 +23,19 @@ Usage in model_loader.py:
   lyra2_model.net = lyra2_wan_dit   # swap the DiT; all other methods unchanged
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import torch
 from loguru import logger
 
-from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.profiler import GET_RECORDER_MODE, ProfilingContext4DebugL1
 from lightx2v.models.networks.lyra2.infer.post_infer import Lyra2PostInfer
 from lightx2v.models.networks.lyra2.infer.pre_infer import Lyra2PreInfer
 from lightx2v.models.networks.lyra2.infer.transformer_infer import Lyra2TransformerInfer
 from lightx2v.models.networks.lyra2.weights.post_weights import Lyra2PostWeights
 from lightx2v.models.networks.lyra2.weights.pre_weights import Lyra2PreWeights
 from lightx2v.models.networks.lyra2.weights.transformer_weights import Lyra2TransformerWeights
+from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.profiler import GET_RECORDER_MODE, ProfilingContext4DebugL1
 
 
 def extract_net_state_dict(lyra2_model) -> dict:
@@ -170,7 +170,7 @@ class Lyra2WanDiT:
     def forward_dit(
         self,
         x_B_C_T_H_W: torch.Tensor,
-        timesteps_B_T: torch.Tensor,          # [B, 1]
+        timesteps_B_T: torch.Tensor,  # [B, 1]
         crossattn_emb: torch.Tensor,
         frame_cond_crossattn_emb_B_L_D: Optional[torch.Tensor] = None,
         y_B_C_T_H_W: Optional[torch.Tensor] = None,
@@ -195,7 +195,7 @@ class Lyra2WanDiT:
                       **kwargs)
         """
         assert timesteps_B_T.shape[1] == 1
-        t_B = timesteps_B_T[:, 0]   # [B]
+        t_B = timesteps_B_T[:, 0]  # [B]
 
         self._dit_forward_count += 1
         step_index = self._dit_forward_count

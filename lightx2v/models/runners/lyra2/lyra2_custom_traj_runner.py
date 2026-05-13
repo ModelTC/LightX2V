@@ -38,7 +38,6 @@ import types
 import cv2
 import numpy as np
 import torch
-
 from loguru import logger
 
 from lightx2v.models.runners.base_runner import BaseRunner
@@ -54,10 +53,7 @@ _DMD_LORA_WEIGHT = 1.0
 def _ensure_lyra2_on_path(lyra_repo: str) -> None:
     """Insert the Lyra-2 repository root into sys.path if not already present."""
     if not os.path.isdir(lyra_repo):
-        raise FileNotFoundError(
-            f"[Lyra2CustomTraj] Lyra-2 repo not found: '{lyra_repo}'. "
-            "Set 'lyra_repo' in the config JSON to the absolute path of the Lyra-2 repo."
-        )
+        raise FileNotFoundError(f"[Lyra2CustomTraj] Lyra-2 repo not found: '{lyra_repo}'. Set 'lyra_repo' in the config JSON to the absolute path of the Lyra-2 repo.")
     if lyra_repo not in sys.path:
         sys.path.insert(0, lyra_repo)
         logger.info(f"[Lyra2CustomTraj] Added to sys.path: {lyra_repo}")
@@ -132,10 +128,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
         else:
             checkpoint_dir_abs = os.path.join(lyra_repo, checkpoint_dir)
         if not os.path.isdir(checkpoint_dir_abs):
-            raise FileNotFoundError(
-                f"[Lyra2CustomTraj] checkpoint directory not found: '{checkpoint_dir_abs}'. "
-                "Check 'checkpoint_dir' (or 'model_path') in your config JSON."
-            )
+            raise FileNotFoundError(f"[Lyra2CustomTraj] checkpoint directory not found: '{checkpoint_dir_abs}'. Check 'checkpoint_dir' (or 'model_path') in your config JSON.")
         logger.info(f"[Lyra2CustomTraj] checkpoint_dir OK: {checkpoint_dir_abs}")
 
         self._prev_cwd = os.getcwd()
@@ -154,6 +147,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
         if cp_size > 1:
             import imaginaire
             from megatron.core import parallel_state
+
             imaginaire.utils.distributed.init()
             parallel_state.initialize_model_parallel(context_parallel_size=cp_size)
             self._process_group = parallel_state.get_context_parallel_group()
@@ -216,10 +210,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
         )
 
         if lora_paths:
-            logger.warning(
-                "[Lyra2CustomTraj] LoRA loading skipped: Lyra2WanDiT is not a PEFT-compatible "
-                "nn.Module. Base weights only."
-            )
+            logger.warning("[Lyra2CustomTraj] LoRA loading skipped: Lyra2WanDiT is not a PEFT-compatible nn.Module. Base weights only.")
 
         self.desired_dtype = model.tensor_kwargs.get("dtype", None)
         self.desired_device = model.tensor_kwargs.get("device", None)
@@ -276,9 +267,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
 
     def _load_negative_prompt(self):
         """Load negative T5 embedding tensor from the .pt file."""
-        neg_pt = self.config.get(
-            "negative_prompt_pt", "checkpoints/text_encoder/negative_prompt.pt"
-        )
+        neg_pt = self.config.get("negative_prompt_pt", "checkpoints/text_encoder/negative_prompt.pt")
         if not os.path.isabs(neg_pt):
             neg_pt = os.path.join(os.getcwd(), neg_pt)
         data = torch.load(neg_pt, map_location="cpu", weights_only=False)
@@ -305,7 +294,6 @@ class Lyra2CustomTrajRunner(BaseRunner):
             t5_chunk_embeddings / t5_chunk_mask / t5_chunk_keys / sample_frame_indices
                        – per-chunk T5 tensors (present only when prompt is a .json file)
         """
-        from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
         from lightx2v.models.input_encoders.hf.lyra2.depth_encode import (
             _da3_infer_depth_intrinsics_single,
         )
@@ -313,6 +301,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
             get_umt5_embedding,
             get_umt5_embedding_offloaded,
         )
+        from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
 
         cfg = self.config
         img_path = self.input_info.image_path
@@ -332,25 +321,16 @@ class Lyra2CustomTrajRunner(BaseRunner):
         with ProfilingContext4DebugL1("Load trajectory"):
             traj_path = self.input_info.trajectory_path
             if not traj_path:
-                raise RuntimeError(
-                    "[Lyra2CustomTraj] trajectory_path is required. "
-                    "Pass --trajectory_path to the launch script."
-                )
+                raise RuntimeError("[Lyra2CustomTraj] trajectory_path is required. Pass --trajectory_path to the launch script.")
             base_name = os.path.splitext(os.path.basename(img_path))[0]
             if os.path.isdir(traj_path):
                 traj_file = os.path.join(traj_path, f"{base_name}.npz")
             else:
                 traj_file = traj_path
             if not os.path.isfile(traj_file):
-                raise FileNotFoundError(
-                    f"[Lyra2CustomTraj] Trajectory file not found: {traj_file}"
-                )
-            w2cs_T_44, Ks_T_33 = _load_trajectory(
-                traj_file, N, target_hw=(target_h, target_w), pose_scale=pose_scale
-            )
-            logger.info(
-                f"[Lyra2CustomTraj] Loaded trajectory: {w2cs_T_44.shape[0]} frames from {traj_file}"
-            )
+                raise FileNotFoundError(f"[Lyra2CustomTraj] Trajectory file not found: {traj_file}")
+            w2cs_T_44, Ks_T_33 = _load_trajectory(traj_file, N, target_hw=(target_h, target_w), pose_scale=pose_scale)
+            logger.info(f"[Lyra2CustomTraj] Loaded trajectory: {w2cs_T_44.shape[0]} frames from {traj_file}")
 
         # ---- DA3 depth estimation ----
         with ProfilingContext4DebugL1("Run DA3 depth"):
@@ -412,9 +392,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
                 get_umt5_embedding_offloaded=get_umt5_embedding_offloaded,
                 N=N,
             )
-            neg_t5 = misc_to(
-                self.negative_prompt_data["t5_text_embeddings"], **self.model.tensor_kwargs
-            )
+            neg_t5 = misc_to(self.negative_prompt_data["t5_text_embeddings"], **self.model.tensor_kwargs)
 
         result = {
             "image": img_bchw,
@@ -459,21 +437,14 @@ class Lyra2CustomTrajRunner(BaseRunner):
         if prompt_or_path.endswith(".json") and os.path.isfile(prompt_or_path):
             with open(prompt_or_path, "r") as f:
                 captions_dict = json.load(f)
-            logger.info(
-                f"[Lyra2CustomTraj] Loaded captions JSON: {prompt_or_path} "
-                f"({len(captions_dict)} entries)"
-            )
+            logger.info(f"[Lyra2CustomTraj] Loaded captions JSON: {prompt_or_path} ({len(captions_dict)} entries)")
 
         # ---- Per-chunk captions path ----
         if captions_dict is not None:
             chunk_keys_int = sorted(int(k) for k in captions_dict if int(k) < N)
             if len(chunk_keys_int) > 1:
-                logger.info(
-                    f"[Lyra2CustomTraj] Using {len(chunk_keys_int)} per-chunk captions"
-                )
-                chunk_keys = torch.tensor(
-                    chunk_keys_int, dtype=torch.long, device=self.desired_device
-                )
+                logger.info(f"[Lyra2CustomTraj] Using {len(chunk_keys_int)} per-chunk captions")
+                chunk_keys = torch.tensor(chunk_keys_int, dtype=torch.long, device=self.desired_device)
                 chunk_embs, chunk_masks = [], []
                 for ck in chunk_keys_int:
                     cap = captions_dict[str(ck)]
@@ -485,24 +456,18 @@ class Lyra2CustomTrajRunner(BaseRunner):
                     S, D = emb.shape
                     S = min(S, 512)
                     D = min(D, 4096)
-                    padded_emb = torch.zeros(
-                        512, 4096, dtype=self.desired_dtype, device=self.desired_device
-                    )
+                    padded_emb = torch.zeros(512, 4096, dtype=self.desired_dtype, device=self.desired_device)
                     padded_emb[:S, :D] = emb[:S, :D]
-                    padded_mask = torch.zeros(
-                        512, dtype=self.desired_dtype, device=self.desired_device
-                    )
+                    padded_mask = torch.zeros(512, dtype=self.desired_dtype, device=self.desired_device)
                     padded_mask[:S] = 1.0
                     chunk_embs.append(padded_emb)
                     chunk_masks.append(padded_mask)
 
-                t5_chunk_embeddings = torch.stack(chunk_embs).unsqueeze(0)   # [1, K, 512, 4096]
-                t5_chunk_mask = torch.stack(chunk_masks).unsqueeze(0)        # [1, K, 512]
-                t5_chunk_keys = chunk_keys.unsqueeze(0)                       # [1, K]
-                sample_frame_indices = torch.arange(
-                    N, dtype=torch.long, device=self.desired_device
-                ).unsqueeze(0)                                                 # [1, N]
-                t5_base = t5_chunk_embeddings[:, 0, :, :]                     # first chunk as base
+                t5_chunk_embeddings = torch.stack(chunk_embs).unsqueeze(0)  # [1, K, 512, 4096]
+                t5_chunk_mask = torch.stack(chunk_masks).unsqueeze(0)  # [1, K, 512]
+                t5_chunk_keys = chunk_keys.unsqueeze(0)  # [1, K]
+                sample_frame_indices = torch.arange(N, dtype=torch.long, device=self.desired_device).unsqueeze(0)  # [1, N]
+                t5_base = t5_chunk_embeddings[:, 0, :, :]  # first chunk as base
                 if t5_base.dim() == 2:
                     t5_base = t5_base.unsqueeze(0)
                 return t5_base, {
@@ -520,10 +485,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
 
         # ---- Single-caption path ----
         if not prompt_or_path:
-            raise RuntimeError(
-                "[Lyra2CustomTraj] No caption provided. Pass --prompt with a text string "
-                "or the path to a per-chunk captions .json file."
-            )
+            raise RuntimeError("[Lyra2CustomTraj] No caption provided. Pass --prompt with a text string or the path to a per-chunk captions .json file.")
         caption = prompt_or_path
         if prompt_suffix:
             caption = caption.rstrip() + " " + prompt_suffix
@@ -577,10 +539,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
         img_path = self.input_info.image_path
         base_name = os.path.splitext(os.path.basename(img_path))[0]
 
-        output_path = (
-            getattr(self.input_info, "save_result_path", None)
-            or cfg.get("output_path", "outputs/lyra2_custom_traj")
-        )
+        output_path = getattr(self.input_info, "save_result_path", None) or cfg.get("output_path", "outputs/lyra2_custom_traj")
         os.makedirs(output_path, exist_ok=True)
 
         N = int(cfg.get("num_frames", 81))
@@ -589,22 +548,12 @@ class Lyra2CustomTrajRunner(BaseRunner):
 
         # ---- Assemble data_batch ----
         with ProfilingContext4DebugL1("Assemble data batch"):
-            w2cs_b_t_44 = enc["w2cs"].unsqueeze(0).to(
-                dtype=torch.float32, device=self.desired_device
-            )
-            Ks_b_t_33 = enc["Ks"].unsqueeze(0).to(
-                dtype=torch.float32, device=self.desired_device
-            )
-            depth_b_thw = (
-                enc["depth_hw"]
-                .unsqueeze(0)
-                .unsqueeze(0)
-                .repeat(1, N, 1, 1)
-                .to(device=self.desired_device)
-            )
+            w2cs_b_t_44 = enc["w2cs"].unsqueeze(0).to(dtype=torch.float32, device=self.desired_device)
+            Ks_b_t_33 = enc["Ks"].unsqueeze(0).to(dtype=torch.float32, device=self.desired_device)
+            depth_b_thw = enc["depth_hw"].unsqueeze(0).unsqueeze(0).repeat(1, N, 1, 1).to(device=self.desired_device)
 
             data_batch = {
-                "video": enc["image"].unsqueeze(2),             # [1, C, 1, H, W]
+                "video": enc["image"].unsqueeze(2),  # [1, C, 1, H, W]
                 "t5_text_embeddings": enc["t5"],
                 "neg_t5_text_embeddings": enc["neg_t5"],
                 "fps": torch.tensor([fps], dtype=torch.int32, device=self.desired_device),
@@ -613,9 +562,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
                     dtype=self.model.tensor_kwargs["dtype"],
                     device=self.desired_device,
                 ),
-                "is_preprocessed": torch.tensor(
-                    [True], dtype=torch.bool, device=self.desired_device
-                ),
+                "is_preprocessed": torch.tensor([True], dtype=torch.bool, device=self.desired_device),
                 "camera_w2c": w2cs_b_t_44,
                 "intrinsics": Ks_b_t_33,
                 "depth": depth_b_thw,
@@ -627,6 +574,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
 
             # safe_to: cast float tensors to model dtype, keep camera/depth as float32
             from lightx2v.models.networks.lyra2.lyra2_ar_inference import safe_to
+
             skip_keys = {"camera_w2c", "intrinsics", "depth", "t5_chunk_keys", "sample_frame_indices"}
             data_batch = safe_to(
                 data_batch,
@@ -649,9 +597,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
             )
 
         if result is None:
-            raise RuntimeError(
-                f"[Lyra2CustomTraj] Generation failed for image: {img_path}"
-            )
+            raise RuntimeError(f"[Lyra2CustomTraj] Generation failed for image: {img_path}")
 
         # ---- Save output ----
         with ProfilingContext4DebugL1("Save results"):
@@ -690,10 +636,7 @@ class Lyra2CustomTrajRunner(BaseRunner):
 
         logger.info(f"[Lyra2CustomTraj] Starting inference  image={input_info.image_path}")
         logger.info(f"[Lyra2CustomTraj] Trajectory: {input_info.trajectory_path}")
-        logger.info(
-            f"[Lyra2CustomTraj] Output → "
-            f"{getattr(input_info, 'save_result_path', None) or self.config.get('output_path')}"
-        )
+        logger.info(f"[Lyra2CustomTraj] Output → {getattr(input_info, 'save_result_path', None) or self.config.get('output_path')}")
 
         self.inputs = self.run_input_encoder()
         result = self.run_main()

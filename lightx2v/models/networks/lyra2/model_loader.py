@@ -29,13 +29,13 @@ import os
 
 import torch
 import torch.distributed.checkpoint as dcp
+from loguru import logger
 from torch.distributed.checkpoint import FileSystemReader
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, set_model_state_dict
 
 from lightx2v.models.networks.lyra2._imaginaire.lazy_config import instantiate
 from lightx2v.models.networks.lyra2._imaginaire.utils.config_helper import get_config_module, override
 from lightx2v.models.networks.lyra2.lyra2_utils import set_random_seed, timer
-from loguru import logger
 
 # ---- DCP planner -------------------------------------------------------
 # Original comment: Prefer Lyra-2's custom DefaultLoadPlanner which handles
@@ -160,6 +160,7 @@ def _swap_net_with_lightx2v_dit(model):
         original_net.cpu()
         del original_net
     import torch as _torch
+
     _torch.cuda.empty_cache()
     logger.info("  GPU memory freed.")
 
@@ -167,8 +168,7 @@ def _swap_net_with_lightx2v_dit(model):
     kernel_sizes = list(getattr(model, "framepack_clean_latent_frame_kernel_sizes", []))
     kernel_types = list(getattr(model, "framepack_clean_latent_frame_kernel_types", []))
     if not kernel_sizes:
-        logger.warning("  framepack_clean_latent_frame_kernel_sizes not found on model; "
-                       "clean_patch_embeddings will not be registered.")
+        logger.warning("  framepack_clean_latent_frame_kernel_sizes not found on model; clean_patch_embeddings will not be registered.")
 
     # 5. Build and load Lyra2WanDiT (weights on CPU pinned memory)
     lyra2_wan_dit = Lyra2WanDiT.from_config_and_state(
@@ -224,6 +224,7 @@ def _extract_net_config(model) -> dict:
 # Helpers replacing ModelWrapper from lyra_2._ext.imaginaire.checkpointer.dcp
 # (unchanged from previous version – kept for the DCP load path)
 # ---------------------------------------------------------------------------
+
 
 def _load_model_state_dict_for_dcp(model, load_ema_to_reg: bool = False):
     """Return a state-dict that mirrors ModelWrapper.state_dict() for the DCP load path."""

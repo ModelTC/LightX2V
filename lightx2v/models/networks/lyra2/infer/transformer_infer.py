@@ -31,17 +31,17 @@ RoPE application (from WanSelfAttention.forward L325-357, rope_apply L203-232):
 """
 
 import math
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.amp as amp
 import torch.nn.functional as F
-from einops import rearrange
 
 from lightx2v.models.networks.lyra2.infer.module_io import Lyra2PreInferOutput
 
 try:
     from flash_attn.layers.rotary import apply_rotary_emb as flash_apply_rotary_emb
+
     _HAS_FLASH_ROTARY = True
 except ImportError:
     _HAS_FLASH_ROTARY = False
@@ -50,6 +50,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # RoPE helper  (wan2pt1.py L203-232)
 # ---------------------------------------------------------------------------
+
 
 def rope_apply(
     x: torch.Tensor,
@@ -77,8 +78,8 @@ def rope_apply(
     else:
         # Fallback: manual rotation
         x_f = x.to(torch.float32)
-        x1, x2 = x_f[..., :freqs.shape[-1]], x_f[..., freqs.shape[-1]:]
-        cos_e = cos.unsqueeze(0).unsqueeze(2)   # [1, L, 1, d/2]
+        x1, x2 = x_f[..., : freqs.shape[-1]], x_f[..., freqs.shape[-1] :]
+        cos_e = cos.unsqueeze(0).unsqueeze(2)  # [1, L, 1, d/2]
         sin_e = sin.unsqueeze(0).unsqueeze(2)
         # Interleaved (even/odd): rebuild by rotating pairs
         x1r = x1 * cos_e - x2 * sin_e
@@ -92,6 +93,7 @@ def rope_apply(
 # Block-level sincos helper (Lyra2AttentionBlock._sincos_embed L135-147)
 # ---------------------------------------------------------------------------
 
+
 def _sincos_embed(x: torch.Tensor, multires: int) -> torch.Tensor:
     """
     Original: Lyra2AttentionBlock._sincos_embed (wan2pt1_lyra2.py L135-147)
@@ -102,7 +104,7 @@ def _sincos_embed(x: torch.Tensor, multires: int) -> torch.Tensor:
     x_float = x.float()
     embeds = []
     for i in range(multires):
-        freq = (2.0 ** i) * math.pi
+        freq = (2.0**i) * math.pi
         embeds.append(torch.sin(x_float * freq))
         embeds.append(torch.cos(x_float * freq))
     return torch.cat(embeds, dim=-1).type_as(x)
@@ -111,6 +113,7 @@ def _sincos_embed(x: torch.Tensor, multires: int) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # Attention computation
 # ---------------------------------------------------------------------------
+
 
 def _scaled_dot_product_attn(
     q: torch.Tensor,
@@ -140,9 +143,10 @@ def _scaled_dot_product_attn(
 # Single-block inference
 # ---------------------------------------------------------------------------
 
+
 def infer_block(
     x: torch.Tensor,
-    block_weights,          # Lyra2BlockWeights
+    block_weights,  # Lyra2BlockWeights
     e0_B_6_D: torch.Tensor,
     freqs_tokens: torch.Tensor,
     context: torch.Tensor,
@@ -166,14 +170,14 @@ def infer_block(
     # --- Modulation (float32) ---
     # Original: e = (self.modulation + e).chunk(6, dim=1)   [B, 1, dim] x6
     with amp.autocast("cuda", dtype=torch.float32):
-        modulation = block_weights.modulation.tensor   # [1, 6, dim]
-        e = (modulation + e0_B_6_D).chunk(6, dim=1)   # list of [B, 1, dim]
+        modulation = block_weights.modulation.tensor  # [1, 6, dim]
+        e = (modulation + e0_B_6_D).chunk(6, dim=1)  # list of [B, 1, dim]
 
     # --- Camera embedding ---
     # Original: cam_emb = cam_encoder(camera) if camera else 0
     # camera shape: [B, L, 1536]  (cam_dim = 1536 when use_plucker_condition)
     if camera is not None:
-        cam_2d = camera.reshape(B * L, -1)   # [B*L, 1536]
+        cam_2d = camera.reshape(B * L, -1)  # [B*L, 1536]
         cam_emb = block_weights.cam_encoder.apply(cam_2d).reshape(B, L, D)
     else:
         cam_emb = None
@@ -182,8 +186,8 @@ def infer_block(
     # Original: buf_emb = buffer_encoder(sincos_embed(buffer)) if buffer else 0
     if buffer is not None:
         if inject_kq_only:
-            validity = buffer[..., -1:]         # [B, L, 1]
-            buf_feat = buffer[..., :-1]         # [B, L, buf_dim]
+            validity = buffer[..., -1:]  # [B, L, 1]
+            buf_feat = buffer[..., :-1]  # [B, L, buf_dim]
         else:
             buf_feat = buffer
             validity = None
@@ -238,7 +242,7 @@ def infer_block(
     q = rope_apply(q, freqs_tokens)
     k = rope_apply(k, freqs_tokens)
 
-    attn_out = _scaled_dot_product_attn(q, k, v)   # [B, L, n*d]
+    attn_out = _scaled_dot_product_attn(q, k, v)  # [B, L, n*d]
     attn_out = block_weights.self_attn.o.apply(attn_out.reshape(B * L, n * d)).reshape(B, L, D)
 
     # --- Residual + gate ---
@@ -250,7 +254,7 @@ def infer_block(
     # Original cross_attn_ffn block (L205-208):
     #   x = x + cross_attn(norm3(x), context, context_lens)
     # norm3 is Identity for ZoomGS (cross_attn_norm=False) → just pass x.
-    x_for_cross = x    # norm3 = Identity in our case
+    x_for_cross = x  # norm3 = Identity in our case
     B_c, L_c, _ = context.shape
     cx_2d = x_for_cross.reshape(B * L, D)
     ctx_2d = context.reshape(B_c * L_c, -1)
@@ -274,29 +278,19 @@ def infer_block(
     # Text cross-attention Q/K/V
     q_c = block_weights.cross_attn.norm_q.apply(block_weights.cross_attn.q.apply(cx_2d)).reshape(B, L, n, d)
     L_txt = context_txt.shape[1]
-    k_c = block_weights.cross_attn.norm_k.apply(
-        block_weights.cross_attn.k.apply(context_txt.reshape(B * L_txt, -1))
-    ).reshape(B, L_txt, n, d)
-    v_c = block_weights.cross_attn.v.apply(
-        context_txt.reshape(B * L_txt, -1)
-    ).reshape(B, L_txt, n, d)
+    k_c = block_weights.cross_attn.norm_k.apply(block_weights.cross_attn.k.apply(context_txt.reshape(B * L_txt, -1))).reshape(B, L_txt, n, d)
+    v_c = block_weights.cross_attn.v.apply(context_txt.reshape(B * L_txt, -1)).reshape(B, L_txt, n, d)
     cross_out = _scaled_dot_product_attn(q_c, k_c, v_c)  # [B, L, n*d]
 
     # Image cross-attention (I2V only)
     if context_img is not None:
         L_img = context_img.shape[1]
-        k_img = block_weights.cross_attn.norm_k_img.apply(
-            block_weights.cross_attn.k_img.apply(context_img.reshape(B * L_img, -1))
-        ).reshape(B, L_img, n, d)
-        v_img = block_weights.cross_attn.v_img.apply(
-            context_img.reshape(B * L_img, -1)
-        ).reshape(B, L_img, n, d)
+        k_img = block_weights.cross_attn.norm_k_img.apply(block_weights.cross_attn.k_img.apply(context_img.reshape(B * L_img, -1))).reshape(B, L_img, n, d)
+        v_img = block_weights.cross_attn.v_img.apply(context_img.reshape(B * L_img, -1)).reshape(B, L_img, n, d)
         img_out = _scaled_dot_product_attn(q_c, k_img, v_img)
-        cross_out = cross_out + img_out   # Original: x = x + img_x; then x = o(x)
+        cross_out = cross_out + img_out  # Original: x = x + img_x; then x = o(x)
 
-    cross_attn_out = block_weights.cross_attn.o.apply(
-        cross_out.reshape(B * L, n * d)
-    ).reshape(B, L, D)
+    cross_attn_out = block_weights.cross_attn.o.apply(cross_out.reshape(B * L, n * d)).reshape(B, L, D)
     x = x + cross_attn_out
 
     # --- FFN ---
@@ -321,6 +315,7 @@ def infer_block(
 # Transformer loop
 # ---------------------------------------------------------------------------
 
+
 class Lyra2TransformerInfer:
     """
     Runs all Lyra2AttentionBlock forward passes.
@@ -336,14 +331,12 @@ class Lyra2TransformerInfer:
         self.head_dim = config["dim"] // config["num_heads"]
         self.buffer_sincos_multires = config.get("buffer_sincos_multires", 2)
         self.inject_kq_only = config.get("inject_kq_only", True)
-        self.cross_attn_type = (
-            "t2v_cross_attn" if config.get("model_type", "i2v") == "t2v" else "i2v_cross_attn"
-        )
+        self.cross_attn_type = "t2v_cross_attn" if config.get("model_type", "i2v") == "t2v" else "i2v_cross_attn"
         self.eps = config.get("eps", 1e-6)
 
     def infer(
         self,
-        block_weights,               # Lyra2TransformerWeights
+        block_weights,  # Lyra2TransformerWeights
         pre_infer_out: "Lyra2PreInferOutput",
     ) -> torch.Tensor:
         """
@@ -351,8 +344,8 @@ class Lyra2TransformerInfer:
 
         Source: Lyra2WanModel.forward L997-1001 (blocks loop).
         """
-        x = pre_infer_out.x_tokens          # [B, L, dim]
-        freqs = pre_infer_out.freqs_tokens   # [L, 1, 1, head_dim]
+        x = pre_infer_out.x_tokens  # [B, L, dim]
+        freqs = pre_infer_out.freqs_tokens  # [L, 1, 1, head_dim]
         context = pre_infer_out.context
         e0 = pre_infer_out.e0_B_6_D
         camera = pre_infer_out.camera_tokens

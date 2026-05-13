@@ -28,7 +28,6 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 from loguru import logger
 
 
@@ -157,8 +156,5 @@ def _fit_ground_normal_from_depth(
     if best_normal[1] > 0:
         best_normal = -best_normal
 
-    logger.info(
-        f"[ground_plane] Fitted normal: [{best_normal[0]:.4f}, {best_normal[1]:.4f}, {best_normal[2]:.4f}], "
-        f"inliers: {best_inliers}/{N_pts}"
-    )
+    logger.info(f"[ground_plane] Fitted normal: [{best_normal[0]:.4f}, {best_normal[1]:.4f}, {best_normal[2]:.4f}], inliers: {best_inliers}/{N_pts}")
     return best_normal

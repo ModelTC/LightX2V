@@ -288,11 +288,9 @@ def create_orbit_trajectory(
     return apply_transformation(trajectory, world_to_camera_matrix)
 
 
-def create_horizontal_trajectory(
-    world_to_camera_matrix, center_depth, right=True, n_steps=13, distance=0.1, device="cuda", axis="x", outwards=False
-):  
+def create_horizontal_trajectory(world_to_camera_matrix, center_depth, right=True, n_steps=13, distance=0.1, device="cuda", axis="x", outwards=False):
     if axis == "z":
-        look_at = torch.tensor([0.0, 0.0, center_depth * (distance+1.0)]).to(device)
+        look_at = torch.tensor([0.0, 0.0, center_depth * (distance + 1.0)]).to(device)
     else:
         look_at = torch.tensor([0.0, 0.0, center_depth]).to(device)
     # Spiral motion key points
@@ -330,12 +328,10 @@ def create_horizontal_trajectory(
     return apply_transformation(trajectory, world_to_camera_matrix)
 
 
-def create_horizontal_with_noise_trajectory(
-    world_to_camera_matrix, center_depth, right=True, n_steps=13, distance=0.1, device="cuda", axis="x", outwards=False, noise_percentage=0.0001
-):
+def create_horizontal_with_noise_trajectory(world_to_camera_matrix, center_depth, right=True, n_steps=13, distance=0.1, device="cuda", axis="x", outwards=False, noise_percentage=0.0001):
     """Create a horizontal trajectory with the same primary axis movement as create_horizontal_trajectory,
     but with random noise added to the two perpendicular dimensions.
-    
+
     Args:
         world_to_camera_matrix: Transformation matrix from world to camera space
         center_depth: Depth at the center
@@ -346,31 +342,31 @@ def create_horizontal_with_noise_trajectory(
         axis: Primary axis ("x", "y", or "z") - movement along this axis
         outwards: Whether to move look_at outwards
         noise_percentage: Percentage of distance * center_depth to use as noise range (default 0.0001)
-    
+
     Returns:
         Trajectory tensor with primary axis movement plus noise in perpendicular dimensions
     """
     if axis == "z":
-        look_at = torch.tensor([0.0, 0.0, center_depth * (distance+1.0)]).to(device)
+        look_at = torch.tensor([0.0, 0.0, center_depth * (distance + 1.0)]).to(device)
     else:
         look_at = torch.tensor([0.0, 0.0, center_depth]).to(device)
-    
+
     trajectory = []
     translation_positions = []
     initial_camera_pos = torch.tensor([0, 0, 0], device=device)
-    
+
     # Calculate noise magnitude as percentage of distance * center_depth
     noise_magnitude = noise_percentage * distance * center_depth
-    
+
     for i in range(n_steps):
         # Primary axis movement (same as create_horizontal_trajectory)
         primary_movement = i * distance * center_depth / n_steps * (1 if right else -1)
-        
+
         # Sample random noise for the two perpendicular dimensions independently per timestep
         # Using Gaussian distribution centered around zero with std = noise_magnitude
         noise1 = torch.randn(1, device=device).item() * noise_magnitude
         noise2 = torch.randn(1, device=device).item() * noise_magnitude
-        
+
         if axis == "x":
             x = primary_movement
             y = noise1
@@ -385,9 +381,9 @@ def create_horizontal_with_noise_trajectory(
             z = primary_movement
         else:
             raise ValueError("Axis should be x, y or z")
-        
+
         translation_positions.append(torch.tensor([x, y, z], device=device))
-    
+
     for pos in translation_positions:
         camera_pos = initial_camera_pos + pos
         if outwards:
@@ -396,7 +392,7 @@ def create_horizontal_with_noise_trajectory(
             _look_at = look_at
         view_matrix = look_at_matrix(camera_pos, _look_at)
         trajectory.append(view_matrix)
-    
+
     trajectory = torch.stack(trajectory)
     return apply_transformation(trajectory, world_to_camera_matrix)
 
@@ -405,7 +401,7 @@ def create_horizontal_zoom_with_bend_trajectory(
     world_to_camera_matrix, center_depth, right=True, n_steps=13, distance=0.1, device="cuda", axis="z", outwards=False, bend_percentage_in=0.04, bend_percentage_out=0.12, axis_bend="y"
 ):
     """Create a horizontal trajectory with bend applied to a perpendicular axis.
-    
+
     Args:
         world_to_camera_matrix: Transformation matrix from world to camera space
         center_depth: Depth at the center
@@ -419,32 +415,32 @@ def create_horizontal_zoom_with_bend_trajectory(
         bend_percentage_out: Percentage of distance * center_depth to use as bend for zoom out (default 0.12)
         axis_bend: Axis to apply bend to (default "y" for vertical bend when axis="z")
                    When right=True, bend goes positive; when right=False, bend goes negative
-    
+
     Returns:
         Trajectory tensor with primary axis movement plus bend on perpendicular axis
     """
     if axis == "z":
-        look_at = torch.tensor([0.0, 0.0, center_depth * (distance+1.0)]).to(device)
+        look_at = torch.tensor([0.0, 0.0, center_depth * (distance + 1.0)]).to(device)
     else:
         look_at = torch.tensor([0.0, 0.0, center_depth]).to(device)
-    
+
     trajectory = []
     translation_positions = []
     initial_camera_pos = torch.tensor([0, 0, 0], device=device)
-    
+
     # Select bend percentage based on direction
     bend_percentage = bend_percentage_in if right else bend_percentage_out
     # Calculate bend magnitude as percentage of distance * center_depth
     bend_magnitude = bend_percentage * distance * center_depth
-    
+
     for i in range(n_steps):
         # Primary axis movement (same as create_horizontal_trajectory)
         primary_movement = i * distance * center_depth / n_steps * (1 if right else -1)
-        
+
         # Bend: positive when right=True, negative when right=False
         bend_base = bend_magnitude * i / n_steps
         bend_value = bend_base if right else -bend_base
-        
+
         if axis == "x":
             x = primary_movement
             if axis_bend == "y":
@@ -477,9 +473,9 @@ def create_horizontal_zoom_with_bend_trajectory(
                 raise ValueError(f"axis_bend must be perpendicular to axis. For axis='z', use 'x' or 'y'")
         else:
             raise ValueError("Axis should be x, y or z")
-        
+
         translation_positions.append(torch.tensor([x, y, z], device=device))
-    
+
     for pos in translation_positions:
         camera_pos = initial_camera_pos + pos
         if outwards:
@@ -488,16 +484,27 @@ def create_horizontal_zoom_with_bend_trajectory(
             _look_at = look_at
         view_matrix = look_at_matrix(camera_pos, _look_at)
         trajectory.append(view_matrix)
-    
+
     trajectory = torch.stack(trajectory)
     return apply_transformation(trajectory, world_to_camera_matrix)
 
 
 def create_horizontal_zoom_with_noise_and_bend_trajectory(
-    world_to_camera_matrix, center_depth, right=True, n_steps=13, distance=0.1, device="cuda", axis="z", outwards=False, noise_percentage=0.0001, bend_percentage_in=0.04, bend_percentage_out=0.12, axis_bend="y"
+    world_to_camera_matrix,
+    center_depth,
+    right=True,
+    n_steps=13,
+    distance=0.1,
+    device="cuda",
+    axis="z",
+    outwards=False,
+    noise_percentage=0.0001,
+    bend_percentage_in=0.04,
+    bend_percentage_out=0.12,
+    axis_bend="y",
 ):
     """Create a horizontal trajectory with Gaussian noise and bend applied to a perpendicular axis.
-    
+
     Args:
         world_to_camera_matrix: Transformation matrix from world to camera space
         center_depth: Depth at the center
@@ -512,39 +519,39 @@ def create_horizontal_zoom_with_noise_and_bend_trajectory(
         bend_percentage_out: Percentage of distance * center_depth to use as bend for zoom out (default 0.12)
         axis_bend: Axis to apply bend to (default "y" for vertical bend when axis="z")
                    When right=True, bend goes positive; when right=False, bend goes negative
-    
+
     Returns:
         Trajectory tensor with primary axis movement plus noise and bend on perpendicular axis
     """
     if axis == "z":
-        look_at = torch.tensor([0.0, 0.0, center_depth * (distance+1.0)]).to(device)
+        look_at = torch.tensor([0.0, 0.0, center_depth * (distance + 1.0)]).to(device)
     else:
         look_at = torch.tensor([0.0, 0.0, center_depth]).to(device)
-    
+
     trajectory = []
     translation_positions = []
     initial_camera_pos = torch.tensor([0, 0, 0], device=device)
-    
+
     # Calculate noise magnitude
     noise_magnitude = noise_percentage * distance * center_depth
     # Select bend percentage based on direction
     bend_percentage = bend_percentage_in if right else bend_percentage_out
     # Calculate bend magnitude as percentage of distance * center_depth
     bend_magnitude = bend_percentage * distance * center_depth
-    
+
     for i in range(n_steps):
         # Primary axis movement (same as create_horizontal_trajectory)
         primary_movement = i * distance * center_depth / n_steps * (1 if right else -1)
-        
+
         # Bend: positive when right=True, negative when right=False
         bend_base = bend_magnitude * i / n_steps
         bend_value = bend_base if right else -bend_base
-        
+
         # Sample random noise for the two perpendicular dimensions independently per timestep
         # Using Gaussian distribution centered around zero
         noise1 = torch.randn(1, device=device).item() * noise_magnitude
         noise2 = torch.randn(1, device=device).item() * noise_magnitude
-        
+
         if axis == "x":
             x = primary_movement
             if axis_bend == "y":
@@ -577,9 +584,9 @@ def create_horizontal_zoom_with_noise_and_bend_trajectory(
                 raise ValueError(f"axis_bend must be perpendicular to axis. For axis='z', use 'x' or 'y'")
         else:
             raise ValueError("Axis should be x, y or z")
-        
+
         translation_positions.append(torch.tensor([x, y, z], device=device))
-    
+
     for pos in translation_positions:
         camera_pos = initial_camera_pos + pos
         if outwards:
@@ -588,7 +595,7 @@ def create_horizontal_zoom_with_noise_and_bend_trajectory(
             _look_at = look_at
         view_matrix = look_at_matrix(camera_pos, _look_at)
         trajectory.append(view_matrix)
-    
+
     trajectory = torch.stack(trajectory)
     return apply_transformation(trajectory, world_to_camera_matrix)
 
@@ -629,9 +636,7 @@ def create_back_trajectory(
     return torch.cat([forward_trajectory, backward_trajectory])
 
 
-def create_dolly_zoom_trajectory(
-    world_to_camera_matrix, intrinsic, center_depth, n_steps=13, shift_z=-3, device="cuda"
-):
+def create_dolly_zoom_trajectory(world_to_camera_matrix, intrinsic, center_depth, n_steps=13, shift_z=-3, device="cuda"):
     center_depth = center_depth * 0.185
 
     look_at = torch.tensor([0.0, 0.0, center_depth], device=device)
@@ -683,13 +688,13 @@ def create_spiral_horizontal_trajectory(
     center_depth,
     radius_x=0.03,
     radius_y=0.02,
-    distance=0.1,           # zoom or horizontal move distance
+    distance=0.1,  # zoom or horizontal move distance
     right=True,
     inwards=True,
     n_steps=20,
     num_circles=1,
     device="cuda",
-    axis="x",               # "x", "y", or "z" (z = zoom)
+    axis="x",  # "x", "y", or "z" (z = zoom)
 ):
     """
     Combine spiral motion with horizontal/zoom translation.
@@ -764,7 +769,7 @@ def create_rotate_then_zoom_trajectory(
 ):
     """
     Create a trajectory that first rotates on the spot (no translation), then zooms in/out.
-    
+
     Args:
         world_to_camera_matrix (torch.Tensor): Base 4x4 world-to-camera transform.
         center_depth (float): Z of the look-at point.
@@ -775,25 +780,25 @@ def create_rotate_then_zoom_trajectory(
         rotation_angle (float): Total rotation angle in degrees (default: 20.0).
         zoom_distance (float): Zoom distance as fraction of center_depth.
         device (str): Device where tensors are created.
-    
+
     Returns:
         torch.Tensor: [n_steps, 4, 4] sequence of world-to-camera matrices.
     """
     # Convert rotation angle from degrees to radians
     rotation_angle_rad = math.radians(rotation_angle)
-    
+
     look_at = torch.tensor([0.0, 0.0, center_depth], device=device)
     initial_camera_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
-    
+
     trajectory = []
     half_steps = n_steps // 2
-    
+
     # Determine rotation direction
     rotation_sign = 1.0 if rotate_direction == "right" else -1.0
-    
+
     # Determine zoom direction: right = zoom in (forward), left = zoom out (backward)
     zoom_sign = 1.0 if zoom_direction == "right" else -1.0
-    
+
     # Pre-compute the view matrix at the transition point (end of rotation, start of zoom)
     # This ensures smooth continuity between the two phases
     final_angle = rotation_sign * rotation_angle_rad
@@ -810,19 +815,19 @@ def create_rotate_then_zoom_trajectory(
     )
     transition_view_matrix = look_at_matrix(initial_camera_pos, look_at)
     transition_view_matrix = final_rotation_matrix @ transition_view_matrix
-    
+
     # Extract the forward direction from the transition view matrix
     # In look_at_matrix, the third row (index 2) is the forward direction in world space
     rotation_part = transition_view_matrix[:3, :3]
     rotated_forward = rotation_part[2, :3].clone()  # Forward direction in world space
     rotated_forward = rotated_forward / torch.norm(rotated_forward)
-    
+
     # Compute the effective look_at point that the camera is looking at after rotation
     # The camera at origin with rotated orientation is looking along rotated_forward
     # So the look_at point is: origin + rotated_forward * distance_to_look_at
     # The distance is the same as center_depth (distance from origin to original look_at)
     zoom_look_at = initial_camera_pos + rotated_forward * center_depth
-    
+
     for i in range(n_steps):
         if i < half_steps:
             # First half: rotate on the spot (no translation)
@@ -830,7 +835,7 @@ def create_rotate_then_zoom_trajectory(
             # The look_at point stays fixed, but we rotate the camera's orientation
             t = i / max(half_steps - 1, 1)  # Normalize to [0, 1]
             angle = rotation_sign * rotation_angle_rad * t
-            
+
             # Create rotation matrix around Y-axis
             cos_a = math.cos(angle)
             sin_a = math.sin(angle)
@@ -843,33 +848,33 @@ def create_rotate_then_zoom_trajectory(
                 ],
                 device=device,
             )
-            
+
             # Camera stays at origin, but rotates its orientation
             # Start with initial view matrix
             view_matrix = look_at_matrix(initial_camera_pos, look_at)
             # Apply rotation to the view matrix (this rotates the camera's orientation)
             view_matrix = rotation_matrix @ view_matrix
-            
+
         else:
             # Second half: zoom along forward direction
             # Keep the rotation from the last rotation state, only change translation
             # The look_at point (zoom_look_at) is computed from rotation state for reference
-            
+
             # Zoom progress in second half (starts from 0 at transition)
             t_zoom = (i - half_steps) / max(n_steps - half_steps - 1, 1)  # Normalize to [0, 1]
             zoom_offset = zoom_sign * zoom_distance * center_depth * t_zoom
-            
+
             # Move camera along the forward direction from the transition point
             camera_pos = initial_camera_pos + rotated_forward * zoom_offset
-            
+
             # Keep the exact same rotation as at transition, only update translation
             # Translation in world-to-camera: -R^T @ camera_pos
             # This ensures smooth continuity: at zoom_offset=0, view_matrix = transition_view_matrix
             view_matrix = transition_view_matrix.clone()
             view_matrix[:3, 3] = -rotation_part.T @ camera_pos
-        
+
         trajectory.append(view_matrix)
-    
+
     trajectory = torch.stack(trajectory)
     return apply_transformation(trajectory, world_to_camera_matrix)
 
@@ -884,7 +889,7 @@ def create_rotate_spot_trajectory(
 ):
     """
     Create a trajectory that rotates on the spot (no translation).
-    
+
     Args:
         world_to_camera_matrix (torch.Tensor): Base 4x4 world-to-camera transform.
         center_depth (float): Z of the look-at point.
@@ -892,28 +897,28 @@ def create_rotate_spot_trajectory(
         rotate_direction (str): 'right' or 'left' - rotation direction (default: 'right').
         rotation_angle (float): Total rotation angle in degrees (default: 65.0).
         device (str): Device where tensors are created.
-    
+
     Returns:
         torch.Tensor: [n_steps, 4, 4] sequence of world-to-camera matrices.
     """
     # Convert rotation angle from degrees to radians
     rotation_angle_rad = math.radians(rotation_angle)
-    
+
     look_at = torch.tensor([0.0, 0.0, center_depth], device=device)
     initial_camera_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
-    
+
     trajectory = []
-    
+
     # Determine rotation direction
     rotation_sign = 1.0 if rotate_direction == "right" else -1.0
-    
+
     for i in range(n_steps):
         # Rotate on the spot (no translation)
         # Rotate the camera's view direction around Y-axis while keeping position fixed
         # The look_at point stays fixed, but we rotate the camera's orientation
         t = i / max(n_steps - 1, 1)  # Normalize to [0, 1]
         angle = rotation_sign * rotation_angle_rad * t
-        
+
         # Create rotation matrix around Y-axis
         cos_a = math.cos(angle)
         sin_a = math.sin(angle)
@@ -926,15 +931,15 @@ def create_rotate_spot_trajectory(
             ],
             device=device,
         )
-        
+
         # Camera stays at origin, but rotates its orientation
         # Start with initial view matrix
         view_matrix = look_at_matrix(initial_camera_pos, look_at)
         # Apply rotation to the view matrix (this rotates the camera's orientation)
         view_matrix = rotation_matrix @ view_matrix
-        
+
         trajectory.append(view_matrix)
-    
+
     trajectory = torch.stack(trajectory)
     return apply_transformation(trajectory, world_to_camera_matrix)
 
@@ -952,10 +957,10 @@ def create_rotate_spot_with_noise_trajectory(
     """
     Create a trajectory that mimics rotate_spot but adds tiny position offsets to avoid
     degenerate covariance errors in DA3 pose alignment during autoregressive generation.
-    
+
     This is identical to rotate_spot except it adds minimal smooth position variation
     that's imperceptible visually but provides enough variation for pose alignment algorithms.
-    
+
     Args:
         world_to_camera_matrix (torch.Tensor): Base 4x4 world-to-camera transform.
         center_depth (float): Z of the look-at point.
@@ -965,32 +970,32 @@ def create_rotate_spot_with_noise_trajectory(
         device (str): Device where tensors are created.
         noise_percentage: Percentage of distance * center_depth for position offset (default 0.0001).
         distance: Base distance (used for offset scaling, default 0.1)
-    
+
     Returns:
         torch.Tensor: [n_steps, 4, 4] sequence of world-to-camera matrices.
     """
     # Convert rotation angle from degrees to radians
     rotation_angle_rad = math.radians(rotation_angle)
-    
+
     look_at = torch.tensor([0.0, 0.0, center_depth], device=device)
     initial_camera_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
-    
+
     trajectory = []
-    
+
     # Determine rotation direction
     rotation_sign = 1.0 if rotate_direction == "right" else -1.0
-    
+
     # Use a tiny smooth orbit instead of noise - this provides smooth, deterministic variation
     # The orbit radius is very small to avoid visible movement, but large enough for pose alignment
     # Use noise_percentage to scale the orbit radius
     orbit_radius = noise_percentage * distance * center_depth  # Small orbit radius
-    
+
     for i in range(n_steps):
         # Rotate on the spot (with tiny orbit for pose alignment)
         # Rotate the camera's view direction around Y-axis while keeping position nearly fixed
         t = i / max(n_steps - 1, 1)  # Normalize to [0, 1]
         angle = rotation_sign * rotation_angle_rad * t
-        
+
         # Create rotation matrix around Y-axis
         cos_a = math.cos(angle)
         sin_a = math.sin(angle)
@@ -1003,7 +1008,7 @@ def create_rotate_spot_with_noise_trajectory(
             ],
             device=device,
         )
-        
+
         # Add tiny smooth orbit in X-Y plane (circular motion)
         # This provides smooth, deterministic variation for pose alignment
         # Use absolute frame index with very slow frequency to ensure smoothness across all frames
@@ -1012,16 +1017,16 @@ def create_rotate_spot_with_noise_trajectory(
         orbit_x = orbit_radius * math.cos(orbit_angle)
         orbit_y = orbit_radius * math.sin(orbit_angle)
         orbit_z = 0.0
-        
+
         # Camera position with tiny orbit (visually identical to pure rotation)
         camera_pos = initial_camera_pos + torch.tensor([orbit_x, orbit_y, orbit_z], device=device)
-        
+
         # Start with view matrix at orbiting position
         view_matrix = look_at_matrix(camera_pos, look_at)
         # Apply rotation to the view matrix (this rotates the camera's orientation)
         view_matrix = rotation_matrix @ view_matrix
-        
+
         trajectory.append(view_matrix)
-    
+
     trajectory = torch.stack(trajectory)
     return apply_transformation(trajectory, world_to_camera_matrix)

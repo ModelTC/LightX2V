@@ -16,14 +16,13 @@
 from typing import IO, Any, Union
 
 import cv2
+import imageio
 import numpy as np
 import torch
-from einops import rearrange
 from PIL import Image as PILImage
-from torch import Tensor
-
-import imageio
+from einops import rearrange
 from loguru import logger
+from torch import Tensor
 
 try:
     import ffmpegcv
@@ -42,9 +41,7 @@ def save_video(grid, video_name, fps=30):
             writer.write(frame)
 
 
-def save_img_or_video(
-    sample_C_T_H_W_in01: Tensor, save_fp_wo_ext: Union[str, IO[Any]], fps: int = 24, quality=None, ffmpeg_params=None
-) -> None:
+def save_img_or_video(sample_C_T_H_W_in01: Tensor, save_fp_wo_ext: Union[str, IO[Any]], fps: int = 24, quality=None, ffmpeg_params=None) -> None:
     """
     Save a tensor as an image or video file based on shape
 
@@ -54,9 +51,7 @@ def save_img_or_video(
         fps (int): Frames per second for video. Default is 24.
     """
     assert sample_C_T_H_W_in01.ndim == 4, "Only support 4D tensor"
-    assert isinstance(save_fp_wo_ext, str) or hasattr(save_fp_wo_ext, "write"), (
-        "save_fp_wo_ext must be a string or file-like object"
-    )
+    assert isinstance(save_fp_wo_ext, str) or hasattr(save_fp_wo_ext, "write"), "save_fp_wo_ext must be a string or file-like object"
 
     if torch.is_floating_point(sample_C_T_H_W_in01):
         sample_C_T_H_W_in01 = sample_C_T_H_W_in01.clamp(0, 1)
@@ -79,9 +74,7 @@ def save_img_or_video(
         pil_quality = kwargs.pop("quality", 85)
         save_obj.save(out_path, format="JPEG", quality=pil_quality)
     else:
-        frames = rearrange(
-            (sample_C_T_H_W_in01.cpu().float().numpy() * 255), "c t h w -> t h w c"
-        ).astype(np.uint8)
+        frames = rearrange((sample_C_T_H_W_in01.cpu().float().numpy() * 255), "c t h w -> t h w c").astype(np.uint8)
         out_path = f"{save_fp_wo_ext}.mp4" if isinstance(save_fp_wo_ext, str) else save_fp_wo_ext
         writer_kwargs = {"fps": fps}
         if "ffmpeg_params" in kwargs:

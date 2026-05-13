@@ -24,14 +24,13 @@ import torch
 import torch.distributed.checkpoint as dcp
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 from torch.distributed.checkpoint import FileSystemReader
 from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, set_model_state_dict
 from transformers import AutoTokenizer
 
-from loguru import logger
-from lightx2v.models.networks.lyra2._imaginaire.utils.distributed import is_rank0, broadcast, get_rank
-from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
+from lightx2v.models.networks.lyra2._imaginaire.utils.distributed import is_rank0
 
 
 def basic_clean(text):
@@ -49,10 +48,7 @@ def whitespace_clean(text):
 def canonicalize(text, keep_punctuation_exact_string=None):
     text = text.replace("_", " ")
     if keep_punctuation_exact_string:
-        text = keep_punctuation_exact_string.join(
-            part.translate(str.maketrans("", "", string.punctuation))
-            for part in text.split(keep_punctuation_exact_string)
-        )
+        text = keep_punctuation_exact_string.join(part.translate(str.maketrans("", "", string.punctuation)) for part in text.split(keep_punctuation_exact_string))
     else:
         text = text.translate(str.maketrans("", "", string.punctuation))
     text = text.lower()
@@ -286,12 +282,7 @@ class T5RelativeEmbedding(nn.Module):
             rel_pos = -torch.min(rel_pos, torch.zeros_like(rel_pos))
 
         max_exact = num_buckets // 2
-        rel_pos_large = (
-            max_exact
-            + (
-                torch.log(rel_pos.float() / max_exact) / math.log(self.max_dist / max_exact) * (num_buckets - max_exact)
-            ).long()
-        )
+        rel_pos_large = max_exact + (torch.log(rel_pos.float() / max_exact) / math.log(self.max_dist / max_exact) * (num_buckets - max_exact)).long()
         rel_pos_large = torch.min(rel_pos_large, torch.full_like(rel_pos_large, num_buckets - 1))
         rel_buckets += torch.where(rel_pos < max_exact, rel_pos, rel_pos_large)
         return rel_buckets
@@ -311,12 +302,7 @@ class T5Encoder(nn.Module):
         self.token_embedding = vocab if isinstance(vocab, nn.Embedding) else nn.Embedding(vocab, dim)
         self.pos_embedding = T5RelativeEmbedding(num_buckets, num_heads, bidirectional=True) if shared_pos else None
         self.dropout = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList(
-            [
-                T5SelfAttention(dim, dim_attn, dim_ffn, num_heads, num_buckets, shared_pos, dropout)
-                for _ in range(num_layers)
-            ]
-        )
+        self.blocks = nn.ModuleList([T5SelfAttention(dim, dim_attn, dim_ffn, num_heads, num_buckets, shared_pos, dropout) for _ in range(num_layers)])
         self.norm = T5LayerNorm(dim)
 
         self.apply(init_weights)
@@ -346,12 +332,7 @@ class T5Decoder(nn.Module):
         self.token_embedding = vocab if isinstance(vocab, nn.Embedding) else nn.Embedding(vocab, dim)
         self.pos_embedding = T5RelativeEmbedding(num_buckets, num_heads, bidirectional=False) if shared_pos else None
         self.dropout = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList(
-            [
-                T5CrossAttention(dim, dim_attn, dim_ffn, num_heads, num_buckets, shared_pos, dropout)
-                for _ in range(num_layers)
-            ]
-        )
+        self.blocks = nn.ModuleList([T5CrossAttention(dim, dim_attn, dim_ffn, num_heads, num_buckets, shared_pos, dropout) for _ in range(num_layers)])
         self.norm = T5LayerNorm(dim)
 
         self.apply(init_weights)
@@ -399,12 +380,8 @@ class T5Model(nn.Module):
         self.num_buckets = num_buckets
 
         self.token_embedding = nn.Embedding(vocab_size, dim)
-        self.encoder = T5Encoder(
-            self.token_embedding, dim, dim_attn, dim_ffn, num_heads, encoder_layers, num_buckets, shared_pos, dropout
-        )
-        self.decoder = T5Decoder(
-            self.token_embedding, dim, dim_attn, dim_ffn, num_heads, decoder_layers, num_buckets, shared_pos, dropout
-        )
+        self.encoder = T5Encoder(self.token_embedding, dim, dim_attn, dim_ffn, num_heads, encoder_layers, num_buckets, shared_pos, dropout)
+        self.decoder = T5Decoder(self.token_embedding, dim, dim_attn, dim_ffn, num_heads, decoder_layers, num_buckets, shared_pos, dropout)
         self.head = nn.Linear(dim, vocab_size, bias=False)
 
         self.apply(init_weights)

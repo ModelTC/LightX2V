@@ -26,10 +26,10 @@ import attrs
 from hydra import compose, initialize
 from hydra.core.config_store import ConfigStore
 from hydra.core.global_hydra import GlobalHydra
+from loguru import logger as log
 from omegaconf import DictConfig, OmegaConf
 
 from lightx2v.models.networks.lyra2._imaginaire.config import Config
-from loguru import logger as log
 
 
 def is_attrs_or_dataclass(obj) -> bool:
@@ -81,9 +81,7 @@ def override(config: Config, overrides: Optional[list[str]] = None) -> Config:
     # Enforce "--" separator between the script arguments and overriding configs.
     if overrides:
         if overrides[0] != "--":
-            raise ValueError(
-                f'Hydra config overrides must be separated with a "--" token. but got overrides={overrides}, and overrides[0]={overrides[0]}'
-            )
+            raise ValueError(f'Hydra config overrides must be separated with a "--" token. but got overrides={overrides}, and overrides[0]={overrides[0]}')
         overrides = overrides[1:]
     # Use Hydra to handle overrides
     cs = ConfigStore.instance()
@@ -116,16 +114,12 @@ def override(config: Config, overrides: Optional[list[str]] = None) -> Config:
             return kwargs
         else:
             ref_fields = set(get_fields(ref_instance))
-            assert isinstance(kwargs, dict) or isinstance(kwargs, DictConfig), (
-                "kwargs must be a dictionary or a DictConfig"
-            )
+            assert isinstance(kwargs, dict) or isinstance(kwargs, DictConfig), "kwargs must be a dictionary or a DictConfig"
             keys = set(kwargs.keys())
 
             # ref_fields must equal to or include all keys
             extra_keys = keys - ref_fields
-            assert ref_fields == keys or keys.issubset(ref_fields), (
-                f"Fields mismatch: {ref_fields} != {keys}. Extra keys found: {extra_keys} \n \t when constructing {type(ref_instance)} with {keys}"
-            )
+            assert ref_fields == keys or keys.issubset(ref_fields), f"Fields mismatch: {ref_fields} != {keys}. Extra keys found: {extra_keys} \n \t when constructing {type(ref_instance)} with {keys}"
 
             resolved_kwargs: Dict[str, Any] = {}
             for f in keys:

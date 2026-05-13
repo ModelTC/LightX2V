@@ -6,9 +6,9 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
+from loguru import logger
 
 from lightx2v.models.networks.lyra2.forward_warp_utils_pytorch import unproject_points
-from loguru import logger
 
 
 class Sparse3DCache:
@@ -215,10 +215,7 @@ class Sparse3DCache:
         valid = (z_all > 0) & (x_all >= 0) & (x_all < Wt_ds) & (y_all >= 0) & (y_all < Ht_ds)
 
         if not valid.any():
-            logger.info(
-                f"Sparse3DCache.retrieve: no valid projections for any of {avail} candidates "
-                f"(frame_ids={self._frame_ids[:avail]})"
-            )
+            logger.info(f"Sparse3DCache.retrieve: no valid projections for any of {avail} candidates (frame_ids={self._frame_ids[:avail]})")
             return []
 
         view_ids, cand_ids, b_idx, _, _ = valid.nonzero(as_tuple=True)
@@ -287,9 +284,7 @@ class Sparse3DCache:
         else:
             is_min = z_vals <= (min_d_for_pts + 1e-6)
             big_int = torch.iinfo(torch.long).max
-            cid_masked = torch.where(
-                is_min, cand_ids.to(torch.long), torch.full_like(cand_ids, big_int, dtype=torch.long)
-            )
+            cid_masked = torch.where(is_min, cand_ids.to(torch.long), torch.full_like(cand_ids, big_int, dtype=torch.long))
 
             owner_lin_tmp = torch.full((n_keys,), big_int, device=device, dtype=torch.long)
             owner_lin_tmp.scatter_reduce_(0, lin_keys, cid_masked, reduce="amin", include_self=True)
@@ -301,10 +296,7 @@ class Sparse3DCache:
             scores_t = counts.float()
             scores = scores_t.tolist()
 
-            score_map = {
-                int(self._latent_indices[i]): {"score": float(scores[i]), "frame_id": int(self._frame_ids[i])}
-                for i in range(num_cands)
-            }
+            score_map = {int(self._latent_indices[i]): {"score": float(scores[i]), "frame_id": int(self._frame_ids[i])} for i in range(num_cands)}
             logger.info(f"Sparse3DCache.retrieve scores (latent_index -> score): {score_map}")
 
             if random and num_latents > 0:

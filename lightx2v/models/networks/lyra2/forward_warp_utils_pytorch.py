@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple, Union
 import torch
 from einops import rearrange
 
+
 def get_max_exponent_for_dtype(dtype):
     # Set the maximum exponent based on dtype
     if dtype == torch.bfloat16:
@@ -31,13 +32,14 @@ def get_max_exponent_for_dtype(dtype):
     else:
         return 80.0  # Default safe value
 
+
 def inverse_with_conversion(mtx):
     return torch.linalg.inv(mtx.to(torch.float32)).to(mtx.dtype)
 
 
 def reliable_depth_mask_range_batch(depth, window_size=5, ratio_thresh=0.05, eps=1e-6):
     assert window_size % 2 == 1, "Window size must be odd."
-    if depth.dim() == 3:   # Input shape: (B, H, W)
+    if depth.dim() == 3:  # Input shape: (B, H, W)
         depth_unsq = depth.unsqueeze(1)
     elif depth.dim() == 4:  # Already has shape (B, 1, H, W)
         depth_unsq = depth
@@ -143,20 +145,14 @@ def forward_warp_multiframes(
     flow12 = trans_coordinates - grid
     warped_frame2, mask2 = bilinear_splatting(frame1, mask1, trans_depth1, flow12, None, is_image=is_image, n_views=v)
     if render_depth:
-        warped_depth2 = bilinear_splatting(trans_depth1, mask1, trans_depth1, flow12, None, is_image=False, n_views=v)[
-            0
-        ][:, 0]
+        warped_depth2 = bilinear_splatting(trans_depth1, mask1, trans_depth1, flow12, None, is_image=False, n_views=v)[0][:, 0]
         return warped_frame2, mask2, warped_depth2, flow12
     return warped_frame2, mask2, None, flow12
 
 
-def unproject_points(depth: torch.Tensor,
-                     w2c: torch.Tensor,
-                     intrinsic: torch.Tensor,
-                     is_depth: bool = True,
-                     is_ftheta: bool = False,
-                     mask: Optional[torch.Tensor] = None,
-                     return_sparse: bool = False) -> Union[torch.Tensor, List[torch.Tensor]]:
+def unproject_points(
+    depth: torch.Tensor, w2c: torch.Tensor, intrinsic: torch.Tensor, is_depth: bool = True, is_ftheta: bool = False, mask: Optional[torch.Tensor] = None, return_sparse: bool = False
+) -> Union[torch.Tensor, List[torch.Tensor]]:
     """
     Unprojects depth values into 3D world points.
 
@@ -205,8 +201,7 @@ def unproject_points(depth: torch.Tensor,
             direction = unnormalized_pos / (norm_val + 1e-8)
             world_points_cam = depth_valid * direction
 
-        ones_h = torch.ones((world_points_cam.shape[0], 1, 1),
-                            device=device, dtype=dtype)
+        ones_h = torch.ones((world_points_cam.shape[0], 1, 1), device=device, dtype=dtype)
         world_points_homo = torch.cat([world_points_cam, ones_h], dim=1)  # (N, 4, 1)
 
         trans = inverse_with_conversion(w2c)  # (b, 4, 4)
@@ -251,8 +246,7 @@ def unproject_points(depth: torch.Tensor,
             ray_norm = torch.norm(rays, dim=1, keepdim=True)
             world_points_cam = depth_valid * (rays / (ray_norm + 1e-8))
 
-        ones_h = torch.ones((world_points_cam.shape[0], 1),
-                            device=device, dtype=dtype)
+        ones_h = torch.ones((world_points_cam.shape[0], 1), device=device, dtype=dtype)
         world_points_homo = torch.cat([world_points_cam, ones_h], dim=1)  # (N, 4)
         world_points_homo = world_points_homo.unsqueeze(-1)  # (N, 4, 1)
         trans = inverse_with_conversion(w2c)  # (b, 4, 4)
@@ -266,7 +260,7 @@ def unproject_points(depth: torch.Tensor,
         offset = 0
         for count in counts:
             if count > 0:
-                sparse_list.append(sparse_points[offset:offset+count])
+                sparse_list.append(sparse_points[offset : offset + count])
             else:
                 sparse_list.append(torch.empty((0, 3), device=device, dtype=dtype))
             offset += count
@@ -346,23 +340,15 @@ def bilinear_splatting(
         dim=1,
     )
 
-    prox_weight_nw = (1 - (trans_pos_offset[:, 1:2] - trans_pos_floor[:, 1:2])) * (
-        1 - (trans_pos_offset[:, 0:1] - trans_pos_floor[:, 0:1])
-    )
-    prox_weight_sw = (1 - (trans_pos_ceil[:, 1:2] - trans_pos_offset[:, 1:2])) * (
-        1 - (trans_pos_offset[:, 0:1] - trans_pos_floor[:, 0:1])
-    )
-    prox_weight_ne = (1 - (trans_pos_offset[:, 1:2] - trans_pos_floor[:, 1:2])) * (
-        1 - (trans_pos_ceil[:, 0:1] - trans_pos_offset[:, 0:1])
-    )
-    prox_weight_se = (1 - (trans_pos_ceil[:, 1:2] - trans_pos_offset[:, 1:2])) * (
-        1 - (trans_pos_ceil[:, 0:1] - trans_pos_offset[:, 0:1])
-    )
+    prox_weight_nw = (1 - (trans_pos_offset[:, 1:2] - trans_pos_floor[:, 1:2])) * (1 - (trans_pos_offset[:, 0:1] - trans_pos_floor[:, 0:1]))
+    prox_weight_sw = (1 - (trans_pos_ceil[:, 1:2] - trans_pos_offset[:, 1:2])) * (1 - (trans_pos_offset[:, 0:1] - trans_pos_floor[:, 0:1]))
+    prox_weight_ne = (1 - (trans_pos_offset[:, 1:2] - trans_pos_floor[:, 1:2])) * (1 - (trans_pos_ceil[:, 0:1] - trans_pos_offset[:, 0:1]))
+    prox_weight_se = (1 - (trans_pos_ceil[:, 1:2] - trans_pos_offset[:, 1:2])) * (1 - (trans_pos_ceil[:, 0:1] - trans_pos_offset[:, 0:1]))
 
     # Calculate depth weights, preventing overflow and removing saturation
     # Clamp depth to be non-negative before log1p
     clamped_depth1 = torch.clamp(depth1, min=0)
-    log_depth1 = torch.log1p(clamped_depth1) # Use log1p for better precision near 0
+    log_depth1 = torch.log1p(clamped_depth1)  # Use log1p for better precision near 0
     # Normalize and scale log depth
     exponent = log_depth1 / (log_depth1.max() + 1e-7) * depth_weight_scale
     # Clamp exponent before exp to prevent overflow
@@ -370,7 +356,6 @@ def bilinear_splatting(
     clamped_exponent = torch.clamp(exponent, max=max_exponent)
     # Compute depth weights with added epsilon for stability when dividing later
     depth_weights = torch.exp(clamped_exponent) + 1e-7
-
 
     weight_nw = torch.moveaxis(prox_weight_nw * mask1 * flow12_mask / depth_weights, [0, 1, 2, 3], [0, 3, 1, 2])
     weight_sw = torch.moveaxis(prox_weight_sw * mask1 * flow12_mask / depth_weights, [0, 1, 2, 3], [0, 3, 1, 2])
@@ -382,18 +367,10 @@ def bilinear_splatting(
 
     frame1_cl = torch.moveaxis(frame1, [0, 1, 2, 3], [0, 3, 1, 2])
     batch_indices = torch.arange(b, device=device, dtype=torch.long)[:, None, None]  # .to(frame1.device)
-    warped_frame.index_put_(
-        (batch_indices, trans_pos_floor[:, 1], trans_pos_floor[:, 0]), frame1_cl * weight_nw, accumulate=True
-    )
-    warped_frame.index_put_(
-        (batch_indices, trans_pos_ceil[:, 1], trans_pos_floor[:, 0]), frame1_cl * weight_sw, accumulate=True
-    )
-    warped_frame.index_put_(
-        (batch_indices, trans_pos_floor[:, 1], trans_pos_ceil[:, 0]), frame1_cl * weight_ne, accumulate=True
-    )
-    warped_frame.index_put_(
-        (batch_indices, trans_pos_ceil[:, 1], trans_pos_ceil[:, 0]), frame1_cl * weight_se, accumulate=True
-    )
+    warped_frame.index_put_((batch_indices, trans_pos_floor[:, 1], trans_pos_floor[:, 0]), frame1_cl * weight_nw, accumulate=True)
+    warped_frame.index_put_((batch_indices, trans_pos_ceil[:, 1], trans_pos_floor[:, 0]), frame1_cl * weight_sw, accumulate=True)
+    warped_frame.index_put_((batch_indices, trans_pos_floor[:, 1], trans_pos_ceil[:, 0]), frame1_cl * weight_ne, accumulate=True)
+    warped_frame.index_put_((batch_indices, trans_pos_ceil[:, 1], trans_pos_ceil[:, 0]), frame1_cl * weight_se, accumulate=True)
 
     warped_weights.index_put_((batch_indices, trans_pos_floor[:, 1], trans_pos_floor[:, 0]), weight_nw, accumulate=True)
     warped_weights.index_put_((batch_indices, trans_pos_ceil[:, 1], trans_pos_floor[:, 0]), weight_sw, accumulate=True)

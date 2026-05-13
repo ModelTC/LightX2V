@@ -81,9 +81,7 @@ def get_default_params(cls_or_func):
         # inspect signature for class
         signature = inspect.signature(cls_or_func.__init__)
     params = signature.parameters
-    default_params = {
-        name: param.default for name, param in params.items() if param.default is not inspect.Parameter.empty
-    }
+    default_params = {name: param.default for name, param in params.items() if param.default is not inspect.Parameter.empty}
     return default_params
 
 
@@ -201,9 +199,7 @@ Within a config file, relative import can only import other config files.
             if PathManager.isdir(cur_file_no_suffix):
                 raise ImportError(f"Cannot import from {cur_file_no_suffix}." + relative_import_err)
             else:
-                raise ImportError(
-                    f"Cannot import name {relative_import_path} from {original_file}: {cur_file} does not exist."
-                )
+                raise ImportError(f"Cannot import name {relative_import_path} from {original_file}: {cur_file} does not exist.")
         return cur_file
 
     def new_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -297,11 +293,7 @@ class LazyConfig:
             if filename.endswith(".py"):
                 # when not specified, only load those that are config objects
                 ret = DictConfig(
-                    {
-                        name: _cast_to_config(value)
-                        for name, value in ret.items()
-                        if isinstance(value, (DictConfig, ListConfig, dict)) and not name.startswith("_")
-                    },
+                    {name: _cast_to_config(value) for name, value in ret.items() if isinstance(value, (DictConfig, ListConfig, dict)) and not name.startswith("_")},
                     flags={"allow_objects": True},
                 )
             return ret

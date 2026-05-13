@@ -2,12 +2,11 @@
 # Only the functions needed for the Lyra-2 ZoomGS inference path are kept.
 
 import collections.abc
-import contextlib
 import functools
 import random
 import time
 from contextlib import ContextDecorator
-from typing import Any, List, Tuple, TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 import torch
@@ -26,6 +25,7 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 # Color
 # ---------------------------------------------------------------------------
+
 
 class Color:
     """Colorize strings for console output."""
@@ -69,6 +69,7 @@ class Color:
 # to — recursive tensor cast
 # ---------------------------------------------------------------------------
 
+
 def to(
     data: Any,
     device: "str | torch.device | None" = None,
@@ -79,14 +80,9 @@ def to(
     assert device is not None or dtype is not None or memory_format is not None
 
     if isinstance(data, torch.Tensor):
-        if (
-            memory_format == torch.channels_last and data.dim() != 4
-            or memory_format == torch.channels_last_3d and data.dim() != 5
-        ):
+        if memory_format == torch.channels_last and data.dim() != 4 or memory_format == torch.channels_last_3d and data.dim() != 5:
             memory_format = torch.preserve_format
-        is_cpu = (isinstance(device, str) and device == "cpu") or (
-            isinstance(device, torch.device) and device.type == "cpu"
-        )
+        is_cpu = (isinstance(device, str) and device == "cpu") or (isinstance(device, torch.device) and device.type == "cpu")
         return data.to(
             device=device,
             dtype=dtype,
@@ -104,6 +100,7 @@ def to(
 # ---------------------------------------------------------------------------
 # set_random_seed
 # ---------------------------------------------------------------------------
+
 
 def _get_rank() -> int:
     if dist.is_available() and dist.is_initialized():
@@ -123,6 +120,7 @@ def set_random_seed(seed: int, by_rank: bool = False) -> None:
 # ---------------------------------------------------------------------------
 # timer — context manager / decorator for timing
 # ---------------------------------------------------------------------------
+
 
 class timer(ContextDecorator):  # noqa: N801
     """Simple timer that logs elapsed time on exit."""

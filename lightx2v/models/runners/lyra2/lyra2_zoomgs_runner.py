@@ -43,7 +43,6 @@ import types
 
 import cv2
 import torch
-
 from loguru import logger
 
 from lightx2v.models.runners.base_runner import BaseRunner
@@ -59,10 +58,7 @@ _DMD_LORA_WEIGHT = 1.0
 def _ensure_lyra2_on_path(lyra_repo: str) -> None:
     """Insert the Lyra-2 repository root into sys.path if not already present."""
     if not os.path.isdir(lyra_repo):
-        raise FileNotFoundError(
-            f"[Lyra2ZoomGS] Lyra-2 repo not found: '{lyra_repo}'. "
-            "Set 'lyra_repo' in the config JSON to the absolute path of the Lyra-2 repo."
-        )
+        raise FileNotFoundError(f"[Lyra2ZoomGS] Lyra-2 repo not found: '{lyra_repo}'. Set 'lyra_repo' in the config JSON to the absolute path of the Lyra-2 repo.")
     if lyra_repo not in sys.path:
         sys.path.insert(0, lyra_repo)
         logger.info(f"[Lyra2ZoomGS] Added to sys.path: {lyra_repo}")
@@ -110,10 +106,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         else:
             checkpoint_dir_abs = os.path.join(lyra_repo, checkpoint_dir)
         if not os.path.isdir(checkpoint_dir_abs):
-            raise FileNotFoundError(
-                f"[Lyra2ZoomGS] checkpoint directory not found: '{checkpoint_dir_abs}'. "
-                "Check 'checkpoint_dir' (or 'model_path') in your config JSON."
-            )
+            raise FileNotFoundError(f"[Lyra2ZoomGS] checkpoint directory not found: '{checkpoint_dir_abs}'. Check 'checkpoint_dir' (or 'model_path') in your config JSON.")
         logger.info(f"[Lyra2ZoomGS] checkpoint_dir OK: {checkpoint_dir_abs}")
 
         # chdir to lyra_repo once; relative paths in Lyra-2 code resolve from here
@@ -134,6 +127,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         if cp_size > 1:
             import imaginaire
             from megatron.core import parallel_state
+
             imaginaire.utils.distributed.init()
             parallel_state.initialize_model_parallel(context_parallel_size=cp_size)
             self._process_group = parallel_state.get_context_parallel_group()
@@ -200,10 +194,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
 
         if lora_paths:
             # Lyra2WanDiT is not a PEFT-compatible nn.Module; LoRA cannot be injected.
-            logger.warning(
-                "[Lyra2ZoomGS] LoRA loading skipped: Lyra2WanDiT is not a PEFT-compatible "
-                "nn.Module. Base weights only."
-            )
+            logger.warning("[Lyra2ZoomGS] LoRA loading skipped: Lyra2WanDiT is not a PEFT-compatible nn.Module. Base weights only.")
 
         # Cache dtype/device so downstream methods don't need to re-query.
         self.desired_dtype = model.tensor_kwargs.get("dtype", None)
@@ -260,9 +251,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
 
     def _load_negative_prompt(self):
         """Load negative T5 embedding tensor from the .pt file."""
-        neg_pt = self.config.get(
-            "negative_prompt_pt", "checkpoints/text_encoder/negative_prompt.pt"
-        )
+        neg_pt = self.config.get("negative_prompt_pt", "checkpoints/text_encoder/negative_prompt.pt")
         if not os.path.isabs(neg_pt):
             neg_pt = os.path.join(os.getcwd(), neg_pt)
         data = torch.load(neg_pt, map_location="cpu", weights_only=False)
@@ -286,7 +275,6 @@ class Lyra2ZoomGSRunner(BaseRunner):
             neg_t5     – negative T5 embedding
             ground_normal – optional ground-plane normal (or None)
         """
-        from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
         from lightx2v.models.input_encoders.hf.lyra2.depth_encode import (
             _da3_infer_depth_intrinsics_single,
         )
@@ -294,6 +282,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
             get_umt5_embedding,
             get_umt5_embedding_offloaded,
         )
+        from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
 
         cfg = self.config
         img_path = self.input_info.image_path
@@ -359,9 +348,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         with ProfilingContext4DebugL1("Run T5 encoder"):
             caption = getattr(self.input_info, "prompt", "") or cfg.get("prompt", "")
             if not caption:
-                raise RuntimeError(
-                    "[Lyra2ZoomGS] No prompt provided. Pass --prompt or add 'prompt' to the config."
-                )
+                raise RuntimeError("[Lyra2ZoomGS] No prompt provided. Pass --prompt or add 'prompt' to the config.")
             prompt_suffix = cfg.get("prompt_suffix", "")
             if prompt_suffix:
                 caption = caption.rstrip() + " " + prompt_suffix
@@ -378,9 +365,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
             elif t5.dim() == 3 and t5.shape[0] != 1:
                 t5 = t5[:1]
 
-            neg_t5 = misc_to(
-                self.negative_prompt_data["t5_text_embeddings"], **self.model.tensor_kwargs
-            )
+            neg_t5 = misc_to(self.negative_prompt_data["t5_text_embeddings"], **self.model.tensor_kwargs)
 
         ground_normal = None
         if cfg.get("ground_plane_align", False):
@@ -388,7 +373,9 @@ class Lyra2ZoomGSRunner(BaseRunner):
 
             with ProfilingContext4DebugL1("Fit ground plane"):
                 ground_normal = _fit_ground_normal_from_depth(
-                    depth_hw, K_33, mask_hw,
+                    depth_hw,
+                    K_33,
+                    mask_hw,
                     bottom_frac=cfg.get("ground_plane_bottom_frac", 0.4),
                 )
                 if ground_normal is None:
@@ -451,10 +438,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         cfg = self.config
         img_path = self.input_info.image_path
         base_name = os.path.splitext(os.path.basename(img_path))[0]
-        output_path = (
-            getattr(self.input_info, "save_result_path", None)
-            or cfg.get("output_path", "outputs/lyra2_zoomgs")
-        )
+        output_path = getattr(self.input_info, "save_result_path", None) or cfg.get("output_path", "outputs/lyra2_zoomgs")
 
         os.makedirs(output_path, exist_ok=True)
         per_image_dir = os.path.join(output_path, base_name)
@@ -466,10 +450,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         N_in = int(cfg.get("num_frames_zoom_in") or cfg.get("num_frames", 161))
         N_out = int(cfg.get("num_frames_zoom_out") or cfg.get("num_frames", 161))
 
-        logger.info(
-            f"=== Generating ZOOM-IN ({cfg.get('zoom_in_trajectory')} "
-            f"{cfg.get('zoom_in_direction')} str={cfg.get('zoom_in_strength')}, N={N_in}) ==="
-        )
+        logger.info(f"=== Generating ZOOM-IN ({cfg.get('zoom_in_trajectory')} {cfg.get('zoom_in_direction')} str={cfg.get('zoom_in_strength')}, N={N_in}) ===")
         with ProfilingContext4DebugL1("Generate zoom-in"):
             result_in = self._run_one_direction(
                 trajectory=cfg.get("zoom_in_trajectory", "horizontal_zoom"),
@@ -483,10 +464,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        logger.info(
-            f"=== Generating ZOOM-OUT ({cfg.get('zoom_out_trajectory')} "
-            f"{cfg.get('zoom_out_direction')} str={cfg.get('zoom_out_strength')}, N={N_out}) ==="
-        )
+        logger.info(f"=== Generating ZOOM-OUT ({cfg.get('zoom_out_trajectory')} {cfg.get('zoom_out_direction')} str={cfg.get('zoom_out_strength')}, N={N_out}) ===")
         with ProfilingContext4DebugL1("Generate zoom-out"):
             result_out = self._run_one_direction(
                 trajectory=cfg.get("zoom_out_trajectory", "horizontal_zoom"),
@@ -499,9 +477,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
             )
 
         if result_in is None and result_out is None:
-            raise RuntimeError(
-                f"[Lyra2ZoomGS] Both zoom-in and zoom-out generation failed for: {img_path}"
-            )
+            raise RuntimeError(f"[Lyra2ZoomGS] Both zoom-in and zoom-out generation failed for: {img_path}")
 
         with ProfilingContext4DebugL1("Save results"):
             self._save_results(
@@ -610,10 +586,7 @@ class Lyra2ZoomGSRunner(BaseRunner):
         set_random_seed(seed=seed, by_rank=True)
 
         logger.info(f"[Lyra2ZoomGS] Starting inference  image={input_info.image_path}")
-        logger.info(
-            f"[Lyra2ZoomGS] Output → "
-            f"{getattr(input_info, 'save_result_path', None) or self.config.get('output_path')}"
-        )
+        logger.info(f"[Lyra2ZoomGS] Output → {getattr(input_info, 'save_result_path', None) or self.config.get('output_path')}")
 
         self.inputs = self.run_input_encoder()
         result = self.run_main()
