@@ -1,9 +1,9 @@
 {
-    "lightx2v_path": "/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V",
+    "lightx2v_path": "",
     "clip_configs": [
         {
             "name":"rs2v_clip",
-            "path": "/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V/configs/seko_talk/shot/rs2v/rs2v.json"
+            "path": "configs/seko_talk/shot/rs2v/rs2v.json"
         }
     ],
     "parallel": {

@@ -17,7 +17,7 @@
     "fps": 30,
     "lora_configs": [
         {
-        "path": "/mtc/gongruihao/qinxinyi/Wan2.2-Animate-14B/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "path": "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
     ]
