@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V
-model_path=/mtc/gongruihao/qinxinyi/Wan2.2-Animate-14B
-video_path=/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V/scripts/wan22/video.mp4
-refer_path=/mtc/gongruihao/qinxinyi/LightX2V-Deploy/LightX2V/scripts/wan22/image.jpeg
+lightx2v_path=
+model_path=
+video_path=
+refer_path=
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -18,7 +18,6 @@ python ${lightx2v_path}/tools/preprocess/preprocess_data.py \
     --refer_path $refer_path \
     --save_path ${lightx2v_path}/save_results/animate/process_results \
     --resolution_area 1280 720 \
-    --fps -1 \
     --retarget_flag \
 
 python -m lightx2v.infer \
