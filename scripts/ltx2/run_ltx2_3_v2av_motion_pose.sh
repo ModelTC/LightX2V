@@ -15,7 +15,7 @@ export CUDA_VISIBLE_DEVICES=0
 #   ${dwpose_ckpt_path}/det/yolox_l.onnx
 #   ${dwpose_ckpt_path}/pose2d/dw-ll_ucoco_384.onnx
 # (Download once from https://huggingface.co/yzd-v/DWPose)
-dwpose_ckpt_path=/mtc/gongruihao/qinxinyi/dwpose
+dwpose_ckpt_path=/path/to/dwpose
 process_out_dir=${lightx2v_path}/save_results/ltx2_v2av/process_results
 
 # set environment variables
