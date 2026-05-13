@@ -56,7 +56,7 @@ class WanAnimateRunner(WanRunner):
         target_len = real_len + extra
         return target_len
 
-    def get_i2v_mask(self, lat_t, lat_h, lat_w, mask_len=1, mask_pixel_values=None, device="cuda"):
+    def get_i2v_mask(self, lat_t, lat_h, lat_w, mask_len=1, mask_pixel_values=None, device=AI_DEVICE):
         if mask_pixel_values is None:
             msk = torch.zeros(1, (lat_t - 1) * 4 + 1, lat_h, lat_w, dtype=GET_DTYPE(), device=device)
         else:
@@ -229,7 +229,7 @@ class WanAnimateRunner(WanRunner):
                     mask_pixel_values=mask_pixel_values.unsqueeze(0),
                 )
             else:
-                y_reft = self.vae_encoder.encode(torch.zeros(1, 3, self.config["target_video_length"] - self.mask_reft_len, H, W, dtype=GET_DTYPE(), device="cuda"))
+                y_reft = self.vae_encoder.encode(torch.zeros(1, 3, self.config["target_video_length"] - self.mask_reft_len, H, W, dtype=GET_DTYPE(), device=AI_DEVICE))
                 msk_reft = self.get_i2v_mask(self.latent_t, self.latent_h, self.latent_w, self.mask_reft_len)
 
         y_reft = torch.concat([msk_reft, y_reft])
@@ -242,7 +242,7 @@ class WanAnimateRunner(WanRunner):
         src_face_path = self.input_info.src_face_path
         src_ref_path = self.input_info.src_ref_images
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(src_pose_path, src_face_path, src_ref_path)
-        self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device="cuda").permute(2, 0, 1)  # chw
+        self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device=AI_DEVICE).permute(2, 0, 1)  # chw
         self.latent_t = self.config["target_video_length"] // self.config["vae_stride"][0] + 1
         self.latent_h = self.refer_pixel_values.shape[-2] // self.config["vae_stride"][1]
         self.latent_w = self.refer_pixel_values.shape[-1] // self.config["vae_stride"][2]
@@ -309,13 +309,13 @@ class WanAnimateRunner(WanRunner):
 
         conditioning_pixel_values = torch.tensor(
             np.stack(self.cond_images[start:end]) / 127.5 - 1,
-            device="cuda",
+            device=AI_DEVICE,
             dtype=GET_DTYPE(),
         ).permute(3, 0, 1, 2)  # c t h w
 
         face_pixel_values = torch.tensor(
             np.stack(self.face_images[start:end]) / 127.5 - 1,
-            device="cuda",
+            device=AI_DEVICE,
             dtype=GET_DTYPE(),
         ).permute(0, 3, 1, 2)  # thwc->tchw
 
@@ -326,7 +326,7 @@ class WanAnimateRunner(WanRunner):
                 self.config["refert_num"],
                 height,
                 width,
-                device="cuda",
+                device=AI_DEVICE,
                 dtype=GET_DTYPE(),
             )  # c t h w
         else:
@@ -336,13 +336,13 @@ class WanAnimateRunner(WanRunner):
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
             bg_pixel_values = torch.tensor(
                 np.stack(self.bg_images[start:end]) / 127.5 - 1,
-                device="cuda",
+                device=AI_DEVICE,
                 dtype=GET_DTYPE(),
             ).permute(3, 0, 1, 2)  # c t h w,
 
             mask_pixel_values = torch.tensor(
                 np.stack(self.mask_images[start:end])[:, :, :, None],
-                device="cuda",
+                device=AI_DEVICE,
                 dtype=GET_DTYPE(),
             ).permute(3, 0, 1, 2)  # c t h w,
 

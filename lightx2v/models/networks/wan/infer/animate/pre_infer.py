@@ -4,6 +4,7 @@ import torch
 
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanAnimatePreInfer(WanPreInfer):
@@ -26,6 +27,6 @@ class WanAnimatePreInfer(WanPreInfer):
 
         motion_vec = torch.cat(face_pixel_values_tmp)
         motion_vec = self.face_encoder(motion_vec.unsqueeze(0).to(GET_DTYPE())).squeeze(0)
-        pad_face = torch.zeros(1, motion_vec.shape[1], motion_vec.shape[2], dtype=motion_vec.dtype, device="cuda")
+        pad_face = torch.zeros(1, motion_vec.shape[1], motion_vec.shape[2], dtype=motion_vec.dtype, device=AI_DEVICE)
         motion_vec = torch.cat([pad_face, motion_vec], dim=0)
         return x, motion_vec

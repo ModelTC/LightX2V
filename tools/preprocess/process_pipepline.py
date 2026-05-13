@@ -6,7 +6,6 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from diffusers import FluxKontextPipeline
 from loguru import logger
 
 try:
@@ -14,18 +13,26 @@ try:
 except:  # noqa
     import moviepy as mpy
 
-import sam2.modeling.sam.transformer as transformer
+
+try:
+    import sam2.modeling.sam.transformer as transformer
+
+    transformer.USE_FLASH_ATTN = False
+    transformer.MATH_KERNEL_ON = True
+    transformer.OLD_GPU = True
+    from sam_utils import build_sam2_video_predictor  # noqa
+
+    _SAM2_AVAILABLE = True
+except (ImportError, ModuleNotFoundError) as e:
+    logger.warning(f"sam2 not available, preprocessing will be skipped: {e}")
+    _SAM2_AVAILABLE = False
+
 from decord import VideoReader
 from human_visualization import draw_aapose_by_meta_new
 from pose2d import Pose2d
 from pose2d_utils import AAPoseMeta
 from retarget_pose import get_retarget_pose
 from utils import get_aug_mask, get_face_bboxes, get_frame_indices, get_mask_body_img, padding_resize, resize_by_area
-
-transformer.USE_FLASH_ATTN = False
-transformer.MATH_KERNEL_ON = True
-transformer.OLD_GPU = True
-from sam_utils import build_sam2_video_predictor  # noqa
 
 
 class ProcessPipeline:
@@ -34,8 +41,12 @@ class ProcessPipeline:
 
         model_cfg = "sam2_hiera_l.yaml"
         if sam_checkpoint_path is not None:
+            if not _SAM2_AVAILABLE:
+                raise RuntimeError("sam2 is required for preprocessing but is not installed. Please install sam2.")
             self.predictor = build_sam2_video_predictor(model_cfg, sam_checkpoint_path)
         if flux_kontext_path is not None:
+            from diffusers import FluxKontextPipeline
+
             self.flux_kontext = FluxKontextPipeline.from_pretrained(flux_kontext_path, torch_dtype=torch.bfloat16).to("cuda")
 
     def __call__(self, video_path, refer_image_path, output_path, resolution_area=[1280, 720], fps=30, iterations=3, k=7, w_len=1, h_len=1, retarget_flag=False, use_flux=False, replace_flag=False):
