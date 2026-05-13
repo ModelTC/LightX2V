@@ -397,11 +397,11 @@ def _wholebody_to_openpose(keypoints: np.ndarray, scores: np.ndarray) -> Tuple[n
     body_op_score = np.zeros((N, 18), dtype=np.float32)
     for op_idx, coco_idx in enumerate(_BODY_COCO_TO_OPENPOSE):
         if coco_idx == -1:
-            l, r = 5, 6
-            valid = (body_score[:, l] > 0.3) & (body_score[:, r] > 0.3)
-            neck = (body_coco[:, l] + body_coco[:, r]) / 2.0
+            li, ri = 5, 6
+            valid = (body_score[:, li] > 0.3) & (body_score[:, ri] > 0.3)
+            neck = (body_coco[:, li] + body_coco[:, ri]) / 2.0
             body_op[valid, op_idx] = neck[valid]
-            body_op_score[valid, op_idx] = np.minimum(body_score[valid, l], body_score[valid, r])
+            body_op_score[valid, op_idx] = np.minimum(body_score[valid, li], body_score[valid, ri])
         else:
             body_op[:, op_idx] = body_coco[:, coco_idx]
             body_op_score[:, op_idx] = body_score[:, coco_idx]
