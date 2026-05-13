@@ -8,6 +8,7 @@ from loguru import logger
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+from lightx2v.models.runners.hunyuan3d.hunyuan3d_runner import Hunyuan3DRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -91,6 +92,7 @@ def main():
             "lyra2_zoomgs",
             "lyra2_custom_traj",
             "lyra2_gs_recon",
+            "hunyuan3d",
         ],
         default="wan2.1",
     )
@@ -98,7 +100,7 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "ltx2_s2v", "sr", "recon", "lyra2_custom_traj", "lyra2_gs_recon"],
+        choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "ltx2_s2v", "sr", "recon", "lyra2_custom_traj", "lyra2_gs_recon", "i23d"],
         default="t2v",
     )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")

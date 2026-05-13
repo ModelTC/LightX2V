@@ -4,25 +4,24 @@
 # -----------------------------------------------------------------------------
 
 import argparse
-from typing import Tuple, Optional, Sequence
+from typing import Optional, Tuple
 
 import torch
 
 from lightx2v.models.networks.lyra2.camera_utils import (  # type: ignore
-    create_spiral_trajectory,
+    create_back_trajectory,
+    create_dolly_zoom_trajectory,
     create_horizontal_trajectory,
     create_horizontal_with_noise_trajectory,
     create_horizontal_zoom_with_bend_trajectory,
     create_horizontal_zoom_with_noise_and_bend_trajectory,
-    create_back_trajectory,
-    create_dolly_zoom_trajectory,
-    create_spiral_horizontal_trajectory,
     create_orbit_trajectory,
-    create_rotate_then_zoom_trajectory,
     create_rotate_spot_trajectory,
     create_rotate_spot_with_noise_trajectory,
+    create_rotate_then_zoom_trajectory,
+    create_spiral_horizontal_trajectory,
+    create_spiral_trajectory,
 )
-
 
 # Canonical list of supported camera trajectories shared across inference scripts.
 CAMERA_TRAJECTORY_CHOICES: Tuple[str, ...] = (
@@ -68,15 +67,9 @@ def add_camera_traj_args(
     trajectory_default: str = "original",
     strength_default: float = 0.2,
 ) -> None:
-    """Attach shared camera trajectory CLI arguments to an argparse parser.
-
-    """
+    """Attach shared camera trajectory CLI arguments to an argparse parser."""
     if with_video_len:
-        help_text = (
-            video_len_help
-            if video_len_help is not None
-            else "Video length (number of frames) for camera trajectory."
-        )
+        help_text = video_len_help if video_len_help is not None else "Video length (number of frames) for camera trajectory."
         parser.add_argument(
             f"--{video_len_flag}",
             type=int,
@@ -448,6 +441,3 @@ def build_camera_trajectory(
         return new_w2cs, Ks
 
     raise NotImplementedError(f"Unsupported trajectory: {trajectory}")
-
-
-

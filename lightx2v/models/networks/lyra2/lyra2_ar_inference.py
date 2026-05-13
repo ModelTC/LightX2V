@@ -13,33 +13,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from lightx2v.models.video_encoders.lyra2.video import save_img_or_video
-from loguru import logger
-from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
+import gc
 import os
-import re
-import sys
-from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
-from megatron.core import parallel_state
-from einops import rearrange, repeat
 import torch
 import tqdm
-from lightx2v.models.networks.lyra2.sparse3d_cache import Sparse3DCache
-import gc
+from einops import rearrange
+from loguru import logger
+from megatron.core import parallel_state
+
 from lightx2v.models.networks.lyra2.forward_warp_utils_pytorch import (
     reliable_depth_mask_range_batch,
 )
+from lightx2v.models.networks.lyra2.lyra2_utils import to as misc_to
+from lightx2v.models.networks.lyra2.sparse3d_cache import Sparse3DCache
+from lightx2v.models.video_encoders.lyra2.video import save_img_or_video
 
 torch.enable_grad(False)
+
 
 def _get_vae_handles(model):
     vae_iface = model.tokenizer
     vae_wrap = vae_iface.model  # WanVAE wrapper
-    vae_core = vae_wrap.model   # WanVAE_ core
+    vae_core = vae_wrap.model  # WanVAE_ core
     return vae_iface, vae_wrap, vae_core
+
 
 def _prime_encoder_cache_with_history(init_video, vae_wrap, vae_core, model=None, enable_offload=False):
     """Advance encoder cache through the history pixels and return history_latents plus the live cache."""
@@ -71,8 +71,7 @@ def _decode_new_latent_chunk(vae_wrap, vae_core, dec_feat_cache, latent_chunk, l
     if T_new == 1 and latent_offset == 0:
         mu = latent_chunk * vae_wrap.img_std.type_as(latent_chunk) + vae_wrap.img_mean.type_as(latent_chunk)
     else:
-        mu = latent_chunk * vae_wrap.video_std[:, :, :1].type_as(latent_chunk) \
-            + vae_wrap.video_mean[:, :, :1].type_as(latent_chunk)
+        mu = latent_chunk * vae_wrap.video_std[:, :, :1].type_as(latent_chunk) + vae_wrap.video_mean[:, :, :1].type_as(latent_chunk)
     # Channel unscale
     mean_c, inv_std_c = vae_wrap.scale[0], vae_wrap.scale[1]
     if torch.is_tensor(mean_c):
@@ -144,11 +143,13 @@ def _add_tiny_offsets_to_extrinsics_for_pose_alignment(
         # - Based on absolute frame index 'i' for consistency across autoregressive chunks
         extrinsics_modified = extrinsics_np.copy()
         for i, ext in enumerate(extrinsics_modified):
-            offset = np.array([
-                offset_scale * np.sin(2 * np.pi * i * offset_freq_x),  # X: sin with configurable frequency
-                offset_scale * np.cos(2 * np.pi * i * offset_freq_y),  # Y: cos with configurable frequency
-                offset_scale * np.sin(2 * np.pi * i * offset_freq_z),  # Z: sin with configurable frequency
-            ])
+            offset = np.array(
+                [
+                    offset_scale * np.sin(2 * np.pi * i * offset_freq_x),  # X: sin with configurable frequency
+                    offset_scale * np.cos(2 * np.pi * i * offset_freq_y),  # Y: cos with configurable frequency
+                    offset_scale * np.sin(2 * np.pi * i * offset_freq_z),  # Z: sin with configurable frequency
+                ]
+            )
             R = ext[:3, :3]
             # Modify translation: new_t = old_t - R @ offset
             extrinsics_modified[i, :3, 3] = ext[:3, 3] - R @ offset
@@ -265,7 +266,6 @@ def _predict_da3_depth_window(
     }
 
 
-
 def _camera_centers_from_w2c(w2c: torch.Tensor) -> torch.Tensor:
     """Compute camera centers from world-to-camera matrices."""
     R = w2c[:, :3, :3]
@@ -290,7 +290,7 @@ def _intrinsics_vec_to_k33(intrinsics_vec: torch.Tensor) -> torch.Tensor:
 
 def _offload_diffusion_to_cpu(model, enable_offload: bool):
     """Move diffusion model to CPU if offload is enabled."""
-    if enable_offload and hasattr(model, 'net'):
+    if enable_offload and hasattr(model, "net"):
         model.net.cpu()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -298,7 +298,7 @@ def _offload_diffusion_to_cpu(model, enable_offload: bool):
 
 def _restore_diffusion_to_gpu(model, enable_offload: bool):
     """Move diffusion model back to GPU if offload is enabled."""
-    if enable_offload and hasattr(model, 'net'):
+    if enable_offload and hasattr(model, "net"):
         model.net.to(model.tensor_kwargs.get("device", "cuda"))
 
 
@@ -341,9 +341,7 @@ def save_output(to_show, vid_save_path):
     legancy_to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0  # [n, b, c, t, h, w]
 
     video_array = (rearrange(legancy_to_show, "n b c t h w -> t (n h) (b w) c") * 255).to(torch.uint8).cpu().numpy()
-    logger.info(
-        f"video_array.shape: {video_array.shape} value: {video_array.max()}, {video_array.min()}, save to {vid_save_path}"
-    )
+    logger.info(f"video_array.shape: {video_array.shape} value: {video_array.max()}, {video_array.min()}, save to {vid_save_path}")
     base_stem, _ = os.path.splitext(vid_save_path)
     save_img_or_video(
         rearrange(legancy_to_show, "n b c t h w -> c t (n h) (b w)"),
@@ -396,9 +394,7 @@ class Lyra2InferencePipeline:
         init_video = first_frame.repeat(1, 1, self.repeat_pixels, 1, 1)
         self.history_frames = init_video
         _, self.vae_wrap, self.vae_core = _get_vae_handles(model)
-        self.history_latents, self.enc_feat_cache = _prime_encoder_cache_with_history(
-            init_video, self.vae_wrap, self.vae_core, model, args.offload
-        )
+        self.history_latents, self.enc_feat_cache = _prime_encoder_cache_with_history(init_video, self.vae_wrap, self.vae_core, model, args.offload)
         # Align latent dtype/device to model tensor kwargs for downstream layers.
         self.history_latents = misc_to(self.history_latents, **self.model.tensor_kwargs)
         self.vae_core.clear_cache()
@@ -471,9 +467,8 @@ class Lyra2InferencePipeline:
             if self.depth_backend == "da3":
                 if self.local_da3_model is None:
                     from lightx2v.models.input_encoders.hf.lyra2.depth_utils import load_da3_model
-                    da3_device = model.tensor_kwargs.get(
-                        "device", "cuda" if torch.cuda.is_available() else "cpu"
-                    )
+
+                    da3_device = model.tensor_kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu")
                     self.local_da3_model = load_da3_model(
                         da3_model_name=args.da3_model_name,
                         da3_model_path_custom=args.da3_model_path_custom,
@@ -495,10 +490,10 @@ class Lyra2InferencePipeline:
             mv_ids = getattr(args, "multiview_ids", None)
             if mv_ids and multiview_data is not None:
                 # Multiview input: seed cache with specified frames using negative IDs.
-                mv_video = multiview_data["video"]       # [B, C, T, H, W]
-                mv_depth = multiview_data["depth"]       # [B, T, ...] or [B, T, 1, H, W]
-                mv_w2c = multiview_data["camera_w2c"]    # [B, T, 4, 4]
-                mv_K = multiview_data["intrinsics"]      # [B, T, 3, 3]
+                mv_video = multiview_data["video"]  # [B, C, T, H, W]
+                mv_depth = multiview_data["depth"]  # [B, T, ...] or [B, T, 1, H, W]
+                mv_w2c = multiview_data["camera_w2c"]  # [B, T, 4, 4]
+                mv_K = multiview_data["intrinsics"]  # [B, T, 3, 3]
                 for i, src_idx in enumerate(mv_ids):
                     neg_id = -(i + 1)
                     d = mv_depth[:, src_idx].to(torch.float32)
@@ -598,19 +593,9 @@ class Lyra2InferencePipeline:
         snap["warp_video_collect_len"] = len(self.warp_video_collect)
 
         # Predicted-pose state.
-        snap["_predicted_pose_last_w2c"] = (
-            self._predicted_pose_last_w2c.clone() if isinstance(self._predicted_pose_last_w2c, torch.Tensor) else None
-        )
-        snap["_predicted_pose_updated_seed_depth"] = (
-            self._predicted_pose_updated_seed_depth.clone()
-            if isinstance(self._predicted_pose_updated_seed_depth, torch.Tensor)
-            else None
-        )
-        snap["_predicted_pose_updated_seed_mask"] = (
-            self._predicted_pose_updated_seed_mask.clone()
-            if isinstance(self._predicted_pose_updated_seed_mask, torch.Tensor)
-            else None
-        )
+        snap["_predicted_pose_last_w2c"] = self._predicted_pose_last_w2c.clone() if isinstance(self._predicted_pose_last_w2c, torch.Tensor) else None
+        snap["_predicted_pose_updated_seed_depth"] = self._predicted_pose_updated_seed_depth.clone() if isinstance(self._predicted_pose_updated_seed_depth, torch.Tensor) else None
+        snap["_predicted_pose_updated_seed_mask"] = self._predicted_pose_updated_seed_mask.clone() if isinstance(self._predicted_pose_updated_seed_mask, torch.Tensor) else None
         snap["_predicted_pose_is_first_segment"] = self._predicted_pose_is_first_segment
 
         self._snapshot = snap
@@ -652,9 +637,7 @@ class Lyra2InferencePipeline:
                 self.retrieval_cache._w2cs = self.retrieval_cache._w2cs[:old_len]
                 self.retrieval_cache._Ks = self.retrieval_cache._Ks[:old_len]
             kept_rgb_keys = snap["cache_rgb_keys"]
-            self.retrieval_cache._rgbs = {
-                k: v for k, v in self.retrieval_cache._rgbs.items() if k in kept_rgb_keys
-            }
+            self.retrieval_cache._rgbs = {k: v for k, v in self.retrieval_cache._rgbs.items() if k in kept_rgb_keys}
 
         # Warp video collect.
         self.warp_video_collect = self.warp_video_collect[: snap["warp_video_collect_len"]]
@@ -721,7 +704,7 @@ class Lyra2InferencePipeline:
         assert self.buffer_depth_latest is not None, "buffer_depth_latest must be initialized for pose mode."
 
         device = history_full.device
-        video_hist_abs = self.history_frames[:, :, self.start_index : ]
+        video_hist_abs = self.history_frames[:, :, self.start_index :]
         video_all = misc_to(video_hist_abs, **self.model.tensor_kwargs)
         # Build a virtual video_indices timeline: [0 repeated prefix] + [1..end_px_idx-1]
         video_indices_t = torch.tensor(
@@ -748,17 +731,17 @@ class Lyra2InferencePipeline:
         try:
             self.model._collect_return_condition_state = True
             latents_full, cond_latent, _mask, buffer_cond_latents = self.model._prepare_lyra2_inputs(
-            history_full=history_full,
-            gen_cond=gen_cond_dummy,
-            spatial_cache=self.retrieval_cache,
-            video=video_all,
-            buffer_depth_B_1_H_W=buffer_depth,
-            camera_w2c=self.cam_w2c,
-            intrinsics=self.intrinsics,
-            video_indices=video_indices_t,
-            is_training=False,
-            spatial_cache_skip_last_n=int(spatial_cache_skip_last_n),
-            num_retrieval_views=self.num_retrieval_views,
+                history_full=history_full,
+                gen_cond=gen_cond_dummy,
+                spatial_cache=self.retrieval_cache,
+                video=video_all,
+                buffer_depth_B_1_H_W=buffer_depth,
+                camera_w2c=self.cam_w2c,
+                intrinsics=self.intrinsics,
+                video_indices=video_indices_t,
+                is_training=False,
+                spatial_cache_skip_last_n=int(spatial_cache_skip_last_n),
+                num_retrieval_views=self.num_retrieval_views,
             )
         finally:
             self.model._collect_return_condition_state = prev_collect
@@ -770,7 +753,7 @@ class Lyra2InferencePipeline:
                 if int(warp_pixels.shape[1]) > 3:
                     warp_pixels = warp_pixels[:, :3]
             self.warp_video_collect.append(warp_pixels.detach().float().cpu())
-        history_window = latents_full[:, :, : -T_new_lat]
+        history_window = latents_full[:, :, :-T_new_lat]
 
         self._restore_model_to_gpu()
         net = getattr(self.model, "net", None)
@@ -812,7 +795,7 @@ class Lyra2InferencePipeline:
                 fps=self.fps,
                 padding_mask=padding_mask_cast,
             )
-        gen_chunk = gen_chunk[:, :, :self.model.framepack_num_new_latent_frames]
+        gen_chunk = gen_chunk[:, :, : self.model.framepack_num_new_latent_frames]
         new_generated_frames = _decode_new_latent_chunk(
             self.vae_wrap,
             self.vae_core,
@@ -891,10 +874,7 @@ class Lyra2InferencePipeline:
                     add_pose_alignment_offsets=True,
                     include_ar_chunk_last_frames=bool(getattr(self.args, "da3_include_ar_chunk_last_frames", False)),
                     ar_chunk_size_frames=int(self.model.framepack_num_new_video_frames),
-                    return_raw_predicted_pose=(
-                        bool(getattr(self.args, "da3_use_predicted_pose", False))
-                        and (self.ar_idx == 0 or bool(getattr(self.args, "da3_predicted_pose_continuation", False)))
-                    ),
+                    return_raw_predicted_pose=(bool(getattr(self.args, "da3_use_predicted_pose", False)) and (self.ar_idx == 0 or bool(getattr(self.args, "da3_predicted_pose_continuation", False)))),
                 )
             finally:
                 if offload_da3:
@@ -932,7 +912,7 @@ class Lyra2InferencePipeline:
                     hist_local = [i for i, f in enumerate(da3_frames) if f < new_frame_start]
                     new_local = [i for i, f in enumerate(da3_frames) if f >= new_frame_start]
 
-                    is_first_segment = (len(hist_local) == 1 and da3_frames[hist_local[0]] == 0)
+                    is_first_segment = len(hist_local) == 1 and da3_frames[hist_local[0]] == 0
 
                     if is_first_segment:
                         # Case a): history = frame 0 only.
@@ -947,18 +927,11 @@ class Lyra2InferencePipeline:
 
                         # Compute depth/pose scale via trajectory-length ratio.
                         assert len(all_local) >= 2, "Expected at least two frames for trajectory-length scale calculation."
-                        ref_c2w_pos = torch.stack([
-                            torch.linalg.inv(self.cam_w2c[0, da3_frames[i]].to(torch.float32))[:3, 3]
-                            for i in all_local
-                        ])
-                        pred_c2w_pos = torch.stack([
-                            torch.linalg.inv(pred_w2c_all[i])[:3, 3]
-                            for i in all_local
-                        ])
+                        ref_c2w_pos = torch.stack([torch.linalg.inv(self.cam_w2c[0, da3_frames[i]].to(torch.float32))[:3, 3] for i in all_local])
+                        pred_c2w_pos = torch.stack([torch.linalg.inv(pred_w2c_all[i])[:3, 3] for i in all_local])
                         ref_traj_len = (ref_c2w_pos[1:] - ref_c2w_pos[:-1]).norm(dim=-1).sum().item()
                         pred_traj_len = (pred_c2w_pos[1:] - pred_c2w_pos[:-1]).norm(dim=-1).sum().item()
                         depth_scale_factor = ref_traj_len / pred_traj_len if pred_traj_len > 1e-8 else 1.0
-
 
                         # Scale w2c translations so relative distances match pipeline.
                         # (frame 0 has t=0 after normalisation, so it stays exactly at origin.)
@@ -969,23 +942,14 @@ class Lyra2InferencePipeline:
                         aligned_all = aligned_all @ pipeline_w2c_0.unsqueeze(0)
 
                         aligned_w2c_per_local = [aligned_all[i].unsqueeze(0) for i in range(len(da3_frames))]
-                        logger.info(
-                            f"[da3_use_predicted_pose] Case A (first segment): "
-                            f"frame0-normalise + traj-length scale={depth_scale_factor:.6f} "
-                            f"on {len(all_local)} frames"
-                        )
+                        logger.info(f"[da3_use_predicted_pose] Case A (first segment): frame0-normalise + traj-length scale={depth_scale_factor:.6f} on {len(all_local)} frames")
                         for li in range(len(da3_frames)):
                             f_abs_i = da3_frames[li]
                             pipeline_pos = torch.linalg.inv(self.cam_w2c[0, f_abs_i].to(torch.float32))[:3, 3]
                             aligned_pos = torch.linalg.inv(aligned_all[li])[:3, 3]
                             residual = (pipeline_pos - aligned_pos).norm().item()
                             is_hist = "hist" if li in hist_local else "new "
-                            logger.info(
-                                f"  [{is_hist}] frame {f_abs_i}: "
-                                f"pipeline_pos={pipeline_pos.cpu().numpy()}, "
-                                f"aligned_pos={aligned_pos.cpu().numpy()}, "
-                                f"residual={residual:.6f}"
-                            )
+                            logger.info(f"  [{is_hist}] frame {f_abs_i}: pipeline_pos={pipeline_pos.cpu().numpy()}, aligned_pos={aligned_pos.cpu().numpy()}, residual={residual:.6f}")
                     elif bool(getattr(self.args, "da3_predicted_pose_continuation", False)):
                         assert len(hist_local) >= 2, "Expected at least one history frame for continuation segment."
                         # Case b): continuation segment. Traj-length scale,
@@ -996,18 +960,11 @@ class Lyra2InferencePipeline:
                         # Trajectory-length scale on history frames only (already
                         # DA3-aligned in prior chunks, so reliable for scale).
 
-                        ref_c2w_pos = torch.stack([
-                            torch.linalg.inv(self.cam_w2c[0, da3_frames[i]].to(torch.float32))[:3, 3]
-                            for i in hist_local
-                        ])
-                        pred_c2w_pos = torch.stack([
-                            torch.linalg.inv(pred_w2c_all[i])[:3, 3]
-                            for i in hist_local
-                        ])
+                        ref_c2w_pos = torch.stack([torch.linalg.inv(self.cam_w2c[0, da3_frames[i]].to(torch.float32))[:3, 3] for i in hist_local])
+                        pred_c2w_pos = torch.stack([torch.linalg.inv(pred_w2c_all[i])[:3, 3] for i in hist_local])
                         ref_traj_len = (ref_c2w_pos[1:] - ref_c2w_pos[:-1]).norm(dim=-1).sum().item()
                         pred_traj_len = (pred_c2w_pos[1:] - pred_c2w_pos[:-1]).norm(dim=-1).sum().item()
                         depth_scale_factor = ref_traj_len / pred_traj_len if pred_traj_len > 1e-8 else 1.0
-
 
                         # Scale predicted w2c translations to match pipeline magnitude.
                         scaled_pred = pred_w2c_all.clone()
@@ -1033,12 +990,7 @@ class Lyra2InferencePipeline:
                             aligned_pos = torch.linalg.inv(aligned_all[li])[:3, 3]
                             residual = (pipeline_pos - aligned_pos).norm().item()
                             is_hist = "hist" if li in hist_local else "new "
-                            logger.info(
-                                f"  [{is_hist}] frame {f_abs_i}: "
-                                f"pipeline_pos={pipeline_pos.cpu().numpy()}, "
-                                f"aligned_pos={aligned_pos.cpu().numpy()}, "
-                                f"residual={residual:.6f}"
-                            )
+                            logger.info(f"  [{is_hist}] frame {f_abs_i}: pipeline_pos={pipeline_pos.cpu().numpy()}, aligned_pos={aligned_pos.cpu().numpy()}, residual={residual:.6f}")
 
                     # Update self.cam_w2c for new frames with aligned predicted poses.
                     if aligned_w2c_per_local is not None:
@@ -1047,14 +999,9 @@ class Lyra2InferencePipeline:
                             f_abs_li = da3_frames[li]
                             self.cam_w2c[:, f_abs_li] = aligned_w2c_per_local[li].to(self.cam_w2c.dtype)
                             updated_abs_ids.append(f_abs_li)
-                        logger.info(
-                            f"[da3_use_predicted_pose] Updated cam_w2c for frames: {updated_abs_ids}"
-                        )
+                        logger.info(f"[da3_use_predicted_pose] Updated cam_w2c for frames: {updated_abs_ids}")
                 else:
-                    logger.warning(
-                        "[da3_use_predicted_pose] DA3 prediction has no extrinsics; "
-                        "falling back to pipeline poses."
-                    )
+                    logger.warning("[da3_use_predicted_pose] DA3 prediction has no extrinsics; falling back to pipeline poses.")
 
             existing_ids = set(getattr(self.retrieval_cache, "_latent_indices", []))
             stride = max(int(self.model.config.spatial_memory_stride), 1)
@@ -1181,7 +1128,7 @@ class Lyra2InferencePipeline:
         raise ValueError(f"Only depth_backend='da3' is supported in this script (VIPE backend removed).")
 
     def build_outputs(self, da3_gs_export_stem, log_prefix):
-        video = self.history_frames[:, :, self.start_index:]
+        video = self.history_frames[:, :, self.start_index :]
         warp_video = None
         if self.use_pose and len(self.warp_video_collect) > 0:
             warp_video = torch.cat(self.warp_video_collect, dim=2)
@@ -1204,6 +1151,7 @@ class Lyra2InferencePipeline:
             "use_pose": self.use_pose,
             "use_plucker": self.use_plucker,
         }
+
 
 def run_lyra2_sample(
     model,
@@ -1259,8 +1207,7 @@ def run_lyra2_sample(
 
     num_frames = int(args.num_frames)
     assert (num_frames - 1) % (pipeline.tokens_per_step * pipeline.frames_per_latent) == 0, (
-        f"N-1 must be divisible by tokens_per_step*frames_per_latent, but got {num_frames-1} "
-        f"and {pipeline.tokens_per_step * pipeline.frames_per_latent}"
+        f"N-1 must be divisible by tokens_per_step*frames_per_latent, but got {num_frames - 1} and {pipeline.tokens_per_step * pipeline.frames_per_latent}"
     )
 
     tokens_needed = (num_frames - 1 + pipeline.frames_per_latent - 1) // pipeline.frames_per_latent
@@ -1295,9 +1242,7 @@ def run_lyra2_sample(
                         keys_b = t5_chunk_keys[b]
                         Kb = int(keys_b.numel())
                         val = int(first_abs_idx_B[b].item())
-                        pos = torch.searchsorted(
-                            keys_b, torch.tensor([val], device=keys_b.device, dtype=keys_b.dtype), right=True
-                        ).item()
+                        pos = torch.searchsorted(keys_b, torch.tensor([val], device=keys_b.device, dtype=keys_b.dtype), right=True).item()
                         sel_idx = max(0, min(int(pos) - 1, Kb - 1))
                         emb_b = t5_chunk_embeddings[b, sel_idx]
                         msk_b = t5_chunk_mask[b, sel_idx]

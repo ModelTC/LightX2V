@@ -8,10 +8,12 @@ import attrs
 @attrs.define(slots=False)
 class EMAModelCallback:
     """Stub for training-only EMA model callback."""
+
     pass
 
 
 @attrs.define(slots=False)
 class ProgressBarCallback:
     """Stub for training-only progress bar callback."""
+
     pass

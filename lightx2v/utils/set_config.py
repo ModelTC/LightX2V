@@ -122,6 +122,10 @@ def auto_calc_config(config):
         # Lyra-2 models manage their own checkpoint loading;
         # there is no transformer config.json to merge here.
         pass
+    elif config["model_cls"] == "hunyuan3d":
+        # Hunyuan3D manages its own checkpoint loading via from_pretrained;
+        # there is no transformer config.json to merge here.
+        pass
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:

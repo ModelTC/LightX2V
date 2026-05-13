@@ -365,6 +365,20 @@ class Lyra2GSReconInputInfo:
 
 
 @dataclass
+class I23DInputInfo:
+    """Input info for image-to-3D generation (e.g. Hunyuan3D).
+
+    image_path: input image path
+    save_result_path: output directory where mesh files will be saved
+    """
+
+    seed: int = field(default_factory=int)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+
+
+@dataclass
 class Lyra2CustomTrajInputInfo:
     """Input info for Lyra-2 custom camera trajectory (i2v) inference.
 
@@ -383,6 +397,7 @@ class Lyra2CustomTrajInputInfo:
 
 
 task_dict = {
+    "i23d": I23DInputInfo,
     "t2v": T2VInputInfo,
     "i2v": I2VInputInfo,
     "sr": SRInputInfo,

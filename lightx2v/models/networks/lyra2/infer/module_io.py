@@ -5,6 +5,7 @@ inference stages of Lyra2WanDiT.
 Lyra2 source reference:
   lyra_2/_src/networks/wan2pt1_lyra2.py  Lyra2WanModel.forward  (L806-1018)
 """
+
 from dataclasses import dataclass
 from typing import Optional
 

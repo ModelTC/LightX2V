@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Type, TypeVar, Union
+from typing import Any, Dict, Optional, TypeVar, Union
 
 import attrs
 import torch
@@ -84,10 +84,7 @@ def make_freezable(cls: T) -> T:
     """
 
     if not hasattr(cls, "__dict__"):
-        raise TypeError(
-            "make_freezable cannot be used with classes that do not define __dict__. Make sure that the wrapped "
-            "class was defined with `@attrs.define(slots=False)`"
-        )
+        raise TypeError("make_freezable cannot be used with classes that do not define __dict__. Make sure that the wrapped class was defined with `@attrs.define(slots=False)`")
 
     original_setattr = cls.__setattr__
 
@@ -134,9 +131,7 @@ def _pretty_print_attrs_instance(obj: object, indent: int = 0, use_color: bool =
             lines.append(_pretty_print_attrs_instance(value, indent + 1, use_color))
         else:
             if use_color:
-                lines.append(
-                    "   " * indent + Color.cyan("* ") + Color.green(attribute.name) + ": " + Color.yellow(value)
-                )
+                lines.append("   " * indent + Color.cyan("* ") + Color.green(attribute.name) + ": " + Color.yellow(value))
             else:
                 lines.append("   " * indent + "* " + attribute.name + ": " + str(value))
     return "\n".join(lines)
@@ -185,6 +180,7 @@ class JobConfig:
     group: str = ""
     # Run/job name.
     name: str = ""
+
     @property
     def path(self) -> str:
         return f"{self.project}/{self.group}/{self.name}"

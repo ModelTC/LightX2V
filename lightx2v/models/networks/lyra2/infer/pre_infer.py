@@ -18,21 +18,18 @@ _pad_for_linear_patch L499-513, and VideoRopePosition3DEmb L94-190):
   #   if frame_cond: context = cat([img_emb(frame_cond), context], dim=1)
 """
 
-import math
 from typing import List, Optional, Tuple
 
 import torch
-import torch.amp as amp
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
 from lightx2v.models.networks.lyra2.infer.module_io import Lyra2PreInferOutput
 
-
 # ---------------------------------------------------------------------------
 # Pure-math helpers (no learnable params – replicate Lyra2 source)
 # ---------------------------------------------------------------------------
+
 
 def sinusoidal_embedding_1d(dim: int, position: torch.Tensor) -> torch.Tensor:
     """
@@ -79,13 +76,13 @@ def _generate_rope_freqs(
     dim_temporal_range = torch.arange(0, dim_t, 2, device=device)[: (dim_t // 2)].float() / dim_t
 
     seq = torch.arange(max(H, W, T), device=device).float()
-    h_spatial_freqs = 1.0 / (h_theta ** dim_spatial_range)
-    w_spatial_freqs = 1.0 / (w_theta ** dim_spatial_range)
-    temporal_freqs = 1.0 / (t_theta ** dim_temporal_range)
+    h_spatial_freqs = 1.0 / (h_theta**dim_spatial_range)
+    w_spatial_freqs = 1.0 / (w_theta**dim_spatial_range)
+    temporal_freqs = 1.0 / (t_theta**dim_temporal_range)
 
     freqs_h = torch.outer(seq[:H], h_spatial_freqs)  # [H, dim_h/2]
     freqs_w = torch.outer(seq[:W], w_spatial_freqs)  # [W, dim_w/2]
-    freqs_t = torch.outer(seq[:T], temporal_freqs)   # [T, dim_t/2]
+    freqs_t = torch.outer(seq[:T], temporal_freqs)  # [T, dim_t/2]
 
     freqs_T_H_W_D = torch.cat(
         [
@@ -131,10 +128,15 @@ def _patchify_linear(
     x = rearrange(
         x,
         "b c (f pt) (hh ph) (ww pw) -> (b f hh ww) (c pt ph pw)",
-        f=f, pt=pt, hh=hh, ph=ph, ww=ww, pw=pw,
+        f=f,
+        pt=pt,
+        hh=hh,
+        ph=ph,
+        ww=ww,
+        pw=pw,
     )
-    x = weight_module.apply(x)           # [(b*f*h*w), dim]
-    x = x.reshape(b, f * hh * ww, -1)   # [B, f*h*w, dim]
+    x = weight_module.apply(x)  # [(b*f*h*w), dim]
+    x = x.reshape(b, f * hh * ww, -1)  # [B, f*h*w, dim]
     return x, (f, hh, ww)
 
 
@@ -153,7 +155,12 @@ def _pixelshuffle_tokens(
     x = rearrange(
         x,
         "b c (f pt) (hh ph) (ww pw) -> b (f hh ww) (c pt ph pw)",
-        f=f, pt=pt, hh=hh, ph=ph, ww=ww, pw=pw,
+        f=f,
+        pt=pt,
+        hh=hh,
+        ph=ph,
+        ww=ww,
+        pw=pw,
     )
     return x, (f, hh, ww)
 
@@ -161,6 +168,7 @@ def _pixelshuffle_tokens(
 # ---------------------------------------------------------------------------
 # Pre-infer class
 # ---------------------------------------------------------------------------
+
 
 class Lyra2PreInfer:
     """
@@ -205,13 +213,13 @@ class Lyra2PreInfer:
     # ------------------------------------------------------------------
     def _patchify_lyra2(
         self,
-        weights,           # Lyra2PreWeights
-        x: torch.Tensor,   # [B, C, T, H, W]  (camera channels already stripped)
+        weights,  # Lyra2PreWeights
+        x: torch.Tensor,  # [B, C, T, H, W]  (camera channels already stripped)
         framepack_indices: torch.Tensor,
         framepack_splits: List[int],
         framepack_kernel_ids: List[int],
         framepack_kernel_types: Optional[List[str]],
-        camera: Optional[torch.Tensor],          # [B, (c*h2*w2), T, H, W]
+        camera: Optional[torch.Tensor],  # [B, (c*h2*w2), T, H, W]
         buffer_B_C_T_H_W: Optional[torch.Tensor],
     ):
         """
@@ -236,12 +244,16 @@ class Lyra2PreInfer:
 
         # Precompute base RoPE frequencies once
         freqs_base = _generate_rope_freqs(
-            f_base, h_base, w_base, self.head_dim,
-            self._h_ntk, self._w_ntk, self._t_ntk, x.device,
+            f_base,
+            h_base,
+            w_base,
+            self.head_dim,
+            self._h_ntk,
+            self._w_ntk,
+            self._t_ntk,
+            x.device,
         )  # [f*h*w, 1, 1, head_dim]
-        freqs_base_5d = rearrange(
-            freqs_base, "(f h w) 1 1 d -> 1 d f h w", f=f_base, h=h_base, w=w_base
-        )  # [1, head_dim, f_base, h_base, w_base]
+        freqs_base_5d = rearrange(freqs_base, "(f h w) 1 1 d -> 1 d f h w", f=f_base, h=h_base, w=w_base)  # [1, head_dim, f_base, h_base, w_base]
 
         token_chunks: List[torch.Tensor] = []
         freq_chunks: List[torch.Tensor] = []
@@ -292,10 +304,7 @@ class Lyra2PreInfer:
                         raise ValueError("use_correspondence requires buffer_pixelshuffle=True")
                     buf_tokens, _ = _pixelshuffle_tokens(buf, self.patch_size)
                     buf_chunks.append(buf_tokens)
-                    buf_validity_chunks.append(
-                        torch.ones(buf_tokens.shape[0], buf_tokens.shape[1], 1,
-                                   device=buf_tokens.device, dtype=buf_tokens.dtype)
-                    )
+                    buf_validity_chunks.append(torch.ones(buf_tokens.shape[0], buf_tokens.shape[1], 1, device=buf_tokens.device, dtype=buf_tokens.dtype))
 
                 # RoPE freqs – slice base grid along T
                 t_idx = inds[i].to(device=freqs_base_5d.device, dtype=torch.long)
@@ -343,22 +352,30 @@ class Lyra2PreInfer:
                         else:
                             buf_tokens = torch.full(
                                 (x_tokens.shape[0], x_tokens.shape[1], int(buffer_token_dim)),
-                                -1.0, device=x_tokens.device, dtype=x_tokens.dtype,
+                                -1.0,
+                                device=x_tokens.device,
+                                dtype=x_tokens.dtype,
                             )
                             buf_is_real = False
                     else:
                         fill_val = -1.0 if effective_ktype != "s" else 0.0
                         buf_tokens = torch.full(
                             (x_tokens.shape[0], x_tokens.shape[1], int(buffer_token_dim)),
-                            fill_val, device=x_tokens.device, dtype=x_tokens.dtype,
+                            fill_val,
+                            device=x_tokens.device,
+                            dtype=x_tokens.dtype,
                         )
                         buf_is_real = False
                     buf_chunks.append(buf_tokens)
                     validity_val = 1.0 if buf_is_real else 0.0
-                    buf_validity_chunks.append(torch.full(
-                        (buf_tokens.shape[0], buf_tokens.shape[1], 1),
-                        validity_val, device=buf_tokens.device, dtype=buf_tokens.dtype,
-                    ))
+                    buf_validity_chunks.append(
+                        torch.full(
+                            (buf_tokens.shape[0], buf_tokens.shape[1], 1),
+                            validity_val,
+                            device=buf_tokens.device,
+                            dtype=buf_tokens.dtype,
+                        )
+                    )
 
                 # RoPE freqs – avg-pool base freqs to match enlarged patch grid
                 t_idx = inds[i].to(device=freqs_base_5d.device, dtype=torch.long)
@@ -384,8 +401,7 @@ class Lyra2PreInfer:
                     cam_sel = camera[:, :, cam_t_idx, :, :]
                     if pad_h or pad_w:
                         cam_sel = F.pad(cam_sel, (0, pad_w, 0, pad_h, 0, 0), mode="replicate")
-                    cam_pooled = F.avg_pool3d(cam_sel.float(), kernel_size=(pool_k[0], pool_k[1], pool_k[2]),
-                                              stride=(pool_k[0], pool_k[1], pool_k[2]))
+                    cam_pooled = F.avg_pool3d(cam_sel.float(), kernel_size=(pool_k[0], pool_k[1], pool_k[2]), stride=(pool_k[0], pool_k[1], pool_k[2]))
                     cam_chunks.append(rearrange(cam_pooled, "b d f h w -> b (f h w) d").type_as(x_tokens))
 
         x_tokens = torch.cat(token_chunks, dim=1)
@@ -406,10 +422,10 @@ class Lyra2PreInfer:
     # ------------------------------------------------------------------
     def infer(
         self,
-        weights,                          # Lyra2PreWeights
+        weights,  # Lyra2PreWeights
         x_B_C_T_H_W: torch.Tensor,
-        t_B: torch.Tensor,                # [B]
-        crossattn_emb: torch.Tensor,      # [B, L, text_dim] or [B, 1, L, text_dim]
+        t_B: torch.Tensor,  # [B]
+        crossattn_emb: torch.Tensor,  # [B, L, text_dim] or [B, 1, L, text_dim]
         framepack_indices: torch.Tensor,
         framepack_splits: List[int],
         framepack_kernel_ids: List[int],
@@ -467,12 +483,12 @@ class Lyra2PreInfer:
         model_dtype = x_tokens.dtype  # bfloat16 (matches weight dtype after to_cuda)
         sin_emb = sinusoidal_embedding_1d(self.freq_dim, t_B).to(dtype=model_dtype, device=x_tokens.device)
         # time_embedding: Linear → SiLU → Linear
-        e_B_D = weights.time_emb_0.apply(sin_emb)   # [B, dim]
+        e_B_D = weights.time_emb_0.apply(sin_emb)  # [B, dim]
         e_B_D = F.silu(e_B_D)
-        e_B_D = weights.time_emb_2.apply(e_B_D)     # [B, dim]
+        e_B_D = weights.time_emb_2.apply(e_B_D)  # [B, dim]
         # time_projection: SiLU → Linear
-        e0 = weights.time_proj_1.apply(F.silu(e_B_D))   # [B, dim*6]
-        e0_B_6_D = e0.unflatten(1, (6, self.dim))       # [B, 6, dim]
+        e0 = weights.time_proj_1.apply(F.silu(e_B_D))  # [B, dim*6]
+        e0_B_6_D = e0.unflatten(1, (6, self.dim))  # [B, 6, dim]
 
         # ------ 4. Text embedding (L968-971) ------
         # Original:
@@ -483,11 +499,11 @@ class Lyra2PreInfer:
         crossattn_emb = crossattn_emb.to(dtype=model_dtype, device=x_tokens.device)
 
         B, L_ctx, _ = crossattn_emb.shape
-        ctx = crossattn_emb.reshape(B * L_ctx, -1)      # [B*L, text_dim]
+        ctx = crossattn_emb.reshape(B * L_ctx, -1)  # [B*L, text_dim]
         # text_embedding: Linear → GELU → Linear
-        ctx = weights.text_emb_0.apply(ctx)              # [B*L, dim]
+        ctx = weights.text_emb_0.apply(ctx)  # [B*L, dim]
         ctx = F.gelu(ctx, approximate="tanh")
-        ctx = weights.text_emb_2.apply(ctx)              # [B*L, dim]
+        ctx = weights.text_emb_2.apply(ctx)  # [B*L, dim]
         context_B_L_D = ctx.reshape(B, L_ctx, self.dim)  # [B, L, dim]
 
         # ------ 5. Image conditioning (MLPProj) (L969-971) ------

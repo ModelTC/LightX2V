@@ -24,10 +24,10 @@ Extracted from lyra_2/_src/inference/lyra2_zoomgs_inference.py:
 from __future__ import annotations
 
 import torch
-
 from loguru import logger
+
 from lightx2v.models.networks.lyra2.camera_traj_utils import build_camera_trajectory
-from lightx2v.models.networks.lyra2.lyra2_ar_inference import safe_to, run_lyra2_sample
+from lightx2v.models.networks.lyra2.lyra2_ar_inference import run_lyra2_sample, safe_to
 
 
 def _camera_centers_from_w2c(w2c: torch.Tensor) -> torch.Tensor:
@@ -117,10 +117,7 @@ def _generate_one_direction(
         new_t = -(R @ cam_centers_shifted.unsqueeze(-1)).squeeze(-1)
         w2cs_T_44 = w2cs_T_44.clone()
         w2cs_T_44[:, :3, 3] = new_t
-        logger.info(
-            f"{log_prefix} [upward_tilt] Added upward ratio={zoom_out_upward_ratio:.3f}, "
-            f"max_upward={upward_amount.max().item():.4f}"
-        )
+        logger.info(f"{log_prefix} [upward_tilt] Added upward ratio={zoom_out_upward_ratio:.3f}, max_upward={upward_amount.max().item():.4f}")
 
     if ground_normal_cam is not None:
         w2cs_T_44 = _correct_trajectory_ground_parallel(w2cs_T_44, ground_normal_cam)

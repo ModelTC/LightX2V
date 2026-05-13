@@ -1,0 +1,13 @@
+{
+    "hunyuan3d_repo": "/data/nvme1/wushuo/lyra_proj/Hunyuan3D-2.1",
+    "paint_model_path": "/data/nvme1/wushuo/hf_models/Hunyuan3D-2.1/hunyuan3d-paintpbr-v2-1",
+    "paint_cfg_path": "hy3dpaint/cfgs/hunyuan-paint-pbr.yaml",
+    "custom_pipeline": "hy3dpaint/hunyuanpaintpbr",
+    "realesrgan_ckpt_path": "hy3dpaint/ckpt/RealESRGAN_x4plus.pth",
+    "num_inference_steps": 50,
+    "guidance_scale": 5.0,
+    "max_num_view": 6,
+    "resolution": 512,
+    "run_paint": true,
+    "offload": false
+}

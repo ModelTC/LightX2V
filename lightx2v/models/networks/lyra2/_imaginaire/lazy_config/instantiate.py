@@ -39,9 +39,7 @@ def dump_dataclass(obj: Any):
     Returns:
         dict
     """
-    assert dataclasses.is_dataclass(obj) and not isinstance(obj, type), (
-        "dump_dataclass() requires an instance of a dataclass."
-    )
+    assert dataclasses.is_dataclass(obj) and not isinstance(obj, type), "dump_dataclass() requires an instance of a dataclass."
     ret = {"_target_": _convert_target_to_string(type(obj))}
     for f in dataclasses.fields(obj):
         v = getattr(obj, f.name)

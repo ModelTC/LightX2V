@@ -22,13 +22,12 @@ from typing import Tuple
 
 import cv2
 import torch
-
 from loguru import logger
-
 
 # ---------------------------------------------------------------------------
 # MoGe
 # ---------------------------------------------------------------------------
+
 
 def load_moge_model(device: torch.device):
     # Disable xformers for MoGe's DINOv2 backbone so it doesn't dispatch to
@@ -93,6 +92,7 @@ def moge_infer_depth_intrinsics(
 # Depth Anything 3
 # ---------------------------------------------------------------------------
 
+
 def _import_da3_api():
     """Lazy-import DepthAnything3 from the vendored depth_anything_3 submodule."""
     da3_src_root = os.path.join(
@@ -108,11 +108,7 @@ def _import_da3_api():
     try:
         from depth_anything_3.api import DepthAnything3  # type: ignore
     except Exception as e:
-        raise ImportError(
-            "Failed to import DepthAnything3 from vendored depth_anything_3. "
-            "Make sure the depth_anything_3 submodule is present and its "
-            "dependencies are available."
-        ) from e
+        raise ImportError("Failed to import DepthAnything3 from vendored depth_anything_3. Make sure the depth_anything_3 submodule is present and its dependencies are available.") from e
     return DepthAnything3
 
 
@@ -140,10 +136,7 @@ def _resolve_da3_local_model_name(model_name: str) -> str:
     for candidate in candidates:
         if candidate in MODEL_REGISTRY:
             return candidate
-    raise KeyError(
-        "Unable to map DA3 model name to a local config: "
-        f"{model_name}. Available local configs: {', '.join(MODEL_REGISTRY.keys())}"
-    )
+    raise KeyError(f"Unable to map DA3 model name to a local config: {model_name}. Available local configs: {', '.join(MODEL_REGISTRY.keys())}")
 
 
 def load_da3_from_custom_checkpoint(
@@ -155,10 +148,7 @@ def load_da3_from_custom_checkpoint(
     """Load DepthAnything3 from a custom finetuned checkpoint."""
     DepthAnything3 = _import_da3_api()
     local_model_name = _resolve_da3_local_model_name(pretrained_path)
-    logger.info(
-        f"Initializing DA3 architecture from local config: {local_model_name} "
-        f"(requested={pretrained_path})"
-    )
+    logger.info(f"Initializing DA3 architecture from local config: {local_model_name} (requested={pretrained_path})")
     model = DepthAnything3(model_name=local_model_name)
 
     logger.info(f"Loading custom checkpoint from {ckpt_path}")
@@ -173,14 +163,11 @@ def load_da3_from_custom_checkpoint(
 
     # Strip "model." prefix
     prefix = "model."
-    converted = {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    converted = {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
     missing, unexpected = model.model.load_state_dict(converted, strict=strict)
     if missing and not strict:
-        logger.info(
-            f"Custom checkpoint is missing {len(missing)} tensors; "
-            f"falling back to pretrained base weights from {pretrained_path}."
-        )
+        logger.info(f"Custom checkpoint is missing {len(missing)} tensors; falling back to pretrained base weights from {pretrained_path}.")
         model = DepthAnything3.from_pretrained(pretrained_path)
         missing, unexpected = model.model.load_state_dict(converted, strict=strict)
     if missing:
