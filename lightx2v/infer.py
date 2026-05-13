@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+
 # from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
@@ -197,7 +198,12 @@ def main():
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--aspect_ratio", type=str, default="")
-    parser.add_argument("--video_path", type=str, default=None, help="input video path (for sr / v2v / v2av task). For v2av this is the pre-processed control/reference video (pose / canny / depth / motion-track for motion-transfer, or the degraded source video for ICEdit).")
+    parser.add_argument(
+        "--video_path",
+        type=str,
+        default=None,
+        help="input video path (for sr / v2v / v2av task). For v2av this is the pre-processed control/reference video (pose / canny / depth / motion-track for motion-transfer, or the degraded source video for ICEdit).",
+    )
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
     parser.add_argument(
         "--num_iterations",
@@ -205,8 +211,11 @@ def main():
         default=None,
         help="Override the number of Matrix-Game-3 generation segments. Final video length follows 57 + 40 * (num_iterations - 1).",
     )
-    parser.add_argument("--reference_video_strength", type=float, default=1.0, help="(v2av) IC-LoRA reference-video conditioning strength in [0.0, 1.0]. 1.0 = full adherence to the control signal, 0.0 = ignore it.")
+    parser.add_argument(
+        "--reference_video_strength", type=float, default=1.0, help="(v2av) IC-LoRA reference-video conditioning strength in [0.0, 1.0]. 1.0 = full adherence to the control signal, 0.0 = ignore it."
+    )
     parser.add_argument("--reference_video_frame_cap", type=int, default=None, help="(v2av) Maximum number of frames to read from the reference/control video. Defaults to the full clip.")
+    parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
     # validate_task_arguments(args)

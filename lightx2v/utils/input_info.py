@@ -282,6 +282,10 @@ class V2AVInputInfo:
     video_path: str = field(default_factory=str)
     reference_video_strength: float = field(default_factory=lambda: 1.0)
     reference_video_frame_cap: Optional[int] = None
+    # Optional: mux audio from this file after save (e.g. original driving video).
+    # ``video_path`` is often a silent pose/canny/depth control clip; DefaultRunner's
+    # v2av mux path is not used because LTX2Runner overrides ``process_images_after_vae_decoder``.
+    mux_audio_video_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related

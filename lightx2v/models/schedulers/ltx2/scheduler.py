@@ -669,36 +669,30 @@ class LTX2Scheduler(BaseScheduler):
         noise_scale: float,
     ) -> None:
         """
-        Append IC-LoRA reference video latents as extra tokens after the main grid.
-
-        ``enc`` is the VAE-encoded reference video [C, F_ref, H_ref, W_ref]; F_ref / H_ref / W_ref
-        already live in latent space (i.e. the VAE temporal/spatial stride has been applied to the
-        pixel-domain reference). Tokens are concatenated with frozen denoise mask (``1 - strength``)
-        and positions inflated by ``ref_downscale_factor`` so the reference grid and the main grid
-        share the same pixel coordinate frame.
+        IC-LoRA reference video conditioning.
         """
         if enc.dim() != 4:
-            raise ValueError(f"reference video latent must be [C,F,H,W], got shape {tuple(enc.shape)}")
+            raise ValueError(f"reference latent must be [C,F,H,W], got shape {tuple(enc.shape)}")
+        if ref_downscale_factor <= 0:
+            raise ValueError(f"ref_downscale_factor must be > 0, got {ref_downscale_factor}")
 
-        _, f_ref, h_ref, w_ref = enc.shape
-        st = self.video_latent_state
+        enc = enc.to(dtype=dtype, device=AI_DEVICE)
+        c, f, h, w = enc.shape
 
         patch_tokens = self.video_patchifier.patchify(enc)
         tk = patch_tokens.shape[0]
 
-        latent_coords = self.video_patchifier.get_patch_grid_bounds(f_ref, h_ref, w_ref, AI_DEVICE)
-        sf = self.video_scale_factors
-        ref_scale = (
-            sf[0],
-            sf[1] * ref_downscale_factor,
-            sf[2] * ref_downscale_factor,
-        )
-        pos = get_pixel_coords(latent_coords, ref_scale, causal_fix=True)
+        latent_coords = self.video_patchifier.get_patch_grid_bounds(f, h, w, AI_DEVICE)
+        pos = get_pixel_coords(latent_coords, self.video_scale_factors, causal_fix=True)
         pos = pos.float()
+        if abs(ref_downscale_factor - 1.0) > 1e-6:
+            pos[1, ...] = pos[1, ...] / ref_downscale_factor
+            pos[2, ...] = pos[2, ...] / ref_downscale_factor
         pos[0, ...] = pos[0, ...] / float(self.fps)
         pos = pos.to(dtype)
 
-        mask = torch.full((tk, 1), 1.0 - float(strength), device=AI_DEVICE, dtype=torch.float32)
+        strength = float(max(0.0, min(1.0, strength)))
+        mask = torch.full((tk, 1), 1.0 - strength, device=AI_DEVICE, dtype=torch.float32)
         clean = patch_tokens.clone()
 
         noise = torch.randn(
@@ -710,6 +704,7 @@ class LTX2Scheduler(BaseScheduler):
         scaled_m = mask * noise_scale
         noised = (noise * scaled_m + clean * (1 - scaled_m)).to(patch_tokens.dtype)
 
+        st = self.video_latent_state
         st.latent = torch.cat([st.latent, noised], dim=0)
         st.clean_latent = torch.cat([st.clean_latent, clean], dim=0)
         st.denoise_mask = torch.cat([st.denoise_mask, mask], dim=0)
