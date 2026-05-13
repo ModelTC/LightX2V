@@ -45,23 +45,43 @@ class LoraTrainer(BaseTrainer):
 
     def setup(self):
         self.get_configs()
+        self.setup_lora()
+
+        self.optimizer = self.build_optimizer(self.model.trainable_parameters())
+        self.lr_scheduler = self.build_lr_scheduler(self.optimizer)
+
+    def setup_lora(self):
         self.model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
         self.model.set_lora_trainable()
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
 
-        self.optimizer = torch.optim.AdamW(
-            self.model.trainable_parameters(),
-            lr=self.optimizer_learning_rate,
-            betas=(self.optimizer_adam_beta1, self.optimizer_adam_beta2),
-            weight_decay=self.optimizer_weight_decay,
-            eps=self.optimizer_adam_epsilon,
+    def build_optimizer(
+        self,
+        parameters,
+        learning_rate=None,
+        adam_beta1=None,
+        adam_beta2=None,
+        weight_decay=None,
+        adam_epsilon=None,
+    ):
+        return torch.optim.AdamW(
+            parameters,
+            lr=self.optimizer_learning_rate if learning_rate is None else learning_rate,
+            betas=(
+                self.optimizer_adam_beta1 if adam_beta1 is None else adam_beta1,
+                self.optimizer_adam_beta2 if adam_beta2 is None else adam_beta2,
+            ),
+            weight_decay=self.optimizer_weight_decay if weight_decay is None else weight_decay,
+            eps=self.optimizer_adam_epsilon if adam_epsilon is None else adam_epsilon,
         )
-        self.lr_scheduler = get_scheduler(
+
+    def build_lr_scheduler(self, optimizer, num_warmup_steps=None, num_training_steps=None):
+        return get_scheduler(
             self.lr_scheduler_name,
-            optimizer=self.optimizer,
-            num_warmup_steps=self.lr_warmup_iters,
-            num_training_steps=self.max_train_iters,
+            optimizer=optimizer,
+            num_warmup_steps=self.lr_warmup_iters if num_warmup_steps is None else num_warmup_steps,
+            num_training_steps=self.max_train_iters if num_training_steps is None else num_training_steps,
         )
 
     def compute_loss_on_sample(self, sample):

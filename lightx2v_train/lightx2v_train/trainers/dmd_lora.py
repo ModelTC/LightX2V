@@ -2,41 +2,20 @@ import os
 
 import torch
 import torch.nn.functional as F
-from diffusers.optimization import get_scheduler
-from diffusers.utils import convert_state_dict_to_diffusers
-from peft import LoraConfig
-from peft.utils import get_peft_model_state_dict
 from tqdm.auto import tqdm
 
-from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
-from lightx2v_train.utils.utils import get_running_dtype
 
-from .base import BaseTrainer
+from .lora import LoraTrainer
 
 
 @TRAINER_REGISTER("dmd_lora")
-class DmdLoraTrainer(BaseTrainer):
+class DmdLoraTrainer(LoraTrainer):
     def get_configs(self):
-        model_config = self.config["model"]
-        self.running_dtype = get_running_dtype(model_config["running_dtype"])
+        super().get_configs()
 
         training_config = self.config["training"]
-        lora_config = training_config.get("lora", {})
-        self.lora_rank = lora_config.get("rank", 16)
-        self.lora_alpha = lora_config.get("alpha", self.lora_rank)
-        self.lora_target_modules = lora_config.get("target_modules")
-
-        self.gradient_checkpointing = training_config.get("gradient_checkpointing", True)
-
-        optimizer_config = training_config.get("optimizer", {})
-        self.optimizer_learning_rate = optimizer_config.get("learning_rate", 1e-4)
-        self.optimizer_adam_beta1 = optimizer_config.get("adam_beta1", 0.9)
-        self.optimizer_adam_beta2 = optimizer_config.get("adam_beta2", 0.999)
-        self.optimizer_weight_decay = optimizer_config.get("weight_decay", 0.01)
-        self.optimizer_adam_epsilon = optimizer_config.get("adam_epsilon", 1e-8)
-
         fake_config = training_config.get("fake", {})
         fake_optimizer_config = fake_config.get("optimizer", {})
         self.fake_optimizer_learning_rate = fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
@@ -44,16 +23,6 @@ class DmdLoraTrainer(BaseTrainer):
         self.fake_optimizer_adam_beta2 = fake_optimizer_config.get("adam_beta2", self.optimizer_adam_beta2)
         self.fake_optimizer_weight_decay = fake_optimizer_config.get("weight_decay", self.optimizer_weight_decay)
         self.fake_optimizer_adam_epsilon = fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
-
-        self.lr_scheduler_name = training_config.get("lr_scheduler", "constant")
-        self.lr_warmup_iters = training_config.get("lr_warmup_iters", 0)
-        self.max_train_iters = training_config["max_train_iters"]
-
-        self.output_dir = training_config["output_dir"]
-        self.gradient_accumulation_iters = training_config.get("gradient_accumulation_iters", 1)
-        self.max_grad_norm = training_config.get("max_grad_norm", 1.0)
-        self.save_every_iters = training_config.get("save_every_iters", 0)
-        self.save_total_limit = training_config.get("save_total_limit")
 
         self.dmd_config = training_config.get("dmd", {})
         self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
@@ -66,74 +35,39 @@ class DmdLoraTrainer(BaseTrainer):
         self.get_configs()
         print("[dmd_lora] single-GPU resident mode: student/fake/teacher transformers stay on CUDA")
 
-        self.model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
-        self.model.set_lora_trainable()
+        self.setup_lora()
+
+        self.fake_model = self.model.__class__(self.config)
+        self.fake_model.load_components(transformer_only=True, reference_model=self.model)
+        self.fake_model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
+        self.fake_model.set_lora_trainable()
         if self.gradient_checkpointing:
-            self.model.enable_gradient_checkpointing()
+            self.fake_model.enable_gradient_checkpointing()
 
-        self.fake_transformer = self.model.load_transformer()
-        self._add_lora_to_transformer(
-            self.fake_transformer,
-            self.lora_rank,
-            self.lora_alpha,
-            self.lora_target_modules,
-        )
-        self._set_lora_trainable(self.fake_transformer)
-        if self.gradient_checkpointing and hasattr(self.fake_transformer, "enable_gradient_checkpointing"):
-            self.fake_transformer.enable_gradient_checkpointing()
+        self.teacher_model = self.model.__class__(self.config)
+        self.teacher_model.load_components(transformer_only=True, reference_model=self.model)
+        self.teacher_model.transformer.requires_grad_(False)
+        self.teacher_model.transformer.eval()
 
-        self.teacher_transformer = self.model.load_transformer()
-        self.teacher_transformer.requires_grad_(False)
-        self.teacher_transformer.eval()
-
-        self.optimizer = torch.optim.AdamW(
-            self.model.trainable_parameters(),
-            lr=self.optimizer_learning_rate,
-            betas=(self.optimizer_adam_beta1, self.optimizer_adam_beta2),
-            weight_decay=self.optimizer_weight_decay,
-            eps=self.optimizer_adam_epsilon,
-        )
-        self.fake_optimizer = torch.optim.AdamW(
-            (p for p in self.fake_transformer.parameters() if p.requires_grad),
-            lr=self.fake_optimizer_learning_rate,
-            betas=(self.fake_optimizer_adam_beta1, self.fake_optimizer_adam_beta2),
+        self.optimizer = self.build_optimizer(self.model.trainable_parameters())
+        self.fake_optimizer = self.build_optimizer(
+            self.fake_model.trainable_parameters(),
+            learning_rate=self.fake_optimizer_learning_rate,
+            adam_beta1=self.fake_optimizer_adam_beta1,
+            adam_beta2=self.fake_optimizer_adam_beta2,
             weight_decay=self.fake_optimizer_weight_decay,
-            eps=self.fake_optimizer_adam_epsilon,
+            adam_epsilon=self.fake_optimizer_adam_epsilon,
         )
-        self.lr_scheduler = get_scheduler(
-            self.lr_scheduler_name,
-            optimizer=self.optimizer,
-            num_warmup_steps=self.lr_warmup_iters,
-            num_training_steps=self.max_train_iters,
-        )
-        self.fake_lr_scheduler = get_scheduler(
-            self.lr_scheduler_name,
-            optimizer=self.fake_optimizer,
+        self.lr_scheduler = self.build_lr_scheduler(self.optimizer)
+        self.fake_lr_scheduler = self.build_lr_scheduler(
+            self.fake_optimizer,
             num_warmup_steps=0,
             num_training_steps=max(1, self.max_train_iters * self.fake_update_ratio),
         )
         self.scheduler = DMDFlowMatchingScheduler(self.config, self.dmd_config)
 
         print(f"[dmd_lora] student trainable params={self._count_trainable(self.model.transformer)}")
-        print(f"[dmd_lora] fake trainable params={self._count_trainable(self.fake_transformer)}")
-
-    @staticmethod
-    def _add_lora_to_transformer(transformer, rank, alpha, target_modules):
-        transformer.add_adapter(
-            LoraConfig(
-                r=rank,
-                lora_alpha=alpha,
-                init_lora_weights="gaussian",
-                target_modules=target_modules,
-            )
-        )
-
-    @staticmethod
-    def _set_lora_trainable(transformer):
-        transformer.requires_grad_(False)
-        transformer.train()
-        for name, param in transformer.named_parameters():
-            param.requires_grad = "lora" in name
+        print(f"[dmd_lora] fake trainable params={self._count_trainable(self.fake_model.transformer)}")
 
     @staticmethod
     def _count_trainable(module):
@@ -188,11 +122,11 @@ class DmdLoraTrainer(BaseTrainer):
             negative_condition = self.model.encode_prompt_condition(negative_prompt)
         return condition, negative_condition
 
-    def _predict_velocity(self, transformer, latents, sigma, condition):
-        denoiser_input = self.model.prepare_denoiser_input(latents, {}, condition)
-        prediction = self.model.denoise_with_transformer(transformer, denoiser_input, sigma, condition)
-        prediction = self.model.postprocess_denoiser_output(prediction, denoiser_input)
-        return self.model.prepare_flow_matching_target(prediction)
+    def _predict_velocity(self, model, latents, sigma, condition):
+        denoiser_input = model.prepare_denoiser_input(latents, {}, condition)
+        prediction = model.denoise(denoiser_input, sigma, condition)
+        prediction = model.postprocess_denoiser_output(prediction, denoiser_input)
+        return model.prepare_flow_matching_target(prediction)
 
     def sample_initial_latents(self, latent_shape):
         return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
@@ -210,7 +144,7 @@ class DmdLoraTrainer(BaseTrainer):
             sigma = self.scheduler.sigma_at(idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
             context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
             with context():
-                velocity = self._predict_velocity(self.model.transformer, xt, sigma, condition)
+                velocity = self._predict_velocity(self.model, xt, sigma, condition)
             xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
         return x0
 
@@ -227,15 +161,15 @@ class DmdLoraTrainer(BaseTrainer):
         velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
 
         if stage == "fake":
-            self.fake_transformer.train()
-            velocity_fake = self._predict_velocity(self.fake_transformer, renoised_xt, sigma, condition)
+            self.fake_model.transformer.train()
+            velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
             return F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
 
         with torch.no_grad():
-            self.fake_transformer.eval()
-            velocity_fake = self._predict_velocity(self.fake_transformer, renoised_xt, sigma, condition)
-            velocity_teacher_cond = self._predict_velocity(self.teacher_transformer, renoised_xt, sigma, condition)
-            velocity_teacher_uncond = self._predict_velocity(self.teacher_transformer, renoised_xt, sigma, negative_condition)
+            self.fake_model.transformer.eval()
+            velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
+            velocity_teacher_cond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, condition)
+            velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition)
             velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
         zeros = torch.zeros_like(sigma)
@@ -248,32 +182,37 @@ class DmdLoraTrainer(BaseTrainer):
         self.setup()
         os.makedirs(self.output_dir, exist_ok=True)
 
+        max_train_iters = self.max_train_iters
+        fake_update_ratio = self.fake_update_ratio
+        max_grad_norm = self.max_grad_norm
+        save_every_iters = self.save_every_iters
+        save_total_limit = self.save_total_limit
         current_iter = 0
         running_dmd = 0.0
         running_fake = 0.0
-        progress = tqdm(total=self.max_train_iters, desc="DMD-LoRA iterations")
 
-        while current_iter < self.max_train_iters:
+        progress = tqdm(total=max_train_iters, desc="DMD-LoRA iterations")
+
+        while current_iter < max_train_iters:
             for sample in self.dataloader:
                 loss_dmd = self.forward_loss(sample, stage="generator")
                 loss_dmd.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), self.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad(set_to_none=True)
-                running_dmd += loss_dmd.detach().float().item()
+                running_dmd += loss_dmd.item()
 
-                fake_losses = []
-                for _ in range(self.fake_update_ratio):
+                fake_loss = 0.0
+                for _ in range(fake_update_ratio):
                     loss_fake = self.forward_loss(sample, stage="fake")
                     loss_fake.backward()
-                    torch.nn.utils.clip_grad_norm_(self.fake_transformer.parameters(), self.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(self.fake_model.transformer.parameters(), max_grad_norm)
                     self.fake_optimizer.step()
                     self.fake_lr_scheduler.step()
                     self.fake_optimizer.zero_grad(set_to_none=True)
-                    fake_losses.append(loss_fake.detach())
-                if fake_losses:
-                    running_fake += torch.stack(fake_losses).mean().float().item()
+                    fake_loss += loss_fake.item()
+                running_fake += fake_loss / fake_update_ratio
 
                 current_iter += 1
                 progress.update(1)
@@ -285,16 +224,10 @@ class DmdLoraTrainer(BaseTrainer):
                 running_dmd = 0.0
                 running_fake = 0.0
 
-                if self.save_every_iters and current_iter % self.save_every_iters == 0:
-                    self.save_checkpoint(current_iter, self.save_total_limit)
+                if save_every_iters and current_iter % save_every_iters == 0:
+                    self.save_checkpoint(current_iter, save_total_limit)
 
-                if current_iter >= self.max_train_iters:
+                if current_iter >= max_train_iters:
                     break
 
         progress.close()
-
-    def save_checkpoint(self, iteration, save_total_limit):
-        prune_checkpoints(self.output_dir, save_total_limit)
-        save_dir = os.path.join(self.output_dir, f"checkpoint-{iteration}")
-        os.makedirs(save_dir, exist_ok=True)
-        self.model.save_lora_weights(save_dir)

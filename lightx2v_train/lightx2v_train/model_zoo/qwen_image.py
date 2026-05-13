@@ -15,8 +15,15 @@ class QwenImageModel(BaseModel):
 
     pipeline_cls = QwenImagePipeline
 
-    def load_components(self):
+    def load_components(self, transformer_only=False, reference_model=None):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
+        if transformer_only:
+            if reference_model is not None:
+                self.text_pipeline = reference_model.text_pipeline
+                self.vae = reference_model.vae
+            self.transformer = self.load_transformer()
+            return
+
         self.text_pipeline = QwenImagePipeline.from_pretrained(
             model_path,
             transformer=None,
