@@ -9,80 +9,11 @@ from peft.utils import get_peft_model_state_dict
 from tqdm.auto import tqdm
 
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
+from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
 from .base import BaseTrainer
-
-
-def _linear_shift(mu, t):
-    return mu / (mu + (1 / t - 1))
-
-
-def _add_noise(x0, noise, sigma):
-    sigma = _expand_to(sigma, x0).to(dtype=torch.float32)
-    return ((1.0 - sigma) * x0.float() + sigma * noise.float()).to(dtype=x0.dtype)
-
-
-def _euler_step(x, velocity, sigma, target_sigma):
-    sigma = _expand_to(sigma, x).to(dtype=torch.float32)
-    target_sigma = _expand_to(target_sigma, x).to(dtype=torch.float32)
-    return x.float() + (target_sigma - sigma) * velocity.float()
-
-
-def _expand_to(value, target):
-    value = value.to(device=target.device)
-    while value.ndim < target.ndim:
-        value = value.view(*value.shape, 1)
-    return value
-
-
-def _do_cfg(cond_pred, uncond_pred, cfg_scale, cfg_norm):
-    pred = uncond_pred + cfg_scale * (cond_pred - uncond_pred)
-    if cfg_norm in (None, "none"):
-        return pred
-    if cfg_norm == "layer_norm":
-        cond_norm = torch.norm(cond_pred, dim=-1, keepdim=True)
-        pred_norm = torch.norm(pred, dim=-1, keepdim=True)
-        return pred * (cond_norm / torch.clamp(pred_norm, min=1e-12))
-    if cfg_norm == "scalar":
-        cond_norm = torch.norm(cond_pred)
-        pred_norm = torch.norm(pred)
-        return pred * min(1.0, (cond_norm / torch.clamp(pred_norm, min=1e-12)).item())
-    raise ValueError(f"Unsupported cfg_norm: {cfg_norm}")
-
-
-def _dmd_loss(latents, x_pred_fake_flow, x_pred_teacher):
-    with torch.no_grad():
-        grad = x_pred_fake_flow - x_pred_teacher
-        dims = tuple(range(1, latents.ndim))
-        normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True)
-        grad = torch.nan_to_num(grad / normalizer)
-    return 0.5 * F.mse_loss(latents.float(), (latents.float() - grad.float()).detach(), reduction="mean")
-
-
-class _DMDEulerScheduler:
-    def __init__(self, shift=3.0, device="cuda"):
-        self.shift = float(shift)
-        self.device = torch.device(device)
-        self.num_train_timesteps = 1000
-
-    def set_timesteps(self, num_inference_steps):
-        timesteps = torch.linspace(
-            1000,
-            0,
-            int(num_inference_steps) + 1,
-            dtype=torch.float32,
-            device=self.device,
-        )
-        self.sigmas = _linear_shift(self.shift, timesteps / self.num_train_timesteps)
-
-    def step(self, model_output, step_idx, sample):
-        sigma = self.sigmas[step_idx].expand(sample.shape[0]).to(sample.device)
-        sigma_next = self.sigmas[step_idx + 1].expand(sample.shape[0]).to(sample.device)
-        x0 = sample.float() - _expand_to(sigma, sample).float() * model_output.float()
-        next_sample = _euler_step(sample, model_output, sigma, sigma_next)
-        return next_sample.to(sample.dtype), x0.to(sample.dtype)
 
 
 @TRAINER_REGISTER("dmd_lora")
@@ -132,17 +63,12 @@ class DmdLoraTrainer(BaseTrainer):
         self.save_total_limit = training_config.get("save_total_limit")
         self.save_fake_lora = fake_config.get("save_lora", False)
 
-        dmd_config = training_config.get("dmd", {})
-        self.num_inference_steps = int(dmd_config.get("num_inference_steps", 4))
-        self.fake_update_ratio = int(dmd_config.get("fake_update_ratio", 1))
-        self.guidance_scale = float(dmd_config.get("guidance_scale", 3.0))
-        self.negative_prompt = dmd_config.get("negative_prompt", " ")
-        self.cfg_norm = dmd_config.get("cfg_norm", "layer_norm")
-        self.min_sigma = float(dmd_config.get("sigma_min", 0.02))
-        self.max_sigma = float(dmd_config.get("sigma_max", 1.0))
-        self.discrete_samples = int(dmd_config.get("discrete_samples", 1000))
-        self.renoise_shift = float(dmd_config.get("renoise_shift", 5.0))
-        self.inference_shift = float(dmd_config.get("inference_shift", 3.0))
+        self.dmd_config = training_config.get("dmd", {})
+        self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
+        self.fake_update_ratio = int(self.dmd_config.get("fake_update_ratio", 1))
+        self.guidance_scale = float(self.dmd_config.get("guidance_scale", 3.0))
+        self.negative_prompt = self.dmd_config.get("negative_prompt", " ")
+        self.cfg_norm = self.dmd_config.get("cfg_norm", "layer_norm")
 
     def setup(self):
         self.get_configs()
@@ -194,7 +120,7 @@ class DmdLoraTrainer(BaseTrainer):
             num_warmup_steps=0,
             num_training_steps=max(1, self.max_train_iters * self.fake_update_ratio),
         )
-        self.scheduler = _DMDEulerScheduler(shift=self.inference_shift, device=self.model.device)
+        self.scheduler = DMDFlowMatchingScheduler(self.config, self.dmd_config)
 
         print(f"[dmd_lora] student trainable params={self._count_trainable(self.model.transformer)}")
         print(f"[dmd_lora] fake trainable params={self._count_trainable(self.fake_transformer)}")
@@ -220,6 +146,30 @@ class DmdLoraTrainer(BaseTrainer):
     @staticmethod
     def _count_trainable(module):
         return sum(1 for param in module.parameters() if param.requires_grad)
+
+    @staticmethod
+    def _do_cfg(cond_pred, uncond_pred, cfg_scale, cfg_norm):
+        pred = uncond_pred + cfg_scale * (cond_pred - uncond_pred)
+        if cfg_norm in (None, "none"):
+            return pred
+        if cfg_norm == "layer_norm":
+            cond_norm = torch.norm(cond_pred, dim=-1, keepdim=True)
+            pred_norm = torch.norm(pred, dim=-1, keepdim=True)
+            return pred * (cond_norm / torch.clamp(pred_norm, min=1e-12))
+        if cfg_norm == "scalar":
+            cond_norm = torch.norm(cond_pred)
+            pred_norm = torch.norm(pred)
+            return pred * min(1.0, (cond_norm / torch.clamp(pred_norm, min=1e-12)).item())
+        raise ValueError(f"Unsupported cfg_norm: {cfg_norm}")
+
+    @staticmethod
+    def _dmd_loss(latents, x_pred_fake_flow, x_pred_teacher):
+        with torch.no_grad():
+            grad = x_pred_fake_flow - x_pred_teacher
+            dims = tuple(range(1, latents.ndim))
+            normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True)
+            grad = torch.nan_to_num(grad / normalizer)
+        return 0.5 * F.mse_loss(latents.float(), (latents.float() - grad.float()).detach(), reduction="mean")
 
     def _latent_shape(self, sample):
         image = sample["target_image"]
@@ -258,13 +208,6 @@ class DmdLoraTrainer(BaseTrainer):
     def sample_end_step(self):
         return int(torch.randint(0, self.num_inference_steps, (1,), device=self.model.device).item())
 
-    def sample_renoise_sigma(self, batch_size):
-        raw = torch.rand((batch_size,), device=self.model.device, dtype=torch.float32)
-        if self.discrete_samples > 0:
-            raw = torch.ceil(raw * self.discrete_samples) / self.discrete_samples
-        raw = torch.clamp(raw, 1e-7, 1 - 1e-7)
-        return torch.clamp(_linear_shift(self.renoise_shift, raw), self.min_sigma, self.max_sigma).to(self.running_dtype)
-
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         self.scheduler.set_timesteps(self.num_inference_steps)
         if xt is None:
@@ -272,11 +215,11 @@ class DmdLoraTrainer(BaseTrainer):
         x0 = None
         self.model.transformer.train()
         for idx in range(end_step_idx + 1):
-            sigma = self.scheduler.sigmas[idx].expand(latent_shape[0]).to(self.model.device, self.running_dtype)
+            sigma = self.scheduler.sigma_at(idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
             context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
             with context():
                 velocity = self._predict_velocity(self.model.transformer, xt, sigma, condition)
-            xt, x0 = self.scheduler.step(velocity, idx, xt)
+            xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
         return x0
 
     def forward_loss(self, sample, stage):
@@ -286,10 +229,10 @@ class DmdLoraTrainer(BaseTrainer):
         xt_start = self.sample_initial_latents(latent_shape)
         x0_ref = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=False, xt=xt_start)
 
-        sigma = self.sample_renoise_sigma(latent_shape[0])
+        sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
-        renoised_xt = _add_noise(x0_ref, noise, sigma)
-        velocity_gt = noise - x0_ref.float()
+        renoised_xt = self.scheduler.add_noise(x0_ref, noise, sigma)
+        velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
 
         if stage == "fake":
             self.fake_transformer.train()
@@ -301,13 +244,13 @@ class DmdLoraTrainer(BaseTrainer):
             velocity_fake = self._predict_velocity(self.fake_transformer, renoised_xt, sigma, condition)
             velocity_teacher_cond = self._predict_velocity(self.teacher_transformer, renoised_xt, sigma, condition)
             velocity_teacher_uncond = self._predict_velocity(self.teacher_transformer, renoised_xt, sigma, negative_condition)
-            velocity_teacher = _do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
+            velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
         zeros = torch.zeros_like(sigma)
-        x_pred_fake = _euler_step(renoised_xt, velocity_fake, sigma, zeros)
-        x_pred_teacher = _euler_step(renoised_xt, velocity_teacher, sigma, zeros)
+        x_pred_fake = self.scheduler.euler_step(renoised_xt, velocity_fake, sigma, zeros)
+        x_pred_teacher = self.scheduler.euler_step(renoised_xt, velocity_teacher, sigma, zeros)
         x0 = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=True, xt=xt_start)
-        return _dmd_loss(x0, x_pred_fake, x_pred_teacher)
+        return self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
 
     def train(self):
         self.setup()
