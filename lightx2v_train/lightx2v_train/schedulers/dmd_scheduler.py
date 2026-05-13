@@ -4,9 +4,8 @@ from .flow_matching import RectifiedFlowMatchingScheduler
 
 
 class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
-    def __init__(self, config, dmd_config=None):
+    def __init__(self, config, dmd_config={}):
         super().__init__(config)
-        dmd_config = dmd_config or {}
         self.inference_shift = float(dmd_config.get("inference_shift", 3.0))
         self.renoise_shift = float(dmd_config.get("renoise_shift", 5.0))
         self.min_sigma = float(dmd_config.get("sigma_min", 0.02))

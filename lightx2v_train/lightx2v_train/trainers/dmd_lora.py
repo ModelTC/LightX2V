@@ -20,8 +20,6 @@ from .base import BaseTrainer
 class DmdLoraTrainer(BaseTrainer):
     def get_configs(self):
         model_config = self.config["model"]
-        if model_config.get("name") != "qwen_image":
-            raise ValueError("dmd_lora currently supports model.name: qwen_image only.")
         self.running_dtype = get_running_dtype(model_config["running_dtype"])
 
         training_config = self.config["training"]
@@ -29,12 +27,6 @@ class DmdLoraTrainer(BaseTrainer):
         self.lora_rank = lora_config.get("rank", 16)
         self.lora_alpha = lora_config.get("alpha", self.lora_rank)
         self.lora_target_modules = lora_config.get("target_modules")
-
-        fake_config = training_config.get("fake", {})
-        fake_lora_config = fake_config.get("lora", lora_config)
-        self.fake_lora_rank = fake_lora_config.get("rank", self.lora_rank)
-        self.fake_lora_alpha = fake_lora_config.get("alpha", self.fake_lora_rank)
-        self.fake_lora_target_modules = fake_lora_config.get("target_modules", self.lora_target_modules)
 
         self.gradient_checkpointing = training_config.get("gradient_checkpointing", True)
 
@@ -45,6 +37,7 @@ class DmdLoraTrainer(BaseTrainer):
         self.optimizer_weight_decay = optimizer_config.get("weight_decay", 0.01)
         self.optimizer_adam_epsilon = optimizer_config.get("adam_epsilon", 1e-8)
 
+        fake_config = training_config.get("fake", {})
         fake_optimizer_config = fake_config.get("optimizer", {})
         self.fake_optimizer_learning_rate = fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
         self.fake_optimizer_adam_beta1 = fake_optimizer_config.get("adam_beta1", self.optimizer_adam_beta1)
@@ -61,7 +54,6 @@ class DmdLoraTrainer(BaseTrainer):
         self.max_grad_norm = training_config.get("max_grad_norm", 1.0)
         self.save_every_iters = training_config.get("save_every_iters", 0)
         self.save_total_limit = training_config.get("save_total_limit")
-        self.save_fake_lora = fake_config.get("save_lora", False)
 
         self.dmd_config = training_config.get("dmd", {})
         self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
@@ -82,9 +74,9 @@ class DmdLoraTrainer(BaseTrainer):
         self.fake_transformer = self.model.load_transformer()
         self._add_lora_to_transformer(
             self.fake_transformer,
-            self.fake_lora_rank,
-            self.fake_lora_alpha,
-            self.fake_lora_target_modules,
+            self.lora_rank,
+            self.lora_alpha,
+            self.lora_target_modules,
         )
         self._set_lora_trainable(self.fake_transformer)
         if self.gradient_checkpointing and hasattr(self.fake_transformer, "enable_gradient_checkpointing"):
@@ -306,8 +298,3 @@ class DmdLoraTrainer(BaseTrainer):
         save_dir = os.path.join(self.output_dir, f"checkpoint-{iteration}")
         os.makedirs(save_dir, exist_ok=True)
         self.model.save_lora_weights(save_dir)
-        if self.save_fake_lora:
-            fake_dir = os.path.join(save_dir, "fake")
-            os.makedirs(fake_dir, exist_ok=True)
-            fake_state = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.fake_transformer))
-            self.model.pipeline_cls.save_lora_weights(fake_dir, fake_state, safe_serialization=True)
