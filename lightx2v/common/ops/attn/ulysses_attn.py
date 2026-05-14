@@ -48,7 +48,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             k (torch.Tensor): 键张量，形状为 [shard_seqlen, kv_heads, hidden_dims]
             v (torch.Tensor): 值张量，形状为 [shard_seqlen, kv_heads, hidden_dims]
             slice_qkv_len (int): 图像或者文本查询、键和值的长度，根据 img_first 确定谁在前半部分
-            cu_seqlens_qkv (torch.Tensor): 累积序列长度，包含文本和图像的长度信息
+            cu_seqlens_qkv (torch.Tensor or list[int]): 累积序列长度，包含文本和图像的长度信息。
+                接受 Tensor 或 list[int]；list 形式可避免 Dynamo 将索引结果误判为 data-dependent。
             q_only_img (bool): 若为 True，q 只含图像 token，k/v 同时含图像和文本 token。
                                此时只对 k/v 做 img/txt 分割，q 整体参与图像侧 all-to-all。
                                支持 cross-attention 等 q 不含文本 token 的场景。
@@ -476,7 +477,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
 
         return attn  # 返回最终的注意力结果
 
-    @torch.compiler.disable
     def _reshape_img_attn(self, img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group, use_fp8_comm):
         img_attn = img_attn.reshape(world_size * shard_seqlen, shard_heads, hidden_dims)  # 重塑图像注意力结果
 
@@ -607,7 +607,8 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
             k (torch.Tensor): 键张量，形状为 [shard_seqlen, heads, hidden_dims]
             v (torch.Tensor): 值张量，形状为 [shard_seqlen, heads, hidden_dims]
             slice_qkv_len (int): 图像或者文本查询、键和值的长度，根据img_first确定谁在前半部分
-            cu_seqlens_qkv (torch.Tensor): 累积序列长度，包含文本和图像的长度信息
+            cu_seqlens_qkv (torch.Tensor or list[int]): 累积序列长度，包含文本和图像的长度信息。
+                接受 Tensor 或 list[int]；list 形式可避免 Dynamo 将索引结果误判为 data-dependent。
 
         返回:
             torch.Tensor: 计算得到的注意力结果
@@ -763,7 +764,6 @@ class Ulysses4090AttnWeight(AttnWeightTemplate):
 
         return attn  # 返回最终的注意力结果
 
-    @torch.compiler.disable
     def _reshape_img_attn(self, img_attn, world_size, shard_seqlen, shard_heads, hidden_dims, seq_p_group, use_fp8_comm):
         cur_rank = dist.get_rank(seq_p_group)
         global_world_size = dist.get_world_size()

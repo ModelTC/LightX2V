@@ -2,70 +2,41 @@ import torch
 
 
 class KVCacheManager:
-    """Manages the pre-allocated KV cache buffers for conditional and unconditional passes.
+    """Manages the KV cache buffer for a single diffusion step.
 
-    The past KV (text prefix) is fixed across all diffusion steps for a given request.
-    This class pre-allocates a combined [past + current] buffer per pass type, fills the
-    past prefix once, and writes the current image KV via in-place slice assignment each
-    layer — avoiding repeated torch.cat allocations.
+    The buffer is allocated fresh each step (via ``prepare()``) so that
+    Dynamo/Inductor sees it as a local tensor inside the compiled region
+    rather than an escaped eager-mode buffer.  This prevents Inductor from
+    generating an oversized fused Triton kernel that tries to inline the
+    slice-scatter updates together with surrounding matmuls.
     """
 
     def __init__(self):
-        self._kv_buf_cond = None
-        self._kv_buf_cond_key = None
-        self._kv_buf_uncond = None
-        self._kv_buf_uncond_key = None
         self._kv_buf = None
         self._kv_past_seq = None
 
-    def prepare(self, past_key_values: torch.Tensor, seq_len_q: int, num_layers: int, is_condition: bool) -> None:
-        """Select and (if needed) reallocate the active KV buffer for this infer pass.
+    def prepare(self, past_key_values: torch.Tensor, seq_len_q: int) -> None:
+        """Allocate a fresh KV buffer for this step and copy the prefix.
 
         Args:
             past_key_values: [num_layers, 2, past_seq, num_kv_heads, head_dim]
             seq_len_q: sequence length of the current image query tokens
-            num_layers: number of decoder layers
-            is_condition: True for conditional pass, False for unconditional
         """
         past_seq = past_key_values.shape[2]
-        buf_key = (
-            past_seq,
-            seq_len_q,
-            past_key_values.shape[3],
-            past_key_values.shape[4],
-            past_key_values.dtype,
-            past_key_values.device,
+        num_layers = past_key_values.shape[0]
+        num_kv = past_key_values.shape[1]
+        num_kv_heads = past_key_values.shape[3]
+        head_dim = past_key_values.shape[4]
+        self._kv_buf = torch.empty(
+            num_layers,
+            num_kv,
+            past_seq + seq_len_q,
+            num_kv_heads,
+            head_dim,
+            dtype=past_key_values.dtype,
+            device=past_key_values.device,
         )
-
-        if is_condition:
-            if self._kv_buf_cond_key != buf_key:
-                self._kv_buf_cond = torch.empty(
-                    num_layers,
-                    2,
-                    past_seq + seq_len_q,
-                    past_key_values.shape[3],
-                    past_key_values.shape[4],
-                    dtype=past_key_values.dtype,
-                    device=past_key_values.device,
-                )
-                self._kv_buf_cond[:, :, :past_seq] = past_key_values
-                self._kv_buf_cond_key = buf_key
-            self._kv_buf = self._kv_buf_cond
-        else:
-            if self._kv_buf_uncond_key != buf_key:
-                self._kv_buf_uncond = torch.empty(
-                    num_layers,
-                    2,
-                    past_seq + seq_len_q,
-                    past_key_values.shape[3],
-                    past_key_values.shape[4],
-                    dtype=past_key_values.dtype,
-                    device=past_key_values.device,
-                )
-                self._kv_buf_uncond[:, :, :past_seq] = past_key_values
-                self._kv_buf_uncond_key = buf_key
-            self._kv_buf = self._kv_buf_uncond
-
+        self._kv_buf[:, :, :past_seq] = past_key_values
         self._kv_past_seq = past_seq
 
     def update(self, layer_idx: int, key_states: torch.Tensor, value_states: torch.Tensor):
@@ -84,9 +55,5 @@ class KVCacheManager:
         return self._kv_buf[layer_idx, 0], self._kv_buf[layer_idx, 1]
 
     def clear(self):
-        self._kv_buf_cond = None
-        self._kv_buf_cond_key = None
-        self._kv_buf_uncond = None
-        self._kv_buf_uncond_key = None
         self._kv_buf = None
         self._kv_past_seq = None

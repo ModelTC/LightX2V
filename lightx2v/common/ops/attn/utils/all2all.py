@@ -1,9 +1,7 @@
 import torch
-import torch._dynamo as dynamo
 import torch.distributed as dist
 
 
-@dynamo.disable
 def all2all_seq2head(input, group=None):
     """
     将输入张量从 [seq_len/N, heads, hidden_dims] 转换为 [seq_len, heads/N, hidden_dims] 的格式。
@@ -44,7 +42,6 @@ def all2all_seq2head(input, group=None):
     return output  # 返回转换后的输出张量
 
 
-@dynamo.disable
 def all2all_head2seq(input, group=None):
     """
     将输入张量从 [seq_len, heads/N, hidden_dims] 转换为 [seq_len/N, heads, hidden_dims] 的格式。

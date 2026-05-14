@@ -6,6 +6,11 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+try:
+    from magi_compiler import magi_register_custom_op
+except ImportError:
+    magi_register_custom_op = None
+
 from lightx2v.common.ops.mm.triton_kernels import (
     fp8_gemm_bias_triton,
     fp8_gemm_triton,
@@ -56,6 +61,29 @@ try:
 except ImportError:
     sgl_kernel = None
 
+
+def _fp8_scaled_mm_meta(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
+    return torch.empty(mat_a.shape[0], mat_b.shape[1], dtype=out_dtype, device=mat_a.device)
+
+
+if magi_register_custom_op is not None and sgl_kernel is not None:
+
+    @magi_register_custom_op(
+        "lightx2v::fp8_scaled_mm",
+        infer_output_meta_fn=_fp8_scaled_mm_meta,
+        is_subgraph_boundary=True,
+    )
+    def _fp8_scaled_mm(
+        mat_a: torch.Tensor,
+        mat_b: torch.Tensor,
+        scales_a: torch.Tensor,
+        scales_b: torch.Tensor,
+        out_dtype: torch.dtype,
+        bias: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return sgl_kernel.fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
+
+
 try:
     from q8_kernels.functional.linear import q8_linear
 except ImportError:
@@ -103,8 +131,6 @@ try:
     import sycl_kernels
 except ImportError:
     sycl_kernels = None
-
-import torch.distributed as dist
 
 
 class MMWeightTemplate(metaclass=ABCMeta):
@@ -1780,14 +1806,24 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = sgl_kernel.fp8_scaled_mm(
-            input_tensor_quant,
-            self.weight,
-            input_tensor_scale,
-            self.weight_scale,
-            self.infer_dtype,
-            self._get_actual_bias(),
-        )
+        if magi_register_custom_op is not None and sgl_kernel is not None:
+            output_tensor = torch.ops.lightx2v.fp8_scaled_mm(
+                input_tensor_quant,
+                self.weight,
+                input_tensor_scale,
+                self.weight_scale,
+                self.infer_dtype,
+                self._get_actual_bias(),
+            )
+        else:
+            output_tensor = sgl_kernel.fp8_scaled_mm(
+                input_tensor_quant,
+                self.weight,
+                input_tensor_scale,
+                self.weight_scale,
+                self.infer_dtype,
+                self._get_actual_bias(),
+            )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
