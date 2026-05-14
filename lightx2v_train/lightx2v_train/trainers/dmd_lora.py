@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 
+from lightx2v_train.model_zoo import build_model
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
@@ -37,14 +38,14 @@ class DmdLoraTrainer(LoraTrainer):
 
         self.setup_lora()
 
-        self.fake_model = self.model.__class__(self.config)
+        self.fake_model = build_model(self.config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
         self.fake_model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
         self.fake_model.set_lora_trainable()
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
 
-        self.teacher_model = self.model.__class__(self.config)
+        self.teacher_model = build_model(self.config)
         self.teacher_model.load_components(transformer_only=True, reference_model=self.model)
         self.teacher_model.transformer.requires_grad_(False)
         self.teacher_model.transformer.eval()
