@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
-model_path=/data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
-export CUDA_VISIBLE_DEVICES=7
+lightx2v_path=path to Lightx2v
+model_path=path to Wan2.1-T2V-1.3B
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

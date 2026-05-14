@@ -5,6 +5,7 @@ from loguru import logger
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.triton_ops import causal_rope_apply_triton
 from lightx2v.models.networks.wan.infer.utils import causal_rope_apply
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -46,6 +47,11 @@ class WanSFTransformerInfer(WanTransformerInfer):
             self.infer_func = self.infer_with_kvcache
         else:
             self.infer_func = self.infer_with_kvcache
+
+        if self.config.get("causal_rope_type", "torch") == "triton":
+            self.causal_rope_apply_func = causal_rope_apply_triton
+        else:
+            self.causal_rope_apply_func = causal_rope_apply
 
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32)
@@ -202,7 +208,9 @@ class WanSFTransformerInfer(WanTransformerInfer):
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
         norm1_weight = 1 + scale_msa.squeeze()
         norm1_bias = shift_msa.squeeze()
-
+        if hasattr(phase, "smooth_norm1_weight"):
+            norm1_weight = norm1_weight * phase.smooth_norm1_weight.tensor
+            norm1_bias = norm1_bias * phase.smooth_norm1_bias.tensor
         norm1_out = phase.norm1.apply(x)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.sensitive_layer_dtype)
@@ -221,8 +229,8 @@ class WanSFTransformerInfer(WanTransformerInfer):
         if self.config.get("seq_parallel", False):
             q, k = self._apply_rope_sp(q, k, grid_sizes, freqs, current_start_frame)
         else:
-            q = causal_rope_apply(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
-            k = causal_rope_apply(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
+            q = self.causal_rope_apply_func(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
+            k = self.causal_rope_apply_func(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
 
         kv_cache = self.kv_cache_manager.self_attn_kv_cache
 
@@ -387,8 +395,12 @@ class WanSFTransformerInfer(WanTransformerInfer):
         num_frames = c_shift_msa.shape[0]
         frame_seqlen = x.shape[0] // c_shift_msa.shape[0]
 
-        norm2_weight = 1 + c_scale_msa
-        norm2_bias = c_shift_msa
+        if hasattr(phase, "smooth_norm2_weight"):
+            norm2_weight = (1 + c_scale_msa.squeeze()) * phase.smooth_norm2_weight.tensor
+            norm2_bias = c_shift_msa.squeeze() * phase.smooth_norm2_bias.tensor
+        else:
+            norm2_weight = 1 + c_scale_msa
+            norm2_bias = c_shift_msa
 
         norm2_out = phase.norm2.apply(x)
         norm2_out = norm2_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen))

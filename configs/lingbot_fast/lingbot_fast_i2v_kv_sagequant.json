@@ -15,7 +15,7 @@
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
     "use_image_encoder": false,
-    "dit_original_ckpt": "/data/nvme4/models/lingbot-world-base-cam/lingbot_world_fast/",
+    "dit_original_ckpt": "path/to/lingbot_world_fast/",
     "ar_config": {
         "local_attn_size": 21,
         "num_frame_per_chunk": 3,
@@ -30,5 +30,5 @@
         },
         "kv_offload": false
     },
-    "rms_norm_type": "self_forcing"
+    "causal_rope_type": "triton"
 }

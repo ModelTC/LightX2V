@@ -38,7 +38,7 @@ class SeedVRPostWeights(WeightModule):
 
         self.add_module(
             "vid_out_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
+            MM_WEIGHT_REGISTER["Default"](
                 "vid_out.proj.weight",
                 "vid_out.proj.bias",
             ),

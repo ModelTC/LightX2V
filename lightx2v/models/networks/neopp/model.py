@@ -18,12 +18,13 @@ class NeoppModel(BaseTransformerModel):
     transformer_weight_class = NeoppTransformerWeights
     post_weight_class = NeoppPostWeights
 
-    def __init__(self, model_path, config, device):
-        super().__init__(model_path, config, device)
+    def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
+        super().__init__(model_path, config, device, None, lora_path, lora_strength)
         self.preserved_keys = ["fm_modules", "mot_gen"]
         self._init_infer_class()
         self._init_infer()
         self._init_weights()
+        self.enable_cfg = self.config.get("enable_cfg", True)
         self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
         self.cfg_scale = self.config.get("cfg_scale", 4.0)
         self.cfg_norm = self.config.get("cfg_norm", "global")
@@ -89,9 +90,6 @@ class NeoppModel(BaseTransformerModel):
         return v_pred
 
     def _infer_t2i_i2i(self, inputs, pre_infer_out):
-        t = self.scheduler.timesteps[self.scheduler.step_index]
-        use_cfg = t >= self.cfg_interval[0] and t <= self.cfg_interval[1] and self.cfg_scale > 1
-
         # 预计算各 pass 的 image_embeds：seq_parallel 时切分为本 rank 的 shard，否则直接引用原张量
         # 这样 _infer_cond_uncond 无需在每次调用时反复 chunk/restore，避免多次 pass 间互相污染
         if self.seq_p_group is not None:
@@ -109,40 +107,48 @@ class NeoppModel(BaseTransformerModel):
             pre_infer_out.image_embeds_cond = pre_infer_out.image_embeds
             pre_infer_out.image_embeds_uncond = pre_infer_out.image_embeds
 
-        if self.config.get("cfg_parallel", False):
-            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-            # assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
-            cfg_p_rank = dist.get_rank(cfg_p_group)
+        if self.enable_cfg:
+            t = self.scheduler.timesteps[self.scheduler.step_index]
+            use_cfg = t >= self.cfg_interval[0] and t <= self.cfg_interval[1] and self.cfg_scale > 1
 
-            cfg_p_world_size = dist.get_world_size(cfg_p_group)
-            if use_cfg:
-                if cfg_p_rank == 0:
-                    v_pred = self._infer_cond_uncond(inputs, pre_infer_out, True)
+            if self.config.get("cfg_parallel", False):
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+                cfg_p_world_size = dist.get_world_size(cfg_p_group)
+
+                if use_cfg:
+                    if cfg_p_rank == 0:
+                        v_pred = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+                    else:
+                        v_pred = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
+                    v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
+                    dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                    v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
+                    v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+                    v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
+                    return v_pred
                 else:
-                    v_pred = self._infer_cond_uncond(inputs, pre_infer_out, False)
-                v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
-                dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
-                v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
-                v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
-                v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
-                return v_pred
+                    # cfg 区间外只有 rank 0 做 cond 推理，其余 rank 用 all_gather 接收结果
+                    if cfg_p_rank == 0:
+                        v_pred = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+                    else:
+                        v_pred = torch.zeros_like(pre_infer_out.z)
+                    v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
+                    dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                    return v_pred_list[0]
             else:
-                # cfg 区间外只有 rank 0 做 cond 推理，其余 rank 用 all_gather 接收结果，无需持有 cond kvcache
-                if cfg_p_rank == 0:
-                    v_pred = self._infer_cond_uncond(inputs, pre_infer_out, True)
-                else:
-                    v_pred = torch.zeros_like(pre_infer_out.z)
-                v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
-                dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
-                return v_pred_list[0]
+                # ==================== CFG Processing ====================
+                v_pred_cond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+                if use_cfg:
+                    v_pred_uncond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
+                    v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+                    v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
+                    return v_pred
+                return v_pred_cond
         else:
-            v_pred_condition = self._infer_cond_uncond(inputs, pre_infer_out, True)
-            if use_cfg:
-                v_pred_uncond = self._infer_cond_uncond(inputs, pre_infer_out, False)
-                v_pred = v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
-                v_pred = self.cfg_norm_func(v_pred, v_pred_condition)
-                return v_pred
-            return v_pred_condition
+            # ==================== No CFG Processing ====================
+            return self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
 
     def _infer_cond_uncond(self, inputs, pre_infer_out, infer_condition: bool):
         self.scheduler.infer_condition = infer_condition

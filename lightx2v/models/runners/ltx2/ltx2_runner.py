@@ -1,5 +1,7 @@
 import gc
 import os
+import time
+from math import gcd as _gcd
 
 import torch
 import torch.distributed as dist
@@ -14,10 +16,11 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning
+from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning, load_video_conditioning
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -75,6 +78,8 @@ class LTX2Runner(DefaultRunner):
         super().init_modules()
         if self.config["task"] == "ltx2_s2v":
             self.run_input_encoder = self._run_input_encoder_local_ltx2_s2v
+        elif self.config["task"] == "v2av":
+            self.run_input_encoder = self._run_input_encoder_local_v2av
 
     def init_scheduler(self):
         self.scheduler = LTX2Scheduler(self.config)
@@ -173,7 +178,7 @@ class LTX2Runner(DefaultRunner):
             checkpoint_path=ckpt_path,
             device=vae_device,
             dtype=GET_DTYPE(),
-            load_encoder=self.config["task"] in ("i2av", "ltx2_s2v") or self.config.get("use_upsampler", False),
+            load_encoder=self.config["task"] in ("i2av", "ltx2_s2v", "v2av") or self.config.get("use_upsampler", False),
             use_tiling=self.config.get("use_tiling_vae", False),
             cpu_offload=vae_offload,
         )
@@ -225,6 +230,7 @@ class LTX2Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2av(self):
         self._clear_ltx2_reference_audio_state()
+        self._clear_ltx2_reference_video_state()
         self.video_denoise_mask = None
         self.initial_video_latent = None
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
@@ -256,6 +262,7 @@ class LTX2Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2av(self):
         self._clear_ltx2_reference_audio_state()
+        self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
@@ -267,9 +274,200 @@ class LTX2Runner(DefaultRunner):
             "text_encoder_output": text_encoder_output,
         }
 
+    def _clear_ltx2_reference_video_state(self):
+        """Avoid leaking reference-video latents into non-v2av runs on a reused runner,
+        and avoid re-appending reference tokens in stage-2 upsampling."""
+        self._ref_video_latent = None
+
+    def _get_ref_downscale_factor(self) -> float:
+        """Read IC-LoRA reference-video downscale factor.
+
+        Priority: config["ref_downscale_factor"] > 1.0 (i.e. same resolution as the generated video).
+        """
+        v = self.config.get("ref_downscale_factor", 1.0)
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            v = 1.0
+        return v if v > 0 else 1.0
+
+    @staticmethod
+    def _probe_video_hw(path: str) -> tuple[int, int] | None:
+        """
+        Return (height, width) of the first video stream in ``path``, or None.
+        """
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            import av  # noqa: PLC0415 - lazy import; PyAV is already required.
+
+            with av.open(path) as container:
+                for stream in container.streams:
+                    if stream.type == "video":
+                        h = int(stream.codec_context.height or 0)
+                        w = int(stream.codec_context.width or 0)
+                        if h > 0 and w > 0:
+                            return h, w
+        except Exception as e:  # noqa: BLE001 - probing must never break inference.
+            logger.warning(f"  ⚠ Could not probe pose-video resolution from {path!r}: {e}")
+        return None
+
+    def _override_target_hw_from_ref_video(self) -> None:
+        """v2av: set ``input_info.target_shape`` from probed ``video_path`` (control mp4).
+
+        Skip if ``target_shape`` already set. Base H/W = final//2 when upsampler else final;
+        snap to VAE grid (spatial 32) vs ``ref_downscale_factor``. Probe/config miss → no-op.
+        """
+        if self.input_info.target_shape:
+            return
+
+        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        hw = self._probe_video_hw(ref_path)
+        if hw is None:
+            return
+        final_h, final_w = hw
+
+        use_upsampler = bool(self.config.get("use_upsampler", False))
+        base_h = final_h // 2 if use_upsampler else final_h
+        base_w = final_w // 2 if use_upsampler else final_w
+
+        vae_spatial_scale = 32
+        ref_factor = self._get_ref_downscale_factor()
+        base_div = int(round(vae_spatial_scale / max(ref_factor, 1e-6)))
+        if base_div % vae_spatial_scale != 0:
+            base_div = base_div * vae_spatial_scale // _gcd(base_div, vae_spatial_scale)
+
+        def _snap_nearest(x: int, d: int) -> int:
+            return max(d, ((int(x) + d // 2) // d) * d)
+
+        base_h = _snap_nearest(base_h, base_div)
+        base_w = _snap_nearest(base_w, base_div)
+
+        old_h = int(self.config.get("target_height", 0) or 0)
+        old_w = int(self.config.get("target_width", 0) or 0)
+        eff_final_h = base_h * 2 if use_upsampler else base_h
+        eff_final_w = base_w * 2 if use_upsampler else base_w
+        logger.info(
+            f"  ↪ v2av: output size from control video "
+            f"(config {old_w}x{old_h} → final {eff_final_w}x{eff_final_h}, "
+            f"base-gen {base_w}x{base_h}, base_div={base_div}, "
+            f"ref_downscale_factor={ref_factor}, use_upsampler={use_upsampler})."
+        )
+        self.input_info.target_shape = [base_h, base_w]
+
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_v2av(self):
+        """
+        LTX-2.3 IC-LoRA video-to-audio-video.
+        """
+        self._clear_ltx2_reference_audio_state()
+        self._normalize_i2av_input_fields()
+        self._override_target_hw_from_ref_video()
+        if not self.input_info.target_shape:
+            if self.config.get("use_upsampler", False):
+                self.input_info.target_shape = [
+                    self.config["target_height"] // 2,
+                    self.config["target_width"] // 2,
+                ]
+            else:
+                self.input_info.target_shape = [
+                    self.config["target_height"],
+                    self.config["target_width"],
+                ]
+
+        # Reference/control video → pixel tensor, then align temporal length with
+        # the clip (official-style: decode up to ``num_frames`` cap, actual length
+        # follows the shorter of cap vs. on-disk frames). Only then derive
+        # ``target_video_length`` / latent shapes so audio and denoising match.
+        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        if not ref_path:
+            raise ValueError("v2av requires a non-empty video_path (pre-processed control / reference video).")
+
+        ref_downscale_factor = self._get_ref_downscale_factor()
+        target_h = self.input_info.target_shape[0]
+        target_w = self.input_info.target_shape[1]
+        ref_h = max(int(round(target_h * ref_downscale_factor)), 1)
+        ref_w = max(int(round(target_w * ref_downscale_factor)), 1)
+        ref_h = ref_h - (ref_h % 2)
+        ref_w = ref_w - (ref_w % 2)
+
+        length_cap = int(self.input_info.target_video_length or self.config.get("target_video_length", 1))
+        ref_extra = getattr(self.input_info, "reference_video_frame_cap", None)
+        if ref_extra and int(ref_extra) > 0:
+            read_cap = min(length_cap, int(ref_extra))
+        else:
+            read_cap = length_cap
+
+        logger.info(f"  🎞️  Loading reference video: {ref_path} resize=({ref_w}x{ref_h}) read_cap={read_cap} (max_output_frames cap) ref_downscale_factor={ref_downscale_factor}")
+
+        ref_pixels = load_video_conditioning(
+            video_path=ref_path,
+            height=ref_h,
+            width=ref_w,
+            frame_cap=read_cap,
+            dtype=GET_DTYPE(),
+            device=AI_DEVICE,
+        )
+        if ref_pixels is None:
+            raise ValueError(f"v2av: failed to decode reference video from {ref_path!r}.")
+
+        ref_T = ref_pixels.shape[2]
+        snapped_T = max(((ref_T - 1) // 8) * 8 + 1, 1)
+        if snapped_T != ref_T:
+            logger.info(f"  ↪ Reference video has {ref_T} decoded frame(s); trimming to {snapped_T} for LTX-2.3 VAE (pixel length must be 1 + 8k).")
+            ref_pixels = ref_pixels[:, :, :snapped_T]
+        if ref_pixels.shape[2] < 1:
+            raise ValueError(f"v2av: reference video {ref_path!r} produced no usable frames (decoded {ref_T}, snapped to {snapped_T}).")
+
+        if snapped_T != length_cap:
+            logger.info(f"  ↪ v2av: setting target_video_length={snapped_T} from reference (decoded {ref_T} frame(s) within read_cap={read_cap}; configured max was {length_cap}).")
+        # Config is a LockableDict and is locked after init_modules; only mutate input_info.
+        self.input_info.target_video_length = snapped_T
+
+        self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
+
+        # Reference VAE encode before the text encoder: long clips at full resolution
+        # can take many minutes on one forward; doing this first avoids looking
+        # "stuck" right after Run Text Encoder in the logs.
+        b, c, t, h, w = ref_pixels.shape
+        logger.info(
+            f"  ⏳ VAE-encoding reference video (single forward, often minutes for long 1080p clips): pixels BCHW=({b},{c},{t},{h},{w}), cpu_offload={getattr(self.video_vae, 'cpu_offload', False)}"
+        )
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            ref_latent = self.video_vae.encode(ref_pixels)
+        if ref_latent.dim() == 5:
+            ref_latent = ref_latent.squeeze(0)
+        logger.info(f"  ✓ Reference VAE encode finished in {time.perf_counter() - t0:.1f}s → latent {tuple(ref_latent.shape)}")
+
+        text_encoder_output = self.run_text_encoder(self.input_info)
+
+        # Optional image conditioning (character image / keyframes).
+        if _ltx2_parse_image_paths(self.input_info.image_path or ""):
+            self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
+        else:
+            self.video_denoise_mask = None
+            self.initial_video_latent = None
+            self._i2av_guiding_keyframe_meta = None
+
+        ref_strength = float(
+            getattr(self.input_info, "reference_video_strength", None) if getattr(self.input_info, "reference_video_strength", None) is not None else self.config.get("reference_video_strength", 1.0)
+        )
+        ref_strength = max(0.0, min(1.0, ref_strength))
+
+        self._ref_video_latent = (ref_latent, ref_strength, ref_downscale_factor)
+        logger.info(f"  ✓ Reference IC-LoRA latent ready (strength={ref_strength}, ref_downscale_factor={ref_downscale_factor})")
+
+        torch_device_module.empty_cache()
+        gc.collect()
+        return {
+            "text_encoder_output": text_encoder_output,
+        }
+
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_ltx2_s2v(self):
         """Reference audio (frozen in latent) + optional reference images; mux original waveform when saving."""
+        self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
 
@@ -551,6 +749,10 @@ class LTX2Runner(DefaultRunner):
         if hasattr(self, "video_denoise_mask") and self.video_denoise_mask is not None:
             stage2_video_denoise_mask = _ltx2_resize_video_denoise_mask_for_stage2(self.video_denoise_mask, stage2_h, stage2_w)
 
+        # Drop the reference-video latent before stage-2 so IC-LoRA reference tokens are
+        # not appended twice (stage-1 already attached them; stage-2 only refines).
+        self._clear_ltx2_reference_video_state()
+
         # Prepare scheduler using the shared method
         stage2_audio_mask = getattr(self, "audio_denoise_mask", None)
 
@@ -628,6 +830,10 @@ class LTX2Runner(DefaultRunner):
         if vg:
             prepare_kwargs["video_guiding_latents"] = vg
 
+        ref_video_latent = getattr(self, "_ref_video_latent", None)
+        if ref_video_latent is not None:
+            prepare_kwargs["reference_video_latent"] = ref_video_latent
+
         self.model.scheduler.prepare(**prepare_kwargs)
 
     def init_run(self):
@@ -693,15 +899,24 @@ class LTX2Runner(DefaultRunner):
                 save_audio = self.gen_audio_final
                 if self.config.get("task") == "ltx2_s2v" and getattr(self, "_ltx2_s2v_mux_audio", None) is not None:
                     save_audio = self._ltx2_s2v_mux_audio
+                out_path = self.input_info.save_result_path
                 save_video(
                     video=self.gen_video_final,
                     fps=self.config.get("fps", 24),
                     audio=save_audio,
-                    output_path=self.input_info.save_result_path,
+                    output_path=out_path,
                     video_chunks_number=1,
                 )
 
-                logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
+                mux_src = (getattr(self.input_info, "mux_audio_video_path", None) or "").strip()
+                if self.config.get("task") == "v2av" and mux_src:
+                    muxed = mux_audio_from_video(mux_src, out_path)
+                    if muxed:
+                        logger.info(f"Audio muxed from --mux_audio_video_path: {mux_src}")
+                    else:
+                        logger.warning("v2av: --mux_audio_video_path was set but mux failed or source had no audio; output keeps audio from generation only.")
+
+                logger.info(f"✅ Video saved successfully to: {out_path} ✅")
             return {"video": None}
 
     def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):

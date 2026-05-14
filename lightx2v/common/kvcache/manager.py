@@ -14,7 +14,7 @@ from .quant import (
     SageQuantRollingKVCachePool,
     TurboQuantRollingKVCachePool,
 )
-from .rolling import RollingKVCachePool
+from .rolling import RollingKVCachePool, SpatialRollingKVCachePool
 from .utils import *
 
 
@@ -161,6 +161,7 @@ class KVCacheManager:
         self.cross_attn_kv_cache = self._create_cross_attn_kv_cache()
         self.self_attn_kv_cache._init_kv_buffer()
         self.cross_attn_kv_cache._init_kv_buffer()
+        self._create_matrix_action_kv_caches()
 
         logger.info(
             "[KVCacheManager] init: frame_seq_length={}, num_output_frames={}, kv_cache_size={}, max_attention_size={}, ws={}, local_attn_size={}, sink_size={}, kv_quant={}, kv_offload={}",
@@ -174,6 +175,47 @@ class KVCacheManager:
             bool(self.ar_config.get("kv_quant")),
             bool(self.ar_config.get("kv_offload")),
         )
+
+    def _create_matrix_action_kv_caches(self) -> None:
+        """Matrix Game action K/V: keyboard ``RollingKVCachePool``, mouse ``SpatialRollingKVCachePool``."""
+        ac = self.config.get("action_config")
+        self.action_keyboard_kv_cache = None
+        self.action_mouse_kv_cache = None
+        if not ac:
+            return
+
+        heads = int(ac["heads_num"])
+        k_hidden = int(ac.get("keyboard_hidden_dim", 1024))
+        head_dim = k_hidden // heads
+        la = self.ar_config.get("local_attn_size", -1)
+        cache_sz = int(la) if la != -1 else 15
+        num_layers = int(self.config["num_layers"])
+
+        if ac.get("enable_keyboard", False):
+            self.action_keyboard_kv_cache = RollingKVCachePool(
+                num_layers=num_layers,
+                cache_size=cache_sz,
+                num_heads=heads,
+                head_dim=head_dim,
+                dtype=self.dtype,
+                device=self.device,
+                kv_offload=False,
+            )
+            self.action_keyboard_kv_cache._init_kv_buffer()
+
+        if ac.get("enable_mouse", False):
+            kv_offload = bool(self.ar_config.get("kv_offload", False))
+            self.action_mouse_kv_cache = SpatialRollingKVCachePool(
+                spatial_len=self.frame_seq_length,
+                num_layers=num_layers,
+                cache_size=cache_sz,
+                num_heads=heads,
+                head_dim=head_dim,
+                dtype=self.dtype,
+                device=self.device,
+                kv_offload=kv_offload,
+            )
+            self.action_mouse_kv_cache._init_kv_buffer()
 
     def save_calibration(self) -> None:
         """Auto-save calibration if running in calibrate mode with calib_path."""

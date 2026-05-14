@@ -5,23 +5,23 @@ from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import WanSFPreIn
 from lightx2v.utils.envs import *
 
 
-def cond_current(conditional_dict, current_start_frame, num_frame_per_block, replace=None, mode="universal"):
+def cond_current(conditional_dict, current_start_frame, num_frame_per_chunk, replace=None, mode="universal"):
     new_cond = {}
 
-    new_cond["cond_concat"] = conditional_dict["image_encoder_output"]["cond_concat"][:, :, current_start_frame : current_start_frame + num_frame_per_block]
+    new_cond["cond_concat"] = conditional_dict["image_encoder_output"]["cond_concat"][:, :, current_start_frame : current_start_frame + num_frame_per_chunk]
     new_cond["visual_context"] = conditional_dict["image_encoder_output"]["visual_context"]
     if replace:
         if current_start_frame == 0:
-            last_frame_num = 1 + 4 * (num_frame_per_block - 1)
+            last_frame_num = 1 + 4 * (num_frame_per_chunk - 1)
         else:
-            last_frame_num = 4 * num_frame_per_block
-        final_frame = 1 + 4 * (current_start_frame + num_frame_per_block - 1)
+            last_frame_num = 4 * num_frame_per_chunk
+        final_frame = 1 + 4 * (current_start_frame + num_frame_per_chunk - 1)
         if mode != "templerun":
             conditional_dict["text_encoder_output"]["mouse_cond"][:, -last_frame_num + final_frame : final_frame] = replace["mouse"][None, None, :].repeat(1, last_frame_num, 1)
         conditional_dict["text_encoder_output"]["keyboard_cond"][:, -last_frame_num + final_frame : final_frame] = replace["keyboard"][None, None, :].repeat(1, last_frame_num, 1)
     if mode != "templerun":
-        new_cond["mouse_cond"] = conditional_dict["text_encoder_output"]["mouse_cond"][:, : 1 + 4 * (current_start_frame + num_frame_per_block - 1)]
-    new_cond["keyboard_cond"] = conditional_dict["text_encoder_output"]["keyboard_cond"][:, : 1 + 4 * (current_start_frame + num_frame_per_block - 1)]
+        new_cond["mouse_cond"] = conditional_dict["text_encoder_output"]["mouse_cond"][:, : 1 + 4 * (current_start_frame + num_frame_per_chunk - 1)]
+    new_cond["keyboard_cond"] = conditional_dict["text_encoder_output"]["keyboard_cond"][:, : 1 + 4 * (current_start_frame + num_frame_per_chunk - 1)]
 
     if replace:
         return new_cond, conditional_dict
@@ -57,13 +57,13 @@ class WanMtxg2PreInfer(WanSFPreInfer):
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         x = self.scheduler.latents_input
         t = self.scheduler.timestep_input
-        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_block
+        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
 
         if self.config["streaming"]:
             current_actions = inputs["current_actions"]
-            current_conditional_dict, _ = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_block, replace=current_actions, mode=self.config["mode"])
+            current_conditional_dict, _ = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_chunk, replace=current_actions, mode=self.config["mode"])
         else:
-            current_conditional_dict = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_block, mode=self.config["mode"])
+            current_conditional_dict = cond_current(inputs, current_start_frame, self.scheduler.num_frame_per_chunk, mode=self.config["mode"])
         cond_concat = current_conditional_dict["cond_concat"]
         visual_context = current_conditional_dict["visual_context"]
 

@@ -11,7 +11,7 @@
     "sample_shift": 5.0,
     "enable_cfg": false,
     "cpu_offload": false,
-    "dit_original_ckpt": "/data/nvme4/models/realtime-video/krea-realtime-video-14b.safetensors",
+    "dit_original_ckpt": "path/to/krea-realtime-video-14b.safetensors",
     "ar_config": {
         "local_attn_size": -1,
         "num_frame_per_chunk": 3,
@@ -19,10 +19,11 @@
         "kv_quant": {
             "calibrate": false,
             "quant_scheme": "turboquant",
-            "codebook_dir": "/data/nvme4/gushiqiao/new/LightX2V/save_results/self_forcing/turboquant_codebooks",
+            "codebook_dir": "path/to/turboquant_codebooks",
             "key_bits": 4,
             "value_bits": 2
         },
         "kv_offload": false
-    }
+    },
+    "causal_rope_type": "triton"
 }

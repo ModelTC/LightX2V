@@ -146,7 +146,7 @@ class WanMtxg3CrossAttention(WeightModule):
         self.mm_type = mm_type
         self.config = config
 
-        if self.config.get("sf_config", False):
+        if self.config.get("ar_config"):
             self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
         else:
             self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
