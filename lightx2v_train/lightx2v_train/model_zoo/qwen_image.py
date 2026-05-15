@@ -36,7 +36,6 @@ class QwenImageModel(BaseModel):
             self.transformer = self.load_transformer()
             return
         model_path = self.config["model"]["pretrained_model_name_or_path"]
-
         self.text_pipeline = QwenImagePipeline.from_pretrained(
             model_path,
             transformer=None,
