@@ -8,7 +8,6 @@ data:
     val:
         name: image_dataset
         num_workers: 8
-        image_size: 1024
         shuffle: false
         data_path:
             - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
@@ -27,8 +26,8 @@ scheduler:
 inference:
     method: image_infer  # image_infer, image_native_infer
     negative_prompt: " "
-    width: 1024
-    height: 1024
+    default_width: 1024
+    default_height: 1024
     num_inference_steps: 50
     enable_cfg: true
     cfg_guidance_scale: 4.0

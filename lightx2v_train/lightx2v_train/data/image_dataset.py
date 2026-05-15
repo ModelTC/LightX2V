@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
-from lightx2v_train.data.utils import center_crop_to_ratio, resize_to_max_side
+from lightx2v_train.data.utils import resize_to_target_area
 from lightx2v_train.utils.registry import DATA_REGISTER
 
 
@@ -15,13 +15,11 @@ class ImageDataset(Dataset):
     def __init__(
         self,
         metadata_paths,
-        image_size=1024,
+        target_area=1024 * 1024,
         prompt_dropout_rate=0.0,
-        random_ratio=False,
     ):
-        self.image_size = image_size
+        self.target_area = target_area
         self.prompt_dropout_rate = prompt_dropout_rate
-        self.random_ratio = random_ratio
         self.samples = []
         for path in metadata_paths:
             path = Path(path)
@@ -78,15 +76,7 @@ class ImageDataset(Dataset):
 
     def load_image(self, image_path):
         image = Image.open(image_path).convert("RGB")
-        if self.random_ratio:
-            ratio_name = random.choice(["default", "1:1", "4:3", "16:9"])
-            ratios = {"1:1": (1, 1), "4:3": (4, 3), "16:9": (16, 9)}
-            if ratio_name in ratios:
-                image = center_crop_to_ratio(image, ratios[ratio_name])
-
-        image = resize_to_max_side(image, self.image_size)
-        width, height = image.size
-        image = image.resize(((width // 32) * 32, (height // 32) * 32))
+        image = resize_to_target_area(image, self.target_area)
         return torch.from_numpy(np.asarray(image).astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1)
 
 
@@ -95,17 +85,15 @@ def build_image_dataset(data_config_split, train_or_val="train"):
     data_path = data_config_split["data_path"]
     assert isinstance(data_path, list), f"config['data'][{train_or_val!r}]['data_path'] must be a list"
 
-    image_size = data_config_split.get("image_size", 1024)
+    target_area = data_config_split.get("target_area", 1024 * 1024)
     prompt_dropout_rate = data_config_split.get("prompt_dropout_rate", 0.0)
-    random_ratio = data_config_split.get("random_ratio", False)
     num_workers = data_config_split.get("num_workers", 8)
     shuffle = data_config_split.get("shuffle", train_or_val == "train")
 
     dataset = ImageDataset(
         metadata_paths=[Path(p) for p in data_path],
-        image_size=image_size,
+        target_area=target_area,
         prompt_dropout_rate=prompt_dropout_rate,
-        random_ratio=random_ratio,
     )
     return DataLoader(
         dataset,

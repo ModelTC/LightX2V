@@ -8,14 +8,23 @@ from lightx2v_train.utils.registry import INFERENCER_REGISTER
 from .base import BaseInferencer
 
 
+def _target_hw_for_sample(sample, default_height, default_width):
+    h = sample.get("target_height")
+    w = sample.get("target_width")
+    if h is not None and w is not None:
+        return int(h), int(w)
+    return default_height, default_width
+
+
 @INFERENCER_REGISTER("image_infer")
 class ImageInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
-        prompts = [sample["prompt"] for sample in self.dataloader_eval.dataset.samples]
+        samples = self.dataloader_eval.dataset.samples
+        prompts = [sample["prompt"] for sample in samples]
 
-        height = self.infer_config.get("height", 1024)
-        width = self.infer_config.get("width", 1024)
+        default_height = self.infer_config.get("default_height", 1024)
+        default_width = self.infer_config.get("default_width", 1024)
         num_inference_steps = self.infer_config.get("num_inference_steps", 50)
 
         base_seed = self.infer_config.get("seed", 42)
@@ -40,6 +49,7 @@ class ImageInferencer(BaseInferencer):
         self.model.transformer.eval()
         with torch.no_grad():
             for i, prompt in enumerate(prompts):
+                height, width = _target_hw_for_sample(samples[i], default_height, default_width)
                 generator = torch.Generator(device=self.model.device).manual_seed(base_seed + i)
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 latent = self.model.prepare_infer_latents(height, width, generator)
