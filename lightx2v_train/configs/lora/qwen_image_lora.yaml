@@ -71,3 +71,6 @@ inference:
     seed: 42
     output_dir: ./output_infer/qwen_image_lora
     infer_every_iters: ${training.save_every_iters}
+
+resume:
+    auto_resume: true
