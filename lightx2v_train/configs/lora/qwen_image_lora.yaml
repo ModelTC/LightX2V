@@ -24,16 +24,15 @@ data:
             - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
-    training:
-        num_train_timesteps: 1000
-        timestep_distribution: logitnormal
-        logitnormal_mean: 0.0
-        logitnormal_std: 1.0
-        min_t: 0.001
-        max_t: 1.0
-        do_time_shift: true
-        time_shift_mu: 5.0
-        time_shift_power: 1.0
+    num_train_timesteps: 1000
+    timestep_distribution: logitnormal
+    logitnormal_mean: 0.0
+    logitnormal_std: 1.0
+    min_t: 0.001
+    max_t: 1.0
+    do_time_shift: true
+    time_shift_mu: 5.0
+    time_shift_power: 1.0
 
 training:
     method: lora
@@ -62,7 +61,7 @@ training:
     output_dir: ./output_train/qwen_image_lora
 
 inference:
-    method: image  # image, image_pipeline
+    method: image_infer  # image_infer, image_native_infer
     negative_prompt: " "
     width: 1024
     height: 1024
@@ -72,3 +71,6 @@ inference:
     seed: 42
     output_dir: ./output_infer/qwen_image_lora
     infer_every_iters: ${training.save_every_iters}
+
+resume:
+    auto_resume: true

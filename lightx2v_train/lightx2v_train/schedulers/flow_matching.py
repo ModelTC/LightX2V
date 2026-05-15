@@ -8,19 +8,19 @@ class RectifiedFlowMatchingScheduler:
         self.config = config
         self.device = torch.device("cuda")
 
-        scheduler_training_config = config["scheduler"]["training"]
-        self.num_train_timesteps = scheduler_training_config.get("num_train_timesteps", 1000)
-        self.timestep_distribution = scheduler_training_config.get("timestep_distribution", "logitnormal")
+        scheduler_config = config["scheduler"]
+        self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)
+        self.timestep_distribution = scheduler_config.get("timestep_distribution", "logitnormal")
 
-        self.logitnormal_mean = scheduler_training_config.get("logitnormal_mean", 0.0)
-        self.logitnormal_std = scheduler_training_config.get("logitnormal_std", 1.0)
+        self.logitnormal_mean = scheduler_config.get("logitnormal_mean", 0.0)
+        self.logitnormal_std = scheduler_config.get("logitnormal_std", 1.0)
 
-        self.min_t = scheduler_training_config.get("min_t", 0.001)
-        self.max_t = scheduler_training_config.get("max_t", 1.0)
+        self.min_t = scheduler_config.get("min_t", 0.001)
+        self.max_t = scheduler_config.get("max_t", 1.0)
 
-        self.do_time_shift = scheduler_training_config.get("do_time_shift", False)
-        self.time_shift_mu = scheduler_training_config.get("time_shift_mu", 5.0)
-        self.time_shift_power = scheduler_training_config.get("time_shift_power", 1.0)
+        self.do_time_shift = scheduler_config.get("do_time_shift", False)
+        self.time_shift_mu = scheduler_config.get("time_shift_mu", 5.0)
+        self.time_shift_power = scheduler_config.get("time_shift_power", 1.0)
 
         self.sigmas = None
         self.timesteps = None
@@ -51,6 +51,9 @@ class RectifiedFlowMatchingScheduler:
     def build_train_gt(self, latent, noise):
         return noise - latent
 
+    # ==============================
+    # The following methods are for inference only
+    # ==============================
     def set_timesteps(self, num_inference_steps, sigmas=None):
         self.num_inference_steps = num_inference_steps
 
@@ -74,10 +77,10 @@ class RectifiedFlowMatchingScheduler:
             x_t-1 = sigma_t-1 * v + x_0
             =>  x_t - x_t-1 = (sigma_t - sigma_t-1) * v
             =>  x_t-1 = x_t + (sigma_t-1 - sigma_t) * v
-            =>  x_t-1 = x_t + (sigma_next - sigma) * model_output  ------ (*)
+            =>  x_t-1 = x_t + (sigma_next - sigma) * model_output  ------------------------ (*)
         """
         step_index = (self.timesteps == current_timestep).nonzero()[0].item()
         sigma = self.sigmas[step_index]
         sigma_next = self.sigmas[step_index + 1]
-        prev_sample = latent + (sigma_next - sigma) * model_output  # ------ (*) from above
+        prev_sample = latent + (sigma_next - sigma) * model_output  # --------------------- (*) from above
         return prev_sample

@@ -8,7 +8,7 @@ from lightx2v_train.utils.registry import INFERENCER_REGISTER
 from .base import BaseInferencer
 
 
-@INFERENCER_REGISTER("image")
+@INFERENCER_REGISTER("image_infer")
 class ImageInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
@@ -19,10 +19,11 @@ class ImageInferencer(BaseInferencer):
         num_inference_steps = self.infer_config.get("num_inference_steps", 50)
 
         base_seed = self.infer_config.get("seed", 42)
-        # self.lora_path = self.infer_config.get("lora_path", None)
 
-        # if self.lora_path:
-        #     self.model.load_lora_for_infer(self.lora_path)
+        lora_config = self.infer_config.get("lora_config", None)
+        lora_path = lora_config.get("path", None) if lora_config else None
+        if lora_path:
+            self.model.load_lora_for_infer(lora_path)
 
         self.scheduler.set_timesteps(num_inference_steps)
 
@@ -63,7 +64,7 @@ class ImageInferencer(BaseInferencer):
                     print(f"Saved to {save_path}")
                     saved_paths.append(str(save_path))
 
-        # if self.lora_path:
-        #     self.model.unload_lora_for_infer()
+        if lora_path:
+            self.model.unload_lora_for_infer()
 
         return saved_paths
