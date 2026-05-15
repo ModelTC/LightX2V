@@ -14,8 +14,8 @@ from .lora import LoraTrainer
 
 @TRAINER_REGISTER("dmd_lora")
 class DmdLoraTrainer(LoraTrainer):
-    def get_configs(self):
-        super().get_configs()
+    def __init__(self, config):
+        super().__init__(config)
         fake_config = self.training_config.get("fake", {})
         fake_optimizer_config = fake_config.get("optimizer", {})
         self.fake_optimizer_learning_rate = fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
