@@ -45,17 +45,6 @@ class LoraTrainer(BaseTrainer):
 
     def setup(self):
         self.get_configs()
-        self.setup_lora()
-
-        if self.infer_every_iters:
-            self.inferencer = build_inferencer(self.config)
-            self.inferencer.set_model(self.model)
-            # set_data is deferred to train() when dataloader_eval is available
-
-        self.optimizer = self.build_optimizer(self.model.trainable_parameters())
-        self.lr_scheduler = self.build_lr_scheduler(self.optimizer)
-
-    def setup_lora(self):
         self.model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
         self.model.set_lora_trainable()
         if self.gradient_checkpointing:
@@ -73,13 +62,11 @@ class LoraTrainer(BaseTrainer):
             weight_decay=self.optimizer_weight_decay,
             eps=self.optimizer_adam_epsilon,
         )
-
-    def build_lr_scheduler(self, optimizer, num_warmup_steps=None, num_training_steps=None):
-        return get_scheduler(
+        self.lr_scheduler = get_scheduler(
             self.lr_scheduler_name,
-            optimizer=optimizer,
-            num_warmup_steps=self.lr_warmup_iters if num_warmup_steps is None else num_warmup_steps,
-            num_training_steps=self.max_train_iters if num_training_steps is None else num_training_steps,
+            optimizer=self.optimizer,
+            num_warmup_steps=self.lr_warmup_iters,
+            num_training_steps=self.max_train_iters,
         )
 
     def compute_loss_on_sample(self, sample):

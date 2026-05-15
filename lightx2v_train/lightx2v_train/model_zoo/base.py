@@ -61,7 +61,7 @@ class BaseModel:
     def encode_condition(self, sample):
         raise NotImplementedError
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, sample, condition):
         raise NotImplementedError
 
     def denoise(self, denoiser_input, timesteps, condition):
