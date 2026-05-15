@@ -1,6 +1,11 @@
 import torch
 from loguru import logger
 
+try:
+    from magi_compiler import magi_register_custom_op
+except ImportError:
+    magi_register_custom_op = None
+
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -31,6 +36,18 @@ else:
     except ImportError:
         logger.info("sageattn not found, please install sageattention first")
         sageattn = None
+
+
+if magi_register_custom_op is not None and sageattn is not None:
+
+    @magi_register_custom_op(
+        "lightx2v::sage_attn2",
+        infer_output_meta_fn=["q"],
+        is_subgraph_boundary=True,
+    )
+    def _sage_attn2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        return sageattn(q, k, v, tensor_layout="NHD")
+
 
 try:
     from sageattn3 import sageattn3_blackwell
@@ -75,12 +92,10 @@ class SageAttn2Weight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        x = sageattn(
-            q,
-            k,
-            v,
-            tensor_layout="NHD",
-        ).view(bs * max_seqlen_q, -1)
+        if magi_register_custom_op is not None and sageattn is not None:
+            x = torch.ops.lightx2v.sage_attn2(q, k, v).view(bs * max_seqlen_q, -1)
+        else:
+            x = sageattn(q, k, v, tensor_layout="NHD").view(bs * max_seqlen_q, -1)
         return x
 
 

@@ -471,7 +471,7 @@ class DefaultRunner(BaseRunner):
                     logger.info(f"🎬 Start to save video 🎬")
 
                     save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
-                    if self.config.get("task") == "sr":
+                    if self.config.get("task") in ("sr", "animate"):
                         input_video_path = getattr(self.input_info, "video_path", "")
                         if input_video_path:
                             muxed_path = mux_audio_from_video(input_video_path, out_path)

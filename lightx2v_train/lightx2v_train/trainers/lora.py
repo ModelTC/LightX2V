@@ -61,24 +61,17 @@ class LoraTrainer(BaseTrainer):
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
 
-    def build_optimizer(
-        self,
-        parameters,
-        learning_rate=None,
-        adam_beta1=None,
-        adam_beta2=None,
-        weight_decay=None,
-        adam_epsilon=None,
-    ):
-        return torch.optim.AdamW(
-            parameters,
-            lr=self.optimizer_learning_rate if learning_rate is None else learning_rate,
-            betas=(
-                self.optimizer_adam_beta1 if adam_beta1 is None else adam_beta1,
-                self.optimizer_adam_beta2 if adam_beta2 is None else adam_beta2,
-            ),
-            weight_decay=self.optimizer_weight_decay if weight_decay is None else weight_decay,
-            eps=self.optimizer_adam_epsilon if adam_epsilon is None else adam_epsilon,
+        if self.infer_every_iters:
+            self.inferencer = build_inferencer(self.config)
+            self.inferencer.set_model(self.model)
+            # set_data is deferred to train() when dataloader_eval is available
+
+        self.optimizer = torch.optim.AdamW(
+            self.model.trainable_parameters(),
+            lr=self.optimizer_learning_rate,
+            betas=(self.optimizer_adam_beta1, self.optimizer_adam_beta2),
+            weight_decay=self.optimizer_weight_decay,
+            eps=self.optimizer_adam_epsilon,
         )
 
     def build_lr_scheduler(self, optimizer, num_warmup_steps=None, num_training_steps=None):

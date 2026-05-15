@@ -462,21 +462,23 @@ class SeedVRRunner(DefaultRunner):
         raw_segments = []
         original_save_path = self.input_info.save_result_path
         original_return_tensor = self.input_info.return_result_tensor
-        self.input_info.save_result_path = ""
-        self.input_info.return_result_tensor = True
+        try:
+            self.input_info.save_result_path = ""
+            self.input_info.return_result_tensor = True
 
-        for idx, (start_idx, end_idx) in enumerate(segments):
-            logger.info(f"[SeedVRRunner] Processing segment {idx + 1}/{len(segments)}: frames {start_idx}:{end_idx}")
-            self._sr_segment = (start_idx, end_idx)
-            self.inputs = self.run_input_encoder()
-            raw = self._run_sr_single_segment()
-            if overlap > 0 and idx > 0 and raw is not None:
-                raw = raw[:, :, overlap:, :, :]
-            raw_segments.append(raw)
-
-        self._sr_segment = None
-        self.input_info.save_result_path = original_save_path
-        self.input_info.return_result_tensor = original_return_tensor
+            for idx, (start_idx, end_idx) in enumerate(segments):
+                logger.info(f"[SeedVRRunner] Processing segment {idx + 1}/{len(segments)}: frames {start_idx}:{end_idx}")
+                self._sr_segment = (start_idx, end_idx)
+                self.inputs = self.run_input_encoder()
+                raw = self._run_sr_single_segment()
+                if overlap > 0 and idx > 0 and raw is not None:
+                    raw = raw[:, :, overlap:, :, :]
+                raw_segments.append(raw)
+        finally:
+            # Critical: restore per-request output mode even when cancelled/interrupted.
+            self._sr_segment = None
+            self.input_info.save_result_path = original_save_path
+            self.input_info.return_result_tensor = original_return_tensor
 
         self.gen_video_final = torch.cat(raw_segments, dim=2)
         gen_video_final = self.process_images_after_vae_decoder()

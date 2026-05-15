@@ -17,6 +17,7 @@ imageio
 imageio-ffmpeg
 einops
 loguru
+langdetect>=1.0.9
 sgl-kernel
 qtorch
 ftfy

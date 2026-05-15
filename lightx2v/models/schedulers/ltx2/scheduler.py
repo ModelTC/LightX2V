@@ -383,6 +383,7 @@ class LTX2Scheduler(BaseScheduler):
         video_denoise_mask: Optional[torch.Tensor] = None,
         audio_denoise_mask: Optional[torch.Tensor] = None,
         video_guiding_latents: Optional[List[Tuple[torch.Tensor, int, float]]] = None,
+        reference_video_latent: Optional[Tuple[torch.Tensor, float, float]] = None,
     ):
         """
         Prepare scheduler for inference.
@@ -399,6 +400,11 @@ class LTX2Scheduler(BaseScheduler):
             video_guiding_latents: Optional list of (encoded_latent [C,1,H,W], pixel_frame_idx, strength).
                 Each keyframe is patchified and concatenated after the main video tokens, with temporal positions
                 offset by `pixel_frame_idx` (see `_append_video_guiding_keyframes`).
+            reference_video_latent: Optional IC-LoRA reference video conditioning, as a tuple of
+                (encoded_latent [C, F_ref, H_ref, W_ref], strength, ref_downscale_factor). The reference latent
+                is patchified and concatenated after the main grid as frozen tokens; their pixel-position
+                spatial coordinates are inflated by ``ref_downscale_factor`` so reference and main tokens land
+                on the same coordinate frame.
         """
         # Reset step state (important for stage 2 after stage 1)
         self.step_index = 0
@@ -421,6 +427,7 @@ class LTX2Scheduler(BaseScheduler):
             video_denoise_mask=video_denoise_mask,
             audio_denoise_mask=audio_denoise_mask,
             video_guiding_latents=video_guiding_latents,
+            reference_video_latent=reference_video_latent,
         )
 
         if self.sigmas is None:
@@ -436,6 +443,7 @@ class LTX2Scheduler(BaseScheduler):
         video_denoise_mask: Optional[torch.Tensor] = None,
         audio_denoise_mask: Optional[torch.Tensor] = None,
         video_guiding_latents: Optional[List[Tuple[torch.Tensor, int, float]]] = None,
+        reference_video_latent: Optional[Tuple[torch.Tensor, float, float]] = None,
     ):
         """
         Prepare initial latents for denoising and patchify them.
@@ -456,6 +464,8 @@ class LTX2Scheduler(BaseScheduler):
             video_denoise_mask: Optional denoise mask for video (unpatchified)
             audio_denoise_mask: Optional denoise mask for audio (unpatchified)
             dtype: Data type for latents (defaults to GET_DTYPE())
+            reference_video_latent: Optional IC-LoRA reference video tuple
+                (encoded [C,F_ref,H_ref,W_ref], strength, ref_downscale_factor).
         """
 
         # Prepare video latents
@@ -466,6 +476,7 @@ class LTX2Scheduler(BaseScheduler):
             video_denoise_mask=video_denoise_mask,
             dtype=GET_DTYPE(),
             video_guiding_latents=video_guiding_latents,
+            reference_video_latent=reference_video_latent,
         )
 
         # Prepare audio latents
@@ -485,6 +496,7 @@ class LTX2Scheduler(BaseScheduler):
         video_denoise_mask: Optional[torch.Tensor] = None,
         dtype: torch.dtype = None,
         video_guiding_latents: Optional[List[Tuple[torch.Tensor, int, float]]] = None,
+        reference_video_latent: Optional[Tuple[torch.Tensor, float, float]] = None,
     ):
         """
         Prepare video latents for denoising.
@@ -496,6 +508,8 @@ class LTX2Scheduler(BaseScheduler):
             video_denoise_mask: Optional denoise mask for video (unpatchified)
             dtype: Data type for latents
             video_guiding_latents: Optional guiding latents (see prepare()).
+            reference_video_latent: Optional IC-LoRA reference video tuple
+                (encoded [C,F_ref,H_ref,W_ref], strength, ref_downscale_factor).
         """
         _, frames_v, height_v, width_v = video_latent_shape
 
@@ -583,6 +597,16 @@ class LTX2Scheduler(BaseScheduler):
                 noise_scale,
             )
 
+        if reference_video_latent is not None:
+            enc, ref_strength, ref_downscale_factor = reference_video_latent
+            self._append_reference_video_latents(
+                enc=enc,
+                strength=float(ref_strength),
+                ref_downscale_factor=float(ref_downscale_factor),
+                dtype=dtype,
+                noise_scale=noise_scale,
+            )
+
     def _append_video_guiding_keyframes(
         self,
         keyframes: List[Tuple[torch.Tensor, int, float]],
@@ -635,6 +659,56 @@ class LTX2Scheduler(BaseScheduler):
             st.clean_latent = torch.cat([st.clean_latent, clean_k], dim=0)
             st.denoise_mask = torch.cat([st.denoise_mask, mask_k], dim=0)
             st.positions = torch.cat([st.positions, pos_k], dim=1)
+
+    def _append_reference_video_latents(
+        self,
+        enc: torch.Tensor,
+        strength: float,
+        ref_downscale_factor: float,
+        dtype: torch.dtype,
+        noise_scale: float,
+    ) -> None:
+        """
+        IC-LoRA reference video conditioning.
+        """
+        if enc.dim() != 4:
+            raise ValueError(f"reference latent must be [C,F,H,W], got shape {tuple(enc.shape)}")
+        if ref_downscale_factor <= 0:
+            raise ValueError(f"ref_downscale_factor must be > 0, got {ref_downscale_factor}")
+
+        enc = enc.to(dtype=dtype, device=AI_DEVICE)
+        c, f, h, w = enc.shape
+
+        patch_tokens = self.video_patchifier.patchify(enc)
+        tk = patch_tokens.shape[0]
+
+        latent_coords = self.video_patchifier.get_patch_grid_bounds(f, h, w, AI_DEVICE)
+        pos = get_pixel_coords(latent_coords, self.video_scale_factors, causal_fix=True)
+        pos = pos.float()
+        if abs(ref_downscale_factor - 1.0) > 1e-6:
+            pos[1, ...] = pos[1, ...] / ref_downscale_factor
+            pos[2, ...] = pos[2, ...] / ref_downscale_factor
+        pos[0, ...] = pos[0, ...] / float(self.fps)
+        pos = pos.to(dtype)
+
+        strength = float(max(0.0, min(1.0, strength)))
+        mask = torch.full((tk, 1), 1.0 - strength, device=AI_DEVICE, dtype=torch.float32)
+        clean = patch_tokens.clone()
+
+        noise = torch.randn(
+            *patch_tokens.shape,
+            dtype=patch_tokens.dtype,
+            device=AI_DEVICE,
+            generator=self.generator,
+        )
+        scaled_m = mask * noise_scale
+        noised = (noise * scaled_m + clean * (1 - scaled_m)).to(patch_tokens.dtype)
+
+        st = self.video_latent_state
+        st.latent = torch.cat([st.latent, noised], dim=0)
+        st.clean_latent = torch.cat([st.clean_latent, clean], dim=0)
+        st.denoise_mask = torch.cat([st.denoise_mask, mask], dim=0)
+        st.positions = torch.cat([st.positions, pos], dim=1)
 
     def _prepare_audio_latents(
         self,
