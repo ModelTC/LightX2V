@@ -38,7 +38,7 @@ class BaseInferencer:
             pred = pred_neg + self.guidance_scale * (pred_pos - pred_neg)
         else:
             pred = pred_pos
-        return self.model.postprocess_infer_step_output(pred)
+        return pred
 
     @torch.no_grad()
     def infer(self):

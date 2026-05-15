@@ -1,11 +1,12 @@
 import os
+import shutil
 
 import torch
 from diffusers.optimization import get_scheduler
 from tqdm.auto import tqdm
 
 from lightx2v_train.infer import build_inferencer
-from lightx2v_train.runtime.checkpoint import prune_checkpoints
+from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, prune_checkpoints
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -14,7 +15,8 @@ from .base import BaseTrainer
 
 @TRAINER_REGISTER("lora")
 class LoraTrainer(BaseTrainer):
-    def get_configs(self):
+    def __init__(self, config):
+        super().__init__(config)
         self.running_dtype = get_running_dtype(self.model_config["running_dtype"])
 
         lora_config = self.training_config.get("lora", {})
@@ -43,9 +45,12 @@ class LoraTrainer(BaseTrainer):
 
         self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
 
-    def setup(self):
-        self.get_configs()
+        resume_config = self.config.get("resume", {})
+        self.auto_resume = resume_config.get("auto_resume", False)
+
+    def setup(self, resume_ckpt_path=None):
         self.model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
+
         self.model.set_lora_trainable()
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
@@ -53,7 +58,6 @@ class LoraTrainer(BaseTrainer):
         if self.infer_every_iters:
             self.inferencer = build_inferencer(self.config)
             self.inferencer.set_model(self.model)
-            # set_data is deferred to train() when dataloader_eval is available
 
         self.optimizer = torch.optim.AdamW(
             self.model.trainable_parameters(),
@@ -68,6 +72,17 @@ class LoraTrainer(BaseTrainer):
             num_warmup_steps=self.lr_warmup_iters,
             num_training_steps=self.max_train_iters,
         )
+
+        if resume_ckpt_path is not None:
+            training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
+            if os.path.exists(training_state_path):
+                state = torch.load(training_state_path, map_location="cpu", weights_only=False)
+                self.model.load_lora_weights_for_resume(resume_ckpt_path)
+                self.optimizer.load_state_dict(state["optimizer"])
+                self.lr_scheduler.load_state_dict(state["lr_scheduler"])
+                print(f"Restored training state from {training_state_path}")
+            else:
+                print(f"Warning: training_state.pt not found in {resume_ckpt_path}. States not restored.")
 
     def compute_loss_on_sample(self, sample):
         with torch.no_grad():
@@ -86,8 +101,19 @@ class LoraTrainer(BaseTrainer):
         loss = torch.mean(((prediction.float() - target.float()) ** 2).reshape(target.shape[0], -1), dim=1)
         return loss.mean()
 
+    def _resolve_resume(self):
+        if not self.auto_resume:
+            return None, 0
+        ckpt_path, current_iter = find_latest_checkpoint(self.output_train_dir)
+        if ckpt_path is None:
+            print(f"Auto-resume enabled but no checkpoint found in '{self.output_train_dir}'. Starting from scratch.")
+        else:
+            print(f"Auto-resuming from checkpoint: {ckpt_path} (iteration {current_iter})")
+        return ckpt_path, current_iter
+
     def train(self):
-        self.setup()
+        resume_ckpt_path, current_iter = self._resolve_resume()
+        self.setup(resume_ckpt_path=resume_ckpt_path)
         os.makedirs(self.output_train_dir, exist_ok=True)
 
         max_train_iters = self.max_train_iters
@@ -95,14 +121,14 @@ class LoraTrainer(BaseTrainer):
         max_grad_norm = self.max_grad_norm
         save_every_iters = self.save_every_iters
         save_total_limit = self.save_total_limit
-        current_iter = 0
         grad_accum_counter = 0
         running_loss = 0.0
 
-        progress = tqdm(total=max_train_iters, desc="Training iterations")
+        progress = tqdm(total=max_train_iters, desc="Training iterations", initial=current_iter)
         if self.infer_every_iters:
             self.inferencer.set_data(self.dataloader_eval)
-            self.run_inference(current_iter)
+            if current_iter == 0:
+                self.run_inference(current_iter)
 
         while current_iter < max_train_iters:
             for sample in self.dataloader_train:
@@ -151,3 +177,14 @@ class LoraTrainer(BaseTrainer):
         save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
         os.makedirs(save_dir, exist_ok=True)
         self.model.save_lora_weights(save_dir)
+
+        config_path = self.config.get("config_path")
+        if config_path is not None:
+            shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
+
+        training_state = {
+            "iteration": iteration,
+            "optimizer": self.optimizer.state_dict(),
+            "lr_scheduler": self.lr_scheduler.state_dict(),
+        }
+        torch.save(training_state, os.path.join(save_dir, "training_state.pt"))

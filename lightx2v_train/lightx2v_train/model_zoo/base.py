@@ -1,5 +1,8 @@
+import os
+
 import torch
 from diffusers.utils import convert_state_dict_to_diffusers
+from diffusers.utils.peft_utils import get_adapter_name
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
@@ -44,17 +47,6 @@ class BaseModel:
         if hasattr(self.transformer, "enable_gradient_checkpointing"):
             self.transformer.enable_gradient_checkpointing()
 
-    def prepare_flow_matching_target(self, velocity):
-        """Layout/format alignment between flow-matching velocity and denoiser output. Override when needed."""
-        return velocity
-
-    def postprocess_infer_step_output(self, pred):
-        """Convert denoiser prediction to the latent format expected by scheduler.step().
-
-        Override when postprocess_denoiser_output returns a different layout than encode_to_latent.
-        """
-        return pred
-
     def encode_to_latent(self, sample):
         raise NotImplementedError
 
@@ -74,17 +66,9 @@ class BaseModel:
         raise NotImplementedError
 
     def decode_latent(self, latent):
-        """Decode a latent tensor into a list of PIL images."""
         raise NotImplementedError
 
     def assemble_pipeline(self, scheduler=None):
-        """Assemble a full diffusers pipeline from loaded components for pipeline-based inference.
-
-        Args:
-            scheduler: The scheduler to inject into the pipeline. If None, the pipeline's
-                       original pretrained scheduler is used. Pass the framework's
-                       RectifiedFlowMatchingScheduler for training-inference alignment.
-        """
         raise NotImplementedError
 
     def get_pipeline_infer_kwargs(self, infer_config):
@@ -96,13 +80,17 @@ class BaseModel:
             "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
         }
 
-    def load_lora_for_infer(self, lora_path):
-        pipe = self.assemble_pipeline()
-        pipe.load_lora_weights(lora_path)
+    def load_lora_for_infer(self, lora_path, adapter_name=None):
+        if adapter_name is None:
+            adapter_name = get_adapter_name(self.transformer)
+        self.transformer.load_lora_adapter(lora_path, adapter_name=adapter_name)
+        self._infer_lora_adapter_name = adapter_name
 
     def unload_lora_for_infer(self):
-        pipe = self.assemble_pipeline()
-        pipe.unload_lora_weights()
+        adapter_name = getattr(self, "_infer_lora_adapter_name", None)
+        if adapter_name is not None:
+            self.transformer.delete_adapters(adapter_name)
+            self._infer_lora_adapter_name = None
 
     def save_lora_weights(self, save_dir):
         lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.transformer))
@@ -110,6 +98,22 @@ class BaseModel:
             self.pipeline_cls.save_lora_weights(save_dir, lora_state_dict, safe_serialization=True)
         else:
             save_file(lora_state_dict, f"{save_dir}/pytorch_lora_weights.safetensors")
+
+    def load_lora_weights_for_resume(self, lora_path):
+        from peft.utils import set_peft_model_state_dict
+        from safetensors.torch import load_file
+
+        raw = load_file(os.path.join(lora_path, "pytorch_lora_weights.safetensors"))
+        peft_state_dict = {}
+        for key, value in raw.items():
+            new_key = key.removeprefix("transformer.")
+            new_key = new_key.replace(".lora.down.weight", ".lora_A.weight")
+            new_key = new_key.replace(".lora.up.weight", ".lora_B.weight")
+            peft_state_dict[new_key] = value
+
+        incompatible = set_peft_model_state_dict(self.transformer, peft_state_dict)
+        if incompatible and incompatible.unexpected_keys:
+            print(f"Warning: unexpected keys when resuming LoRA: {incompatible.unexpected_keys}")
 
     def save_full_model(self, save_dir):
         self.transformer.save_pretrained(f"{save_dir}/transformer", safe_serialization=True)
