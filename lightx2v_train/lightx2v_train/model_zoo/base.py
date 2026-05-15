@@ -7,35 +7,16 @@ from safetensors.torch import save_file
 from lightx2v_train.utils.utils import get_running_dtype
 
 
-class DenoiserInput:
-    def __init__(self, hidden_states, extra):
-        self.hidden_states = hidden_states
-        self.extra = extra
-
-
 class BaseModel:
     def __init__(self, config):
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
         self.device = torch.device("cuda")
-        self.pipeline = None
-        self.flow_matching = None
         self.transformer = None
         self.vae = None
 
     def load_components(self):
         raise NotImplementedError
-
-    def build_pipeline(self):
-        raise NotImplementedError
-
-    def generate(self, **kwargs):
-        lora_path = kwargs.pop("lora_path", None)
-        pipe = self.build_pipeline()
-        if lora_path is not None:
-            pipe.load_lora_weights(lora_path)
-        pipe.to(self.device)
-        return pipe(**kwargs)
 
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(
@@ -67,13 +48,20 @@ class BaseModel:
         """Layout/format alignment between flow-matching velocity and denoiser output. Override when needed."""
         return velocity
 
+    def postprocess_infer_step_output(self, pred):
+        """Convert denoiser prediction to the latent format expected by scheduler.step().
+
+        Override when postprocess_denoiser_output returns a different layout than encode_to_latent.
+        """
+        return pred
+
     def encode_to_latent(self, sample):
         raise NotImplementedError
 
     def encode_condition(self, sample):
         raise NotImplementedError
 
-    def prepare_denoiser_input(self, noisy_latent, sample, condition):
+    def prepare_denoiser_input(self, noisy_latent):
         raise NotImplementedError
 
     def denoise(self, denoiser_input, timesteps, condition):
@@ -81,6 +69,40 @@ class BaseModel:
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         raise NotImplementedError
+
+    def prepare_infer_latents(self, height, width, generator=None):
+        raise NotImplementedError
+
+    def decode_latent(self, latent):
+        """Decode a latent tensor into a list of PIL images."""
+        raise NotImplementedError
+
+    def assemble_pipeline(self, scheduler=None):
+        """Assemble a full diffusers pipeline from loaded components for pipeline-based inference.
+
+        Args:
+            scheduler: The scheduler to inject into the pipeline. If None, the pipeline's
+                       original pretrained scheduler is used. Pass the framework's
+                       RectifiedFlowMatchingScheduler for training-inference alignment.
+        """
+        raise NotImplementedError
+
+    def get_pipeline_infer_kwargs(self, infer_config):
+        """Return kwargs to pass to pipeline.__call__. Override to adapt model-specific parameter names."""
+        return {
+            "height": infer_config.get("height", 1024),
+            "width": infer_config.get("width", 1024),
+            "num_inference_steps": infer_config.get("num_inference_steps", 50),
+            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
+        }
+
+    def load_lora_for_infer(self, lora_path):
+        pipe = self.assemble_pipeline()
+        pipe.load_lora_weights(lora_path)
+
+    def unload_lora_for_infer(self):
+        pipe = self.assemble_pipeline()
+        pipe.unload_lora_weights()
 
     def save_lora_weights(self, save_dir):
         lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.transformer))

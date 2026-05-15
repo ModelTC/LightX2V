@@ -21,7 +21,6 @@
 .log
 *.pid
 *.ipynb*
-*.mp4
 build/
 dist/
 .cache/
@@ -31,3 +30,5 @@ app/.gradio/
 save_results/*
 *.egg-info/
 lightx2v_train/train_output/*
+lightx2v_train/output_train/*
+lightx2v_train/output_infer/*

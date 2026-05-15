@@ -106,8 +106,8 @@ class DmdLoraTrainer(LoraTrainer):
             latent_channels = self.model.transformer.config.in_channels // 4
         return (
             batch_size,
-            1,
             int(latent_channels),
+            1,
             image.shape[-2] // self.model.vae_scale_factor,
             image.shape[-1] // self.model.vae_scale_factor,
         )
@@ -124,10 +124,10 @@ class DmdLoraTrainer(LoraTrainer):
         return condition, negative_condition
 
     def _predict_velocity(self, model, latents, sigma, condition):
-        denoiser_input = model.prepare_denoiser_input(latents, {}, condition)
+        denoiser_input = model.prepare_denoiser_input(latents)
         prediction = model.denoise(denoiser_input, sigma, condition)
         prediction = model.postprocess_denoiser_output(prediction, denoiser_input)
-        return model.prepare_flow_matching_target(prediction)
+        return prediction
 
     def sample_initial_latents(self, latent_shape):
         return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
@@ -181,7 +181,7 @@ class DmdLoraTrainer(LoraTrainer):
 
     def train(self):
         self.setup()
-        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.output_train_dir, exist_ok=True)
 
         max_train_iters = self.max_train_iters
         fake_update_ratio = self.fake_update_ratio
@@ -195,7 +195,7 @@ class DmdLoraTrainer(LoraTrainer):
         progress = tqdm(total=max_train_iters, desc="DMD-LoRA iterations")
 
         while current_iter < max_train_iters:
-            for sample in self.dataloader:
+            for sample in self.dataloader_train:
                 loss_dmd = self.forward_loss(sample, stage="generator")
                 loss_dmd.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), max_grad_norm)

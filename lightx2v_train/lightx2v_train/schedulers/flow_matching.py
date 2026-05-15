@@ -1,5 +1,4 @@
 import torch
-from diffusers.schedulers.scheduling_utils import SchedulerOutput
 
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -23,12 +22,8 @@ class RectifiedFlowMatchingScheduler:
         self.time_shift_mu = scheduler_training_config.get("time_shift_mu", 5.0)
         self.time_shift_power = scheduler_training_config.get("time_shift_power", 1.0)
 
-        _sigmas = torch.linspace(1.0, 1.0 / self.num_train_timesteps, self.num_train_timesteps)
-        self._train_sigmas = _sigmas
-        self._train_timesteps = _sigmas * self.num_train_timesteps
-
-        self.sigmas = torch.cat([_sigmas, torch.zeros(1)])
-        self.timesteps = self._train_timesteps
+        self.sigmas = None
+        self.timesteps = None
         self.num_inference_steps = None
 
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
@@ -56,24 +51,33 @@ class RectifiedFlowMatchingScheduler:
     def build_train_gt(self, latent, noise):
         return noise - latent
 
-    def set_timesteps(self, num_inference_steps, device=None):
+    def set_timesteps(self, num_inference_steps, sigmas=None):
         self.num_inference_steps = num_inference_steps
-        device = device or self.device
 
-        sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
-        self.sigmas = torch.cat([sigmas, torch.zeros(1)]).to(device)
-        self.timesteps = (sigmas * self.num_train_timesteps).to(device)
+        if sigmas is None:
+            sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
+            if self.do_time_shift:
+                sigmas = self.time_shift(sigmas)
+        else:
+            sigmas = torch.tensor(sigmas, dtype=torch.float32)
+        self.sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
+        self.timesteps = (sigmas * self.num_train_timesteps).to(self.device)
 
-    def step(self, model_output, timestep, sample, return_dict=True):
-        step_index = (self.timesteps == timestep).nonzero()[0].item()
+    def step(self, model_output, current_timestep, latent):
+        f"""
+        ADD NOISE:
+            x_t = (1 - sigma_t) * x_0 + sigma_t * N  ------ self.add_noise(...)
+            =>  x_t = sigma_t * (N - x_0) + x_0
+            =>  x_t = sigma_t * v + x_0
+        REMOVE NOISE:
+            x_t = sigma_t * v + x_0
+            x_t-1 = sigma_t-1 * v + x_0
+            =>  x_t - x_t-1 = (sigma_t - sigma_t-1) * v
+            =>  x_t-1 = x_t + (sigma_t-1 - sigma_t) * v
+            =>  x_t-1 = x_t + (sigma_next - sigma) * model_output  ------ (*)
+        """
+        step_index = (self.timesteps == current_timestep).nonzero()[0].item()
         sigma = self.sigmas[step_index]
         sigma_next = self.sigmas[step_index + 1]
-
-        prev_sample = sample + (sigma_next - sigma) * model_output
-
-        if not return_dict:
-            return (prev_sample,)
-        return SchedulerOutput(prev_sample=prev_sample)
-
-    def scale_model_input(self, sample, timestep=None):
-        return sample
+        prev_sample = latent + (sigma_next - sigma) * model_output  # ------ (*) from above
+        return prev_sample

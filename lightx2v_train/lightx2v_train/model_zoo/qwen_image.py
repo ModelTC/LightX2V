@@ -1,9 +1,20 @@
+from dataclasses import dataclass
+
 import torch
 from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
+from diffusers.image_processor import VaeImageProcessor
 
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
-from .base import BaseModel, DenoiserInput
+from .base import BaseModel
+
+
+@dataclass
+class QwenImageDenoiserInput:
+    hidden_states: torch.Tensor
+    img_shapes: list
+    height: int
+    width: int
 
 
 @MODEL_REGISTER("qwen_image")
@@ -21,6 +32,8 @@ class QwenImageModel(BaseModel):
             if reference_model is not None:
                 self.text_pipeline = reference_model.text_pipeline
                 self.vae = reference_model.vae
+                self.vae_scale_factor = reference_model.vae_scale_factor
+                self.image_processor = reference_model.image_processor
             self.transformer = self.load_transformer()
             return
 
@@ -32,34 +45,23 @@ class QwenImageModel(BaseModel):
         ).to(self.device)
         self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
         self.transformer = self.load_transformer()
+
+        self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
+        self.vae_scale_factor = 2 ** len(self.vae.temperal_downsample)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
-    def build_pipeline(self):
-        pipe = QwenImagePipeline(
-            scheduler=self.flow_matching,
-            vae=self.vae,
-            text_encoder=self.text_pipeline.text_encoder,
-            tokenizer=self.text_pipeline.tokenizer,
-            transformer=self.transformer,
-        )
-        return pipe
-
-    @property
-    def vae_scale_factor(self):
-        return 2 ** len(self.vae.temperal_downsample)
-
     def encode_to_latent(self, sample):
         image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)
-        latent = self.vae.encode(pixel_values).latent_dist.sample()
-        latent = latent.permute(0, 2, 1, 3, 4)
+        latent = self.vae.encode(pixel_values).latent_dist.sample()  # (B, C, T, H, W)
 
-        latent_mean = torch.tensor(self.vae.config.latents_mean, device=self.device, dtype=self.running_dtype).view(1, 1, self.vae.config.z_dim, 1, 1)
-        latent_std = 1.0 / torch.tensor(self.vae.config.latents_std, device=self.device, dtype=self.running_dtype).view(1, 1, self.vae.config.z_dim, 1, 1)
+        latent_mean = torch.tensor(self.vae.config.latents_mean, device=self.device, dtype=self.running_dtype).view(1, self.vae.config.z_dim, 1, 1, 1)
+        latent_std = 1.0 / torch.tensor(self.vae.config.latents_std, device=self.device, dtype=self.running_dtype).view(1, self.vae.config.z_dim, 1, 1, 1)
         return (latent - latent_mean) * latent_std
 
     def encode_condition(self, sample):
@@ -78,23 +80,16 @@ class QwenImageModel(BaseModel):
             "prompt_embed_mask": prompt_embed_mask,
         }
 
-    def prepare_denoiser_input(self, noisy_latent, sample, condition):
+    def prepare_denoiser_input(self, noisy_latent):
+        # noisy_latent: (B, C, T, H, W)
         n = noisy_latent.shape[0]
-        packed = QwenImagePipeline._pack_latents(
-            noisy_latent,
-            n,
-            noisy_latent.shape[2],
-            noisy_latent.shape[3],
-            noisy_latent.shape[4],
-        )
-        img_shapes = [(1, noisy_latent.shape[3] // 2, noisy_latent.shape[4] // 2)] * n
-        return DenoiserInput(
+        h, w = noisy_latent.shape[3], noisy_latent.shape[4]
+        packed = QwenImagePipeline._pack_latents(noisy_latent, n, noisy_latent.shape[1], h, w)
+        return QwenImageDenoiserInput(
             hidden_states=packed,
-            extra={
-                "img_shapes": img_shapes,
-                "height": noisy_latent.shape[3],
-                "width": noisy_latent.shape[4],
-            },
+            img_shapes=[(1, h // 2, w // 2)] * n,
+            height=h,
+            width=w,
         )
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
@@ -107,17 +102,51 @@ class QwenImageModel(BaseModel):
             guidance=None,
             encoder_hidden_states_mask=condition["prompt_embed_mask"],
             encoder_hidden_states=condition["prompt_embed"],
-            img_shapes=denoiser_input.extra["img_shapes"],
+            img_shapes=denoiser_input.img_shapes,
             return_dict=False,
         )[0]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         return QwenImagePipeline._unpack_latents(
             prediction,
-            height=denoiser_input.extra["height"] * self.vae_scale_factor,
-            width=denoiser_input.extra["width"] * self.vae_scale_factor,
+            height=denoiser_input.height * self.vae_scale_factor,
+            width=denoiser_input.width * self.vae_scale_factor,
             vae_scale_factor=self.vae_scale_factor,
         )
 
-    def prepare_flow_matching_target(self, velocity):
-        return velocity.permute(0, 2, 1, 3, 4)
+    def prepare_infer_latents(self, height, width, generator=None):
+        latent_h = height // self.vae_scale_factor
+        latent_w = width // self.vae_scale_factor
+        shape = (1, self.vae.config.z_dim, 1, latent_h, latent_w)
+        return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+
+    def decode_latent(self, latent):
+        # Reverse the normalization from encode_to_latent:
+        # encode: normalized = (raw - mean) / latents_std
+        # decode: raw = normalized * latents_std + mean
+        latent_mean = torch.tensor(self.vae.config.latents_mean, device=self.device, dtype=self.running_dtype).view(1, self.vae.config.z_dim, 1, 1, 1)
+        latent_std = torch.tensor(self.vae.config.latents_std, device=self.device, dtype=self.running_dtype).view(1, self.vae.config.z_dim, 1, 1, 1)
+        latent = latent * latent_std + latent_mean  # (B, C, T, H, W), C == z_dim
+
+        image = self.vae.decode(latent).sample  # (B, C, T, H, W)
+        image = image[:, :, 0, :, :]  # drop temporal dim -> (B, C, H, W), T == 1
+
+        return self.image_processor.postprocess(image, output_type="pil")
+
+    def assemble_pipeline(self, scheduler=None):
+        return QwenImagePipeline(
+            tokenizer=self.text_pipeline.tokenizer,
+            text_encoder=self.text_pipeline.text_encoder,
+            vae=self.vae,
+            transformer=self.transformer,
+            scheduler=scheduler or self.text_pipeline.scheduler,  # use the original scheduler for bit-exact alignment with diffusers
+        ).to(self.device)
+
+    def get_pipeline_infer_kwargs(self, infer_config):
+        # QwenImagePipeline uses `true_cfg_scale` instead of the standard `guidance_scale`
+        return {
+            "height": infer_config.get("height", 1024),
+            "width": infer_config.get("width", 1024),
+            "num_inference_steps": infer_config.get("num_inference_steps", 50),
+            "true_cfg_scale": infer_config.get("cfg_guidance_scale", 4.0),
+        }
