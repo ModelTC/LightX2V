@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import torch
 import torch.nn.functional as F
@@ -6,6 +7,7 @@ from diffusers.optimization import get_scheduler
 from tqdm.auto import tqdm
 
 from lightx2v_train.model_zoo import build_model
+from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
@@ -31,8 +33,8 @@ class DmdLoraTrainer(LoraTrainer):
         self.negative_prompt = self.dmd_config.get("negative_prompt", " ")
         self.cfg_norm = self.dmd_config.get("cfg_norm", "layer_norm")
 
-    def setup(self):
-        super().setup()
+    def setup(self, resume_ckpt_path=None):
+        super().setup(resume_ckpt_path=resume_ckpt_path)
         self.fake_model = build_model(self.config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
         self.fake_model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
@@ -60,6 +62,9 @@ class DmdLoraTrainer(LoraTrainer):
         )
 
         self.scheduler = DMDFlowMatchingScheduler(self.config, self.dmd_config)
+
+        if resume_ckpt_path is not None:
+            self.load_resume_ckpt(resume_ckpt_path)
 
         print(f"[dmd_lora] student trainable params={self._count_trainable(self.model.transformer)}")
         print(f"[dmd_lora] fake trainable params={self._count_trainable(self.fake_model.transformer)}")
@@ -174,7 +179,8 @@ class DmdLoraTrainer(LoraTrainer):
         return self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
 
     def train(self):
-        self.setup()
+        resume_ckpt_path, current_iter = self._resolve_resume()
+        self.setup(resume_ckpt_path=resume_ckpt_path)
         os.makedirs(self.output_train_dir, exist_ok=True)
 
         max_train_iters = self.max_train_iters
@@ -182,11 +188,10 @@ class DmdLoraTrainer(LoraTrainer):
         max_grad_norm = self.max_grad_norm
         save_every_iters = self.save_every_iters
         save_total_limit = self.save_total_limit
-        current_iter = 0
         running_dmd = 0.0
         running_fake = 0.0
 
-        progress = tqdm(total=max_train_iters, desc="DMD-LoRA iterations")
+        progress = tqdm(total=max_train_iters, desc="DMD-LoRA iterations", initial=current_iter)
 
         while current_iter < max_train_iters:
             for sample in self.dataloader_train:
@@ -226,3 +231,51 @@ class DmdLoraTrainer(LoraTrainer):
                     break
 
         progress.close()
+
+    def load_resume_ckpt(self, resume_ckpt_path):
+        training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
+        fake_lora_path = os.path.join(resume_ckpt_path, "fake_lora")
+        fake_lora_weights_path = os.path.join(fake_lora_path, "pytorch_lora_weights.safetensors")
+
+        if os.path.exists(fake_lora_weights_path):
+            self.fake_model.load_lora_weights_for_resume(fake_lora_path)
+        else:
+            print(f"Warning: fake LoRA weights not found in {fake_lora_path}. Fake model not restored.")
+
+        if not os.path.exists(training_state_path):
+            return
+
+        state = torch.load(training_state_path, map_location="cpu", weights_only=False)
+        if "fake_optimizer" in state:
+            self.fake_optimizer.load_state_dict(state["fake_optimizer"])
+        else:
+            print(f"Warning: fake optimizer state not found in {training_state_path}.")
+
+        if "fake_lr_scheduler" in state:
+            self.fake_lr_scheduler.load_state_dict(state["fake_lr_scheduler"])
+        else:
+            print(f"Warning: fake lr scheduler state not found in {training_state_path}.")
+
+    def save_checkpoint(self, iteration, save_total_limit):
+        prune_checkpoints(self.output_train_dir, save_total_limit)
+
+        save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
+        os.makedirs(save_dir, exist_ok=True)
+        self.model.save_lora_weights(save_dir)
+
+        fake_save_dir = os.path.join(save_dir, "fake_lora")
+        os.makedirs(fake_save_dir, exist_ok=True)
+        self.fake_model.save_lora_weights(fake_save_dir)
+
+        config_path = self.config.get("config_path")
+        if config_path is not None:
+            shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
+
+        training_state = {
+            "iteration": iteration,
+            "optimizer": self.optimizer.state_dict(),
+            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "fake_optimizer": self.fake_optimizer.state_dict(),
+            "fake_lr_scheduler": self.fake_lr_scheduler.state_dict(),
+        }
+        torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
