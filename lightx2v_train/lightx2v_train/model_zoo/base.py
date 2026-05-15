@@ -1,5 +1,6 @@
 import torch
 from diffusers.utils import convert_state_dict_to_diffusers
+from diffusers.utils.peft_utils import get_adapter_name
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
@@ -96,13 +97,17 @@ class BaseModel:
             "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
         }
 
-    def load_lora_for_infer(self, lora_path):
-        pipe = self.assemble_pipeline()
-        pipe.load_lora_weights(lora_path)
+    def load_lora_for_infer(self, lora_path, adapter_name=None):
+        if adapter_name is None:
+            adapter_name = get_adapter_name(self.transformer)
+        self.transformer.load_lora_adapter(lora_path, adapter_name=adapter_name)
+        self._infer_lora_adapter_name = adapter_name
 
     def unload_lora_for_infer(self):
-        pipe = self.assemble_pipeline()
-        pipe.unload_lora_weights()
+        adapter_name = getattr(self, "_infer_lora_adapter_name", None)
+        if adapter_name is not None:
+            self.transformer.delete_adapters(adapter_name)
+            self._infer_lora_adapter_name = None
 
     def save_lora_weights(self, save_dir):
         lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.transformer))

@@ -7,8 +7,8 @@ from lightx2v_train.utils.registry import INFERENCER_REGISTER
 from .base import BaseInferencer
 
 
-@INFERENCER_REGISTER("native_pipeline")
-class NativePipelineInferencer(BaseInferencer):
+@INFERENCER_REGISTER("image_native_infer")
+class NativeImageInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
         prompts = [sample["prompt"] for sample in self.dataloader_eval.dataset.samples]
@@ -22,9 +22,10 @@ class NativePipelineInferencer(BaseInferencer):
         # Use the pipeline's original pretrained scheduler for bit-exact alignment with diffusers
         pipe = self.model.assemble_pipeline()
 
-        # self.lora_path = self.infer_config.get("lora_path", None)
-        # if self.lora_path:
-        #     pipe.load_lora_weights(self.lora_path)
+        lora_config = self.infer_config.get("lora_config", None)
+        lora_path = lora_config.get("path", None) if lora_config else None
+        if lora_path:
+            pipe.load_lora_weights(lora_path)
 
         saved_paths = []
         self.model.transformer.eval()
@@ -44,7 +45,7 @@ class NativePipelineInferencer(BaseInferencer):
                     print(f"Saved to {save_path}")
                     saved_paths.append(str(save_path))
 
-        # if self.lora_path:
-        #     self.model.unload_lora_for_infer()
+        if lora_path:
+            pipe.unload_lora_weights()
 
         return saved_paths
