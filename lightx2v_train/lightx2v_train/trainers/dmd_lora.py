@@ -2,6 +2,7 @@ import os
 
 import torch
 import torch.nn.functional as F
+from diffusers.optimization import get_scheduler
 from tqdm.auto import tqdm
 
 from lightx2v_train.model_zoo import build_model
@@ -15,9 +16,7 @@ from .lora import LoraTrainer
 class DmdLoraTrainer(LoraTrainer):
     def get_configs(self):
         super().get_configs()
-
-        training_config = self.config["training"]
-        fake_config = training_config.get("fake", {})
+        fake_config = self.training_config.get("fake", {})
         fake_optimizer_config = fake_config.get("optimizer", {})
         self.fake_optimizer_learning_rate = fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
         self.fake_optimizer_adam_beta1 = fake_optimizer_config.get("adam_beta1", self.optimizer_adam_beta1)
@@ -25,7 +24,7 @@ class DmdLoraTrainer(LoraTrainer):
         self.fake_optimizer_weight_decay = fake_optimizer_config.get("weight_decay", self.optimizer_weight_decay)
         self.fake_optimizer_adam_epsilon = fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
 
-        self.dmd_config = training_config.get("dmd", {})
+        self.dmd_config = self.training_config.get("dmd", {})
         self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
         self.fake_update_ratio = int(self.dmd_config.get("fake_update_ratio", 1))
         self.guidance_scale = float(self.dmd_config.get("guidance_scale", 3.0))
@@ -33,11 +32,7 @@ class DmdLoraTrainer(LoraTrainer):
         self.cfg_norm = self.dmd_config.get("cfg_norm", "layer_norm")
 
     def setup(self):
-        self.get_configs()
-        print("[dmd_lora] single-GPU resident mode: student/fake/teacher transformers stay on CUDA")
-
-        self.setup_lora()
-
+        super().setup()
         self.fake_model = build_model(self.config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
         self.fake_model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
@@ -50,21 +45,20 @@ class DmdLoraTrainer(LoraTrainer):
         self.teacher_model.transformer.requires_grad_(False)
         self.teacher_model.transformer.eval()
 
-        self.optimizer = self.build_optimizer(self.model.trainable_parameters())
-        self.fake_optimizer = self.build_optimizer(
+        self.fake_optimizer = torch.optim.AdamW(
             self.fake_model.trainable_parameters(),
-            learning_rate=self.fake_optimizer_learning_rate,
-            adam_beta1=self.fake_optimizer_adam_beta1,
-            adam_beta2=self.fake_optimizer_adam_beta2,
+            lr=self.fake_optimizer_learning_rate,
+            betas=(self.fake_optimizer_adam_beta1, self.fake_optimizer_adam_beta2),
             weight_decay=self.fake_optimizer_weight_decay,
-            adam_epsilon=self.fake_optimizer_adam_epsilon,
+            eps=self.fake_optimizer_adam_epsilon,
         )
-        self.lr_scheduler = self.build_lr_scheduler(self.optimizer)
-        self.fake_lr_scheduler = self.build_lr_scheduler(
-            self.fake_optimizer,
+        self.fake_lr_scheduler = get_scheduler(
+            self.lr_scheduler_name,
+            optimizer=self.fake_optimizer,
             num_warmup_steps=0,
             num_training_steps=max(1, self.max_train_iters * self.fake_update_ratio),
         )
+
         self.scheduler = DMDFlowMatchingScheduler(self.config, self.dmd_config)
 
         print(f"[dmd_lora] student trainable params={self._count_trainable(self.model.transformer)}")
