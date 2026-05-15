@@ -33,6 +33,6 @@ inference:
     enable_cfg: true
     cfg_guidance_scale: 4.0
     seed: 42
-    output_dir: ./output_infer/qwen_image_lora_test3
+    output_dir: ./output_infer/qwen_image_lora_test
     lora_config:
-        path: /data/nvme1/yongyang/kkk/LightX2V/lightx2v_train/output_train/qwen_image_lora/checkpoint-000001000/pytorch_lora_weights.safetensors
+        path: /path/to/checkpoint-x/pytorch_lora_weights.safetensors

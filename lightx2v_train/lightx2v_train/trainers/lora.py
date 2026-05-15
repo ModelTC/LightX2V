@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import torch
 from diffusers.optimization import get_scheduler
@@ -176,6 +177,10 @@ class LoraTrainer(BaseTrainer):
         save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
         os.makedirs(save_dir, exist_ok=True)
         self.model.save_lora_weights(save_dir)
+
+        config_path = self.config.get("config_path")
+        if config_path is not None:
+            shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
 
         training_state = {
             "iteration": iteration,
