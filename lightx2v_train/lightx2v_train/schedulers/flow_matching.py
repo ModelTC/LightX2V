@@ -26,12 +26,13 @@ class RectifiedFlowMatchingScheduler:
         self.shift_type = time_shift_settings.get("shift_type", "linear")
         self.dynamic_shift = time_shift_settings.get("dynamic_shift", False)
         if self.dynamic_shift:
-            self.shift_y1 = time_shift_settings["shift_y1"]
-            self.shift_y2 = time_shift_settings["shift_y2"]
             self.shift_x1 = time_shift_settings["shift_x1"]
             self.shift_x2 = time_shift_settings["shift_x2"]
+            self.shift_y1 = time_shift_settings["shift_y1"]
+            self.shift_y2 = time_shift_settings["shift_y2"]
             self._mu_slope = (self.shift_y2 - self.shift_y1) / (self.shift_x2 - self.shift_x1)
             self._mu_bias = self.shift_y1 - self._mu_slope * self.shift_x1
+            self.patch_size = time_shift_settings.get("patch_size", [2, 2])
         else:
             self.time_shift_mu = time_shift_settings.get("time_shift_mu", 5.0)
 
@@ -49,8 +50,8 @@ class RectifiedFlowMatchingScheduler:
             if latent_hw is None:
                 raise ValueError("latent_hw=(H, W) must be provided when dynamic_shift=True")
             h, w = latent_hw
-            length = (h * w) ** 0.5
-            return self._mu_slope * length + self._mu_bias
+            image_seq_len = (h // self.patch_size[0]) * (w // self.patch_size[1])
+            return self._mu_slope * image_seq_len + self._mu_bias
         return self.time_shift_mu
 
     def sample_timestep_or_sigma(self, num_samples, latent_hw=None):

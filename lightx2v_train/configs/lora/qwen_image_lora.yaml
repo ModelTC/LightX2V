@@ -30,13 +30,16 @@ scheduler:
     max_t: 1.0
     time_shift_settings:
         do_time_shift: true
-        shift_type: exponential  # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
+        shift_type: exponential
+        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
         time_shift_power: 1.0
         dynamic_shift: true
+        patch_size: [2, 2]  # [H, W]
+        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
         shift_x1: 256
+        shift_x2: 4096
         shift_y1: 0.5
-        shift_x2: 8192
-        shift_y2: 0.9
+        shift_y2: 1.15
 
 training:
     method: lora
