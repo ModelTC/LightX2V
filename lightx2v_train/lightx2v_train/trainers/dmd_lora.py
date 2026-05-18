@@ -102,9 +102,7 @@ class DmdLoraTrainer(LoraTrainer):
         image = sample["target_image"]
         batch_size = image.shape[0]
         if self.image_sizes:
-            height, width = self.image_sizes[
-                torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item()
-            ]
+            height, width = self.image_sizes[torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item()]
         else:
             height, width = image.shape[-2], image.shape[-1]
 
