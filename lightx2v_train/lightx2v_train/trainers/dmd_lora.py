@@ -32,6 +32,7 @@ class DmdLoraTrainer(LoraTrainer):
         self.guidance_scale = float(self.dmd_config.get("guidance_scale", 3.0))
         self.negative_prompt = self.dmd_config.get("negative_prompt", " ")
         self.cfg_norm = self.dmd_config.get("cfg_norm", "layer_norm")
+        self.image_sizes = self.dmd_config.get("image_sizes", [])
 
     def setup(self, resume_ckpt_path=None):
         super().setup(resume_ckpt_path=resume_ckpt_path)
@@ -100,6 +101,13 @@ class DmdLoraTrainer(LoraTrainer):
     def _latent_shape(self, sample):
         image = sample["target_image"]
         batch_size = image.shape[0]
+        if self.image_sizes:
+            height, width = self.image_sizes[
+                torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item()
+            ]
+        else:
+            height, width = image.shape[-2], image.shape[-1]
+
         latent_channels = getattr(self.model.vae.config, "z_dim", None)
         if latent_channels is None:
             latent_channels = self.model.transformer.config.in_channels // 4
@@ -107,8 +115,8 @@ class DmdLoraTrainer(LoraTrainer):
             batch_size,
             int(latent_channels),
             1,
-            image.shape[-2] // self.model.vae_scale_factor,
-            image.shape[-1] // self.model.vae_scale_factor,
+            height // self.model.vae_scale_factor,
+            width // self.model.vae_scale_factor,
         )
 
     def _encode_conditions(self, sample):
@@ -148,9 +156,8 @@ class DmdLoraTrainer(LoraTrainer):
             xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
         return x0
 
-    def forward_loss(self, sample, stage):
-        condition, negative_condition = self._encode_conditions(sample)
-        latent_shape = self._latent_shape(sample)
+    def forward_loss(self, latent_shape, conditions, stage):
+        condition, negative_condition = conditions
         end_step_idx = self.sample_end_step()
         xt_start = self.sample_initial_latents(latent_shape)
         x0_ref = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=False, xt=xt_start)
@@ -158,11 +165,11 @@ class DmdLoraTrainer(LoraTrainer):
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
         renoised_xt = self.scheduler.add_noise(x0_ref, noise, sigma)
-        velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
 
         if stage == "fake":
             self.fake_model.transformer.train()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
+            velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
             return F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
 
         with torch.no_grad():
@@ -172,9 +179,8 @@ class DmdLoraTrainer(LoraTrainer):
             velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition)
             velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
-        zeros = torch.zeros_like(sigma)
-        x_pred_fake = self.scheduler.euler_step(renoised_xt, velocity_fake, sigma, zeros)
-        x_pred_teacher = self.scheduler.euler_step(renoised_xt, velocity_teacher, sigma, zeros)
+        x_pred_fake = renoised_xt - sigma * velocity_fake
+        x_pred_teacher = renoised_xt - sigma * velocity_teacher
         x0 = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=True, xt=xt_start)
         return self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
 
@@ -195,7 +201,10 @@ class DmdLoraTrainer(LoraTrainer):
 
         while current_iter < max_train_iters:
             for sample in self.dataloader_train:
-                loss_dmd = self.forward_loss(sample, stage="generator")
+                conditions = self._encode_conditions(sample)
+                latent_shape = self._latent_shape(sample)
+
+                loss_dmd = self.forward_loss(latent_shape, conditions, stage="student")
                 loss_dmd.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), max_grad_norm)
                 self.optimizer.step()
@@ -205,7 +214,7 @@ class DmdLoraTrainer(LoraTrainer):
 
                 fake_loss = 0.0
                 for _ in range(fake_update_ratio):
-                    loss_fake = self.forward_loss(sample, stage="fake")
+                    loss_fake = self.forward_loss(latent_shape, conditions, stage="fake")
                     loss_fake.backward()
                     torch.nn.utils.clip_grad_norm_(self.fake_model.transformer.parameters(), max_grad_norm)
                     self.fake_optimizer.step()

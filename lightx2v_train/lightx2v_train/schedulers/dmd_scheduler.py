@@ -13,13 +13,6 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         self.discrete_samples = int(dmd_config.get("discrete_samples", 1000))
 
     @staticmethod
-    def expand_to(value, target):
-        value = value.to(device=target.device)
-        while value.ndim < target.ndim:
-            value = value.view(*value.shape, 1)
-        return value
-
-    @staticmethod
     def linear_shift(mu, t):
         return mu / (mu + (1 / t - 1))
 
@@ -54,17 +47,11 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         return sigma
 
     def add_noise(self, latent, noise, sigmas):
-        sigmas = self.expand_to(sigmas, latent).to(dtype=torch.float32)
-        return ((1.0 - sigmas) * latent.float() + sigmas * noise.float()).to(dtype=latent.dtype)
+        return ((1.0 - sigmas) * latent + sigmas * noise).to(dtype=latent.dtype)
 
-    def euler_step(self, sample, velocity, sigma, target_sigma):
-        sigma = self.expand_to(sigma, sample).to(dtype=torch.float32)
-        target_sigma = self.expand_to(target_sigma, sample).to(dtype=torch.float32)
-        return sample.float() + (target_sigma - sigma) * velocity.float()
-
-    def step_by_index(self, model_output, step_idx, sample):
+    def step_by_index(self, velocity, step_idx, sample):
         sigma = self.sigma_at(step_idx, sample.shape[0], device=sample.device)
         sigma_next = self.sigma_at(int(step_idx) + 1, sample.shape[0], device=sample.device)
-        x0 = sample.float() - self.expand_to(sigma, sample).float() * model_output.float()
-        next_sample = self.euler_step(sample, model_output, sigma, sigma_next)
+        next_sample = sample + (sigma_next - sigma) * velocity
+        x0 = sample - sigma * velocity
         return next_sample.to(sample.dtype), x0.to(sample.dtype)
