@@ -1,6 +1,6 @@
 model:
     name: longcat_image
-    pretrained_model_name_or_path: /mnt/miaohua/wangshankun/HF/hub/models--meituan-longcat--LongCat-Image/snapshots/d2ea50b79a930074c37b9b97ce45e3b2ea8cf4d8
+    pretrained_model_name_or_path: /data/nvme1/models/meituan-longcat/LongCat-Image
     max_sequence_length: 1024
     running_dtype: bf16
 
@@ -13,13 +13,13 @@ data:
         shuffle: true
         # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
-            - /mnt/miaohua/wangshankun/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /mnt/miaohua/wangshankun/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -28,13 +28,22 @@ scheduler:
     logitnormal_std: 1.0
     min_t: 0.001
     max_t: 1.0
-    do_time_shift: true
-    time_shift_mu: 5.0
-    time_shift_power: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
+        time_shift_power: 1.0
+        dynamic_shift: true
+        patch_size: [2, 2]  # [H, W]
+        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
+        shift_x1: 256
+        shift_x2: 4096
+        shift_y1: 0.5
+        shift_y2: 1.15
 
 training:
     method: lora
-    max_train_iters: 100
+    max_train_iters: 3000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 1.0

@@ -51,7 +51,7 @@ class ImageInferencer(BaseInferencer):
                 generator = torch.Generator(device=self.model.device).manual_seed(base_seed + i)
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 latent = self.model.prepare_infer_latents(height, width, generator)
-                latent_hw = (latent.shape[3], latent.shape[4])
+                latent_hw = (latent.shape[-2], latent.shape[-1])
                 self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
 
                 for step_idx, current_timestep in enumerate(tqdm(self.scheduler.infer_timesteps, desc=f"[{i + 1}/{len(prompts)}] Denoising")):
