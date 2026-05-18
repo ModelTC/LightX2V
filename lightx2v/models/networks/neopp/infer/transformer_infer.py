@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 # from flashinfer.activation import silu_and_mul as flashinfer_silu_and_mul
 try:
@@ -82,6 +83,14 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         else:
             self.seq_p_group = None
         self.kv_cache = KVCacheManager()
+
+        # MagiCompiler enable/disable switch
+        self.use_magi_compile = config.get("use_magi_compile", False)
+        if self.use_magi_compile and magi_compile is None:
+            logger.warning("use_magi_compile=True but magi_compiler is not available, using eager mode")
+            self.use_magi_compile = False
+        if not self.use_magi_compile:
+            self.infer_without_offload = self._infer_without_offload_impl
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, inputs):
