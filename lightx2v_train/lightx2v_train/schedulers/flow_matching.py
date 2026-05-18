@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 from lightx2v_train.utils.utils import get_running_dtype
@@ -18,17 +20,41 @@ class RectifiedFlowMatchingScheduler:
         self.min_t = scheduler_config.get("min_t", 0.001)
         self.max_t = scheduler_config.get("max_t", 1.0)
 
-        self.do_time_shift = scheduler_config.get("do_time_shift", False)
-        self.time_shift_mu = scheduler_config.get("time_shift_mu", 5.0)
-        self.time_shift_power = scheduler_config.get("time_shift_power", 1.0)
-
-        self.sigmas = None
-        self.timesteps = None
-        self.num_inference_steps = None
+        time_shift_settings = scheduler_config["time_shift_settings"]
+        self.do_time_shift = time_shift_settings.get("do_time_shift", False)
+        self.time_shift_power = time_shift_settings.get("time_shift_power", 1.0)
+        self.shift_type = time_shift_settings.get("shift_type", "linear")
+        self.dynamic_shift = time_shift_settings.get("dynamic_shift", False)
+        if self.dynamic_shift:
+            self.shift_x1 = time_shift_settings["shift_x1"]
+            self.shift_x2 = time_shift_settings["shift_x2"]
+            self.shift_y1 = time_shift_settings["shift_y1"]
+            self.shift_y2 = time_shift_settings["shift_y2"]
+            self._mu_slope = (self.shift_y2 - self.shift_y1) / (self.shift_x2 - self.shift_x1)
+            self._mu_bias = self.shift_y1 - self._mu_slope * self.shift_x1
+            self.patch_size = time_shift_settings.get("patch_size", [2, 2])
+        else:
+            self.time_shift_mu = time_shift_settings.get("time_shift_mu", 5.0)
 
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
 
-    def sample_timestep_or_sigma(self, num_samples):
+        # ==============================
+        # The following attributes are for inference only
+        # ==============================
+        self.infer_sigmas = None
+        self.infer_timesteps = None
+        self.num_inference_steps = None
+
+    def _get_time_shift_mu(self, latent_hw=None):
+        if self.dynamic_shift:
+            if latent_hw is None:
+                raise ValueError("latent_hw=(H, W) must be provided when dynamic_shift=True")
+            h, w = latent_hw
+            image_seq_len = (h // self.patch_size[0]) * (w // self.patch_size[1])
+            return self._mu_slope * image_seq_len + self._mu_bias
+        return self.time_shift_mu
+
+    def sample_timestep_or_sigma(self, num_samples, latent_hw=None):
         if self.timestep_distribution == "logitnormal":
             timestep_or_sigma = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
             timestep_or_sigma = torch.sigmoid(timestep_or_sigma)
@@ -39,11 +65,14 @@ class RectifiedFlowMatchingScheduler:
         else:
             raise ValueError(f"Unsupported timestep distribution: {self.timestep_distribution}")
         if self.do_time_shift:
-            timestep_or_sigma = self.time_shift(timestep_or_sigma)
+            timestep_or_sigma = self.time_shift(timestep_or_sigma, latent_hw=latent_hw)
         return timestep_or_sigma.to(self.running_dtype)
 
-    def time_shift(self, t):
-        return self.time_shift_mu / (self.time_shift_mu + (1 / t - 1) ** self.time_shift_power)
+    def time_shift(self, t, latent_hw=None):
+        mu = self._get_time_shift_mu(latent_hw)
+        if self.shift_type == "exponential":
+            mu = math.exp(mu)
+        return mu / (mu + (1 / t - 1) ** self.time_shift_power)
 
     def add_noise(self, latent, noise, sigmas):
         return (1.0 - sigmas) * latent + sigmas * noise
@@ -54,17 +83,17 @@ class RectifiedFlowMatchingScheduler:
     # ==============================
     # The following methods are for inference only
     # ==============================
-    def set_timesteps(self, num_inference_steps, sigmas=None):
+    def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None):
         self.num_inference_steps = num_inference_steps
 
         if sigmas is None:
             sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
             if self.do_time_shift:
-                sigmas = self.time_shift(sigmas)
+                sigmas = self.time_shift(sigmas, latent_hw=latent_hw)
         else:
             sigmas = torch.tensor(sigmas, dtype=torch.float32)
-        self.sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
-        self.timesteps = (sigmas * self.num_train_timesteps).to(self.device)
+        self.infer_sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
+        self.infer_timesteps = (sigmas * self.num_train_timesteps).to(self.device)
 
     def step(self, model_output, current_timestep, latent):
         f"""
@@ -79,8 +108,8 @@ class RectifiedFlowMatchingScheduler:
             =>  x_t-1 = x_t + (sigma_t-1 - sigma_t) * v
             =>  x_t-1 = x_t + (sigma_next - sigma) * model_output  ------------------------ (*)
         """
-        step_index = (self.timesteps == current_timestep).nonzero()[0].item()
-        sigma = self.sigmas[step_index]
-        sigma_next = self.sigmas[step_index + 1]
+        step_index = (self.infer_timesteps == current_timestep).nonzero()[0].item()
+        sigma = self.infer_sigmas[step_index]
+        sigma_next = self.infer_sigmas[step_index + 1]
         prev_sample = latent + (sigma_next - sigma) * model_output  # --------------------- (*) from above
         return prev_sample

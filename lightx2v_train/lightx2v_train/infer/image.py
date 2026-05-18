@@ -34,8 +34,6 @@ class ImageInferencer(BaseInferencer):
         if lora_path:
             self.model.load_lora_for_infer(lora_path)
 
-        self.scheduler.set_timesteps(num_inference_steps)
-
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 4.0)
@@ -53,10 +51,12 @@ class ImageInferencer(BaseInferencer):
                 generator = torch.Generator(device=self.model.device).manual_seed(base_seed + i)
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 latent = self.model.prepare_infer_latents(height, width, generator)
+                latent_hw = (latent.shape[3], latent.shape[4])
+                self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
 
-                for step_idx, current_timestep in enumerate(tqdm(self.scheduler.timesteps, desc=f"[{i + 1}/{len(prompts)}] Denoising")):
+                for step_idx, current_timestep in enumerate(tqdm(self.scheduler.infer_timesteps, desc=f"[{i + 1}/{len(prompts)}] Denoising")):
                     # current_timestep is in [0, 1000]
-                    sigma = self.scheduler.sigmas[step_idx].unsqueeze(0)  # shape (1,) required by diffusers
+                    sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)  # shape (1,) required by diffusers
                     # sigma is in [0, 1]
                     model_output = self.cfg_guided_denoise(
                         latents=latent,
