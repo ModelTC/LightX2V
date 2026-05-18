@@ -22,11 +22,14 @@ class RectifiedFlowMatchingScheduler:
         self.time_shift_mu = scheduler_config.get("time_shift_mu", 5.0)
         self.time_shift_power = scheduler_config.get("time_shift_power", 1.0)
 
-        self.sigmas = None
-        self.timesteps = None
-        self.num_inference_steps = None
-
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
+
+        # ==============================
+        # The following attributes are for inference only
+        # ==============================
+        self.infer_sigmas = None
+        self.infer_timesteps = None
+        self.num_inference_steps = None
 
     def sample_timestep_or_sigma(self, num_samples):
         if self.timestep_distribution == "logitnormal":
@@ -63,8 +66,8 @@ class RectifiedFlowMatchingScheduler:
                 sigmas = self.time_shift(sigmas)
         else:
             sigmas = torch.tensor(sigmas, dtype=torch.float32)
-        self.sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
-        self.timesteps = (sigmas * self.num_train_timesteps).to(self.device)
+        self.infer_sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
+        self.infer_timesteps = (sigmas * self.num_train_timesteps).to(self.device)
 
     def step(self, model_output, current_timestep, latent):
         f"""
@@ -79,8 +82,8 @@ class RectifiedFlowMatchingScheduler:
             =>  x_t-1 = x_t + (sigma_t-1 - sigma_t) * v
             =>  x_t-1 = x_t + (sigma_next - sigma) * model_output  ------------------------ (*)
         """
-        step_index = (self.timesteps == current_timestep).nonzero()[0].item()
-        sigma = self.sigmas[step_index]
-        sigma_next = self.sigmas[step_index + 1]
+        step_index = (self.infer_timesteps == current_timestep).nonzero()[0].item()
+        sigma = self.infer_sigmas[step_index]
+        sigma_next = self.infer_sigmas[step_index + 1]
         prev_sample = latent + (sigma_next - sigma) * model_output  # --------------------- (*) from above
         return prev_sample

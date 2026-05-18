@@ -54,9 +54,9 @@ class ImageInferencer(BaseInferencer):
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 latent = self.model.prepare_infer_latents(height, width, generator)
 
-                for step_idx, current_timestep in enumerate(tqdm(self.scheduler.timesteps, desc=f"[{i + 1}/{len(prompts)}] Denoising")):
+                for step_idx, current_timestep in enumerate(tqdm(self.scheduler.infer_timesteps, desc=f"[{i + 1}/{len(prompts)}] Denoising")):
                     # current_timestep is in [0, 1000]
-                    sigma = self.scheduler.sigmas[step_idx].unsqueeze(0)  # shape (1,) required by diffusers
+                    sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)  # shape (1,) required by diffusers
                     # sigma is in [0, 1]
                     model_output = self.cfg_guided_denoise(
                         latents=latent,
