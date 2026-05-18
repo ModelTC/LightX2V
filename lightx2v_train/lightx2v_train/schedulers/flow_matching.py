@@ -95,7 +95,7 @@ class RectifiedFlowMatchingScheduler:
         self.infer_sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
         self.infer_timesteps = (sigmas * self.num_train_timesteps).to(self.device)
 
-    def step(self, model_output, current_timestep, latent):
+    def step(self, model_output, step_index, latent):
         f"""
         ADD NOISE:
             x_t = (1 - sigma_t) * x_0 + sigma_t * N  ------ self.add_noise(...)
@@ -108,7 +108,6 @@ class RectifiedFlowMatchingScheduler:
             =>  x_t-1 = x_t + (sigma_t-1 - sigma_t) * v
             =>  x_t-1 = x_t + (sigma_next - sigma) * model_output  ------------------------ (*)
         """
-        step_index = (self.infer_timesteps == current_timestep).nonzero()[0].item()
         sigma = self.infer_sigmas[step_index]
         sigma_next = self.infer_sigmas[step_index + 1]
         prev_sample = latent + (sigma_next - sigma) * model_output  # --------------------- (*) from above

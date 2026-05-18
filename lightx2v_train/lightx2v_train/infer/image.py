@@ -64,7 +64,7 @@ class ImageInferencer(BaseInferencer):
                         pos_cond=pos_cond,
                         neg_cond=neg_cond,
                     )
-                    latent = self.scheduler.step(model_output, current_timestep, latent)
+                    latent = self.scheduler.step(model_output, step_idx, latent)
 
                 images = self.model.decode_latent(latent)
 
