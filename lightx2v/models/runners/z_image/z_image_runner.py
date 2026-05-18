@@ -278,8 +278,10 @@ class ZImageRunner(DefaultRunner):
             "16:9": [1664, 928],
             "9:16": [928, 1664],
             "1:1": [1328, 1328],
-            "4:3": [1472, 1140],
-            "3:4": [768, 1024],
+            "4:3": [1472, 1104],
+            "3:4": [1104, 1472],
+            "3:2": (1584, 1056),
+            "2:3": (1056, 1584),
         }
         as_maps = self.config.get("aspect_ratios", {})
         as_maps.update(default_aspect_ratios)

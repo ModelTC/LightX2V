@@ -9,8 +9,7 @@ data:
         name: image_dataset
         num_workers: 8
         prompt_dropout_rate: 0.1
-        image_size: 1024
-        random_ratio: false
+        target_area: 1048576 # 1024 * 1024
         shuffle: true
         # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
@@ -18,7 +17,6 @@ data:
     val:
         name: image_dataset
         num_workers: 8
-        image_size: 1024
         shuffle: false
         data_path:
             - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
@@ -61,10 +59,10 @@ training:
     output_dir: ./output_train/qwen_image_lora
 
 inference:
-    method: image_infer  # image_infer, image_native_infer
+    method: image_infer
     negative_prompt: " "
-    width: 1024
-    height: 1024
+    default_width: 1024
+    default_height: 1024
     num_inference_steps: 50
     enable_cfg: true
     cfg_guidance_scale: 4.0
