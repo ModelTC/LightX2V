@@ -89,7 +89,8 @@ class LoraTrainer(BaseTrainer):
             latent = self.model.encode_to_latent(sample)
             n = latent.shape[0]
             noise = torch.randn_like(latent, dtype=self.running_dtype)
-            timestep_or_sigma = self.noise_scheduler.sample_timestep_or_sigma(n)
+            latent_hw = (latent.shape[3], latent.shape[4])
+            timestep_or_sigma = self.noise_scheduler.sample_timestep_or_sigma(n, latent_hw=latent_hw)
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timestep_or_sigma)
             condition = self.model.encode_condition(sample)
 
