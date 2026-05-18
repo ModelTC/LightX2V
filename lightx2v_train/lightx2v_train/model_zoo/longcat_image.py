@@ -34,6 +34,7 @@ class LongCatImageModel(BaseModel):
         ).to(self.device)
         self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
         self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
 
     @property
@@ -50,15 +51,14 @@ class LongCatImageModel(BaseModel):
     def encode_condition(self, sample):
         prompt = sample["prompt"]
         if self.config.get("enable_prompt_rewrite_training", False):
-            prompt = self.text_pipeline.rewrite_prompt(prompt, self.device)
+            prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
         prompt_embed, text_ids = self.text_pipeline.encode_prompt(
             prompt=prompt,
-            device=self.device,
             num_images_per_prompt=1,
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def prepare_denoiser_input(self, noisy_latent, sample, condition):
+    def prepare_denoiser_input(self, noisy_latent):
         n = noisy_latent.shape[0]
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = LongCatImagePipeline._pack_latents(noisy_latent, n, noisy_latent.shape[1], h, w)
@@ -119,7 +119,20 @@ class LongCatImageModel(BaseModel):
         return LongCatImagePipeline(
             tokenizer=self.text_pipeline.tokenizer,
             text_encoder=self.text_pipeline.text_encoder,
+            text_processor=self.text_pipeline.text_processor,
             vae=self.vae,
             transformer=self.transformer,
             scheduler=scheduler or self.text_pipeline.scheduler,
         ).to(self.device)
+
+    def get_pipeline_infer_kwargs(self, infer_config):
+        enable_cfg = infer_config.get("enable_cfg", False)
+        return {
+            "height": infer_config.get("height", infer_config.get("default_height", 1024)),
+            "width": infer_config.get("width", infer_config.get("default_width", 1024)),
+            "num_inference_steps": infer_config.get("num_inference_steps", 50),
+            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0) if enable_cfg else 1.0,
+            "enable_cfg_renorm": infer_config.get("enable_cfg_renorm", True),
+            "cfg_renorm_min": infer_config.get("cfg_renorm_min", 0.0),
+            "enable_prompt_rewrite": infer_config.get("enable_prompt_rewrite", True),
+        }
