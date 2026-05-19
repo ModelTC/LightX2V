@@ -122,9 +122,7 @@ class ProcessPipeline:
                         each_aug_mask = mask
 
                 if each_aug_mask is None or each_aug_mask.sum() == 0:
-                    logger.warning(
-                        f"Frame {frame_idx}: no valid person mask, skipping character replacement for this frame"
-                    )
+                    logger.warning(f"Frame {frame_idx}: no valid person mask, skipping character replacement for this frame")
                     each_bg_image, each_aug_mask = skip_replace_frame_outputs(frame)
                 else:
                     each_bg_image = frame * (1 - each_aug_mask[:, :, None])
@@ -134,14 +132,9 @@ class ProcessPipeline:
                 aug_masks.append(each_aug_mask)
 
             if replace_frame_count == 0:
-                raise ValueError(
-                    "Animate replace preprocessing failed: no stable human body detected in driving video"
-                )
+                raise ValueError("Animate replace preprocessing failed: no stable human body detected in driving video")
             if replace_frame_count < len(frames):
-                logger.info(
-                    f"Replace preprocessing: {replace_frame_count}/{len(frames)} frames will be replaced, "
-                    f"{len(frames) - replace_frame_count} frames kept as original"
-                )
+                logger.info(f"Replace preprocessing: {replace_frame_count}/{len(frames)} frames will be replaced, {len(frames) - replace_frame_count} frames kept as original")
 
             src_face_path = os.path.join(output_path, "src_face.mp4")
             mpy.ImageSequenceClip(face_images, fps=fps).write_videofile(src_face_path)
@@ -378,9 +371,7 @@ class ProcessPipeline:
 
                 video_segments = {}
                 for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(inference_state):
-                    video_segments[out_frame_idx] = {
-                        out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
-                    }
+                    video_segments[out_frame_idx] = {out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)}
 
                 for out_frame_idx in range(len(each_frames)):
                     out_mask = None
