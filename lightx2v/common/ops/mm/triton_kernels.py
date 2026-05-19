@@ -1,8 +1,12 @@
 import torch
-from triton import Config, autotune, cdiv, jit, next_power_of_2
+from triton import Config, autotune, cdiv, heuristics, jit, next_power_of_2
 from triton import language as tl
 
 _ordered_datatypes = [torch.int8, torch.float16, torch.bfloat16, torch.float32]
+
+
+def _is_even_k(args):
+    return args["K"] % (args["BLOCK_K"] * args["SPLIT_K"]) == 0
 
 
 @jit
@@ -96,6 +100,7 @@ def get_higher_dtype(a, b):
     ],
     key=["M", "N", "K"],
 )
+@heuristics({"EVEN_K": _is_even_k})
 @jit
 def int8_gemm_bias_kernel(
     A,
@@ -164,12 +169,12 @@ def int8_gemm_bias_kernel(
     acc = acc.to(tl.float32)
     a_scales_ptr = A_SCALES + pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     b_scales_ptr = B_SCALES + pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    a_scales = tl.load(a_scales_ptr)  # [BM]
-    b_scales = tl.load(b_scales_ptr)  # [BN]
+    a_scales = tl.load(a_scales_ptr, mask=rm < M, other=0.0)  # [BM]
+    b_scales = tl.load(b_scales_ptr, mask=rn < N, other=0.0)  # [BN]
     # [BM, BN] * [BM, 1] * [1, BN]
 
     bias_ptr = BIAS + pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    bias = tl.load(bias_ptr)
+    bias = tl.load(bias_ptr, mask=rn < N, other=0.0)
     if fuse_gelu:
         acc = gelu(((acc * a_scales[:, None]) * b_scales[None, :]) + bias[None, :])
     else:
@@ -211,7 +216,7 @@ def int8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, outpu
 
     # allocates output
     if output_dtype is None:
-        output_dtype = ab_dtype
+        output_dtype = torch.float16
 
     c = torch.empty((M, N), device=device, dtype=output_dtype)
 
@@ -262,7 +267,6 @@ def int8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, outpu
         acc_dtype=acc_dtype,  #
         fuse_gelu=fuse_gelu,
         GROUP_M=8,
-        EVEN_K=True,
         AB_DTYPE=ab_dtype,
     )
     return c.view(*out_shape)
@@ -277,6 +281,7 @@ def int8_gemm_bias_triton(a, b, bias, a_scales, b_scales, fuse_gelu=False, outpu
     ],
     key=["M", "N", "K"],
 )
+@heuristics({"EVEN_K": _is_even_k})
 @jit
 def int8_gemm_kernel(
     A,
@@ -344,8 +349,8 @@ def int8_gemm_kernel(
     acc = acc.to(tl.float32)
     a_scales_ptr = A_SCALES + pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     b_scales_ptr = B_SCALES + pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    a_scales = tl.load(a_scales_ptr)  # [BM]
-    b_scales = tl.load(b_scales_ptr)  # [BN]
+    a_scales = tl.load(a_scales_ptr, mask=rm < M, other=0.0)  # [BM]
+    b_scales = tl.load(b_scales_ptr, mask=rn < N, other=0.0)  # [BN]
     # [BM, BN] * [BM, 1] * [1, BN]
     if fuse_gelu:
         acc = gelu((acc * a_scales[:, None]) * b_scales[None, :])
@@ -389,7 +394,7 @@ def int8_gemm_triton(a, b, a_scales, b_scales, fuse_gelu=False, output_dtype=Non
 
     # allocates output
     if output_dtype is None:
-        output_dtype = ab_dtype
+        output_dtype = torch.float16
 
     c = torch.empty((M, N), device=device, dtype=output_dtype)
 
@@ -438,7 +443,6 @@ def int8_gemm_triton(a, b, a_scales, b_scales, fuse_gelu=False, output_dtype=Non
         c.stride(1),  #
         acc_dtype=acc_dtype,  #
         fuse_gelu=fuse_gelu,
-        EVEN_K=True,
         GROUP_M=8,
         AB_DTYPE=ab_dtype,
     )
