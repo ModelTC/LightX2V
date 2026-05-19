@@ -1,12 +1,15 @@
 import os
 import unittest
 from importlib import import_module
+from types import SimpleNamespace
+
+import torch
 
 os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 
 
-class WanSwitchStatusTest(unittest.TestCase):
-    def test_first_block_switch_status_toggles_infer_conditional(self):
+class WanFeatureCacheCfgStateTest(unittest.TestCase):
+    def test_first_block_reads_cfg_state_from_scheduler(self):
         transformer_infer = import_module("lightx2v.models.networks.wan.infer.feature_caching.transformer_infer")
 
         config = {
@@ -24,15 +27,18 @@ class WanSwitchStatusTest(unittest.TestCase):
         }
 
         infer = transformer_infer.WanTransformerInferFirstBlock(config)
+        scheduler = SimpleNamespace(infer_condition=True)
+        infer.set_scheduler(scheduler)
 
-        self.assertTrue(hasattr(infer, "switch_status"))
-        self.assertTrue(infer.infer_conditional)
+        cond_residual = torch.ones(1, 4, 8)
+        self.assertTrue(infer.calculate_should_calc(cond_residual))
+        self.assertIsNotNone(infer.prev_first_block_residual_even)
+        self.assertIsNone(infer.prev_first_block_residual_odd)
 
-        infer.switch_status()
-        self.assertFalse(infer.infer_conditional)
-
-        infer.switch_status()
-        self.assertTrue(infer.infer_conditional)
+        scheduler.infer_condition = False
+        uncond_residual = torch.full((1, 4, 8), 2.0)
+        self.assertTrue(infer.calculate_should_calc(uncond_residual))
+        self.assertIsNotNone(infer.prev_first_block_residual_odd)
 
 
 if __name__ == "__main__":

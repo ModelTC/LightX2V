@@ -72,16 +72,12 @@ class WanTransformerInfer(BaseTransformerInfer):
             self.enable_head_parallel = False
             self.seq_p_tensor_fusion = False
         self.infer_func = self.infer_without_offload
-        self.infer_conditional = True
 
         self.cos_sin = None
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
         pass
-
-    def switch_status(self):
-        self.infer_conditional = not self.infer_conditional
 
     def reset_infer_states(self):
         self.self_attn_cu_seqlens_qkv = None
