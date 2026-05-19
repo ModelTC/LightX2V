@@ -6,6 +6,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.networks.bagel.model import BagelModel
+from lightx2v.models.runners.bagel.i2i_utils import load_bagel_i2i_input_image, resize_pil_to_shape, resolve_bagel_i2i_image_shape
 from lightx2v.models.runners.bagel.t2i_utils import get_bagel_latent_downsample, resolve_bagel_t2i_image_shape
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.bagel.scheduler import BagelScheduler
@@ -52,12 +53,32 @@ class BagelRunner(DefaultRunner):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
 
-    def set_image_shapes(self):
+    def set_t2i_image_shapes(self):
         image_shape = resolve_bagel_t2i_image_shape(self.input_info, self.config)
         self.input_info.image_shapes = image_shape
         self.input_info.target_shape = list(image_shape)
         logger.info(f"BAGEL T2I image shape: {image_shape[0]}x{image_shape[1]}")
         return image_shape
+
+    def set_i2i_image_shapes(self):
+        input_image = load_bagel_i2i_input_image(self.input_info.image_path)
+        image_shape = resolve_bagel_i2i_image_shape(self.input_info, self.config, input_image.size)
+        processed_image = resize_pil_to_shape(input_image, image_shape)
+
+        self.input_info.input_image = processed_image
+        self.input_info.image_shapes = image_shape
+        self.input_info.target_shape = list(image_shape)
+        self.input_info.original_size = [input_image.size[1], input_image.size[0]]
+        self.input_info.processed_image_size = list(image_shape)
+        if getattr(self.input_info, "aspect_ratio", ""):
+            logger.warning("BAGEL I2I MVP ignores aspect_ratio and preserves the input image aspect ratio unless target_shape is set.")
+        logger.info(f"BAGEL I2I image shape: {image_shape[0]}x{image_shape[1]} from input {input_image.size[1]}x{input_image.size[0]}")
+        return image_shape
+
+    def set_image_shapes(self):
+        if self.config["task"] == "i2i":
+            return self.set_i2i_image_shapes()
+        return self.set_t2i_image_shapes()
 
     def run(self, total_steps=None):
         if total_steps is None:
@@ -86,7 +107,8 @@ class BagelRunner(DefaultRunner):
         return latents, generator
 
     def _refresh_scheduler_from_config(self):
-        self.scheduler.infer_steps = int(self.config.get("infer_steps", self.scheduler.infer_steps))
+        infer_steps = self.config.get("infer_steps", self.config["inference_hyper"].get("num_timesteps", self.scheduler.infer_steps))
+        self.scheduler.infer_steps = int(infer_steps)
         self.scheduler.timestep_shift = self.config["inference_hyper"]["timestep_shift"]
         self.scheduler.set_timesteps()
 
@@ -145,19 +167,19 @@ class BagelRunner(DefaultRunner):
         return {"images": images}
 
     def run_pipeline(self, input_info):
-        if self.config["task"] != "t2i":
-            raise NotImplementedError("BAGEL v1 support in LightX2V currently only implements task='t2i'")
+        if self.config["task"] not in ["t2i", "i2i"]:
+            raise NotImplementedError("BAGEL image generation in LightX2V currently supports task='t2i' and task='i2i'")
 
         self.input_info = input_info
         logger.info(f"input_info: {self.input_info}")
         if getattr(self.input_info, "negative_prompt", ""):
-            logger.warning("BAGEL T2I v1 does not use negative_prompt; the value will be ignored.")
+            logger.warning("BAGEL image generation MVP does not use negative_prompt; the value will be ignored.")
 
         self._refresh_scheduler_from_config()
         image_shape = self.set_image_shapes()
 
-        self.inputs, self.scheduler = self.model.prepare_inputs(self.input_info, self.scheduler)
-        self.model.set_scheduler(self.scheduler)
+        vae_encoder = self.vae_decoder if self.config["task"] == "i2i" else None
+        self.inputs, self.scheduler = self.model.prepare_inputs(self.input_info, self.scheduler, vae_model=vae_encoder)
 
         latents, generator = self.run_dit()
         decode_info = self._build_decode_info(image_shape)

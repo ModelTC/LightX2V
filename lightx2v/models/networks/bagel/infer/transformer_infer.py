@@ -291,7 +291,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
     ):
         for layer_idx, block_weight in enumerate(block_weights):
             if enable_taylorseer:
-                assert NotImplementedError
+                raise NotImplementedError("TaylorSeer is not implemented for BAGEL transformer inference.")
             packed_query_sequence, past_key_values = self.decoder_layer(
                 block_weight=block_weight,
                 packed_query_sequence=packed_query_sequence,

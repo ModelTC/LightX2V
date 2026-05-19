@@ -15,6 +15,9 @@ class BagelVae:
         self.vae_model, self.vae_params = load_ae(vae_path)
         self.vae_model = self.vae_model
 
+    def encode(self, images):
+        return self.vae_model.encode(images)
+
     def decode(self, latents, decode_info):
         latents = latents.split((decode_info["packed_seqlens"] - 2).tolist())
 

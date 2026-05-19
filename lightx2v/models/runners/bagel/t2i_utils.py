@@ -66,8 +66,11 @@ def validate_bagel_model_assets(config, model_path):
         "visual_gen",
     ]
     missing = [key for key in required_keys if key not in config]
+    if get_config_value(config, "task", None) == "i2i":
+        i2i_required_keys = ["vit_config", "vit_max_num_patch_per_side", "connector_act", "visual_und"]
+        missing.extend([key for key in i2i_required_keys if key not in config])
     if missing:
-        raise ValueError(f"BAGEL config missing required key(s): {missing}. Check model_path/config.json and configs/bagel/bagel_t2i.json.")
+        raise ValueError(f"BAGEL config missing required key(s): {missing}. Check model_path/config.json and configs/bagel/bagel_t2i.json or configs/bagel/bagel_i2i.json.")
 
     required_files = ["ema.safetensors", "ae.safetensors"]
     missing_files = [name for name in required_files if not os.path.exists(os.path.join(model_path, name))]
