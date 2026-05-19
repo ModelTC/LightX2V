@@ -24,7 +24,7 @@ if global_var.AI_DEVICE is None:
 from lightx2v.models.networks.bagel.infer import transformer_infer
 from lightx2v.models.networks.bagel.model import BagelModel
 from lightx2v.models.networks.bagel.vision import build_bagel_vit_config, extract_bagel_vit_state_dict
-from lightx2v.models.runners.bagel.i2i_utils import resolve_bagel_i2i_image_shape
+from lightx2v.models.runners.bagel.i2i_utils import resolve_bagel_i2i_image_shape, resize_pil_for_vit
 from lightx2v.models.runners.bagel.t2i_utils import BAGEL_T2I_ASPECT_RATIOS, resolve_bagel_t2i_image_shape, validate_bagel_model_assets
 from lightx2v.models.schedulers.bagel.scheduler import BagelScheduler
 from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
@@ -231,6 +231,17 @@ class BagelT2ISupportTest(unittest.TestCase):
         self.assertEqual(bagel_inputs.cfg_img_precontext["images"], [])
         self.assertEqual(bagel_inputs.cfg_img_precontext["texts"], ["make it blue"])
         self.assertEqual(scheduler.latents.shape, torch.Size([1]))
+
+    def test_resize_pil_for_vit_respects_stride_and_max_pixels(self):
+        image = Image.new("RGB", (1920, 1080), "white")
+        resized = resize_pil_for_vit(image)
+        width, height = resized.size
+
+        self.assertEqual(width % 14, 0)
+        self.assertEqual(height % 14, 0)
+        self.assertLessEqual(width, 980)
+        self.assertLessEqual(height, 980)
+        self.assertLessEqual(width * height, 14 * 14 * 9 * 1024)
 
 
 if __name__ == "__main__":

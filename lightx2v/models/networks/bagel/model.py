@@ -491,6 +491,7 @@ class BagelModel:
         packed_sequence = packed_text_embedding.new_zeros((int(packed_seqlens.sum().item()), self.hidden_size))
         packed_sequence[packed_text_indexes.to(AI_DEVICE)] = packed_text_embedding
 
+        padded_images = padded_images.to(device=AI_DEVICE, dtype=torch.bfloat16)
         padded_latent = vae_model.encode(padded_images)
 
         p = self.latent_patch_size

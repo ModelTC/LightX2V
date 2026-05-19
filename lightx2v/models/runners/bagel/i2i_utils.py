@@ -98,7 +98,7 @@ def resize_pil_for_vit(image, max_size=980, min_size=224, stride=14, max_pixels=
     new_width, new_height = apply_scale(width, height, scale)
 
     if new_width * new_height > max_pixels:
-        scale = max_pixels / (new_width * new_height)
+        scale = (max_pixels / (new_width * new_height)) ** 0.5
         new_width, new_height = apply_scale(new_width, new_height, scale)
 
     if max(new_width, new_height) > max_size:
