@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import torch
 from PIL import Image
+from loguru import logger
 from torch.nn import functional as F
 
 from lightx2v.models.networks.bagel.data_utils import add_special_tokens
@@ -17,6 +18,7 @@ from lightx2v.models.networks.bagel.tokenization_qwen2 import Qwen2Tokenizer
 from lightx2v.models.networks.bagel.weights.post_weights import Qwen2PostWeights
 from lightx2v.models.networks.bagel.weights.pre_weights import Qwen2PreWeights
 from lightx2v.models.networks.bagel.weights.transformer_weights import Qwen2TransformerWeights
+from lightx2v.models.runners.bagel.t2i_utils import validate_bagel_model_assets
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
@@ -35,6 +37,7 @@ class BagelModel:
     def __init__(self, config):
         self.config = config
         self.model_path = config["model_path"]
+        self._validate_config()
         # init llm config
         llm_config = self.config["llm_config"]
         with self.config.temporarily_unlocked():
@@ -58,6 +61,9 @@ class BagelModel:
         self._init_weights()
         self._init_infer()
         self._init_modules()
+
+    def _validate_config(self):
+        validate_bagel_model_assets(self.config, self.model_path)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -88,7 +94,10 @@ class BagelModel:
         self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config, self.llm_config)
         self.post_weight = self.post_weight_class(self.config)
-        weight_dict = safetensors.torch.load_file(os.path.join(self.config["model_path"], "ema.safetensors"), device=AI_DEVICE)
+        weight_path = os.path.join(self.config["model_path"], "ema.safetensors")
+        if not os.path.exists(weight_path):
+            raise FileNotFoundError(f"BAGEL transformer weights not found: {weight_path}")
+        weight_dict = safetensors.torch.load_file(weight_path, device=AI_DEVICE)
         self._apply_weights(weight_dict)
 
     def _init_infer(self):
@@ -264,9 +273,16 @@ class BagelModel:
 
     @torch.no_grad()
     def prepare_inputs(self, input_info, scheduler):
-        gen_context = self.transformer_infer.gen_context
-        cfg_text_context = self.transformer_infer.cfg_text_context
-        cfg_img_context = self.transformer_infer.cfg_img_context
+        gen_context = self.init_gen_context()
+        cfg_text_context = deepcopy(gen_context)
+        cfg_img_context = deepcopy(gen_context)
+        self.transformer_infer.gen_context = gen_context
+        self.transformer_infer.cfg_text_context = cfg_text_context
+        self.transformer_infer.cfg_img_context = cfg_img_context
+
+        image_shape = tuple(input_info.image_shapes) if input_info.image_shapes else (1024, 1024)
+        if len(image_shape) != 2:
+            raise ValueError(f"BAGEL image_shapes must be a 2D image shape (H, W), got: {input_info.image_shapes}")
 
         input_lists = [input_info.prompt]
         output_list = []
@@ -307,8 +323,9 @@ class BagelModel:
         generation_input = scheduler.prepare_vae_latent(
             curr_kvlens=kv_lens,
             curr_rope=ropes,
-            image_sizes=[(1024, 1024)],
+            image_sizes=[image_shape],
             new_token_ids=self.new_token_ids,
+            seed=input_info.seed,
         )
 
         # text cfg
@@ -318,7 +335,7 @@ class BagelModel:
         generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
             curr_kvlens=kv_lens_cfg,
             curr_rope=ropes_cfg,
-            image_sizes=[(1024, 1024)],
+            image_sizes=[image_shape],
         )
 
         # img cfg
@@ -328,7 +345,7 @@ class BagelModel:
         generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
             curr_kvlens=kv_lens_cfg,
             curr_rope=ropes_cfg,
-            image_sizes=[(1024, 1024)],
+            image_sizes=[image_shape],
         )
 
         scheduler.generation_input = generation_input
@@ -363,6 +380,8 @@ class BagelModel:
             cfg_text_past_key_values=cfg_text_past_key_values,
             cfg_img_past_key_values=cfg_img_past_key_values,
         )
+        if output_list:
+            logger.info(f"BAGEL thinking/text output is not returned by T2I v1: {output_list}")
         return bagel_inputs, scheduler
 
     @staticmethod
