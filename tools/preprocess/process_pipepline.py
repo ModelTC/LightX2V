@@ -32,7 +32,7 @@ from human_visualization import draw_aapose_by_meta_new
 from pose2d import Pose2d
 from pose2d_utils import AAPoseMeta
 from retarget_pose import get_retarget_pose
-from utils import get_aug_mask, get_face_bboxes, get_frame_indices, get_mask_body_img, padding_resize, resize_by_area
+from utils import get_aug_mask, get_face_bboxes, get_frame_indices, get_mask_body_img, padding_resize, resize_by_area, skip_replace_frame_outputs
 
 
 class ProcessPipeline:
@@ -109,17 +109,39 @@ class ProcessPipeline:
 
             bg_images = []
             aug_masks = []
+            replace_frame_count = 0
 
-            for frame, mask in zip(frames, masks):
-                if iterations > 0:
-                    _, each_mask = get_mask_body_img(frame, mask, iterations=iterations, k=k)
-                    each_aug_mask = get_aug_mask(each_mask, w_len=w_len, h_len=h_len)
+            for frame_idx, (frame, mask) in enumerate(zip(frames, masks)):
+                each_aug_mask = None
+                if mask is not None and mask.sum() > 0:
+                    if iterations > 0:
+                        _, each_mask = get_mask_body_img(frame, mask, iterations=iterations, k=k)
+                        if each_mask.sum() > 0:
+                            each_aug_mask = get_aug_mask(each_mask, w_len=w_len, h_len=h_len)
+                    else:
+                        each_aug_mask = mask
+
+                if each_aug_mask is None or each_aug_mask.sum() == 0:
+                    logger.warning(
+                        f"Frame {frame_idx}: no valid person mask, skipping character replacement for this frame"
+                    )
+                    each_bg_image, each_aug_mask = skip_replace_frame_outputs(frame)
                 else:
-                    each_aug_mask = mask
+                    each_bg_image = frame * (1 - each_aug_mask[:, :, None])
+                    replace_frame_count += 1
 
-                each_bg_image = frame * (1 - each_aug_mask[:, :, None])
                 bg_images.append(each_bg_image)
                 aug_masks.append(each_aug_mask)
+
+            if replace_frame_count == 0:
+                raise ValueError(
+                    "Animate replace preprocessing failed: no stable human body detected in driving video"
+                )
+            if replace_frame_count < len(frames):
+                logger.info(
+                    f"Replace preprocessing: {replace_frame_count}/{len(frames)} frames will be replaced, "
+                    f"{len(frames) - replace_frame_count} frames kept as original"
+                )
 
             src_face_path = os.path.join(output_path, "src_face.mp4")
             mpy.ImageSequenceClip(face_images, fps=fps).write_videofile(src_face_path)
@@ -295,25 +317,26 @@ class ProcessPipeline:
 
     def get_mask(self, frames, th_step, kp2ds_all):
         frame_num = len(frames)
+        masks = [None] * frame_num
         if frame_num < th_step:
             num_step = 1
         else:
             num_step = (frame_num + th_step) // th_step
 
-        all_mask = []
         for index in range(num_step):
-            each_frames = frames[index * th_step : (index + 1) * th_step]
-
-            kp2ds = kp2ds_all[index * th_step : (index + 1) * th_step]
-            if len(each_frames) > 4:
-                key_frame_num = 4
-            elif 4 >= len(each_frames) > 0:
-                key_frame_num = 1
-            else:
+            chunk_start = index * th_step
+            each_frames = frames[chunk_start : chunk_start + th_step]
+            kp2ds = kp2ds_all[chunk_start : chunk_start + th_step]
+            if len(each_frames) == 0:
                 continue
 
-            key_frame_step = len(kp2ds) // key_frame_num
-            key_frame_index_list = list(range(0, len(kp2ds), key_frame_step))
+            if len(each_frames) > 4:
+                key_frame_num = 4
+            else:
+                key_frame_num = 1
+
+            key_frame_step = max(len(kp2ds) // key_frame_num, 1)
+            key_frame_index_list = list(range(0, len(kp2ds), key_frame_step))[:key_frame_num]
 
             key_points_index = [0, 1, 2, 5, 8, 11, 10, 13]
             key_frame_body_points_list = []
@@ -326,41 +349,54 @@ class ProcessPipeline:
                         continue
                     keypoints_body_list.append(each_keypoint)
 
+                if len(keypoints_body_list) == 0:
+                    key_frame_body_points_list.append(np.zeros((0, 2), dtype=np.int32))
+                    continue
+
                 keypoints_body = np.array(keypoints_body_list)[:, :2]
                 wh = np.array([[kp2ds[0]["width"], kp2ds[0]["height"]]])
                 points = (keypoints_body * wh).astype(np.int32)
                 key_frame_body_points_list.append(points)
 
-            inference_state = self.predictor.init_state_v2(frames=each_frames)
-            self.predictor.reset_state(inference_state)
-            ann_obj_id = 1
-            for ann_frame_idx, points in zip(key_frame_index_list, key_frame_body_points_list):
-                labels = np.array([1] * points.shape[0], np.int32)
-                _, out_obj_ids, out_mask_logits = self.predictor.add_new_points(
-                    inference_state=inference_state,
-                    frame_idx=ann_frame_idx,
-                    obj_id=ann_obj_id,
-                    points=points,
-                    labels=labels,
-                )
+            chunk_masks = {}
+            sam_ran = False
+            if any(points.shape[0] > 0 for points in key_frame_body_points_list):
+                inference_state = self.predictor.init_state_v2(frames=each_frames)
+                self.predictor.reset_state(inference_state)
+                ann_obj_id = 1
+                for ann_frame_idx, points in zip(key_frame_index_list, key_frame_body_points_list):
+                    if points.shape[0] == 0:
+                        continue
+                    labels = np.array([1] * points.shape[0], np.int32)
+                    self.predictor.add_new_points(
+                        inference_state=inference_state,
+                        frame_idx=ann_frame_idx,
+                        obj_id=ann_obj_id,
+                        points=points,
+                        labels=labels,
+                    )
 
-            video_segments = {}
-            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(inference_state):
-                video_segments[out_frame_idx] = {out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)}
+                video_segments = {}
+                for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(inference_state):
+                    video_segments[out_frame_idx] = {
+                        out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
+                    }
 
-            for out_frame_idx in range(len(video_segments)):
-                for out_obj_id, out_mask in video_segments[out_frame_idx].items():
-                    out_mask = out_mask[0].astype(np.uint8)
-                    all_mask.append(out_mask)
+                for out_frame_idx in range(len(each_frames)):
+                    out_mask = None
+                    if out_frame_idx in video_segments:
+                        for _, mask_logits in video_segments[out_frame_idx].items():
+                            out_mask = mask_logits[0].astype(np.uint8)
+                            break
+                    chunk_masks[out_frame_idx] = out_mask
+                sam_ran = True
 
-        return all_mask
+            for local_idx in range(len(each_frames)):
+                global_idx = chunk_start + local_idx
+                if global_idx >= frame_num:
+                    continue
+                mask = chunk_masks.get(local_idx) if sam_ran else None
+                if mask is not None and mask.sum() > 0:
+                    masks[global_idx] = mask
 
-    def convert_list_to_array(self, metas):
-        metas_list = []
-        for meta in metas:
-            for key, value in meta.items():
-                if type(value) is list:
-                    value = np.array(value)
-                meta[key] = value
-            metas_list.append(meta)
-        return metas_list
+        return masks
