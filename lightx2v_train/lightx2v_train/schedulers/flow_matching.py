@@ -26,12 +26,18 @@ class RectifiedFlowMatchingScheduler:
         self.shift_type = time_shift_settings.get("shift_type", "linear")
         self.dynamic_shift = time_shift_settings.get("dynamic_shift", False)
         if self.dynamic_shift:
-            self.shift_x1 = time_shift_settings["shift_x1"]
-            self.shift_x2 = time_shift_settings["shift_x2"]
-            self.shift_y1 = time_shift_settings["shift_y1"]
-            self.shift_y2 = time_shift_settings["shift_y2"]
-            self._mu_slope = (self.shift_y2 - self.shift_y1) / (self.shift_x2 - self.shift_x1)
-            self._mu_bias = self.shift_y1 - self._mu_slope * self.shift_x1
+            self.shift_mu_strategy = time_shift_settings.get("shift_mu_strategy", "linear")
+            if self.shift_mu_strategy == "linear":
+                self.shift_x1 = time_shift_settings["shift_x1"]
+                self.shift_x2 = time_shift_settings["shift_x2"]
+                self.shift_y1 = time_shift_settings["shift_y1"]
+                self.shift_y2 = time_shift_settings["shift_y2"]
+                self._mu_slope = (self.shift_y2 - self.shift_y1) / (self.shift_x2 - self.shift_x1)
+                self._mu_bias = self.shift_y1 - self._mu_slope * self.shift_x1
+            elif self.shift_mu_strategy == "flux2_empirical":
+                self.shift_mu_num_steps = time_shift_settings.get("shift_mu_num_steps", 50)
+            else:
+                raise ValueError(f"Unsupported shift_mu_strategy: {self.shift_mu_strategy}")
             self.patch_size = time_shift_settings.get("patch_size", [2, 2])
         else:
             self.time_shift_mu = time_shift_settings.get("time_shift_mu", 5.0)
@@ -45,12 +51,31 @@ class RectifiedFlowMatchingScheduler:
         self.infer_timesteps = None
         self.num_inference_steps = None
 
-    def _get_time_shift_mu(self, latent_hw=None):
+    @staticmethod
+    def _compute_flux2_empirical_mu(image_seq_len, num_steps):
+        a1, b1 = 8.73809524e-05, 1.89833333
+        a2, b2 = 0.00016927, 0.45666666
+
+        if image_seq_len > 4300:
+            return float(a2 * image_seq_len + b2)
+
+        m_200 = a2 * image_seq_len + b2
+        m_10 = a1 * image_seq_len + b1
+        a = (m_200 - m_10) / 190.0
+        b = m_200 - 200.0 * a
+        return float(a * num_steps + b)
+
+    def _get_time_shift_mu(self, latent_hw=None, num_steps=None):
         if self.dynamic_shift:
             if latent_hw is None:
                 raise ValueError("latent_hw=(H, W) must be provided when dynamic_shift=True")
             h, w = latent_hw
             image_seq_len = (h // self.patch_size[0]) * (w // self.patch_size[1])
+            if self.shift_mu_strategy == "flux2_empirical":
+                return self._compute_flux2_empirical_mu(
+                    image_seq_len=image_seq_len,
+                    num_steps=num_steps or self.shift_mu_num_steps,
+                )
             return self._mu_slope * image_seq_len + self._mu_bias
         return self.time_shift_mu
 
@@ -68,8 +93,8 @@ class RectifiedFlowMatchingScheduler:
             timestep_or_sigma = self.time_shift(timestep_or_sigma, latent_hw=latent_hw)
         return timestep_or_sigma.to(self.running_dtype)
 
-    def time_shift(self, t, latent_hw=None):
-        mu = self._get_time_shift_mu(latent_hw)
+    def time_shift(self, t, latent_hw=None, num_steps=None):
+        mu = self._get_time_shift_mu(latent_hw, num_steps=num_steps)
         if self.shift_type == "exponential":
             mu = math.exp(mu)
         return mu / (mu + (1 / t - 1) ** self.time_shift_power)
@@ -89,7 +114,7 @@ class RectifiedFlowMatchingScheduler:
         if sigmas is None:
             sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
             if self.do_time_shift:
-                sigmas = self.time_shift(sigmas, latent_hw=latent_hw)
+                sigmas = self.time_shift(sigmas, latent_hw=latent_hw, num_steps=num_inference_steps)
         else:
             sigmas = torch.tensor(sigmas, dtype=torch.float32)
         self.infer_sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
