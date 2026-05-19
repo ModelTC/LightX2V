@@ -7,7 +7,6 @@ from PIL import Image
 from lightx2v.models.networks.bagel.data_utils import pil_img2rgb
 from lightx2v.models.runners.bagel.t2i_utils import get_bagel_latent_downsample, get_config_value
 
-
 _BICUBIC = Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC
 
 
