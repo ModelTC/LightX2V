@@ -10,8 +10,13 @@ class BagelVae:
     def __init__(self, config):
         self.config = config
         vae_path = os.path.join(config["model_path"], "ae.safetensors")
+        if not os.path.exists(vae_path):
+            raise FileNotFoundError(f"BAGEL VAE weights not found: {vae_path}. Expected `ae.safetensors` in model_path.")
         self.vae_model, self.vae_params = load_ae(vae_path)
         self.vae_model = self.vae_model
+
+    def encode(self, images):
+        return self.vae_model.encode(images)
 
     def decode(self, latents, decode_info):
         latents = latents.split((decode_info["packed_seqlens"] - 2).tolist())
