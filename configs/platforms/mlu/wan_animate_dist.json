@@ -24,5 +24,9 @@
         "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
         "strength": 1.0
         }
-    ]
+    ],
+    "parallel": {
+        "seq_p_size": 8,
+        "seq_p_attn_type": "ulysses"
+    }
 }
