@@ -6,7 +6,7 @@ model_path=
 video_path=
 refer_path=
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
