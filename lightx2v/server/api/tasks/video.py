@@ -42,6 +42,7 @@ async def create_video_task(message: VideoTaskRequest):
 @router.post("/form", response_model=TaskResponse)
 async def create_video_task_form(
     image_file: UploadFile = File(...),
+    last_frame_file: UploadFile = File(...),
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
     use_prompt_enhancer: bool = Form(default=False),
@@ -74,6 +75,10 @@ async def create_video_task_form(
     if image_file and image_file.filename:
         image_path = await save_file_async(image_file, services.file_service.input_image_dir)
 
+    last_frame_path = ""
+    if last_frame_file and last_frame_file.filename:
+        last_frame_path = await save_file_async(last_frame_file, services.file_service.input_image_dir)
+
     audio_path = ""
     if audio_file and audio_file.filename:
         audio_path = await save_file_async(audio_file, services.file_service.input_audio_dir)
@@ -82,6 +87,7 @@ async def create_video_task_form(
         prompt=prompt,
         use_prompt_enhancer=use_prompt_enhancer,
         negative_prompt=negative_prompt,
+        last_frame_path=last_frame_path,
         image_path=image_path,
         num_fragments=num_fragments,
         save_result_path=save_result_path,
