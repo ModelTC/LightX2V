@@ -48,7 +48,6 @@ class WanModel(BaseTransformerModel):
             "before_proj",  # vace
             "after_proj",  # vace
         }
-        self.padding_multiple = self.config.get("padding_multiple", 1)
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
@@ -127,9 +126,7 @@ class WanModel(BaseTransformerModel):
         x = pre_infer_out.x
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
-        f, _, _ = pre_infer_out.grid_sizes.tuple
-        multiple = world_size * f
-        padding_size = (multiple - (x.shape[0] % multiple)) % multiple
+        padding_size = (world_size - (x.shape[0] % world_size)) % world_size
         if padding_size > 0:
             x = F.pad(x, (0, 0, 0, padding_size))
 
