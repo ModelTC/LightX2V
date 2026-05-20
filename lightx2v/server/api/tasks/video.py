@@ -42,7 +42,7 @@ async def create_video_task(message: VideoTaskRequest):
 @router.post("/form", response_model=TaskResponse)
 async def create_video_task_form(
     image_file: UploadFile = File(...),
-    last_frame_file: UploadFile = File(...),
+    last_frame_file: UploadFile = File(None),
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
     use_prompt_enhancer: bool = Form(default=False),
