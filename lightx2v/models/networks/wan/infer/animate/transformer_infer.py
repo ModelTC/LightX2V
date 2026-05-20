@@ -11,6 +11,9 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
         super().__init__(config)
         self.has_post_adapter = True
         self.phases_num = 4
+        self.adapter_cu_seqlens_q = None
+        self.adapter_cu_seqlens_kv = None
+        self._adapter_cu_seqlens_key = None
 
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
@@ -87,11 +90,22 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
             raise RuntimeError(f"face adapter: seq {q.shape[0]} not divisible by T={t} (tokens_per_step={tokens_per_step})")
         q = phase.q_norm.apply(q).view(t, tokens_per_step, q.shape[1], q.shape[2])
         k = phase.k_norm.apply(k)
-        q_b = q.permute(0, 2, 1, 3).contiguous()
-        k_b = k.permute(0, 2, 1, 3).contiguous()
-        v_b = v.permute(0, 2, 1, 3).contiguous()
-        attn_b = F.scaled_dot_product_attention(q_b, k_b, v_b)
-        attn = attn_b.permute(0, 2, 1, 3).reshape(t * q.shape[1], -1)
+        seq_q, seq_kv = q.size(1), k.size(1)
+        cu_seqlens_key = (t, seq_q, seq_kv, q.device)
+        if self._adapter_cu_seqlens_key != cu_seqlens_key:
+            self.adapter_cu_seqlens_q = torch.arange(t + 1, device=q.device, dtype=torch.int32) * seq_q
+            self.adapter_cu_seqlens_kv = torch.arange(t + 1, device=k.device, dtype=torch.int32) * seq_kv
+            self._adapter_cu_seqlens_key = cu_seqlens_key
+        attn = phase.adapter_attn.apply(
+            q,
+            k,
+            v,
+            cu_seqlens_q=self.adapter_cu_seqlens_q,
+            cu_seqlens_kv=self.adapter_cu_seqlens_kv,
+            max_seqlen_q=seq_q,
+            max_seqlen_kv=seq_kv,
+        )
+        attn = attn.reshape(t * seq_q, -1)
 
         output = phase.linear2.apply(attn)
         if sp_size > 1:
