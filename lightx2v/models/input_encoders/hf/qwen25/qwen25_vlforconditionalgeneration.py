@@ -55,7 +55,7 @@ def calculate_dimensions(target_area, ratio):
 class Qwen25_VLForConditionalGeneration_TextEncoder:
     def __init__(self, config):
         self.config = config
-        self.tokenizer_max_length = 1024
+        self.tokenizer_max_length = config.get("tokenizer_max_length", 4096)
         self.prompt_template_encode = config["prompt_template_encode"]
         self.prompt_template_encode_start_idx = config["prompt_template_encode_start_idx"]
         """
@@ -218,6 +218,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             drop_idx = self.prompt_template_encode_start_idx
             txt = [template.format(e) for e in text]
 
+            token_lengths = [len(ids) for ids in self.tokenizer(txt, add_special_tokens=True)["input_ids"]]
+            max_token_len = max(token_lengths)
+            if max_token_len > self.tokenizer_max_length + drop_idx:
+                raise ValueError(f"Input text token length ({max_token_len - drop_idx}) exceeds ({self.tokenizer_max_length}). Please shorten the input text.")
             model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(AI_DEVICE)
             encoder_hidden_states = self.text_encoder(
                 input_ids=model_inputs.input_ids,

@@ -37,6 +37,11 @@ def calculate_shift(
     return mu
 
 
+def time_shift_linear(mu: float, t: torch.Tensor) -> torch.Tensor:
+    """Linear time shift: mu / (mu + (1/t - 1)), matching zoe-diffusion's implementation."""
+    return mu / (mu + (1.0 / t - 1.0))
+
+
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
 def retrieve_timesteps(
     scheduler,
@@ -428,7 +433,7 @@ class QwenImageScheduler(BaseScheduler):
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
         self.dtype = torch.bfloat16
-        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.sample_guide_scale = self.config.get("sample_guide_scale", None)
         self.zero_cond_t = config.get("zero_cond_t", False)
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
@@ -480,43 +485,84 @@ class QwenImageScheduler(BaseScheduler):
 
         return latent_image_ids.to(device=device, dtype=dtype)
 
+    def _prepare_latents_lightx2v(self, shape, height, width, num_channels_latents):
+        """Original LightX2V latent generation: noise in [B, T, C, H, W] then pack."""
+        latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
+        if self.is_layered:
+            latents = self._pack_latents(latents, 1, num_channels_latents, height, width, self.layers + 1)
+        else:
+            latents = self._pack_latents(latents, 1, num_channels_latents, height, width)
+        return latents
+
+    def _prepare_latents_zoe(self, shape, height, width, num_channels_latents):
+        """Zoe-aligned latent generation: noise in packed format [B, C*4, T, H//2, W//2].
+        Ensures the same random sampling order as Zoe for bit-exact alignment.
+        """
+        b, t = shape[0], shape[1]
+        zoe_shape = (b, num_channels_latents * 4, t, height // 2, width // 2)
+        latents = randn_tensor(zoe_shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
+        # Convert to LightX2V sequence format: [B, (H//2)*(W//2), C*4]
+        latents = latents.squeeze(2)  # [B, C*4, H//2, W//2]
+        latents = latents.permute(0, 2, 3, 1)  # [B, H//2, W//2, C*4]
+        latents = latents.reshape(b, (height // 2) * (width // 2), num_channels_latents * 4)
+        return latents
+
     def prepare_latents(self, input_info):
         self.input_info = input_info
         shape = input_info.target_shape
+        # shape: [B, T, C, H, W]
         width, height = shape[-1], shape[-2]
-        latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
-        if self.is_layered:
-            latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width, self.layers + 1)
+        num_channels_latents = self.config.get("num_channels_latents", 16)
+
+        if self.config.get("zoe_style_noise", False) and not self.is_layered:
+            latents = self._prepare_latents_zoe(shape, height, width, num_channels_latents)
         else:
-            latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width)
+            latents = self._prepare_latents_lightx2v(shape, height, width, num_channels_latents)
+
         latent_image_ids = self._prepare_latent_image_ids(1, height // 2, width // 2, AI_DEVICE, self.dtype)
         self.latents = latents
         self.latent_image_ids = latent_image_ids
         self.noise_pred = None
 
     def set_timesteps(self):
-        sigmas = np.linspace(1.0, 1 / self.config["infer_steps"], self.config["infer_steps"])
-        image_seq_len = self.latents.shape[1]
-        if self.is_layered:
-            base_seqlen = 256 * 256 / 16 / 16
-            image_seq_len = self.latents.shape[1] // 5
-            mu = (image_seq_len / base_seqlen) ** 0.5
-        else:
-            mu = calculate_shift(
-                image_seq_len,
-                self.scheduler_config.get("base_image_seq_len", 256),
-                self.scheduler_config.get("max_image_seq_len", 4096),
-                self.scheduler_config.get("base_shift", 0.5),
-                self.scheduler_config.get("max_shift", 1.15),
-            )
         num_inference_steps = self.config["infer_steps"]
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            AI_DEVICE,
-            sigmas=sigmas,
-            mu=mu,
-        )
+        sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
+
+        sample_shift = self.config.get("sample_shift", None)
+        if sample_shift is not None:
+            # Zoe-style: linear time shift with a fixed mu, resolution-independent.
+            # Formula: t_shifted = mu / (mu + (1/t - 1))
+            sigmas_tensor = torch.from_numpy(sigmas).float().to(AI_DEVICE)
+            sigmas_shifted = time_shift_linear(mu=sample_shift, t=sigmas_tensor)
+            sigmas_shifted = torch.cat([sigmas_shifted, torch.zeros(1, device=AI_DEVICE)])
+            self.scheduler.sigmas = sigmas_shifted.to(dtype=torch.float32, device=AI_DEVICE)
+            self.scheduler.timesteps = sigmas_shifted[:-1] * self.scheduler_config["num_train_timesteps"]
+            self.scheduler.timesteps = self.scheduler.timesteps.to(AI_DEVICE)
+            self.scheduler._step_index = None
+            self.scheduler._begin_index = None
+            timesteps = self.scheduler.timesteps
+        else:
+            # Original: resolution-adaptive exponential shift via diffusers.
+            image_seq_len = self.latents.shape[1]
+            if self.is_layered:
+                base_seqlen = 256 * 256 / 16 / 16
+                image_seq_len = self.latents.shape[1] // 5
+                mu = (image_seq_len / base_seqlen) ** 0.5
+            else:
+                mu = calculate_shift(
+                    image_seq_len,
+                    self.scheduler_config.get("base_image_seq_len", 256),
+                    self.scheduler_config.get("max_image_seq_len", 4096),
+                    self.scheduler_config.get("base_shift", 0.5),
+                    self.scheduler_config.get("max_shift", 1.15),
+                )
+            timesteps, num_inference_steps = retrieve_timesteps(
+                self.scheduler,
+                num_inference_steps,
+                AI_DEVICE,
+                sigmas=sigmas,
+                mu=mu,
+            )
 
         self.timesteps = timesteps
         self.infer_steps = num_inference_steps

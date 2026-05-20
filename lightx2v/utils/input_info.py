@@ -1,6 +1,6 @@
 import inspect
 from dataclasses import MISSING, dataclass, field, fields, make_dataclass
-from typing import Any
+from typing import Any, Optional
 
 import torch
 
@@ -174,8 +174,11 @@ class AnimateInputInfo:
     src_pose_path: str = field(default_factory=str)
     src_face_path: str = field(default_factory=str)
     src_ref_images: str = field(default_factory=str)
+    video_path: str = field(default_factory=str)
     src_bg_path: str = field(default_factory=str)
     src_mask_path: str = field(default_factory=str)
+    # None: use config_json replace_flag; True/False: per-request (e.g. worker frontend)
+    replace_flag: Optional[bool] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -232,6 +235,7 @@ class T2AVInputInfo:
     audio_latent_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -242,6 +246,7 @@ class I2AVInputInfo:
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
@@ -250,6 +255,68 @@ class I2AVInputInfo:
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
+class V2AVInputInfo:
+    """LTX-2.3 IC-LoRA video-to-audio-video.
+
+    Drives both motion-transfer (Union / Pose / Motion-Track-Control) and
+    ICEdit-Insight editing (restoration / HD / watermark / subtitle removal).
+    The reference / control video is provided pre-processed via ``video_path``.
+    Optional character image conditioning is supported through the i2av-style
+    ``image_path`` / ``image_strength`` / ``image_frame_idx`` fields.
+    """
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    # Optional character / keyframe image conditioning (motion transfer).
+    image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
+    # Pre-processed reference / control video (pose / canny / depth / track for
+    # motion transfer, or the degraded source video for ICEdit).
+    video_path: str = field(default_factory=str)
+    reference_video_strength: float = field(default_factory=lambda: 1.0)
+    reference_video_frame_cap: Optional[int] = None
+    # Optional: mux audio from this file after save (e.g. original driving video).
+    # ``video_path`` is often a silent pose/canny/depth control clip; DefaultRunner's
+    # v2av mux path is not used because LTX2Runner overrides ``process_images_after_vae_decoder``.
+    mux_audio_video_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
+class LTX2S2VInputInfo:
+    """LTX-2 audio-conditioned video (reference audio + optional reference images)."""
+
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    image_strength: float = field(default_factory=float)
+    image_frame_idx: Optional[list[int]] = None
+    audio_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
 
 
 @dataclass
@@ -277,6 +344,25 @@ class WorldPlayI2VInputInfo:
     viewmats: torch.Tensor = field(default_factory=lambda: None)
     Ks: torch.Tensor = field(default_factory=lambda: None)
     action: torch.Tensor = field(default_factory=lambda: None)
+
+
+@dataclass
+class WorldMirrorReconInputInfo:
+    """Input info for HY-WorldMirror-2.0 3D reconstruction.
+
+    Unlike the diffusion tasks, this task takes a directory / video / image
+    and saves multi-view depth / normal / Gaussian-splat results to disk.
+    """
+
+    seed: int = field(default_factory=int)
+    # Input may be a directory of images, a single image, or a video.
+    input_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)  # output root dir
+    strict_output_path: str = field(default_factory=lambda: None)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # Optional priors
+    prior_cam_path: str = field(default_factory=lambda: None)
+    prior_depth_path: str = field(default_factory=lambda: None)
 
 
 @dataclass
@@ -316,8 +402,11 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "v2av": V2AVInputInfo,
+    "ltx2_s2v": LTX2S2VInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,
+    "recon": WorldMirrorReconInputInfo,
 }
 
 

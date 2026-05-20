@@ -107,18 +107,21 @@ class SeedVRTransformerBlockWeights(WeightModule):
                     f"mlp_proj_in_gate_{branch}",
                     MM_WEIGHT_REGISTER[mm_type](
                         f"blocks.{block_index}.mlp.{branch}.proj_in_gate.weight",
+                        None,
                     ),
                 )
                 self.add_module(
                     f"mlp_proj_in_{branch}",
                     MM_WEIGHT_REGISTER[mm_type](
                         f"blocks.{block_index}.mlp.{branch}.proj_in.weight",
+                        None,
                     ),
                 )
                 self.add_module(
                     f"mlp_proj_out_{branch}",
                     MM_WEIGHT_REGISTER[mm_type](
                         f"blocks.{block_index}.mlp.{branch}.proj_out.weight",
+                        None,
                     ),
                 )
             else:

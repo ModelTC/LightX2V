@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.neopp.infer.post_infer import NeoppPostInfer
@@ -17,17 +18,22 @@ class NeoppModel(BaseTransformerModel):
     transformer_weight_class = NeoppTransformerWeights
     post_weight_class = NeoppPostWeights
 
-    def __init__(self, model_path, config, device):
-        super().__init__(model_path, config, device)
+    def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
+        super().__init__(model_path, config, device, None, lora_path, lora_strength)
         self.preserved_keys = ["fm_modules", "mot_gen"]
         self._init_infer_class()
         self._init_infer()
         self._init_weights()
+        self.enable_cfg = self.config.get("enable_cfg", True)
         self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
         self.cfg_scale = self.config.get("cfg_scale", 4.0)
         self.cfg_norm = self.config.get("cfg_norm", "global")
         self.patch_size = self.config.get("patch_size", 16)
         self.merge_size = 2
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def _init_infer_class(self):
         self.pre_infer_class = NeoppPreInfer
@@ -41,9 +47,9 @@ class NeoppModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        logger.info(f"infer: cfg_scale={self.cfg_scale}")
-        logger.info(f"infer: cfg_interval={self.cfg_interval}")
-        logger.info(f"infer: cfg_norm={self.cfg_norm}")
+        # logger.info(f"infer: cfg_scale={self.cfg_scale}")
+        # logger.info(f"infer: cfg_interval={self.cfg_interval}")
+        # logger.info(f"infer: cfg_norm={self.cfg_norm}")
         pre_infer_out = self.pre_infer.infer(self.pre_weight)
 
         # if self.config["task"] == "i2i":
@@ -84,88 +90,81 @@ class NeoppModel(BaseTransformerModel):
         return v_pred
 
     def _infer_t2i_i2i(self, inputs, pre_infer_out):
-        t = self.scheduler.timesteps[self.scheduler.step_index]
-        use_cfg = t > self.cfg_interval[0] and t < self.cfg_interval[1] and self.cfg_scale > 1
-
-        if self.config.get("cfg_parallel", False):
-            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-            # assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
-            cfg_p_rank = dist.get_rank(cfg_p_group)
-
-            cfg_p_world_size = dist.get_world_size(cfg_p_group)
-            if use_cfg:
-                if cfg_p_rank == 0:
-                    v_pred = self._infer_pass(inputs, pre_infer_out, "cond")
-                elif cfg_p_rank == 1:
-                    v_pred = self._infer_pass(inputs, pre_infer_out, "uncond")
-                elif cfg_p_rank == 2:
-                    v_pred = torch.zeros_like(pre_infer_out.z)
-                v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
-                dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
-                v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
-                v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
-                v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
-                return v_pred
-            else:
-                return self._infer_pass(inputs, pre_infer_out, "cond")
+        # 预计算各 pass 的 image_embeds：seq_parallel 时切分为本 rank 的 shard，否则直接引用原张量
+        # 这样 _infer_cond_uncond 无需在每次调用时反复 chunk/restore，避免多次 pass 间互相污染
+        if self.seq_p_group is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+            image_embeds = pre_infer_out.image_embeds
+            seq_len = image_embeds.shape[1]
+            padding_size = (world_size - (seq_len % world_size)) % world_size
+            if padding_size > 0:
+                image_embeds = F.pad(image_embeds, (0, 0, 0, padding_size))
+            shard = torch.chunk(image_embeds, world_size, dim=1)[cur_rank]
+            pre_infer_out.image_embeds_cond = shard
+            pre_infer_out.image_embeds_uncond = shard
         else:
-            v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
-            if use_cfg:
-                v_pred_uncond = self._infer_pass(inputs, pre_infer_out, "uncond")
-                v_pred = v_pred_uncond + self.cfg_scale * (v_pred_condition - v_pred_uncond)
-                v_pred = self.cfg_norm_func(v_pred, v_pred_condition)
-                return v_pred
-            return v_pred_condition
+            pre_infer_out.image_embeds_cond = pre_infer_out.image_embeds
+            pre_infer_out.image_embeds_uncond = pre_infer_out.image_embeds
 
-    # def _infer_i2i(self, inputs, pre_infer_out):
-    #     t = self.scheduler.timesteps[self.scheduler.step_index]
-    #     use_cfg = t > self.cfg_interval[0] and t < self.cfg_interval[1]
+        if self.enable_cfg:
+            t = self.scheduler.timesteps[self.scheduler.step_index]
+            use_cfg = t >= self.cfg_interval[0] and t <= self.cfg_interval[1] and self.cfg_scale > 1
 
-    #     if self.config.get("cfg_parallel", False):
-    #         cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-    #         # assert dist.get_world_size(cfg_p_group) == 3, "cfg_p_world_size must be equal to 3 for i2i"
-    #         cfg_p_rank = dist.get_rank(cfg_p_group)
+            if self.config.get("cfg_parallel", False):
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+                cfg_p_world_size = dist.get_world_size(cfg_p_group)
 
-    #         if use_cfg:
-    #             if cfg_p_rank == 0:
-    #                 v_pred = self._infer_pass(inputs, pre_infer_out, "cond")
-    #             elif cfg_p_rank == 1:
-    #                 if self.cfg_scale > 1:
-    #                     v_pred = self._infer_pass(inputs, pre_infer_out, "text_uncond")
-    #                 else:
-    #                     v_pred = torch.zeros_like(pre_infer_out.z)
-    #             elif cfg_p_rank == 2:
-    #                 if self.img_cfg_scale > 1:
-    #                     v_pred = self._infer_pass(inputs, pre_infer_out, "img_uncond")
-    #                 else:
-    #                     v_pred = torch.zeros_like(pre_infer_out.z)
-    #             v_pred_list = [torch.zeros_like(v_pred) for _ in range(3)]
-    #             dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
-    #             v_pred_condition = v_pred_list[0]
-    #             v_pred_text_uncond = v_pred_list[1] if self.cfg_scale > 1 else 0
-    #             v_pred_img_uncond = v_pred_list[2] if self.img_cfg_scale > 1 else 0
-    #             v_pred_text = v_pred_text_uncond + self.cfg_scale * (v_pred_condition - v_pred_text_uncond)
-    #             return v_pred_img_uncond + self.img_cfg_scale * (v_pred_text - v_pred_img_uncond)
-    #         else:
-    #             return self._infer_pass(inputs, pre_infer_out, "cond")
-    #     else:
-    #         v_pred_condition = self._infer_pass(inputs, pre_infer_out, "cond")
-    #         if use_cfg:
-    #             v_pred_text_uncond = self._infer_pass(inputs, pre_infer_out, "text_uncond") if self.cfg_scale > 1 else 0
-    #             v_pred_img_uncond = self._infer_pass(inputs, pre_infer_out, "img_uncond") if self.img_cfg_scale > 1 else 0
-    #             v_pred_text = v_pred_text_uncond + self.cfg_scale * (v_pred_condition - v_pred_text_uncond)
-    #             return v_pred_img_uncond + self.img_cfg_scale * (v_pred_text - v_pred_img_uncond)
-    #         return v_pred_condition
+                if use_cfg:
+                    if cfg_p_rank == 0:
+                        v_pred = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+                    else:
+                        v_pred = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
+                    v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
+                    dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                    v_pred_cond, v_pred_uncond = v_pred_list[0], v_pred_list[1]
+                    v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+                    v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
+                    return v_pred
+                else:
+                    # cfg 区间外只有 rank 0 做 cond 推理，其余 rank 用 all_gather 接收结果
+                    if cfg_p_rank == 0:
+                        v_pred = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+                    else:
+                        v_pred = torch.zeros_like(pre_infer_out.z)
+                    v_pred_list = [torch.zeros_like(v_pred) for _ in range(cfg_p_world_size)]
+                    dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                    return v_pred_list[0]
+            else:
+                # ==================== CFG Processing ====================
+                v_pred_cond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+                if use_cfg:
+                    v_pred_uncond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
+                    v_pred = v_pred_uncond + self.cfg_scale * (v_pred_cond - v_pred_uncond)
+                    v_pred = self.cfg_norm_func(v_pred, v_pred_cond)
+                    return v_pred
+                return v_pred_cond
+        else:
+            # ==================== No CFG Processing ====================
+            return self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
 
-    def _infer_pass(self, inputs, pre_infer_out, pass_name):
-        """Run one forward pass. pass_name: 'cond' | 'uncond' | 'text_uncond' | 'img_uncond'"""
-        self.scheduler.infer_pass = pass_name
+    def _infer_cond_uncond(self, inputs, pre_infer_out, infer_condition: bool):
+        self.scheduler.infer_condition = infer_condition
+        pre_infer_out.image_embeds = pre_infer_out.image_embeds_cond if infer_condition else pre_infer_out.image_embeds_uncond
+
         hidden_states = self.transformer_infer.infer(self.transformer_weights, pre_infer_out, inputs)
+
+        if self.seq_p_group is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            gathered_hidden_states = [torch.empty_like(hidden_states) for _ in range(world_size)]
+            dist.all_gather(gathered_hidden_states, hidden_states, group=self.seq_p_group)
+            hidden_states = torch.cat(gathered_hidden_states, dim=1)
+            hidden_states = hidden_states[:, : pre_infer_out.image_token_num, :]
+
         v_pred = self.post_infer.infer(self.post_weight, pre_infer_out, hidden_states)
         return v_pred
-
-    def _infer_cond_uncond(self, inputs, pre_infer_out, infer_condition=True):
-        pass
 
     def _seq_parallel_post_process(self, pre_infer_out):
         pass

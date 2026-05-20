@@ -24,3 +24,8 @@ elif PLATFORM == "enflame_gcu":
 elif PLATFORM == "intel_xpu":
     from .attn.intel_xpu import *
     from .mm.intel_xpu import *
+elif PLATFORM == "iluvatar_cuda":
+    from .attn.iluvatar_cuda import *
+    from .mm.iluvatar_cuda import *
+    from .norm.iluvatar_cuda import *
+    from .rope.iluvatar_cuda import *

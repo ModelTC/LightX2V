@@ -42,6 +42,15 @@ def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64):
     arg_k = k - torch.mean(k, dim=-2, keepdim=True)  # smooth-k technique in SageAttention
     pooled_qblocks = mean_pool(q, BLKQ)
     pooled_kblocks = mean_pool(arg_k, BLKK)
+
+    # GQA
+    num_q_heads = q.size(1)
+    num_kv_heads = k.size(1)
+    if num_q_heads != num_kv_heads:
+        assert num_q_heads % num_kv_heads == 0, f"Number of Q heads ({num_q_heads}) must be divisible by number of KV heads ({num_kv_heads})"
+        repeat_factor = num_q_heads // num_kv_heads
+        pooled_kblocks = pooled_kblocks.repeat_interleave(repeat_factor, dim=1)
+
     pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2)
 
     K = pooled_score.shape[-1]

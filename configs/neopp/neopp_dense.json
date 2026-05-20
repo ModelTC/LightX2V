@@ -6,5 +6,6 @@
     "cfg_scale": 4.0,
     "timestep_shift": 3.0,
     "cfg_interval": [-1, 2],
-    "enable_cfg": true
+    "enable_cfg": true,
+    "use_triton_qknorm_rope": true
 }

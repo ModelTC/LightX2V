@@ -1,0 +1,22 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 720,
+    "target_width": 1280,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": 1,
+    "sample_shift": 5.0,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "dit_original_ckpt": "path/to/self_forcing_dmd_14b.safetensors",
+    "ar_config": {
+        "local_attn_size": -1,
+        "num_frame_per_chunk": 3,
+        "timesteps_index": [0, 179, 358, 679],
+        "kv_offload": false
+    },
+    "causal_rope_type": "triton"
+}

@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.utils.registry_factory import ROPE_REGISTER
 
 from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
@@ -20,10 +21,26 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
         self.seq_p_fp8_comm = False
         self.seq_p_fp4_comm = False
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            self.apply_rope_func = apply_wan_rope_with_flashinfer
+
+        rope_funcs = {
+            "flashinfer": apply_wan_rope_with_flashinfer,
+            "torch_naive": apply_rotary_emb_qwen,
+        }
+
+        rope_type = self.config.get("rope_type", "flashinfer")
+        if rope_type in ROPE_REGISTER:
+            rope_class = ROPE_REGISTER[rope_type]
+            self.rope_instance = rope_class()
+
+            # Create a wrapper function that matches the expected signature
+            def rope_wrapper(xq, xk, cos_sin_cache):
+                return self.rope_instance.apply(xq, xk, cos_sin_cache)
+
+            rope_func = rope_wrapper
         else:
-            self.apply_rope_func = apply_rotary_emb_qwen
+            # Fallback to hardcoded functions
+            rope_func = rope_funcs.get(rope_type, apply_rotary_emb_qwen)
+        self.apply_rope_func = rope_func
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -65,7 +82,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         query, key = self.apply_rope_func(query, key, freqs_cis)
 
         total_seq_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu").to(query.device, non_blocking=True)
+        cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")
 
         if self.config["seq_parallel"]:
             hidden_states_out = attn_phase.calculate_parallel.apply(

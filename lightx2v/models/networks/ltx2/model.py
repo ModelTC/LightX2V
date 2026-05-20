@@ -111,6 +111,33 @@ class LTX2Model(BaseTransformerModel):
                 return True
         return False
 
+    def _remap_lora_dict_keys_for_mm_weight(self, weight_dict):
+        if not weight_dict:
+            return weight_dict
+        prefix = "model.diffusion_model.blocks.diffusion_model."
+        out = {}
+        for k, v in weight_dict.items():
+            if k.startswith("model.diffusion_model.blocks.diffusion_model."):
+                out[k] = v
+            elif k.startswith("transformer_blocks."):
+                out[prefix + k] = v
+            else:
+                out[k] = v
+        return out
+
+    def _load_lora_file(self, file_path):
+        d = super()._load_lora_file(file_path)
+        return self._remap_lora_dict_keys_for_mm_weight(d)
+
+    def _update_lora(self, lora_path, strength):
+        if isinstance(lora_path, dict):
+            lora_weight = self._remap_lora_dict_keys_for_mm_weight(lora_path)
+        else:
+            lora_weight = self._load_lora_file(lora_path)
+        self.pre_weight.update_lora(lora_weight, strength)
+        self.transformer_weights.update_lora(lora_weight, strength)
+        self.post_weight.update_lora(lora_weight, strength)
+
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
         """
         Load and distribute weights from rank 0 to all ranks.

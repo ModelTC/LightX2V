@@ -806,7 +806,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def load_audio_encoder(self):
         audio_encoder_path = self.config.get("audio_encoder_path", os.path.join(self.config["model_path"], "TencentGameMate-chinese-hubert-large"))
         audio_encoder_offload = self.config.get("audio_encoder_cpu_offload", self.config.get("cpu_offload", False))
-        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload)
+        dummy_model = self.config.get("dummy_model", False)
+        model = SekoAudioEncoderModel(audio_encoder_path, self.config["audio_sr"], audio_encoder_offload, dummy_model=dummy_model)
         return model
 
     def load_audio_adapter(self):
@@ -830,9 +831,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         )
 
         audio_adapter.to(device)
-        load_from_rank0 = self.config.get("load_from_rank0", False)
-        weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
-        audio_adapter.load_state_dict(weights_dict, strict=False)
+        if not self.config.get("dummy_model", False):
+            load_from_rank0 = self.config.get("load_from_rank0", False)
+            weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
+            audio_adapter.load_state_dict(weights_dict, strict=False)
+        else:
+            logger.info("[DummyModel] Skipping audio adapter weight loading, using random init")
         return audio_adapter.to(dtype=GET_DTYPE())
 
     def load_model(self):
@@ -941,6 +945,7 @@ class Wan22AudioRunner(WanAudioRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         vae_decoder = Wan2_2_VAE(**vae_config)
         return vae_decoder
@@ -957,6 +962,7 @@ class Wan22AudioRunner(WanAudioRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "offload_cache": self.config.get("vae_offload_cache", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config.task not in ["i2v", "s2v", "rs2v"]:
             return None

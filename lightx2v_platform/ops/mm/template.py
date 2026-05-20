@@ -7,7 +7,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class MMWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False):
+    def __init__(self, weight_name, bias_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, lora_prefix="", lora_path=""):
         self.weight_name = weight_name
         self.bias_name = bias_name
         self.create_cuda_buffer = create_cuda_buffer
@@ -16,6 +16,8 @@ class MMWeightTemplate(metaclass=ABCMeta):
         self.lazy_load_file = lazy_load_file
         self.is_post_adapter = is_post_adapter
         self.config = {}
+        self.lora_prefix = lora_prefix
+        self.lora_path = lora_path
 
     @abstractmethod
     def load(self, weight_dict):

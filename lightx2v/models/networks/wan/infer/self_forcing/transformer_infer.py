@@ -1,372 +1,179 @@
 import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+from loguru import logger
 
+from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.triton_ops import causal_rope_apply_triton
+from lightx2v.models.networks.wan.infer.utils import causal_rope_apply
+from lightx2v_platform.base.global_var import AI_DEVICE
 
-
-def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
-    n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
-    output = []
-
-    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
-        seq_len = f * h * w
-
-        # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2))
-        freqs_i = torch.cat(
-            [freqs[0][start_frame : start_frame + f].view(f, 1, 1, -1).expand(f, h, w, -1), freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1), freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)],
-            dim=-1,
-        ).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).type_as(x)
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class WanSFTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
-        if self.config.get("cpu_offload", False):
-            self.device = torch.device("cpu")
+        ar = config.get("ar_config", {})
+        self.num_frame_per_chunk = ar.get("num_frame_per_chunk", 3)
+        self._ar_kv_offload: bool = bool(ar.get("kv_offload", False))
+        if self._ar_kv_offload:
+            self.infer_block_func = self.infer_block_with_kvoffload
         else:
-            self.device = torch.device("cuda")
-        self.dtype = torch.bfloat16
-        sf_config = self.config["sf_config"]
-        self.local_attn_size = sf_config["local_attn_size"]
-        self.max_attention_size = 32760 if self.local_attn_size == -1 else self.local_attn_size * 1560
-        self.sink_size = sf_config.get("sink_size", 0)
-        self.num_frame_per_block = sf_config["num_frame_per_block"]
-        self.num_transformer_blocks = sf_config["num_transformer_blocks"]
-        self.frame_seq_length = sf_config["frame_seq_length"]
-        self.kv_quant_config = sf_config.get("kv_quant", None)
-        if self.kv_quant_config is not None:
-            from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
+            self.infer_block_func = self.infer_block_with_kvcache
 
-            self.quant_fp8_vllm = quant_fp8_vllm
-            self.dequant_fp8_vllm = dequant_fp8_vllm
-        self._initialize_kv_cache(self.device, self.dtype)
-        self._initialize_crossattn_cache(self.device, self.dtype)
+        # Weight CPU↔GPU block streaming (WeightAsyncStreamManager) — independent of
+        # ``infer_block_func`` (KV cache CPU offload vs on-GPU).
+        self._weight_offload_block_compute = False
+        cpu_off = self.config.get("cpu_offload", False)
+        gran = self.config.get("offload_granularity", "block")
+        if cpu_off and gran == "block":
+            self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
+            self.lazy_load = self.config.get("lazy_load", False)
+            if self.lazy_load:
+                self.offload_manager.init_lazy_load(
+                    num_workers=self.config.get("num_disk_workers", 4),
+                )
+            self.infer_func = self.infer_with_kvcache_blocks_offload
+            self._weight_offload_block_compute = True
+        elif cpu_off:
+            logger.warning(
+                "[WanLingbotFastTransformerInfer] cpu_offload with offload_granularity={!r} does not use "
+                "block weight streaming; falling back to infer_with_kvcache. Use offload_granularity='block' "
+                "to enable infer_with_kvcache_blocks_offload (WeightAsyncStreamManager).",
+                gran,
+            )
+            self.infer_func = self.infer_with_kvcache
+        else:
+            self.infer_func = self.infer_with_kvcache
 
-        self.infer_func = self.infer_with_kvcache
+        if self.config.get("causal_rope_type", "torch") == "triton":
+            self.causal_rope_apply_func = causal_rope_apply_triton
+        else:
+            self.causal_rope_apply_func = causal_rope_apply
 
     def _calculate_q_k_len(self, q, k_lens):
-        q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
+        q_lens = torch.tensor([q.size(0)], dtype=torch.int32)
         cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
         cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
         return cu_seqlens_q, cu_seqlens_k
 
-    def _initialize_kv_cache(self, dtype, device):
-        """
-        Initialize a Per-GPU KV cache for the Wan model.
-        """
-        kv_cache1 = []
-        if self.local_attn_size != -1:
-            # Use the local attention size to compute the KV cache size
-            kv_cache_size = self.local_attn_size * self.frame_seq_length
-        else:
-            # Use the default KV cache size
-            kv_cache_size = 32760
-        self.kv_cache_size = kv_cache_size
-        if self.kv_quant_config is not None:
-            k_bit = self.kv_quant_config["k_bit"]
-            v_bit = self.kv_quant_config["v_bit"]
-            self.k_cache_dtype = torch.float8_e4m3fn if k_bit == "e4m3" else torch.float8_e5m2
-            self.v_cache_dtype = torch.float8_e4m3fn if v_bit == "e4m3" else torch.float8_e5m2
-        else:
-            self.k_cache_dtype = None
-            self.v_cache_dtype = None
+    def _apply_rope_sp(self, q, k, grid_sizes, freqs, start_frame):
+        f, h, w = grid_sizes[0].tolist()
+        full_seq_len = f * h * w
+        c = q.size(-1) // 2
 
-        for _ in range(self.num_transformer_blocks):
-            if self.k_cache_dtype is not None:
-                entry = {
-                    "k": torch.zeros((kv_cache_size, 12, 128), dtype=self.k_cache_dtype, device=self.device),
-                    "v": torch.zeros((kv_cache_size, 12, 128), dtype=self.v_cache_dtype, device=self.device),
-                    "k_scales": torch.zeros((kv_cache_size, 12, 1), dtype=torch.float32, device=self.device),
-                    "v_scales": torch.zeros((kv_cache_size, 12, 1), dtype=torch.float32, device=self.device),
-                    "global_end_index": torch.tensor([0], dtype=torch.long, device=self.device),
-                    "local_end_index": torch.tensor([0], dtype=torch.long, device=self.device),
-                }
-            else:
-                entry = {
-                    "k": torch.zeros((kv_cache_size, 12, 128)).to(dtype).to(device),
-                    "v": torch.zeros((kv_cache_size, 12, 128)).to(dtype).to(device),
-                    "global_end_index": torch.tensor([0], dtype=torch.long).to(device),
-                    "local_end_index": torch.tensor([0], dtype=torch.long).to(device),
-                }
-            kv_cache1.append(entry)
+        freqs_split = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+        pos_freqs = torch.cat(
+            [
+                freqs_split[0][start_frame : start_frame + f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                freqs_split[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                freqs_split[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+            ],
+            dim=-1,
+        ).reshape(full_seq_len, 1, -1)
 
-        self.kv_cache1_default = kv_cache1  # always store the clean cache
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        multiple = world_size * f
+        padding_size = (multiple - (full_seq_len % multiple)) % multiple
+        if padding_size > 0:
+            pos_freqs = F.pad(pos_freqs, (0, 0, 0, 0, 0, padding_size))
+        pos_freqs = torch.chunk(pos_freqs, world_size, dim=0)[cur_rank][: q.size(0)]
 
-    def _initialize_crossattn_cache(self, dtype, device):
-        """
-        Initialize a Per-GPU cross-attention cache for the Wan model.
-        """
-        crossattn_cache = []
-
-        for _ in range(self.num_transformer_blocks):
-            crossattn_cache.append({"k": torch.zeros((512, 12, 128)).to(dtype).to(device), "v": torch.zeros((512, 12, 128)).to(dtype).to(device), "is_init": False})
-        self.crossattn_cache_default = crossattn_cache
+        n = q.size(1)
+        q_c = torch.view_as_complex(q.to(torch.float64).reshape(q.size(0), n, -1, 2))
+        k_c = torch.view_as_complex(k.to(torch.float64).reshape(k.size(0), n, -1, 2))
+        q = torch.view_as_real(q_c * pos_freqs).flatten(2).type_as(q)
+        k = torch.view_as_real(k_c * pos_freqs).flatten(2).type_as(k)
+        return q, k
 
     def infer_with_kvcache(self, blocks, x, pre_infer_out):
-        self.kv_cache1 = self.kv_cache1_default
-        self.crossattn_cache = self.crossattn_cache_default
-        for block_idx in range(len(blocks)):
+        """Run all transformer blocks with the rolling self-attention KV cache."""
+        mgr = self.kv_cache_manager
+        self.kv_cache_size = mgr.kv_size
+        self.max_attention_size = mgr.max_attention_size
+        self._kv_offload = self._ar_kv_offload
+        kv_cache = mgr.self_attn_kv_cache
+        num_blocks = len(blocks)
+
+        if self._kv_offload:
+            kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
+
+        for block_idx in range(num_blocks):
             self.block_idx = block_idx
-            x = self.infer_block_with_kvcache(blocks[block_idx], x, pre_infer_out)
+            if self._kv_offload:
+                self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
+            x = self.infer_block_func(blocks[block_idx], x, pre_infer_out)
+
+        if self._kv_offload:
+            comp = getattr(kv_cache, "compute_stream", None)
+            if comp is not None:
+                comp.synchronize()
+            kv_cache.sync_all()
         return x
 
-    def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
-        if hasattr(phase, "smooth_norm1_weight"):
-            norm1_weight = (1 + scale_msa.squeeze()) * phase.smooth_norm1_weight.tensor
-            norm1_bias = shift_msa.squeeze() * phase.smooth_norm1_bias.tensor
-        else:
-            norm1_weight = 1 + scale_msa.squeeze()
-            norm1_bias = shift_msa.squeeze()
+    def infer_with_kvcache_blocks_offload(self, blocks, x, pre_infer_out):
+        """Run transformer blocks with both weight offload and KV cache support."""
+        mgr = self.kv_cache_manager
+        self.kv_cache_size = mgr.kv_size
+        self.max_attention_size = mgr.max_attention_size
+        self._kv_offload = self._ar_kv_offload
+        kv_cache = mgr.self_attn_kv_cache
+        num_blocks = len(blocks)
 
-        norm1_out = phase.norm1.apply(x)
+        if self._kv_offload:
+            kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
 
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            norm1_out = norm1_out.to(self.sensitive_layer_dtype)
+        for block_idx in range(num_blocks):
+            self.block_idx = block_idx
+            if self._kv_offload:
+                self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
 
-        norm1_out.mul_(norm1_weight[0:1, :]).add_(norm1_bias[0:1, :])
+            if self.offload_manager.need_init_first_buffer:
+                self.offload_manager.init_first_buffer(blocks)
 
-        if self.sensitive_layer_dtype != self.infer_dtype:  # False
-            norm1_out = norm1_out.to(self.infer_dtype)
+            self.offload_manager.prefetch_weights((block_idx + 1) % num_blocks, blocks)
+            gpu_block = self.offload_manager.cuda_buffers[0]
+            if AI_DEVICE == "xpu":
+                x = self.infer_block_func(gpu_block, x, pre_infer_out)
+            else:
+                with torch_device_module.stream(self.offload_manager.compute_stream):
+                    x = self.infer_block_func(gpu_block, x, pre_infer_out)
 
-        s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
-
-        q0 = phase.self_attn_q.apply(norm1_out)
-        k0 = phase.self_attn_k.apply(norm1_out)
-
-        q = phase.self_attn_norm_q.apply(q0).view(s, n, d)
-        k = phase.self_attn_norm_k.apply(k0).view(s, n, d)
-        v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-
-        seg_index = self.scheduler.seg_index
-
-        current_start_frame = seg_index * self.num_frame_per_block
-
-        q = causal_rope_apply(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
-        k = causal_rope_apply(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
-
-        # Assign new keys/values with optional cache eviction
-        seg_seq_len = self.frame_seq_length * self.num_frame_per_block
-        num_new_tokens = seg_seq_len
-        current_start = seg_index * seg_seq_len
-        current_end = current_start + num_new_tokens
-        kv_cache = self.kv_cache1[self.block_idx]
-        sink_tokens = self.sink_size * self.frame_seq_length
-
-        if self.local_attn_size != -1 and (current_end > kv_cache["global_end_index"].item()) and (num_new_tokens + kv_cache["local_end_index"].item() > self.kv_cache_size):
-            num_evicted_tokens = num_new_tokens + kv_cache["local_end_index"].item() - self.kv_cache_size
-            num_rolled_tokens = kv_cache["local_end_index"].item() - num_evicted_tokens - sink_tokens
-            src_start = sink_tokens + num_evicted_tokens
-            src_end = src_start + num_rolled_tokens
-            dst_start = sink_tokens
-            dst_end = dst_start + num_rolled_tokens
-            kv_cache["k"][dst_start:dst_end] = kv_cache["k"][src_start:src_end].clone()
-            kv_cache["v"][dst_start:dst_end] = kv_cache["v"][src_start:src_end].clone()
-            if self.kv_quant_config is not None:
-                kv_cache["k_scales"][dst_start:dst_end] = kv_cache["k_scales"][src_start:src_end].clone()
-                kv_cache["v_scales"][dst_start:dst_end] = kv_cache["v_scales"][src_start:src_end].clone()
-            local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item() - num_evicted_tokens
-            local_start_index = local_end_index - num_new_tokens
-        else:
-            local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item()
-            local_start_index = local_end_index - num_new_tokens
-
-        if self.kv_quant_config is not None:
-            s0, s1, s2 = k.shape  # (seq_len, num_heads, head_dim)
-            k_2d = k.view(s0 * s1, s2)
-            v_2d = v.view(s0 * s1, s2)
-            k_q, k_scales = self.quant_fp8_vllm(k_2d)
-            v_q, v_scales = self.quant_fp8_vllm(v_2d)
-            kv_cache["k"][local_start_index:local_end_index] = k_q.view(s0, s1, s2)
-            kv_cache["v"][local_start_index:local_end_index] = v_q.view(s0, s1, s2)
-            kv_cache["k_scales"][local_start_index:local_end_index] = k_scales.view(s0, s1, 1)
-            kv_cache["v_scales"][local_start_index:local_end_index] = v_scales.view(s0, s1, 1)
-        else:
-            kv_cache["k"][local_start_index:local_end_index] = k
-            kv_cache["v"][local_start_index:local_end_index] = v
-
-        kv_cache["global_end_index"].fill_(current_end)
-        kv_cache["local_end_index"].fill_(local_end_index)
-
-        attn_start = max(0, local_end_index - self.max_attention_size)
-        if self.kv_quant_config is not None:
-            k_fp8 = kv_cache["k"][attn_start:local_end_index]
-            v_fp8 = kv_cache["v"][attn_start:local_end_index]
-            k_sc = kv_cache["k_scales"][attn_start:local_end_index]
-            v_sc = kv_cache["v_scales"][attn_start:local_end_index]
-            attn_k = self.dequant_fp8_vllm(k_fp8, k_sc, self.dtype)
-            attn_v = self.dequant_fp8_vllm(v_fp8, v_sc, self.dtype)
-        else:
-            attn_k = kv_cache["k"][attn_start:local_end_index]
-            attn_v = kv_cache["v"][attn_start:local_end_index]
-
-        k_lens = torch.empty_like(seq_lens).fill_(attn_k.size(0))
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
+            self.offload_manager.swap_blocks()
 
         if self.clean_cuda_cache:
-            del freqs_i, norm1_out, norm1_weight, norm1_bias
-            torch.cuda.empty_cache()
+            del pre_infer_out.embed0, pre_infer_out.context
+            torch_device_module.empty_cache()
 
-        if self.config["seq_parallel"]:
-            attn_out = phase.self_attn_1_parallel.apply(
-                q=q,
-                k=attn_k,
-                v=attn_v,
-                slice_qkv_len=q.shape[0],
-                cu_seqlens_qkv=cu_seqlens_q,
-                attention_module=phase.self_attn_1,
-                seq_p_group=self.seq_p_group,
-            )
-        else:
-            attn_out = phase.self_attn_1.apply(
-                q=q,
-                k=attn_k,
-                v=attn_v,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
-                max_seqlen_q=q.size(0),
-                max_seqlen_kv=attn_k.size(0),
-            )
-
-        y = phase.self_attn_o.apply(attn_out)
-
-        if self.clean_cuda_cache:
-            del q, k, v, attn_out
-            torch.cuda.empty_cache()
-
-        return y
-
-    def infer_cross_attn_with_kvcache(self, phase, x, context, y_out, gate_msa):
-        num_frames = gate_msa.shape[0]
-        frame_seqlen = x.shape[0] // gate_msa.shape[0]
-        seg_index = self.scheduler.seg_index
-
-        x.add_((y_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen)) * gate_msa).flatten(0, 1))
-        norm3_out = phase.norm3.apply(x)
-
-        if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
-            context_img = context[:257]
-            context = context[257:]
-        else:
-            context_img = None
-
-        if self.sensitive_layer_dtype != self.infer_dtype:
-            context = context.to(self.infer_dtype)
-            if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
-                context_img = context_img.to(self.infer_dtype)
-
-        n, d = self.num_heads, self.head_dim
-
-        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
-
-        if seg_index == 0:
-            k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
-            v = phase.cross_attn_v.apply(context).view(-1, n, d)
-            self.crossattn_cache[self.block_idx]["k"] = k
-            self.crossattn_cache[self.block_idx]["v"] = v
-        else:
-            k = self.crossattn_cache[self.block_idx]["k"]
-            v = self.crossattn_cache[self.block_idx]["v"]
-
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-            q,
-            k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device),
-        )
-        attn_out = phase.cross_attn_1.apply(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_kv=cu_seqlens_k,
-            max_seqlen_q=q.size(0),
-            max_seqlen_kv=k.size(0),
-        )
-
-        if self.task in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
-            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
-            v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
-
-            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-                q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
-            )
-            img_attn_out = phase.cross_attn_2.apply(
-                q=q,
-                k=k_img,
-                v=v_img,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
-                max_seqlen_q=q.size(0),
-                max_seqlen_kv=k_img.size(0),
-            )
-            attn_out.add_(img_attn_out)
-
-            if self.clean_cuda_cache:
-                del k_img, v_img, img_attn_out
-                torch.cuda.empty_cache()
-
-        attn_out = phase.cross_attn_o.apply(attn_out)
-
-        if self.clean_cuda_cache:
-            del q, k, v, norm3_out, context, context_img
-            torch.cuda.empty_cache()
-        return x, attn_out
-
-    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
-        x.add_(attn_out)
-
-        if self.clean_cuda_cache:
-            del attn_out
-            torch.cuda.empty_cache()
-
-        num_frames = c_shift_msa.shape[0]
-        frame_seqlen = x.shape[0] // c_shift_msa.shape[0]
-
-        norm2_weight = 1 + c_scale_msa
-        norm2_bias = c_shift_msa
-
-        norm2_out = phase.norm2.apply(x)
-        norm2_out = norm2_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
-        norm2_out.mul_(norm2_weight).add_(norm2_bias)
-        norm2_out = norm2_out.flatten(0, 1)
-
-        y = phase.ffn_0.apply(norm2_out)
-        if self.clean_cuda_cache:
-            del norm2_out, x, norm2_weight, norm2_bias
-            torch.cuda.empty_cache()
-        y = torch.nn.functional.gelu(y, approximate="tanh")
-        if self.clean_cuda_cache:
-            torch.cuda.empty_cache()
-        y = phase.ffn_2.apply(y)
-
-        return y
-
-    def post_process(self, x, y, c_gate_msa, pre_infer_out=None):
-        num_frames = c_gate_msa.shape[0]
-        frame_seqlen = x.shape[0] // c_gate_msa.shape[0]
-        y = y.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
-        x = x.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
-        x.add_(y * c_gate_msa)
-        x = x.flatten(0, 1)
-
-        if self.clean_cuda_cache:
-            del y, c_gate_msa
-            torch.cuda.empty_cache()
+        if self._kv_offload:
+            if self._weight_offload_block_compute and AI_DEVICE == "cuda":
+                self.offload_manager.compute_stream.synchronize()
+            else:
+                comp = getattr(kv_cache, "compute_stream", None)
+                if comp is not None:
+                    comp.synchronize()
+            kv_cache.sync_all()
         return x
+
+    def infer_block_with_kvoffload(self, block, x, pre_infer_out):
+        """Run a transformer block with kv cache offload."""
+        kv_cache = self.kv_cache_manager.self_attn_kv_cache
+        if self._weight_offload_block_compute:
+            kv_cache.begin_layer(self.block_idx)
+            return self.infer_block_with_kvcache(block, x, pre_infer_out)
+        comp = getattr(kv_cache, "compute_stream", None)
+        if comp is not None:
+            with torch_device_module.stream(comp):
+                kv_cache.begin_layer(self.block_idx)
+                return self.infer_block_with_kvcache(block, x, pre_infer_out)
+        kv_cache.begin_layer(self.block_idx)
+        return self.infer_block_with_kvcache(block, x, pre_infer_out)
 
     def infer_block_with_kvcache(self, block, x, pre_infer_out):
+        """Run a transformer block with kv cache."""
         if hasattr(block.compute_phases[0], "before_proj"):
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
 
@@ -396,13 +203,232 @@ class WanSFTransformerInfer(WanTransformerInfer):
         y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
 
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
+        return x
 
-        if hasattr(block.compute_phases[2], "after_proj"):
-            pre_infer_out.adapter_output["hints"].append(block.compute_phases[2].after_proj.apply(x))
+    def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
+        norm1_weight = 1 + scale_msa.squeeze()
+        norm1_bias = shift_msa.squeeze()
+        if hasattr(phase, "smooth_norm1_weight"):
+            norm1_weight = norm1_weight * phase.smooth_norm1_weight.tensor
+            norm1_bias = norm1_bias * phase.smooth_norm1_bias.tensor
+        norm1_out = phase.norm1.apply(x)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm1_out = norm1_out.to(self.sensitive_layer_dtype)
+        norm1_out.mul_(norm1_weight[0:1, :]).add_(norm1_bias[0:1, :])
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm1_out = norm1_out.to(self.infer_dtype)
 
-        if self.has_post_adapter:
-            x = self.infer_post_adapter(block.compute_phases[3], x, pre_infer_out)
+        s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
+        q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
+        k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
+        v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
 
+        seg_index = int(self.scheduler.seg_index)
+        current_start_frame = seg_index * self.num_frame_per_chunk
+
+        if self.config.get("seq_parallel", False):
+            q, k = self._apply_rope_sp(q, k, grid_sizes, freqs, current_start_frame)
+        else:
+            q = self.causal_rope_apply_func(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
+            k = self.causal_rope_apply_func(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
+
+        kv_cache = self.kv_cache_manager.self_attn_kv_cache
+
+        num_new = int(q.size(0))
+        current_start = seg_index * num_new
+        current_end = current_start + num_new
+        global_end = kv_cache.get_global_end(self.block_idx)
+        local_end = kv_cache.get_local_end(self.block_idx)
+        local_per_frame = num_new // self.num_frame_per_chunk if self.num_frame_per_chunk > 0 else 0
+        sink_tokens = self.kv_cache_manager.sink_size * local_per_frame
+
+        if self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and num_new + local_end > self.kv_cache_size:
+            num_evicted = num_new + local_end - self.kv_cache_size
+            kv_cache.roll_window(self.block_idx, sink_tokens, num_evicted)
+            local_end_idx = local_end + current_end - global_end - num_evicted
+        else:
+            local_end_idx = local_end + current_end - global_end
+        local_start_idx = local_end_idx - num_new
+
+        kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)
+        kv_cache.set_ends(self.block_idx, current_end, local_end_idx)
+        attn_start = max(0, local_end_idx - self.max_attention_size)
+
+        if self.clean_cuda_cache:
+            del norm1_out, norm1_weight, norm1_bias
+            torch_device_module.empty_cache()
+
+        if self.config.get("seq_parallel", False):
+            attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
+            attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
+            attn_out = kv_cache.sp_kvcache_attn(
+                q=q,
+                k_cache=attn_k,
+                v_cache=attn_v,
+                attention_module=phase.self_attn_1,
+                seq_p_group=self.seq_p_group,
+                num_heads=self.num_heads,
+                head_dim=self.head_dim,
+                attn_start=attn_start,
+                local_end=local_end_idx,
+            )
+        else:
+            attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
+            attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
+
+            if self.config.get("ar_config", {}).get("kv_quant", {}).get("calibrate", False):
+                kv_cache.capture_attn(self.block_idx, attn_start, local_end_idx)
+
+            if isinstance(attn_k, tuple):
+                k_lens = torch.empty_like(seq_lens).fill_(attn_k[0].size(0))
+            else:
+                k_lens = torch.empty_like(seq_lens).fill_(attn_k.size(0))
+            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
+            attn_out = phase.self_attn_1.apply(
+                q=q,
+                k=attn_k,
+                v=attn_v,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_k,
+                max_seqlen_q=q.size(0),
+                max_seqlen_kv=attn_k.size(0) if not isinstance(attn_k, tuple) else attn_k[0].size(0),
+            )
+
+        y = phase.self_attn_o.apply(attn_out)
+
+        if self.clean_cuda_cache:
+            del q, k, v, attn_out
+            torch_device_module.empty_cache()
+        if self._kv_offload:
+            self.kv_cache_manager.self_attn_kv_cache.end_layer(
+                self.block_idx,
+                next_prefetch=self._next_prefetch,
+            )
+        return y
+
+    def infer_cross_attn_with_kvcache(self, phase, x, context, y_out, gate_msa):
+        num_frames = gate_msa.shape[0]
+        frame_seqlen = x.shape[0] // num_frames
+        seg_index = self.scheduler.seg_index
+
+        x.add_((y_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen)) * gate_msa).flatten(0, 1))
+
+        norm3_out = phase.norm3.apply(x)
+
+        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+            context_img = context[:257]
+            context = context[257:]
+        else:
+            context_img = None
+
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            context = context.to(self.infer_dtype)
+            if context_img is not None:
+                context_img = context_img.to(self.infer_dtype)
+
+        n, d = self.num_heads, self.head_dim
+        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
+
+        cross_kv_cache = self.kv_cache_manager.cross_attn_kv_cache
+
+        if seg_index == 0:
+            k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
+            v = phase.cross_attn_v.apply(context).view(-1, n, d)
+            cross_kv_cache.store_kv(k, v, self.block_idx)
+            self._cross_kv_len = k.size(0)
+        else:
+            L = self._cross_kv_len
+            k = cross_kv_cache.k_cache(self.block_idx)[:L]
+            v = cross_kv_cache.v_cache(self.block_idx)[:L]
+
+        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
+            q,
+            k_lens=torch.tensor([k.size(0)], dtype=torch.int32),
+        )
+        attn_out = phase.cross_attn_1.apply(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_k,
+            max_seqlen_q=q.size(0),
+            max_seqlen_kv=k.size(0),
+        )
+
+        if context_img is not None:
+            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
+            v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
+            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
+                q,
+                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
+            )
+            attn_out.add_(
+                phase.cross_attn_2.apply(
+                    q=q,
+                    k=k_img,
+                    v=v_img,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_k,
+                    max_seqlen_q=q.size(0),
+                    max_seqlen_kv=k_img.size(0),
+                )
+            )
+
+            if self.clean_cuda_cache:
+                del k_img, v_img
+                torch_device_module.empty_cache()
+
+        attn_out = phase.cross_attn_o.apply(attn_out)
+
+        if self.clean_cuda_cache:
+            del q, k, v, norm3_out, context, context_img
+            torch_device_module.empty_cache()
+        return x, attn_out
+
+    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
+        x.add_(attn_out)
+
+        if self.clean_cuda_cache:
+            del attn_out
+            torch.cuda.empty_cache()
+
+        num_frames = c_shift_msa.shape[0]
+        frame_seqlen = x.shape[0] // c_shift_msa.shape[0]
+
+        if hasattr(phase, "smooth_norm2_weight"):
+            norm2_weight = (1 + c_scale_msa.squeeze()) * phase.smooth_norm2_weight.tensor
+            norm2_bias = c_shift_msa.squeeze() * phase.smooth_norm2_bias.tensor
+        else:
+            norm2_weight = 1 + c_scale_msa
+            norm2_bias = c_shift_msa
+
+        norm2_out = phase.norm2.apply(x)
+        norm2_out = norm2_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
+        norm2_out.mul_(norm2_weight).add_(norm2_bias)
+        norm2_out = norm2_out.flatten(0, 1)
+
+        y = phase.ffn_0.apply(norm2_out)
+        if self.clean_cuda_cache:
+            del norm2_out, x, norm2_weight, norm2_bias
+            torch.cuda.empty_cache()
+        y = torch.nn.functional.gelu(y, approximate="tanh")
+        if self.clean_cuda_cache:
+            torch.cuda.empty_cache()
+        y = phase.ffn_2.apply(y)
+
+        return y
+
+    def post_process(self, x, y, c_gate_msa, pre_infer_out=None):
+        num_frames = c_gate_msa.shape[0]
+        frame_seqlen = x.shape[0] // c_gate_msa.shape[0]
+        y = y.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
+        x = x.unflatten(dim=0, sizes=(num_frames, frame_seqlen))
+        x.add_(y * c_gate_msa)
+        x = x.flatten(0, 1)
+
+        if self.clean_cuda_cache:
+            del y, c_gate_msa
+            torch.cuda.empty_cache()
         return x
 
     def infer_non_blocks(self, weights, x, e):

@@ -122,6 +122,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 cpu_offload=clip_offload,
                 use_31_block=self.config.get("use_31_block", True),
                 load_from_rank0=self.config.get("load_from_rank0", False),
+                dummy_model=self.config.get("dummy_model", False),
             )
 
         return image_encoder
@@ -162,6 +163,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             quant_scheme=t5_quant_scheme,
             load_from_rank0=self.config.get("load_from_rank0", False),
             lazy_load=self.config.get("t5_lazy_load", False),
+            dummy_model=self.config.get("dummy_model", False),
         )
         text_encoders = [text_encoder]
         return text_encoders
@@ -190,6 +192,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
@@ -213,6 +216,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
+            "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
@@ -806,6 +810,64 @@ class Wan22DenseRunner(WanRunner):
         self.vae_name = "Wan2.2_VAE.pth"
         self.tiny_vae_name = "taew2_2.pth"
 
+    def _resolve_wan22_vae_paths(self):
+        requested_vae_type = str(self.config.get("vae_type", "wan")).lower()
+        if requested_vae_type not in {"wan", "wan2.2", "mg_lightvae", "mg_lightvae_v2"}:
+            raise ValueError(f"Unsupported wan2.2 vae_type: {requested_vae_type}")
+
+        if requested_vae_type in {"wan", "wan2.2"}:
+            decoder_filename = "Wan2.2_VAE.pth"
+            resolved_vae_type = "wan2.2"
+            default_pruning_rate = None
+        elif requested_vae_type == "mg_lightvae":
+            decoder_filename = "MG-LightVAE.pth"
+            resolved_vae_type = "mg_lightvae"
+            default_pruning_rate = 0.5
+        else:
+            decoder_filename = "MG-LightVAE_v2.pth"
+            resolved_vae_type = "mg_lightvae"
+            default_pruning_rate = 0.75
+
+        decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
+        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+
+        return {
+            "vae_path": decoder_path,
+            "vae_type": resolved_vae_type,
+            "lightvae_pruning_rate": self.config.get("lightvae_pruning_rate", default_pruning_rate),
+            "lightvae_encoder_vae_pth": teacher_encoder_path,
+        }
+
+    def _build_wan22_vae_config(self, vae_offload):
+        vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
+        resolved_paths = self._resolve_wan22_vae_paths()
+        return {
+            "vae_path": resolved_paths["vae_path"],
+            "device": vae_device,
+            "parallel": self.get_vae_parallel(),
+            "use_tiling": self.config.get("use_tiling_vae", False),
+            "cpu_offload": vae_offload,
+            "dtype": GET_DTYPE(),
+            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "vae_type": resolved_paths["vae_type"],
+            "lightvae_pruning_rate": resolved_paths["lightvae_pruning_rate"],
+            "lightvae_encoder_vae_pth": resolved_paths["lightvae_encoder_vae_pth"],
+            "dummy_model": self.config.get("dummy_model", False),
+        }
+
+    def load_vae_encoder(self):
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
+            return None
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
+
+    def load_vae_decoder(self):
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if self.config.get("use_tae", False):
+            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+            return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+        return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
+
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -842,18 +904,8 @@ class Wan22DenseRunner(WanRunner):
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
     def __init__(self, config):
-        with config.temporarily_unlocked():
-            if "use_image_encoder" not in config:
-                config["use_image_encoder"] = False
-            config["enable_lingbot_cam_ctrl"] = bool(config.get("enable_lingbot_cam_ctrl", True))
         super().__init__(config)
-        model_path = str(self.config.get("model_path", "")).lower()
-        if "cam" in model_path:
-            self.control_type = "cam"
-        elif "act" in model_path:
-            self.control_type = "act"
-        else:
-            self.control_type = "cam"
+        self.control_type = config.get("control_type", "cam")
 
     def set_inputs(self, inputs):
         super().set_inputs(inputs)

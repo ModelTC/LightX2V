@@ -18,11 +18,11 @@
 
 **LightX2V** is an advanced lightweight image/video generation inference framework engineered to deliver efficient, high-performance image/video synthesis solutions. This unified platform integrates multiple state-of-the-art image/video generation techniques, supporting diverse generation tasks including text-to-video (T2V), image-to-video (I2V), text-to-image (T2I), image-editing (I2I). **X2V represents the transformation of different input modalities (X, such as text or images) into vision output (Vision)**.
 
-> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** - Free, lightweight, and fast AI digital human video generation platform.
-
-> 🎉 **NEW: GenRL is here!** Check out our new **[GenRL Framework](https://github.com/ModelTC/GenRL)** for training visual generation models with reinforcement learning! High-performance RL-trained checkpoints now available on **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)**.
+> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** — a free, lightweight AI video platform with **LTX 2.3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SeedVR2**, and more models and tasks.
 
 > 👋 **Join our WeChat group! LightX2V Rotbot WeChat ID: random42seed**
+
+> 🌐 More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)
 
 ## 🧾 Community Code Contribution Guidelines
 
@@ -42,8 +42,18 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
 - [Tyr0727](https://github.com/Tyr0727)
+- [hufangjian2017](https://github.com/hufangjian2017)
 
 ## :fire: Latest News
+
+- **April 30, 2026:** 🚀 We now support deployment on iluvatar. Thanks to the iluvatar team.
+
+- **April 20, 2026:** 🚀 We are excited to release the [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) and [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) models. Compared to previous iterations, this version was trained on a high-quality 720p dataset and features an optimized low-noise training algorithm. These enhancements significantly boost the model's performance in fine-grained detail rendering and visual texture.
+
+- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](examples/worldmirror/README.md).
+
+- **April 10, 2026:** 🎉 We released a technical blog on disaggregated deployment
+  - [LightX2V Disaggregated Deployment: Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
 
 - **March 5, 2026:** 🚀 We now support deployment on Intel AIPC PTL. Thanks to the Intel team.
 
@@ -216,9 +226,11 @@ pipe.generate(
 ## 🤖 Supported Model Ecosystem
 
 ### Official Open-Source Models
+- ✅ [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)
 - ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
+- ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)

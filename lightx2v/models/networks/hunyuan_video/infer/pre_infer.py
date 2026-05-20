@@ -81,6 +81,10 @@ class HunyuanVideo15PreInfer:
         self.max_period = 10000
         self.cos_sin = None
         self.grid_sizes = (0, 0, 0)  # (t, h, w)
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

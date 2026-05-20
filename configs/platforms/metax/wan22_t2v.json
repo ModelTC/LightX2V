@@ -1,0 +1,25 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 720,
+    "target_width": 1280,
+    "self_attn_1_type": "flash_attn2",
+    "cross_attn_1_type": "flash_attn2",
+    "cross_attn_2_type": "flash_attn2",
+    "sample_guide_scale": [
+        4.0,
+        3.0
+    ],
+    "sample_shift": 12.0,
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "boundary": 0.875,
+    "modulate_type": "torch",
+    "rope_type": "torch",
+    "layer_norm_type": "torch",
+    "rms_norm_type": "torch"
+}

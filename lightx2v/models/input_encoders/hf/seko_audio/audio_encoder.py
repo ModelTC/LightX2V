@@ -1,15 +1,17 @@
 import torch
-from transformers import AutoFeatureExtractor, AutoModel
+from loguru import logger
+from transformers import AutoConfig, AutoFeatureExtractor, AutoModel
 
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class SekoAudioEncoderModel:
-    def __init__(self, model_path, audio_sr, cpu_offload):
+    def __init__(self, model_path, audio_sr, cpu_offload, dummy_model=False):
         self.model_path = model_path
         self.audio_sr = audio_sr
         self.cpu_offload = cpu_offload
+        self.dummy_model = dummy_model
         if self.cpu_offload:
             self.device = torch.device("cpu")
         else:
@@ -18,7 +20,12 @@ class SekoAudioEncoderModel:
 
     def load(self):
         self.audio_feature_extractor = AutoFeatureExtractor.from_pretrained(self.model_path)
-        self.audio_feature_encoder = AutoModel.from_pretrained(self.model_path)
+        if self.dummy_model:
+            logger.info("[DummyModel] Skipping audio encoder weight loading, using random init from config")
+            config = AutoConfig.from_pretrained(self.model_path)
+            self.audio_feature_encoder = AutoModel.from_config(config)
+        else:
+            self.audio_feature_encoder = AutoModel.from_pretrained(self.model_path)
         self.audio_feature_encoder.to(self.device)
         self.audio_feature_encoder.eval()
         self.audio_feature_encoder.to(GET_DTYPE())

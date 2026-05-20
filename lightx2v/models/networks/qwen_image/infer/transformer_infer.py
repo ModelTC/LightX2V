@@ -11,7 +11,7 @@ from .utils import apply_qwen_rope_with_flashinfer, apply_qwen_rope_with_torch, 
 
 
 def calculate_q_k_len(q, k_lens):
-    q_lens = torch.tensor([q.size(0)], dtype=torch.int32, device=q.device)
+    q_lens = torch.tensor([q.size(0)], dtype=torch.int32)
     cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
     cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
     return cu_seqlens_q, cu_seqlens_k
@@ -205,7 +205,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         joint_value = torch.cat([txt_value, img_value], dim=0)
 
         img_qkv_len = joint_query.shape[0]
-        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu").to(joint_query.device, non_blocking=True)
+        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu")
 
         if self.config["seq_parallel"]:
             joint_hidden_states = cross_attn_phase.calculate_parallel.apply(

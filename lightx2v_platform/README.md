@@ -13,6 +13,7 @@ Currently supported backends include:
 - MThreads MUSA
 - Enflame S60 (GCU)
 - Intel AIPC PTL
+- iluvatar
 
 For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 

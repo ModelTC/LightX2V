@@ -29,7 +29,7 @@ class WanAudioModel(WanModel):
             if self.config.get("adapter_quantized", False):
                 if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl", "fp8-torchao", "fp8-triton"]:
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
-                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-triton", "int8-tmo", "int8-npu"]:
+                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-triton", "int8-tmo", "int8-npu", "int8-iluvatar"]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
                 elif self.config.get("adapter_quant_scheme", None) in ["mxfp4"]:
                     adapter_model_name = "audio_adapter_model_mxfp4.safetensors"
@@ -42,6 +42,26 @@ class WanAudioModel(WanModel):
             else:
                 adapter_model_name = "audio_adapter_model.safetensors"
             self.config["adapter_model_path"] = os.path.join(self.config["model_path"], adapter_model_name)
+
+        if self.config.get("dummy_model", False):
+            from lightx2v.models.networks.base_model import SAFETENSORS_DTYPE_MAP, BaseTransformerModel
+
+            dummy_device = str(self.device)
+            logger.info(f"[DummyModel] Generating random adapter weights on device={dummy_device}")
+            tensors_meta = BaseTransformerModel._read_safetensors_metadata(self.config["adapter_model_path"])
+            adapter_weights_dict = {}
+            from lightx2v.utils.envs import GET_DTYPE
+
+            for key, meta in tensors_meta.items():
+                if "audio" in key:
+                    continue
+                shape = meta["shape"]
+                dtype = GET_DTYPE()
+                original_dtype = SAFETENSORS_DTYPE_MAP.get(meta["dtype"])
+                if original_dtype is not None and not original_dtype.is_floating_point:
+                    dtype = original_dtype
+                adapter_weights_dict[key] = torch.randn(shape, dtype=dtype, device=dummy_device) if dtype.is_floating_point else torch.zeros(shape, dtype=dtype, device=dummy_device)
+            return adapter_weights_dict
 
         adapter_offload = self.config.get("cpu_offload", False)
         load_from_rank0 = self.config.get("load_from_rank0", False)

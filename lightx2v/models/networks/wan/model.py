@@ -186,10 +186,18 @@ class WanModel(BaseTransformerModel):
                 noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
                 noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
 
-            self.scheduler.noise_pred = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            noise_pred_guided = noise_pred_uncond + self.scheduler.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
+            self.scheduler.noise_pred_cond = noise_pred_cond
+            self.scheduler.noise_pred_uncond = noise_pred_uncond
+            self.scheduler.noise_pred_guided = noise_pred_guided
+            self.scheduler.noise_pred = noise_pred_guided
         else:
             # ==================== No CFG ====================
-            self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            self.scheduler.noise_pred_cond = noise_pred
+            self.scheduler.noise_pred_uncond = None
+            self.scheduler.noise_pred_guided = noise_pred
+            self.scheduler.noise_pred = noise_pred
 
         if self.cpu_offload:
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:

@@ -15,13 +15,13 @@
     "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
-    "dit_original_ckpt": "Lightricks/LTX-2.3ltx-2.3-22b-distilled.safetensors",
+    "dit_original_ckpt": "Lightricks/LTX-2.3/ltx-2.3-22b-distilled.safetensors",
     "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47],
     "distilled_sigma_values": [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0],
     "caption_proj_before_connector": true,
     "cross_attention_adaln": true,
     "apply_gated_attention": true,
     "use_upsampler": true,
-    "upsampler_original_ckpt": "Lightricks/LTX-2.3ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    "upsampler_original_ckpt": "Lightricks/LTX-2.3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
     "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0]
 }

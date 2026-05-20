@@ -213,6 +213,15 @@ def get_block_map_meansim(q, k, is_causal=False, BLKQ=128, BLKK=64, simthreshd1=
     pooled_qblocks, sim_qblocks = get_pool_sim_triton_simmean(q, BLKQ, simthreshd1)
     pooled_kblocks, sim_kblocks = get_pool_sim_triton_simmean(k, BLKK, simthreshd1)
 
+    # GQA
+    num_q_heads = q.size(1)
+    num_kv_heads = k.size(1)
+    if num_q_heads != num_kv_heads:
+        assert num_q_heads % num_kv_heads == 0, f"Number of Q heads ({num_q_heads}) must be divisible by number of KV heads ({num_kv_heads})"
+        repeat_factor = num_q_heads // num_kv_heads
+        pooled_kblocks = pooled_kblocks.repeat_interleave(repeat_factor, dim=1)
+        sim_kblocks = sim_kblocks.repeat_interleave(repeat_factor, dim=1)
+
     sim_kblocks = sim_kblocks.unsqueeze(-2).expand(-1, -1, nq, -1)  # faster than repeat
     sim_qblocks = sim_qblocks.unsqueeze(-1).expand(-1, -1, -1, nk)
     pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2) * q.shape[-1] ** -0.5

@@ -1,4 +1,5 @@
 import gc
+import os
 
 import numpy as np
 import requests
@@ -15,7 +16,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -457,16 +458,26 @@ class DefaultRunner(BaseRunner):
                 fps = self.config.get("fps", 16)
 
             if not dist.is_initialized() or dist.get_rank() == 0:
-                logger.info(f"🎬 Start to save video 🎬")
+                out_path = self.input_info.save_result_path
+                img_in = (getattr(self.input_info, "image_path", None) or "").strip()
+                vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
+                sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
 
-                save_to_video(self.gen_video_final, self.input_info.save_result_path, fps=fps, method="ffmpeg")
-                if self.config.get("task") == "sr":
-                    input_video_path = getattr(self.input_info, "video_path", "")
-                    if input_video_path:
-                        muxed_path = mux_audio_from_video(input_video_path, self.input_info.save_result_path)
-                        if muxed_path:
-                            logger.info(f"Audio muxed from input video: {input_video_path}")
-                logger.info(f"✅ Video saved successfully to: {self.input_info.save_result_path} ✅")
+                if sr_from_image_only:
+                    logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
+                    save_to_image(self.gen_video_final, out_path)
+                    logger.info(f"✅ Image saved successfully to: {out_path} ✅")
+                else:
+                    logger.info(f"🎬 Start to save video 🎬")
+
+                    save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
+                    if self.config.get("task") in ("sr", "animate"):
+                        input_video_path = getattr(self.input_info, "video_path", "")
+                        if input_video_path:
+                            muxed_path = mux_audio_from_video(input_video_path, out_path)
+                            if muxed_path:
+                                logger.info(f"Audio muxed from input video: {input_video_path}")
+                    logger.info(f"✅ Video saved successfully to: {out_path} ✅")
             return {"video": None}
 
     @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["DefaultRunner"])
@@ -529,6 +540,58 @@ class DefaultRunner(BaseRunner):
             return True
         except Exception as e:
             logger.error(f"Failed to switch LoRA: {e}")
+            return False
+
+    def switch_lora_multi(self, resolved_items: list):
+        """
+        Apply one or more runtime LoRA adapters using the same primitives as
+        :meth:`switch_lora` (``model._load_lora_file`` + ``model._update_lora``).
+
+        - **Empty** ``resolved_items``: remove LoRA (same as ``switch_lora(\"\")``).
+        - **One** ``(path, strength)``: same as ``switch_lora(path, strength)``.
+        - **Multiple**: load each file with ``model._load_lora_file`` (identical to the
+          single-file path inside ``_update_lora``), scale tensors by per-item strength,
+          sum by key, then one ``_update_lora(merged, 1.0)``. Upstream has no separate
+          multi-file dynamic API; this keeps the per-file load path aligned with
+          ``switch_lora``.
+
+        Args:
+            resolved_items: List of ``(absolute_path_str, strength)`` tuples.
+
+        Returns:
+            bool: True on success, False otherwise.
+        """
+        if not hasattr(self, "model") or self.model is None:
+            logger.error("Model not loaded. Please load model first.")
+            return False
+        if not hasattr(self.model, "_update_lora"):
+            logger.error("Model does not support LoRA switching")
+            return False
+        try:
+            if not resolved_items:
+                return self.switch_lora("", 1.0)
+            if len(resolved_items) == 1:
+                path, strength = resolved_items[0]
+                return self.switch_lora(path, float(strength))
+            merged = None
+            for path, strength in resolved_items:
+                if not os.path.isfile(path):
+                    logger.warning(f"LoRA file missing: {path}")
+                    return False
+                weight_dict = self.model._load_lora_file(path)
+                s = float(strength)
+                if merged is None:
+                    merged = {k: v * s for k, v in weight_dict.items()}
+                else:
+                    for k, v in weight_dict.items():
+                        if k in merged:
+                            merged[k] = merged[k] + v * s
+            logger.info(f"Switching LoRA ({len(resolved_items)} files fused; same _load_lora_file + _update_lora as single): {resolved_items}")
+            self.model._update_lora(merged, 1.0)
+            logger.info("LoRA switched successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to switch LoRA (multi): {e}")
             return False
 
     def __del__(self, _empty_cache=getattr(torch_device_module, "empty_cache", None), _gc_collect=gc.collect):

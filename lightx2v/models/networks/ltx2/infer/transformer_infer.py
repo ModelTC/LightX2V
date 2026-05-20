@@ -111,21 +111,17 @@ class LTX2TransformerInfer:
         self._mm_skip_a2v = bool(skip_a2v)
         self._mm_skip_v2a = bool(skip_v2a)
 
-    def _create_cu_seqlens(self, seq_len: int, device: torch.device) -> torch.Tensor:
+    def _create_cu_seqlens(self, seq_len: int) -> torch.Tensor:
         """
         Create cumulative sequence lengths tensor for attention.
 
         Args:
             seq_len: Sequence length
-            device: Device to place the tensor on
 
         Returns:
             Cumulative sequence lengths tensor [0, seq_len]
         """
-        if self.config["attn_type"] in ["flash_attn2", "flash_attn3"]:
-            return torch.tensor([0, seq_len]).cumsum(0, dtype=torch.int32).to(device, non_blocking=True)
-        else:
-            return torch.tensor([0, seq_len]).cumsum(0, dtype=torch.int32)
+        return torch.tensor([0, seq_len]).cumsum(0, dtype=torch.int32)
 
     def _gather_cross_attn_context(self, context: torch.Tensor, k_pe=None):
         """
@@ -282,7 +278,7 @@ class LTX2TransformerInfer:
         if is_self_attn and not is_audio and self.config.get("seq_parallel", False) and not use_tp:
             # Cache cu_seqlens_qkv for self-attention (q, k, v have same length)
             if self.v_attn_cu_seqlens_qkv is None:
-                self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0], q.device)
+                self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
 
             out = attn_phase.attn_func_parallel.apply(
                 q=q,
@@ -291,7 +287,6 @@ class LTX2TransformerInfer:
                 slice_qkv_len=seq_len,
                 cu_seqlens_qkv=self.v_attn_cu_seqlens_qkv,
                 attention_module=attn_phase.attn_func,
-                attention_type=self.config["attn_type"],
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,
@@ -303,17 +298,17 @@ class LTX2TransformerInfer:
             # Cache cu_seqlens_qkv for self-attention only
             if is_self_attn:
                 if not is_audio and self.v_attn_cu_seqlens_qkv is None:
-                    self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0], q.device)
+                    self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
                 elif is_audio and self.a_attn_cu_seqlens_qkv is None:
-                    self.a_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0], q.device)
+                    self.a_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
 
                 cu_seqlens_q = self.v_attn_cu_seqlens_qkv if not is_audio else self.a_attn_cu_seqlens_qkv
                 cu_seqlens_kv = cu_seqlens_q  # For self-attn, q and k have same length
             else:
                 # For cross-attention, always create cu_seqlens dynamically
                 # because k length varies by context type (text, audio, video)
-                cu_seqlens_q = self._create_cu_seqlens(q.shape[0], q.device)
-                cu_seqlens_kv = self._create_cu_seqlens(k.shape[0], k.device)
+                cu_seqlens_q = self._create_cu_seqlens(q.shape[0])
+                cu_seqlens_kv = self._create_cu_seqlens(k.shape[0])
 
             out = attn_phase.attn_func.apply(
                 q=q,

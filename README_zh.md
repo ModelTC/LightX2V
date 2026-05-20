@@ -18,11 +18,13 @@
 
 **LightX2V** 是一个先进的轻量级图像视频生成推理框架，专为提供高效、高性能的图像视频生成解决方案而设计。该统一平台集成了多种前沿的图像视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)，文本生图片(T2I)，图像编辑(I2I)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视觉输出(Vision)**。
 
-> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI数字人视频生成平台。
-
-> 🎉 **新品发布：GenRL 来了！** 查看我们全新的 **[GenRL 框架](https://github.com/ModelTC/GenRL)**，使用强化学习训练视觉生成模型！高性能 RL 训练的 checkpoint 现已在 **[HuggingFace](https://huggingface.co/collections/lightx2v/genrl)** 开放下载。
+> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI视频生成平台，提供LTX2.3 / Wan 2.2 / SekoTalk / Qwen-Image / SeedVR2等多个模型多种任务的免费体验使用。
+>
+> **Try it online:** No install required — **[LightX2V Online Service](https://x2v.light-ai.top/login)**. A free, lightweight AI video platform with **LTX 2.3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SeedVR2**, and more models and tasks.
 
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
+
+> 🌐 更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)
 
 ## 🧾 社区代码贡献指南
 
@@ -42,8 +44,18 @@ pre-commit run --all-files
 - [kikidouloveme79](https://github.com/kikidouloveme79)
 - [ziyanxzy](https://github.com/ziyanxzy)
 - [Tyr0727](https://github.com/Tyr0727)
+- [hufangjian2017](https://github.com/hufangjian2017)
 
 ## :fire: 最新动态
+
+- **2026年4月30日：** 🚀 支持 天数智芯 的部署，感谢天数智芯团队。
+
+- **2026年4月20日：** 🚀 我们很高兴发布 [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) 和 [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) 两个新模型。与之前的版本相比，这一版本基于高质量的720p数据集进行训练，并采用了优化过的低噪声训练算法。这些改进显著提升了模型在细粒度细节渲染以及视觉纹理方面的表现。
+
+- **2026年4月17日：** 🚀 我们支持了 [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) 模型。在单张 H100 显卡上，LightX2V 可实现约 1.2 倍的推理加速。详细用法请参考[此教程](examples/worldmirror/README_zh.md)。
+
+- **2026年4月10日：** 🎉 我们更新了分离部署的技术博客
+  - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
 
 - **2026年3月5日：** 🚀 支持 Intel AIPC PTL 的部署，感谢Intel团队。
 
@@ -215,9 +227,11 @@ pipe.generate(
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
+- ✅ [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)
 - ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
+- ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)

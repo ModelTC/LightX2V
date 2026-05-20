@@ -1,0 +1,34 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 161,
+    "text_len": 512,
+    "target_height": 720,
+    "target_width": 1280,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": 1.0,
+    "sample_shift": 10.0,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "offload_granularity": "block",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "use_image_encoder": false,
+    "dit_original_ckpt": "path/to/lingbot_world_fast/",
+    "ar_config": {
+        "local_attn_size": 21,
+        "num_frame_per_chunk": 3,
+        "timesteps_index": [0, 179, 358, 679],
+        "sink_size": 3,
+        "kv_quant": {
+            "quant_scheme": "turboquant",
+            "calibrate": false,
+            "codebook_dir": "path/to/turboquant_codebooks",
+            "key_bits": 4,
+            "value_bits": 2
+        },
+        "kv_offload": true
+    },
+    "causal_rope_type": "triton"
+}

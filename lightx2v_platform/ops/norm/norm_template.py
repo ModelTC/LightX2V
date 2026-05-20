@@ -38,7 +38,7 @@ def GET_SENSITIVE_DTYPE():
 
 
 class RMSWeightTemplate(metaclass=ABCMeta):
-    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6, lora_prefix="", lora_path=""):
         self.weight_name = weight_name
         self.eps = eps
         self.create_cuda_buffer = create_cuda_buffer
@@ -49,6 +49,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.config = {}
+        self.lora_prefix = lora_prefix
+        self.lora_path = lora_path
 
     def load(self, weight_dict):
         if self.create_cuda_buffer:

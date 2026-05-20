@@ -2,9 +2,11 @@ import base64
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.io as io
 from PIL import Image
 
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
@@ -13,6 +15,24 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs):
+    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+
+    if lora_dynamic_apply:
+        lora_path = lora_configs[0]["path"]
+        lora_strength = lora_configs[0]["strength"]
+        model_kwargs["lora_path"] = lora_path
+        model_kwargs["lora_strength"] = lora_strength
+        model = neopp_module(**model_kwargs)
+    else:
+        assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
+        assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
+        model = neopp_module(**model_kwargs)
+        lora_adapter = LoraAdapter(model)
+        lora_adapter.apply_lora(lora_configs)
+    return model
 
 
 @RUNNER_REGISTER("neopp")
@@ -29,11 +49,16 @@ class NeoppRunner(DefaultRunner):
         head_dim = llm_config["head_dim"]
         self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
+        self.enable_cfg = self.config.get("enable_cfg", True)
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
         self.past_key_values_text_uncond = None
         self.past_key_values_img_uncond = None
         self.num_input_images = config.get("num_input_images", 1)
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def init_scheduler(self):
         self.scheduler = NeoppMoeScheduler(self.config)
@@ -48,7 +73,16 @@ class NeoppRunner(DefaultRunner):
         MoT: Mixture-of-Transformer-Experts (MoT) architecture
         https://arxiv.org/abs/2505.14683
         """
-        model = NeoppModel(self.config["model_path"], self.config, self.init_device)
+        neopp_model_kwargs = {
+            "model_path": self.config["model_path"],
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = NeoppModel(**neopp_model_kwargs)
+        else:
+            model = build_neopp_model_with_lora(NeoppModel, self.config, neopp_model_kwargs, lora_configs)
         return model
 
     def _build_inv_freq(self, half_head_dim, theta):
@@ -78,21 +112,48 @@ class NeoppRunner(DefaultRunner):
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
             indexes_cond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_cond, device=self.init_device)
-            indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_uncond, device=self.init_device)
-
             cos_t_cond, sin_t_cond = self._compute_rope(indexes_cond[0].unsqueeze(0), self.inv_freq_t)
             cos_h_cond, sin_h_cond = self._compute_rope(indexes_cond[1].unsqueeze(0), self.inv_freq_hw)
             cos_w_cond, sin_w_cond = self._compute_rope(indexes_cond[2].unsqueeze(0), self.inv_freq_hw)
 
-            cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
-            cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
-            cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
+            if self.enable_cfg:
+                indexes_uncond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_uncond, device=self.init_device)
+                cos_t_uncond, sin_t_uncond = self._compute_rope(indexes_uncond[0].unsqueeze(0), self.inv_freq_t)
+                cos_h_uncond, sin_h_uncond = self._compute_rope(indexes_uncond[1].unsqueeze(0), self.inv_freq_hw)
+                cos_w_uncond, sin_w_uncond = self._compute_rope(indexes_uncond[2].unsqueeze(0), self.inv_freq_hw)
+            else:
+                cos_t_uncond = sin_t_uncond = cos_h_uncond = sin_h_uncond = cos_w_uncond = sin_w_uncond = None
+
+            if self.seq_p_group is not None:
+                world_size = dist.get_world_size(self.seq_p_group)
+                cur_rank = dist.get_rank(self.seq_p_group)
+                seq_len = cos_t_cond.shape[1]
+                padding_size = (world_size - (seq_len % world_size)) % world_size
+
+                def _pad_and_chunk(t):
+                    if padding_size > 0:
+                        t = F.pad(t, (0, 0, 0, padding_size))
+                    return torch.chunk(t, world_size, dim=1)[cur_rank]
+
+                cos_t_cond = _pad_and_chunk(cos_t_cond)
+                sin_t_cond = _pad_and_chunk(sin_t_cond)
+                cos_h_cond = _pad_and_chunk(cos_h_cond)
+                sin_h_cond = _pad_and_chunk(sin_h_cond)
+                cos_w_cond = _pad_and_chunk(cos_w_cond)
+                sin_w_cond = _pad_and_chunk(sin_w_cond)
+                if self.enable_cfg:
+                    cos_t_uncond = _pad_and_chunk(cos_t_uncond)
+                    sin_t_uncond = _pad_and_chunk(sin_t_uncond)
+                    cos_h_uncond = _pad_and_chunk(cos_h_uncond)
+                    sin_h_uncond = _pad_and_chunk(sin_h_uncond)
+                    cos_w_uncond = _pad_and_chunk(cos_w_uncond)
+                    sin_w_uncond = _pad_and_chunk(sin_w_uncond)
 
             return {
                 "past_key_values_cond": self.past_key_values_cond,
                 "past_key_values_uncond": self.past_key_values_uncond,
                 "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
-                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond),
+                "cos_sin_uncond": (cos_t_uncond, sin_t_uncond, cos_h_uncond, sin_h_uncond, cos_w_uncond, sin_w_uncond) if self.enable_cfg else None,
             }
 
     def get_latent_shape_with_target_hw(self):
@@ -164,40 +225,38 @@ class NeoppRunner(DefaultRunner):
         self.clear_kvcache()
         return gen_result
 
-    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path):
-        self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-        logger.info(f"Loaded t2i KV cache from {to_x2v_cond_kv_path} and {to_x2v_uncond_kv_path}")
-        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+    def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path=None):
+        cfg_p_rank = self._get_cfg_p_rank()
+        if cfg_p_rank != 1:  # rank 0 只做 cond，无需加载 uncond
+            self.past_key_values_cond = torch.load(to_x2v_cond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+            logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
+        if self.enable_cfg and cfg_p_rank != 0:  # rank 1 只做 uncond，无需加载 cond
+            self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
+            logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
-    # def load_kvcache_i2i(self, to_x2v_cond_path, to_x2v_uncond_kv_path, to_x2v_img_uncond_path):
-    #     self.past_key_values_cond = torch.load(to_x2v_cond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-    #     self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-    #     self.past_key_values_img_uncond = torch.load(to_x2v_img_uncond_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
-    #     logger.info(f"Loaded i2i KV caches: cond={self.past_key_values_cond.shape}, uncond={self.past_key_values_uncond.shape}")
-
-    def set_inference_params(self, index_offset_cond, index_offset_uncond, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
+    def set_inference_params(self, index_offset_cond, index_offset_uncond=None, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
         self.index_offset_cond = index_offset_cond
-        self.index_offset_uncond = index_offset_uncond
+        self.index_offset_uncond = index_offset_uncond if self.enable_cfg else None
         self.scheduler.timestep_shift = timestep_shift
         self.model.cfg_interval = cfg_interval
         self.model.cfg_scale = cfg_scale
         self.model.cfg_norm = cfg_norm
 
-    def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor):
-        self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
-        self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
-        logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-        logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+    def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor = None):
+        cfg_p_rank = self._get_cfg_p_rank()
+        if cfg_p_rank != 1:
+            self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
+            logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")
+        if self.enable_cfg and cfg_p_rank != 0:
+            self.past_key_values_uncond = to_x2v_uncond_kv.to(AI_DEVICE)
+            logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
-    # def set_kvcache_i2i(self, to_x2v_cond_kv: torch.Tensor, to_x2v_text_uncond_kv: torch.Tensor, to_x2v_img_uncond_kv: torch.Tensor):
-    #     self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
-    #     self.past_key_values_text_uncond = to_x2v_text_uncond_kv.to(AI_DEVICE)
-    #     self.past_key_values_img_uncond = to_x2v_img_uncond_kv.to(AI_DEVICE)
-    #     logger.info(f"KV cache cond shape: {self.past_key_values_cond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-    #     logger.info(f"KV cache text uncond shape: {self.past_key_values_text_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
-    #     logger.info(f"KV cache img uncond shape: {self.past_key_values_img_uncond.shape}")  # [layers, 2, past_seq, num_kv_heads, head_dim]
+    def _get_cfg_p_rank(self):
+        """返回当前进程在 cfg_p 组内的 rank；未开启 cfg_parallel 时返回 None（两份 kvcache 都需要加载）。"""
+        if self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            return dist.get_rank(cfg_p_group)
+        return None
 
     def clear_kvcache(self):
         self.past_key_values_cond = None

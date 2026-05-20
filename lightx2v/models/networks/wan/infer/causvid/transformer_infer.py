@@ -116,7 +116,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         self.kv_cache[block_idx]["k"][kv_start:kv_end] = k
         self.kv_cache[block_idx]["v"][kv_start:kv_end] = v
 
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q=q, k_lens=torch.tensor([kv_end], dtype=torch.int32, device=k.device))
+        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q=q, k_lens=torch.tensor([kv_end], dtype=torch.int32))
 
         if not self.parallel_attention:
             attn_out = weights.self_attn_1.apply(
@@ -157,7 +157,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
             k = self.crossattn_cache[block_idx]["k"]
             v = self.crossattn_cache[block_idx]["v"]
 
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=torch.tensor([k.size(0)], dtype=torch.int32, device=k.device))
+        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=torch.tensor([k.size(0)], dtype=torch.int32))
 
         attn_out = weights.cross_attn_1.apply(
             q=q,
@@ -175,7 +175,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
 
             cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
                 q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32, device=k.device),
+                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
             )
 
             img_attn_out = weights.cross_attn_2.apply(

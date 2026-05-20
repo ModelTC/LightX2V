@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.utils.envs import *
@@ -81,10 +82,15 @@ def create_pin_tensor(tensor, transpose=False, dtype=None):
         dtype: Target data type of the pinned tensor (optional, defaults to source tensor's dtype)
 
     Returns:
-        Pinned memory tensor (on CPU) with optional transposition applied
+        Pinned memory tensor (on CPU) with optional transposition applied.
+        Falls back to regular CPU tensor if pinned memory allocation fails.
     """
     dtype = dtype or tensor.dtype
-    pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
+    try:
+        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
+    except Exception as e:
+        logger.warning(f"Failed to allocate pinned memory (shape={tensor.shape}, dtype={dtype}): {e}. Falling back to regular CPU memory.")
+        pin_tensor = torch.empty(tensor.shape, dtype=dtype)
     pin_tensor = pin_tensor.copy_(tensor)
     if transpose:
         pin_tensor = pin_tensor.t()

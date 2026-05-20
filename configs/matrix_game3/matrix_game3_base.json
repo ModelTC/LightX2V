@@ -1,0 +1,43 @@
+{
+    "model_cls": "wan2.2_matrix_game3",
+    "task": "i2v",
+    "sub_model_folder": "base_model",
+    "use_base_model": true,
+    "vae_type": "mg_lightvae_v2",
+    "lightvae_pruning_rate": 0.75,
+
+    "target_video_length": 57,
+    "target_height": 704,
+    "target_width": 1280,
+    "vae_stride": [4, 16, 16],
+    "patch_size": [1, 2, 2],
+
+    "num_channels_latents": 48,
+    "infer_steps": 50,
+    "sample_shift": 5.0,
+    "sample_guide_scale": 5.0,
+    "enable_cfg": true,
+
+    "first_clip_frame": 57,
+    "clip_frame": 56,
+    "incremental_segment_frames": 40,
+    "past_frame": 16,
+    "conditioning_latent_frames": 4,
+    "num_iterations": 1,
+    "interactive": false,
+    "streaming": false,
+
+    "mouse_dim_in": 2,
+    "keyboard_dim_in": 6,
+
+    "self_attn_1_type": "flash_attn2",
+    "cross_attn_1_type": "flash_attn2",
+    "cross_attn_2_type": "flash_attn2",
+
+    "cpu_offload": false,
+    "cpu_offload_activations": false,
+    "offload_granularity": "block",
+    "seq_parallel": false,
+    "parallel": {},
+    "dit_quantized": false
+}

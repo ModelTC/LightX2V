@@ -24,6 +24,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
+from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8
 
 __all__ = [
     "XLMRobertaCLIP",
@@ -91,8 +92,10 @@ class SelfAttention(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-iluvatar":
+                linear_cls = IluvatarQuantLinearInt8
             else:
-                NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
@@ -181,8 +184,10 @@ class AttentionBlock(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-iluvatar":
+                linear_cls = IluvatarQuantLinearInt8
             else:
-                NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
+                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
             linear_cls = nn.Linear
 
@@ -454,7 +459,7 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 
 
 class CLIPModel:
-    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False):
+    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False, dummy_model=False):
         self.dtype = dtype
         self.quantized = clip_quantized
         self.cpu_offload = cpu_offload
@@ -470,8 +475,13 @@ class CLIPModel:
             pretrained=False, return_transforms=True, return_tokenizer=False, dtype=dtype, device=device, quantized=self.quantized, quant_scheme=quant_scheme
         )
         self.model = self.model.eval().requires_grad_(False)
-        weight_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, remove_key="textual", load_from_rank0=load_from_rank0)
-        self.model.load_state_dict(weight_dict)
+        if not dummy_model:
+            weight_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, remove_key="textual", load_from_rank0=load_from_rank0)
+            self.model.load_state_dict(weight_dict)
+        else:
+            from loguru import logger
+
+            logger.info("[DummyModel] Skipping CLIP weight loading, using random init")
 
     def visual(self, videos):
         if self.cpu_offload:

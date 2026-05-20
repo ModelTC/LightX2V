@@ -59,3 +59,35 @@ class Conv2dWeight(Conv2dWeightTemplate):
         if self.bias is not None:
             destination[self.bias_name] = self.bias.cpu().detach().clone()
         return destination
+
+
+@CONV2D_WEIGHT_REGISTER("Default-ForceFp32")
+class Conv2dWeightForceFp32(Conv2dWeight):
+    """Conv2d variant that always keeps weights in fp32.
+
+    Mirror of ``MMWeightForceFp32`` for the Conv2d side — used for DPT
+    ``scratch.output_conv2`` which the upstream pipeline explicitly runs
+    fp32 (see dense_head.py ``.float().contiguous()`` before the conv).
+    """
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self.weight = self.weight.to(torch.float32)
+        if self.bias is not None:
+            self.bias = self.bias.to(torch.float32)
+
+    def apply(self, input_tensor):
+        # Source pipeline explicitly upcasts to fp32 before the conv, but
+        # defend the invariant anyway: if the caller passes bf16 / fp16
+        # tensors, cast up so conv2d's dtype check doesn't trip.
+        if input_tensor.dtype != self.weight.dtype:
+            input_tensor = input_tensor.to(self.weight.dtype)
+        return torch.nn.functional.conv2d(
+            input_tensor,
+            weight=self.weight,
+            bias=self.bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+        )
