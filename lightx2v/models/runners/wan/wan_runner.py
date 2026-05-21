@@ -31,6 +31,7 @@ from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
     WanSchedulerTaylorCaching,
 )
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
@@ -239,7 +240,12 @@ class WanRunner(DisaggMixin, DefaultRunner):
             return
 
         if self.config["feature_caching"] == "NoCaching":
-            scheduler_class = WanScheduler
+            if self.config.get("scheduler_type") == "WanStepDistillScheduler":
+                scheduler_class = WanStepDistillScheduler
+                logger.info("Using WanStepDistillScheduler")
+            else:
+                scheduler_class = WanScheduler
+                logger.info("Using WanScheduler")
         elif self.config["feature_caching"] == "TaylorSeer":
             scheduler_class = WanSchedulerTaylorCaching
         elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock", "Mag"]:
