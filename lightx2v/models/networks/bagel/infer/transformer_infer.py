@@ -54,6 +54,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
 
 class BagelTransformerInfer(BaseTransformerInfer):
     def __init__(self, config, llm_config):
+        if flash_attn_varlen_func is None:
+            raise ImportError("BAGEL T2I requires flash-attn (`flash_attn`). Install a flash-attn build compatible with your CUDA/PyTorch environment before running BAGEL.")
         self.config = config
         self.llm_config = llm_config
         self.num_layers = llm_config["num_hidden_layers"]
@@ -289,7 +291,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
     ):
         for layer_idx, block_weight in enumerate(block_weights):
             if enable_taylorseer:
-                assert NotImplementedError
+                raise NotImplementedError("TaylorSeer is not implemented for BAGEL transformer inference.")
             packed_query_sequence, past_key_values = self.decoder_layer(
                 block_weight=block_weight,
                 packed_query_sequence=packed_query_sequence,

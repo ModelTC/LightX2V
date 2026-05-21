@@ -217,7 +217,7 @@ class I2IInputInfo:
     target_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
-    processed_image_size: int = field(default_factory=list)
+    processed_image_size: list = field(default_factory=list)
     original_size: list = field(default_factory=list)
     aspect_ratio: str = field(default_factory=str)
 
