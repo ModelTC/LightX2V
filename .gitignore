@@ -28,6 +28,7 @@ server_cache/
 app/.gradio/
 *.pkl
 save_results/*
+tools/postprocess/hy3dpaint
 *.egg-info/
 lightx2v_train/output_train/*
 lightx2v_train/output_infer/*

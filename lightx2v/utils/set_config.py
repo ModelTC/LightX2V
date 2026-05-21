@@ -80,6 +80,9 @@ def auto_calc_config(config):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "hunyuan3d":
+        # Hunyuan3D shape loads hunyuan3d-dit-v2-1/config.yaml + checkpoint in the runner.
+        pass
     elif config["model_cls"] == "worldmirror":
         # WorldMirror weights live under {model_path}/{subfolder}/, with a config.json
         # alongside model.safetensors. The runner loads this config directly; here we
