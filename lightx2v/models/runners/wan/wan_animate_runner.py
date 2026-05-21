@@ -46,46 +46,15 @@ class WanAnimateRunner(WanRunner):
                 flip = not flip
         return target_array[:target_len]
 
-    @staticmethod
-    def snap_to_4n_plus_1(frame_count):
-        """Smallest value of form 4n+1 that is >= frame_count (VAE temporal stride constraint)."""
-        if frame_count <= 1:
-            return 1
-        return (frame_count + 2) // 4 * 4 + 1
-
     def get_valid_len(self, real_len, clip_len=81, overlap=1):
-        """Pad total length: intermediate segments use clip_len; last segment uses min 4n+1."""
-        if real_len <= clip_len:
-            return self.snap_to_4n_plus_1(real_len)
-        move_frames = clip_len - overlap
-        num_segments = 1 + (real_len - clip_len + move_frames - 1) // move_frames
-        start = (num_segments - 1) * move_frames
-        remaining = real_len - start
-        return start + self.snap_to_4n_plus_1(remaining)
-
-    def get_segment_target_len(self, segment_idx):
-        max_clip = self.config["target_video_length"]
-        overlap = self.config.get("refert_num", 1)
-        move_frames = max_clip - overlap
-        if self.video_segment_num == 1:
-            return self.snap_to_4n_plus_1(self.real_frame_len)
-        if segment_idx < self.video_segment_num - 1:
-            return max_clip
-        start = segment_idx * move_frames
-        remaining = self.real_frame_len - start
-        return self.snap_to_4n_plus_1(remaining)
-
-    def _update_latent_shape_for_segment(self, segment_idx):
-        segment_target_len = self.get_segment_target_len(segment_idx)
-        self.segment_target_len = segment_target_len
-        vae_stride_t = self.config["vae_stride"][0]
-        self.latent_t = segment_target_len // vae_stride_t + 1
-        self.input_info.latent_shape = [
-            self.config.get("num_channels_latents", 16),
-            self.latent_t + 1,
-            self.latent_h,
-            self.latent_w,
-        ]
+        real_clip_len = clip_len - overlap
+        last_clip_num = (real_len - overlap) % real_clip_len
+        if last_clip_num == 0:
+            extra = 0
+        else:
+            extra = real_clip_len - last_clip_num
+        target_len = real_len + extra
+        return target_len
 
     def get_i2v_mask(self, lat_t, lat_h, lat_w, mask_len=1, mask_pixel_values=None, device=AI_DEVICE):
         if mask_pixel_values is None:
@@ -237,7 +206,7 @@ class WanAnimateRunner(WanRunner):
                                 size=(H, W),
                                 mode="bicubic",
                             ),
-                            torch.zeros(3, self.segment_target_len - self.mask_reft_len, H, W, dtype=GET_DTYPE()),
+                            torch.zeros(3, self.config["target_video_length"] - self.mask_reft_len, H, W, dtype=GET_DTYPE()),
                         ],
                         dim=1,
                     )
@@ -260,7 +229,7 @@ class WanAnimateRunner(WanRunner):
                     mask_pixel_values=mask_pixel_values.unsqueeze(0),
                 )
             else:
-                y_reft = self.vae_encoder.encode(torch.zeros(1, 3, self.segment_target_len - self.mask_reft_len, H, W, dtype=GET_DTYPE(), device=AI_DEVICE))
+                y_reft = self.vae_encoder.encode(torch.zeros(1, 3, self.config["target_video_length"] - self.mask_reft_len, H, W, dtype=GET_DTYPE(), device=AI_DEVICE))
                 msk_reft = self.get_i2v_mask(self.latent_t, self.latent_h, self.latent_w, self.mask_reft_len)
 
         y_reft = torch.concat([msk_reft, y_reft])
@@ -274,21 +243,19 @@ class WanAnimateRunner(WanRunner):
         src_ref_path = self.input_info.src_ref_images
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(src_pose_path, src_face_path, src_ref_path)
         self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device=AI_DEVICE).permute(2, 0, 1)  # chw
+        self.latent_t = self.config["target_video_length"] // self.config["vae_stride"][0] + 1
         self.latent_h = self.refer_pixel_values.shape[-2] // self.config["vae_stride"][1]
         self.latent_w = self.refer_pixel_values.shape[-1] // self.config["vae_stride"][2]
+        self.input_info.latent_shape = [self.config.get("num_channels_latents", 16), self.latent_t + 1, self.latent_h, self.latent_w]
         self.real_frame_len = len(self.cond_images)
-        refert_num = self.config["refert_num"] if "refert_num" in self.config else 1
         target_len = self.get_valid_len(
             self.real_frame_len,
             self.config["target_video_length"],
-            overlap=refert_num,
+            overlap=self.config["refert_num"] if "refert_num" in self.config else 1,
         )
         logger.info("real frames: {} target frames: {}".format(self.real_frame_len, target_len))
         self.cond_images = self.inputs_padding(self.cond_images, target_len)
         self.face_images = self.inputs_padding(self.face_images, target_len)
-        self.get_video_segment_num()
-        self._update_latent_shape_for_segment(0)
-        logger.info("video segments: {}, first segment target frames: {}".format(self.video_segment_num, self.segment_target_len))
 
         if self.config["replace_flag"] if "replace_flag" in self.config else False:
             src_bg_path = self.input_info.src_bg_path
@@ -333,10 +300,8 @@ class WanAnimateRunner(WanRunner):
         metrics_labels=["WanAnimateRunner"],
     )
     def init_run_segment(self, segment_idx):
-        self._update_latent_shape_for_segment(segment_idx)
         start = segment_idx * self.move_frames
-        end = start + self.segment_target_len
-        logger.info("segment {}/{}: frames [{}:{}) target_len={}".format(segment_idx + 1, self.video_segment_num, start, end, self.segment_target_len))
+        end = start + self.config["target_video_length"]
         if start == 0:
             self.mask_reft_len = 0
         else:
