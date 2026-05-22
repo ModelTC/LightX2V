@@ -76,8 +76,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
-        multiple = world_size * f
-        padding_size = (multiple - (full_seq_len % multiple)) % multiple
+        padding_size = (world_size - (full_seq_len % world_size)) % world_size
         if padding_size > 0:
             pos_freqs = F.pad(pos_freqs, (0, 0, 0, 0, 0, padding_size))
         pos_freqs = torch.chunk(pos_freqs, world_size, dim=0)[cur_rank][: q.size(0)]

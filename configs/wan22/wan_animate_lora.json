@@ -15,9 +15,11 @@
     "refert_num": 1,
     "replace_flag": false,
     "fps": 30,
+    "denoising_step_list": [1000, 750, 500, 250],
+    "scheduler_type": "WanStepDistillScheduler",
     "lora_configs": [
         {
-        "path": "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
         "strength": 1.0
         }
     ]

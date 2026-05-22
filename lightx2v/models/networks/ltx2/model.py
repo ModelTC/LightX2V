@@ -78,8 +78,6 @@ class LTX2Model(BaseTransformerModel):
             self.tp_rank = 0
             self.tp_size = 1
 
-        self.padding_multiple = self.config.get("padding_multiple", 1)
-
         # Track original video sequence length before padding (for sequence parallel)
         self.original_video_seq_len = None
 
@@ -476,8 +474,7 @@ class LTX2Model(BaseTransformerModel):
             # Split x (latent)
             vx = pre_infer_out.video_args.x
             self.original_video_seq_len = vx.shape[0]  # Record original length before padding
-            multiple = world_size * self.padding_multiple
-            padding_size = (multiple - (vx.shape[0] % multiple)) % multiple
+            padding_size = (world_size - (vx.shape[0] % world_size)) % world_size
             if padding_size > 0:
                 vx = F.pad(vx, (0, 0, 0, padding_size))
             pre_infer_out.video_args.x = torch.chunk(vx, world_size, dim=0)[cur_rank]
@@ -494,7 +491,7 @@ class LTX2Model(BaseTransformerModel):
                     seq_dim = 1
 
                 seq_len = v_cos.shape[seq_dim]
-                padding_size = (multiple - (seq_len % multiple)) % multiple
+                padding_size = (world_size - (seq_len % world_size)) % world_size
                 if padding_size > 0:
                     pad_spec = [0, 0] * (v_cos.dim() - seq_dim - 1) + [0, padding_size] + [0, 0] * seq_dim
                     v_cos = F.pad(v_cos, pad_spec)
@@ -513,7 +510,7 @@ class LTX2Model(BaseTransformerModel):
                     seq_dim = 1
 
                 seq_len = v_cross_cos.shape[seq_dim]
-                padding_size = (multiple - (seq_len % multiple)) % multiple
+                padding_size = (world_size - (seq_len % world_size)) % world_size
                 if padding_size > 0:
                     pad_spec = [0, 0] * (v_cross_cos.dim() - seq_dim - 1) + [0, padding_size] + [0, 0] * seq_dim
                     v_cross_cos = F.pad(v_cross_cos, pad_spec)
@@ -524,28 +521,28 @@ class LTX2Model(BaseTransformerModel):
             # Split timestep embeddings (sequence-length dependent)
             if pre_infer_out.video_args.timesteps is not None:
                 v_timesteps = pre_infer_out.video_args.timesteps
-                padding_size = (multiple - (v_timesteps.shape[0] % multiple)) % multiple
+                padding_size = (world_size - (v_timesteps.shape[0] % world_size)) % world_size
                 if padding_size > 0:
                     v_timesteps = F.pad(v_timesteps, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.timesteps = torch.chunk(v_timesteps, world_size, dim=0)[cur_rank]
 
             if pre_infer_out.video_args.embedded_timestep is not None:
                 v_embedded_timestep = pre_infer_out.video_args.embedded_timestep
-                padding_size = (multiple - (v_embedded_timestep.shape[0] % multiple)) % multiple
+                padding_size = (world_size - (v_embedded_timestep.shape[0] % world_size)) % world_size
                 if padding_size > 0:
                     v_embedded_timestep = F.pad(v_embedded_timestep, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.embedded_timestep = torch.chunk(v_embedded_timestep, world_size, dim=0)[cur_rank]
 
             if pre_infer_out.video_args.cross_scale_shift_timestep is not None:
                 v_cross_ss = pre_infer_out.video_args.cross_scale_shift_timestep
-                padding_size = (multiple - (v_cross_ss.shape[0] % multiple)) % multiple
+                padding_size = (world_size - (v_cross_ss.shape[0] % world_size)) % world_size
                 if padding_size > 0:
                     v_cross_ss = F.pad(v_cross_ss, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.cross_scale_shift_timestep = torch.chunk(v_cross_ss, world_size, dim=0)[cur_rank]
 
             if pre_infer_out.video_args.cross_gate_timestep is not None:
                 v_cross_gate = pre_infer_out.video_args.cross_gate_timestep
-                padding_size = (multiple - (v_cross_gate.shape[0] % multiple)) % multiple
+                padding_size = (world_size - (v_cross_gate.shape[0] % world_size)) % world_size
                 if padding_size > 0:
                     v_cross_gate = F.pad(v_cross_gate, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.cross_gate_timestep = torch.chunk(v_cross_gate, world_size, dim=0)[cur_rank]

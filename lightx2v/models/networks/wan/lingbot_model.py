@@ -27,11 +27,8 @@ class WanLingbotModel(WanModel):
 
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
-        f, _, _ = pre_infer_out.grid_sizes.tuple
-        multiple = world_size * f
-
         c2ws_plucker_emb = pre_infer_out.conditional_dict["c2ws_plucker_emb"]
-        padding_size = (multiple - (c2ws_plucker_emb.shape[0] % multiple)) % multiple
+        padding_size = (world_size - (c2ws_plucker_emb.shape[0] % world_size)) % world_size
         if padding_size > 0:
             c2ws_plucker_emb = F.pad(c2ws_plucker_emb, (0, 0, 0, padding_size))
         pre_infer_out.conditional_dict["c2ws_plucker_emb"] = torch.chunk(c2ws_plucker_emb, world_size, dim=0)[cur_rank]

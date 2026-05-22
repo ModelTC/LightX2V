@@ -55,6 +55,7 @@ class Register(dict):
 
 MODEL_REGISTER = Register()
 TRAINER_REGISTER = Register()
+INFERENCER_REGISTER = Register()
 DATA_REGISTER = Register()
 
 
@@ -72,6 +73,14 @@ def build_trainer(config):
         available = ", ".join(sorted(TRAINER_REGISTER.keys()))
         raise ValueError(f"Unknown trainer {name!r}. Available trainers: {available}")
     return TRAINER_REGISTER[name](config)
+
+
+def build_inferencer(config):
+    name = config["inference"]["method"]
+    if name not in INFERENCER_REGISTER:
+        available = ", ".join(sorted(INFERENCER_REGISTER.keys()))
+        raise ValueError(f"Unknown inferencer {name!r}. Available inferencers: {available}")
+    return INFERENCER_REGISTER[name](config)
 
 
 def build_data(config, train_or_val):

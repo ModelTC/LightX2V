@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from loguru import logger
+from transformers.activations import ACT2FN
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 
 from lightx2v.utils.envs import *
@@ -96,6 +97,7 @@ class BagelPreInfer:
     def __init__(self, config, llm_config):
         self.config = config
         self.rotary_emb = Qwen2RotaryEmbedding(config=llm_config)
+        self.connector_activation = ACT2FN[config.get("connector_act", "gelu_pytorch_tanh")]
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -116,4 +118,11 @@ class BagelPreInfer:
     def vae2llm(self, weights, x):
         x = x.to(AI_DEVICE).to(torch.bfloat16)
         x = weights.vae2llm.apply(x)
+        return x
+
+    def connector(self, weights, x):
+        x = x.to(AI_DEVICE).to(torch.bfloat16)
+        x = weights.fc1.apply(x)
+        x = self.connector_activation(x)
+        x = weights.fc2.apply(x)
         return x

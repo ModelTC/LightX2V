@@ -1,3 +1,6 @@
+import math
+
+
 def resize_to_max_side(image, max_side):
     width, height = image.size
     if width >= height:
@@ -9,14 +12,18 @@ def resize_to_max_side(image, max_side):
     return image.resize((new_width, new_height))
 
 
-def center_crop_to_ratio(image, ratio):
-    width, height = image.size
-    target = ratio[0] / ratio[1]
-    current = width / height
-    if current > target:
-        new_width = int(height * target)
-        left = (width - new_width) // 2
-        return image.crop((left, 0, left + new_width, height))
-    new_height = int(width / target)
-    top = (height - new_height) // 2
-    return image.crop((0, top, width, top + new_height))
+def resize_to_target_area(image, target_area):
+    w, h = image.size
+    ratio = w / h
+    new_w = round(math.sqrt(target_area * ratio) / 16) * 16
+    new_h = round(math.sqrt(target_area / ratio) / 16) * 16
+    # Scale so that both dimensions are at least the target size, then crop.
+    scale = max(new_w / w, new_h / h)
+    scaled_w = round(w * scale)
+    scaled_h = round(h * scale)
+    image = image.resize((scaled_w, scaled_h), resample=3)  # BICUBIC=3
+    # Center crop to exact (new_w, new_h)
+    left = (scaled_w - new_w) // 2
+    top = (scaled_h - new_h) // 2
+    image = image.crop((left, top, left + new_w, top + new_h))
+    return image
