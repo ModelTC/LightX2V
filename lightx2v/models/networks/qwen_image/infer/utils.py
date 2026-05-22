@@ -7,16 +7,27 @@ try:
 except ImportError:
     apply_rope_with_cos_sin_cache_inplace = None
 
+try:
+    from magi_compiler import magi_register_custom_op
+except ImportError:
+    magi_register_custom_op = None
 
-def apply_qwen_rope_with_flashinfer(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-):
+# Re-export for transformer_infer init.
+from lightx2v.common.magi_custom_op_mode import (
+    set_magi_custom_op_mode,  # noqa: F401
+    use_magi_custom_ops,
+)
+
+
+def _qwen_rope_meta(xq, xk, cos_sin_cache):
+    return torch.empty_like(xq), torch.empty_like(xk)
+
+
+def _apply_qwen_rope_with_flashinfer_impl(xq, xk, cos_sin_cache):
     L, H, D = xq.shape
 
-    query = xq.reshape(L, H * D).contiguous()
-    key = xk.reshape(L, H * D).contiguous()
+    query = xq.reshape(L, H * D).contiguous().clone()
+    key = xk.reshape(L, H * D).contiguous().clone()
 
     positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
 
@@ -34,17 +45,55 @@ def apply_qwen_rope_with_flashinfer(
     return xq_out, xk_out
 
 
+def _apply_qwen_rope_with_torch_impl(xq, xk, cos_sin_cache):
+    xq_rotated = torch.view_as_complex(xq.float().unflatten(-1, (-1, 2)))
+    xk_rotated = torch.view_as_complex(xk.float().unflatten(-1, (-1, 2)))
+    freqs_cis = cos_sin_cache.unsqueeze(1)
+    xq_out = torch.view_as_real(xq_rotated * freqs_cis).flatten(-2)
+    xk_out = torch.view_as_real(xk_rotated * freqs_cis).flatten(-2)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
+
+if magi_register_custom_op is not None and apply_rope_with_cos_sin_cache_inplace is not None:
+
+    @magi_register_custom_op(
+        "lightx2v::qwen_rope_flashinfer",
+        infer_output_meta_fn=_qwen_rope_meta,
+        is_subgraph_boundary=True,
+    )
+    def _qwen_rope_flashinfer_custom_op(xq: torch.Tensor, xk: torch.Tensor, cos_sin_cache: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return _apply_qwen_rope_with_flashinfer_impl(xq, xk, cos_sin_cache)
+
+
+if magi_register_custom_op is not None:
+
+    @magi_register_custom_op(
+        "lightx2v::qwen_rope_torch",
+        infer_output_meta_fn=_qwen_rope_meta,
+        is_subgraph_boundary=True,
+    )
+    def _qwen_rope_torch_custom_op(xq: torch.Tensor, xk: torch.Tensor, cos_sin_cache: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return _apply_qwen_rope_with_torch_impl(xq, xk, cos_sin_cache)
+
+
+def apply_qwen_rope_with_flashinfer(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+):
+    if use_magi_custom_ops() and magi_register_custom_op is not None and apply_rope_with_cos_sin_cache_inplace is not None:
+        return torch.ops.lightx2v.qwen_rope_flashinfer(xq, xk, cos_sin_cache)
+    return _apply_qwen_rope_with_flashinfer_impl(xq, xk, cos_sin_cache)
+
+
 def apply_qwen_rope_with_torch(
     xq: torch.Tensor,
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq_rotated = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2)).squeeze(0)
-    xk_rotated = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2)).squeeze(0)
-    freqs_cis = cos_sin_cache.unsqueeze(1)
-    xq_out = torch.view_as_real(xq_rotated * freqs_cis).flatten(-2)
-    xk_out = torch.view_as_real(xk_rotated * freqs_cis).flatten(-2)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    if use_magi_custom_ops() and magi_register_custom_op is not None:
+        return torch.ops.lightx2v.qwen_rope_torch(xq, xk, cos_sin_cache)
+    return _apply_qwen_rope_with_torch_impl(xq, xk, cos_sin_cache)
 
 
 def apply_qwen_rope_with_torch_naive(

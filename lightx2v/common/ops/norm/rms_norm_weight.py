@@ -16,6 +16,13 @@ try:
 except ImportError:
     sgl_kernel = None
 
+try:
+    from magi_compiler import magi_register_custom_op
+except ImportError:
+    magi_register_custom_op = None
+
+from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
+
 
 class RMSWeightTemplate(metaclass=ABCMeta):
     def __init__(
@@ -414,7 +421,10 @@ class RMSWeightOnePass(RMSWeight):
         )
 
     def apply(self, input_tensor):
-        return rms_norm_kernel(input_tensor, (self._get_actual_weight()), self.eps)
+        w = self._get_actual_weight()
+        if use_magi_custom_ops() and magi_register_custom_op is not None:
+            return torch.ops.lightx2v.rms_norm(input_tensor, w, self.eps)
+        return rms_norm_kernel(input_tensor, w, self.eps)
 
 
 class RMSWeightFusedQKNorm3DRope:

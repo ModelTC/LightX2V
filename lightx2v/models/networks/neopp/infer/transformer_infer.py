@@ -120,13 +120,9 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         kv_buf = self.kv_cache._kv_buf
         for layer_idx, block_weight in enumerate(blocks):
             if self.use_magi_compile:
-                hidden_states = self._decoder_layer_magi(
-                    block_weight, layer_idx, hidden_states, cos_sin, kv_buf
-                )
+                hidden_states = self._decoder_layer_magi(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
             else:
-                hidden_states = self._decoder_layer(
-                    block_weight, layer_idx, hidden_states, cos_sin, kv_buf
-                )
+                hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
         return hidden_states
 
     if magi_compile is not None:
