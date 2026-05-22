@@ -22,6 +22,7 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_wi
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.profiler import *
@@ -181,7 +182,7 @@ class AudioProcessor:
         self.audio_frame_rate = audio_sr // target_fps
 
     def load_audio(self, audio_path: str):
-        audio_array, ori_sr = ta.load(audio_path)
+        audio_array, ori_sr = load_audio_file(audio_path)
         audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
         return audio_array
 

@@ -7,6 +7,8 @@ import torch.distributed as dist
 import torchaudio as ta
 from loguru import logger
 
+from lightx2v.utils.audio_io import load_audio_file
+
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.input_info import init_input_info_from_args
@@ -41,7 +43,7 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
         gen_video_list = []
         cut_audio_list = []
 
-        audio_array, ori_sr = ta.load(args.audio_path)
+        audio_array, ori_sr = load_audio_file(args.audio_path)
         audio_array = audio_array.mean(0)
         if ori_sr != model_sr:
             audio_array = ta.functional.resample(audio_array, ori_sr, model_sr)

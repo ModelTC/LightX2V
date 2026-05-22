@@ -7,6 +7,8 @@ import torch
 import torchaudio as ta
 from loguru import logger
 
+from lightx2v.utils.audio_io import load_audio_file
+
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.input_info import UNSET, calculate_target_video_length_from_duration, init_input_info_from_args
@@ -44,7 +46,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 
     @staticmethod
     def _load_single_audio(audio_path, target_sr):
-        arr, ori_sr = ta.load(audio_path)
+        arr, ori_sr = load_audio_file(audio_path)
         arr = arr.mean(0)
         if ori_sr != target_sr:
             arr = ta.functional.resample(arr, ori_sr, target_sr)
