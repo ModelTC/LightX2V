@@ -11,6 +11,7 @@ class NullScheduler:
 class BaseScheduler:
     def __init__(self, config):
         self.config = config
+        self.generator = None
         self.latents = None
         self.step_index = 0
         self.infer_steps = config["infer_steps"]

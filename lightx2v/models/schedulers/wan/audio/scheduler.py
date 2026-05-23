@@ -14,6 +14,7 @@ class EulerScheduler(WanScheduler):
     def __init__(self, config):
         self.config = config
         self.latents = None
+        self.generator = None
         self.step_index = 0
         self.flag_df = False
         self.transformer_infer = None
@@ -76,7 +77,10 @@ class EulerScheduler(WanScheduler):
             )
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
         self.latents = torch.randn(
             latent_shape[0],
             latent_shape[1],
