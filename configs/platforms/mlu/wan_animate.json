@@ -1,9 +1,10 @@
 {
     "infer_steps": 4,
-    "target_video_length": 77,
+    "target_video_length": 81,
     "text_len": 512,
-    "target_height": 720,
-    "target_width": 1280,
+    "auto_target_shape": false,
+    "target_height": 1280,
+    "target_width": 720,
     "self_attn_1_type": "mlu_flash_attn",
     "cross_attn_1_type": "mlu_flash_attn",
     "cross_attn_2_type": "mlu_flash_attn",
@@ -18,9 +19,7 @@
     "rms_norm_type": "mlu_rms_norm",
     "refert_num": 1,
     "replace_flag": false,
-    "fps": 30,
-    "denoising_step_list": [1000, 750, 500, 250],
-    "scheduler_type": "WanStepDistillScheduler",
+    "fps": 24,
     "lora_configs": [
         {
         "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",

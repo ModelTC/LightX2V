@@ -25,7 +25,7 @@ python ${lightx2v_path}/tools/preprocess/preprocess_data.py \
     --resolution_area 1280 720 \
     --retarget_flag \
 
-torchrun --nproc_per_node=8 -m lightx2v.infer \
+torchrun --nproc_per_node=2 -m lightx2v.infer \
 --model_cls wan2.2_animate \
 --task animate \
 --model_path $model_path \
