@@ -16,6 +16,7 @@ except ImportError:
     magi_register_custom_op = None
     CudaGraphMode = None
 
+from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
@@ -92,6 +93,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             logger.warning("use_magi_compile=True but magi_compiler is not available, using eager mode")
             self.use_magi_compile = False
         if self.use_magi_compile:
+            configure_dynamo_for_magi_compile()
             logger.info("Using Magi Compile (per-layer decoder, split at kv_update)")
 
     @torch.no_grad()
@@ -126,11 +128,6 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         return hidden_states
 
     if magi_compile is not None:
-        import torch._dynamo as _dynamo
-
-        _dynamo.config.capture_scalar_outputs = False
-        _dynamo.config.specialize_int = False
-        _dynamo.config.automatic_dynamic_shapes = True
 
         def _magi_config_patch(c):
             return c.model_copy(

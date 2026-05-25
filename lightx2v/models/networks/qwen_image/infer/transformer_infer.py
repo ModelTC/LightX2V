@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.common.magi_custom_op_mode import set_magi_custom_op_mode
+from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile, set_magi_custom_op_mode
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .triton_ops import (
@@ -33,6 +33,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.use_magi_compile = False
         set_magi_custom_op_mode(self.use_magi_compile)
         if self.use_magi_compile:
+            configure_dynamo_for_magi_compile()
             logger.info("Using Magi Compile (split: pre-attn / cross-attn eager / post-attn)")
         self.infer_func = self.infer_calculating
 
@@ -488,11 +489,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         return hidden_states
 
     if magi_compile is not None:
-        import torch._dynamo as _dynamo
-
-        _dynamo.config.capture_scalar_outputs = False
-        _dynamo.config.specialize_int = False
-        _dynamo.config.automatic_dynamic_shapes = True
 
         def _magi_config_patch(c):
             return c.model_copy(

@@ -23,7 +23,29 @@ def _qwen_rope_meta(xq, xk, cos_sin_cache):
     return torch.empty_like(xq), torch.empty_like(xk)
 
 
-def _apply_qwen_rope_with_flashinfer_impl(xq, xk, cos_sin_cache):
+def _apply_qwen_rope_with_flashinfer_eager(xq, xk, cos_sin_cache):
+    L, H, D = xq.shape
+
+    query = xq.reshape(L, H * D).contiguous()
+    key = xk.reshape(L, H * D).contiguous()
+
+    positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
+
+    apply_rope_with_cos_sin_cache_inplace(
+        positions=positions,
+        query=query,
+        key=key,
+        head_size=D,
+        cos_sin_cache=cos_sin_cache,
+        is_neox=False,
+    )
+
+    xq_out = query.view(L, H, D)
+    xk_out = key.view(L, H, D)
+    return xq_out, xk_out
+
+
+def _apply_qwen_rope_with_flashinfer_magi(xq, xk, cos_sin_cache):
     L, H, D = xq.shape
 
     query = xq.reshape(L, H * D).contiguous().clone()
@@ -62,7 +84,7 @@ if magi_register_custom_op is not None and apply_rope_with_cos_sin_cache_inplace
         is_subgraph_boundary=True,
     )
     def _qwen_rope_flashinfer_custom_op(xq: torch.Tensor, xk: torch.Tensor, cos_sin_cache: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        return _apply_qwen_rope_with_flashinfer_impl(xq, xk, cos_sin_cache)
+        return _apply_qwen_rope_with_flashinfer_magi(xq, xk, cos_sin_cache)
 
 
 if magi_register_custom_op is not None:
@@ -83,7 +105,7 @@ def apply_qwen_rope_with_flashinfer(
 ):
     if use_magi_custom_ops() and magi_register_custom_op is not None and apply_rope_with_cos_sin_cache_inplace is not None:
         return torch.ops.lightx2v.qwen_rope_flashinfer(xq, xk, cos_sin_cache)
-    return _apply_qwen_rope_with_flashinfer_impl(xq, xk, cos_sin_cache)
+    return _apply_qwen_rope_with_flashinfer_eager(xq, xk, cos_sin_cache)
 
 
 def apply_qwen_rope_with_torch(
