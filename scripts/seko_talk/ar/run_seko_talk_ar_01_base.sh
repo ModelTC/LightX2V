@@ -3,13 +3,13 @@
 lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
 model_path=/data/nvme0/gushiqiao/models/Lightx2v_models/SekoTalk-Distill/
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=3,4
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
 
-python -m lightx2v.infer \
+torchrun --nproc-per-node 2 -m lightx2v.infer \
 --model_cls seko_talk_ar \
 --task rs2v \
 --model_path $model_path \

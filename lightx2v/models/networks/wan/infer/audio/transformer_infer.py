@@ -11,6 +11,7 @@ except ImportError:
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask, calculate_n_query_tokens, get_qk_lens_audio_range
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import WanSFTransformerInfer
+from lightx2v.models.networks.wan.infer.triton_ops import apply_audio_cache_rope
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -169,6 +170,25 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
 
     def _apply_rope_with_cache_range(self, x, freqs, grid_sizes, token_start, token_end, ref_tokens, local_per_frame):
         orig_dtype = x.dtype
+        if self.config.get("causal_rope_type", "triton") == "triton":
+            _, h, w = grid_sizes[0].tolist()
+            if self.config.get("seq_parallel", False):
+                world_size = dist.get_world_size(self.seq_p_group)
+                rank = dist.get_rank(self.seq_p_group)
+            else:
+                world_size = 1
+                rank = 0
+            return apply_audio_cache_rope(
+                x,
+                freqs,
+                h=h,
+                w=w,
+                token_start=token_start,
+                ref_tokens=ref_tokens,
+                local_per_frame=local_per_frame,
+                world_size=world_size,
+                rank=rank,
+            ).to(orig_dtype)
         pos_freqs = self._rope_freqs_for_cache_range(freqs, grid_sizes, token_start, token_end, ref_tokens, local_per_frame)
         n = x.size(1)
         x_c = torch.view_as_complex(x.float().reshape(x.size(0), n, -1, 2))

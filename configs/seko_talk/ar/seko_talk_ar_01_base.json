@@ -30,6 +30,10 @@
     "look_ahead": 0.0,
     "audio_feat_window_neighbor_frame": 0,
     "audio_feat_fps": 50,
+    "parallel": {
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
+    },
     "ar_config": {
         "num_frame_per_chunk": 1,
         "step_kv_cache": true,
