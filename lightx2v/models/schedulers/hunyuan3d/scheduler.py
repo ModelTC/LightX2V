@@ -12,6 +12,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from lightx2v.models.networks.hunyuan3d.utils.checkpoint import load_pipeline_config, resolve_model_dir
 from lightx2v.models.schedulers.hunyuan3d.flow_match_euler import FlowMatchEulerDiscreteScheduler
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -61,8 +62,7 @@ class Hunyuan3DShapeScheduler(BaseScheduler):
         self.noise_pred = None
         self.generator = None
         self.device = torch.device(config.get("device", AI_DEVICE))
-        dtype_name = str(config.get("dtype", "fp16")).lower()
-        self.dtype = torch.float16 if dtype_name in {"fp16", "float16"} else torch.bfloat16
+        self.dtype = GET_DTYPE()
         self.current_timestep = None
 
     def prepare(self, seed=None, batch_size=1, latent_shape=None):

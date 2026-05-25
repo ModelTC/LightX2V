@@ -37,7 +37,7 @@ def get_default_config():
 
 def set_args2config(args):
     config = get_default_config()
-    config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
+    config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
 
     # Snapshot worldmirror-specific CLI flags so they can win over JSON
     # defaults after auto_calc_config merges the JSON in. See the

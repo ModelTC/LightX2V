@@ -10,7 +10,8 @@ import yaml
 from loguru import logger
 
 
-def resolve_model_dir(model_path: str, subfolder: str) -> str:
+def resolve_model_dir(model_path: str, subfolder: str | None = None) -> str:
+    subfolder = subfolder or "hunyuan3d-dit-v2-1"
     candidate = os.path.join(model_path, subfolder)
     if os.path.isdir(candidate):
         return candidate

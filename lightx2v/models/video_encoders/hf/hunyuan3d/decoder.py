@@ -13,6 +13,7 @@ from lightx2v.models.networks.hunyuan3d.utils.checkpoint import (
     resolve_model_dir,
 )
 from lightx2v.models.video_encoders.hf.hunyuan3d.autoencoders import ShapeVAE, SurfaceExtractors
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -46,8 +47,7 @@ class Hunyuan3DShapeVAEDecoder:
         subfolder = config.get("subfolder", "hunyuan3d-dit-v2-1")
         use_safetensors = bool(config.get("use_safetensors", False))
         variant = config.get("variant", "fp16")
-        dtype_name = str(config.get("dtype", "fp16")).lower()
-        dtype = torch.float16 if dtype_name in {"fp16", "float16"} else torch.bfloat16
+        dtype = GET_DTYPE()
         device = config.get("device", AI_DEVICE)
 
         model_dir = resolve_model_dir(model_path, subfolder)

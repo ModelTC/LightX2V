@@ -82,7 +82,7 @@ class Hunyuan3DShapeRunner(DefaultRunner):
 
     def _build_dit_weight_dict(self):
         state_dict = self._ckpt["model"]
-        dtype = Hunyuan3DDiTModel._resolve_dit_dtype_from_config(self.config)
+        dtype = GET_DTYPE()
         weight_dict = {}
         for key, tensor in state_dict.items():
             weight_dict[key] = tensor.to(dtype=dtype)

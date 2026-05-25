@@ -94,6 +94,9 @@ def process_paint(args):
         save_glb=args.save_glb,
     )
     print(f"Saved textured mesh: {result_path}")
+    # bpy / custom_rasterizer may segfault during normal interpreter teardown after a
+    # successful run; exit immediately so shell scripts get a clean status code.
+    os._exit(0)
 
 
 if __name__ == "__main__":

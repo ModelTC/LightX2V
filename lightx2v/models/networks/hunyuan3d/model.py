@@ -44,9 +44,6 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
         if not self.cpu_offload:
             self.to_cuda()
 
-    def _resolve_dit_dtype(self):
-        return self._resolve_dit_dtype_from_config(self.config)
-
     @staticmethod
     def _merge_dit_config(model_path, config):
         if config.get("hidden_size") and config.get("depth"):
@@ -91,7 +88,7 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
     @staticmethod
     def _build_weight_dict(state_dict, unified_dtype, sensitive_layer, config=None):
         if config is not None:
-            dtype = Hunyuan3DDiTModel._resolve_dit_dtype_from_config(config)
+            dtype = GET_DTYPE()
         else:
             dtype = GET_DTYPE() if unified_dtype else GET_SENSITIVE_DTYPE()
         weight_dict = {}
@@ -105,18 +102,9 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
     def guidance_embed(self):
         return self.config.get("guidance_cond_proj_dim") is not None
 
-    @staticmethod
-    def _resolve_dit_dtype_from_config(config):
-        dtype_name = str(config.get("dtype", "fp16")).lower()
-        if dtype_name in {"fp16", "float16"}:
-            return torch.float16
-        if dtype_name in {"bf16", "bfloat16"}:
-            return torch.bfloat16
-        return GET_DTYPE()
-
     @property
     def dtype(self):
-        return self._resolve_dit_dtype()
+        return GET_DTYPE()
 
     @torch.no_grad()
     def _infer_forward(self, latent_model_input, timestep, cond, guidance=None):

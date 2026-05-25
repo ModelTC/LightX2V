@@ -174,6 +174,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
             batch_size, seq_len, hidden_dim = hidden_states.shape
             flat = block_weights.skip_linear.apply(cat.reshape(-1, cat.shape[-1]))
             hidden_states = block_weights.skip_norm.apply(flat).reshape(batch_size, seq_len, hidden_dim)
+
         hidden_states = hidden_states + self._infer_self_attention(block_weights, hidden_states)
         hidden_states = hidden_states + self._infer_cross_attention(block_weights, hidden_states, cond)
         norm_hidden = self._flatten_norm(block_weights.norm3, hidden_states)
@@ -181,6 +182,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
             hidden_states = hidden_states + infer_moe_block(block_weights.moe, norm_hidden)
         else:
             hidden_states = hidden_states + self._infer_mlp(block_weights, norm_hidden)
+
         return hidden_states
 
     def infer(self, block_weights, pre_infer_out: Hunyuan3DPreInferOutput):
@@ -190,6 +192,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         skip_value_list = []
         for layer, block in enumerate(block_weights.blocks):
             skip_value = None if layer <= self.depth // 2 else skip_value_list.pop()
+
             hidden_states = self.infer_block(block, hidden_states, cond, skip_value=skip_value)
             if layer < self.depth // 2:
                 skip_value_list.append(hidden_states)

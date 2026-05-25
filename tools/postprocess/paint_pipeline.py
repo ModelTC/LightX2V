@@ -6,14 +6,16 @@ import importlib.util
 import os
 import shutil
 import sys
+from contextlib import contextmanager
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from loguru import logger
 from torchvision_fix import apply_fix
 
 _POSTPROCESS_DIR = os.path.dirname(os.path.abspath(__file__))
 _HY3DPAINT_LINK = os.path.join(_POSTPROCESS_DIR, "hy3dpaint")
+_HF_PAINT_REPO_ID = "tencent/Hunyuan3D-2.1"
 
 
 def default_hy3dpaint_root() -> str:
@@ -64,13 +66,44 @@ def resolve_paint_output_paths(save_path: str) -> tuple[str, str]:
     return obj_path, f"{save_path}.glb"
 
 
-def _resolve_multiview_pretrained_path(model_path: str) -> str:
-    if os.path.isfile(os.path.join(model_path, "model_index.json")):
-        return model_path
+def _resolve_local_paint_hf_root(model_path: str) -> str:
+    """Return local HF repo root that contains hunyuan3d-paintpbr-v2-1/."""
     paint_subdir = os.path.join(model_path, "hunyuan3d-paintpbr-v2-1")
+    if os.path.isfile(os.path.join(model_path, "model_index.json")):
+        return os.path.dirname(model_path)
     if os.path.isfile(os.path.join(paint_subdir, "model_index.json")):
-        return paint_subdir
+        return model_path
     raise FileNotFoundError(f"Paint weights not found. Expected model_index.json under {model_path} or {paint_subdir}.")
+
+
+@contextmanager
+def _use_local_paint_weights(model_path: str) -> Iterator[None]:
+    """Redirect upstream snapshot_download to local HF weights without patching hy3dpaint."""
+    local_root = _resolve_local_paint_hf_root(model_path)
+    import huggingface_hub
+    from diffusers import DiffusionPipeline
+
+    original_download: Callable = huggingface_hub.snapshot_download
+    original_from_pretrained = DiffusionPipeline.from_pretrained
+
+    def patched_download(repo_id, *args, **kwargs):
+        if repo_id == _HF_PAINT_REPO_ID:
+            logger.info(f"Using local paint weights from {local_root} (skip HF download)")
+            return local_root
+        return original_download(repo_id, *args, **kwargs)
+
+    @classmethod
+    def patched_from_pretrained(cls, *args, **kwargs):
+        kwargs.setdefault("trust_remote_code", True)
+        return original_from_pretrained(*args, **kwargs)
+
+    huggingface_hub.snapshot_download = patched_download
+    DiffusionPipeline.from_pretrained = patched_from_pretrained
+    try:
+        yield
+    finally:
+        huggingface_hub.snapshot_download = original_download
+        DiffusionPipeline.from_pretrained = original_from_pretrained
 
 
 def build_paint_config(
@@ -89,7 +122,8 @@ def build_paint_config(
 
     paint_conf = tgp.Hunyuan3DPaintConfig(max_num_view, resolution)
     paint_conf.device = device
-    paint_conf.multiview_pretrained_path = _resolve_multiview_pretrained_path(model_path)
+    _resolve_local_paint_hf_root(model_path)
+    paint_conf.multiview_pretrained_path = _HF_PAINT_REPO_ID
     paint_conf.multiview_cfg_path = multiview_cfg_path or os.path.join(hy3dpaint_root, "cfgs", "hunyuan-paint-pbr.yaml")
     paint_conf.realesrgan_ckpt_path = realesrgan_ckpt_path or os.path.join(hy3dpaint_root, "ckpt", "RealESRGAN_x4plus.pth")
     paint_conf.custom_pipeline = custom_pipeline or os.path.join(hy3dpaint_root, "hunyuanpaintpbr")
@@ -141,7 +175,8 @@ class PaintPipeline:
             "resolution": resolution,
             "device": device,
         }
-        self._pipeline = tgp.Hunyuan3DPaintPipeline(paint_conf)
+        with _use_local_paint_weights(model_path):
+            self._pipeline = tgp.Hunyuan3DPaintPipeline(paint_conf)
 
     def __call__(
         self,
