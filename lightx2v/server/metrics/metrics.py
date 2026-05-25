@@ -316,6 +316,13 @@ METRICS_INFO = {
         labels=["model_cls"],
         buckets=HYBRID_1_30S_BUCKETS,
     ),
+    "lightx2v_run_prefill_reference_kv_duration": MetricsConfig(
+        name="lightx2v_run_prefill_reference_kv_duration",
+        desc="Duration of AR reference KV prefill (s)",
+        type_="histogram",
+        labels=["model_cls"],
+        buckets=HYBRID_1_30S_BUCKETS,
+    ),
     "lightx2v_run_end_run_segment_duration": MetricsConfig(
         name="lightx2v_run_end_run_segment_duration",
         desc="Duration of run end_run_segment (s)",

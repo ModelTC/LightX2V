@@ -45,3 +45,20 @@ class SekoAudioEncoderModel:
         if self.cpu_offload:
             self.audio_feature_encoder = self.audio_feature_encoder.to("cpu")
         return audio_feat
+
+    @torch.no_grad()
+    def infer_causal(self, audio_segment, sliding_processor):
+        if audio_segment.dim() == 1:
+            audio_segment = audio_segment.unsqueeze(0)
+        if self.cpu_offload:
+            self.audio_feature_encoder = self.audio_feature_encoder.to(AI_DEVICE)
+        audio_feat = sliding_processor.preprocess(
+            audio_preprocessor=self.audio_feature_extractor,
+            audio_encoder=self.audio_feature_encoder,
+            audio_array=audio_segment,
+            device=AI_DEVICE,
+            dtype=GET_DTYPE(),
+        )
+        if self.cpu_offload:
+            self.audio_feature_encoder = self.audio_feature_encoder.to("cpu")
+        return audio_feat
