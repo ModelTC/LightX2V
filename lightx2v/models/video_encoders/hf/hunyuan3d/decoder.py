@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import torch
-import trimesh
+
+try:
+    import trimesh
+except ImportError:
+    trimesh = None
 
 from lightx2v.models.networks.hunyuan3d.utils import synchronize_timer
 from lightx2v.models.networks.hunyuan3d.utils.checkpoint import (

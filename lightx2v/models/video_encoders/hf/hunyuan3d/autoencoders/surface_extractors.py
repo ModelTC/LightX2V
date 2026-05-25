@@ -16,7 +16,11 @@ from typing import List, Tuple, Union
 
 import numpy as np
 import torch
-from skimage import measure
+
+try:
+    from skimage import measure
+except ImportError:
+    measure = None
 
 
 class Latent2MeshOutput:

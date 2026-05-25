@@ -13,7 +13,12 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 from PIL import Image
-from rembg import new_session, remove
+
+try:
+    from rembg import new_session, remove
+except ImportError:
+    new_session = None
+    remove = None
 
 
 class BackgroundRemover:
