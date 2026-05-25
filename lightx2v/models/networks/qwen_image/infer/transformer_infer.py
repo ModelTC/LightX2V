@@ -6,6 +6,10 @@ from loguru import logger
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile, set_magi_custom_op_mode
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.utils.torch_trace_profiler import (
+    TorchTraceProfiler,
+    log_profile_start,
+)
 
 from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
@@ -426,18 +430,25 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         image_rotary_emb,
         modulate_index,
     ):
-        trace_path = os.environ.get("QWEN_MAGI_PROFILE_TRACE")
-        if trace_path:
-            return self._infer_calculating_profiled(
-                blocks,
-                hidden_states,
-                encoder_hidden_states,
-                temb_img_silu,
-                temb_txt_silu,
-                image_rotary_emb,
-                modulate_index,
-                trace_path,
-            )
+        profiler = TorchTraceProfiler.from_env()
+        if profiler.should_run():
+            log_profile_start(profiler.cfg)
+
+            def profile_step():
+                nonlocal encoder_hidden_states, hidden_states
+                for idx in range(len(blocks)):
+                    encoder_hidden_states, hidden_states = self.infer_block(
+                        block=blocks[idx],
+                        hidden_states=hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        temb_img_silu=temb_img_silu,
+                        temb_txt_silu=temb_txt_silu,
+                        image_rotary_emb=image_rotary_emb,
+                        modulate_index=modulate_index,
+                    )
+
+            profiler.run(profile_step)
+            return hidden_states
 
         for idx in range(len(blocks)):
             encoder_hidden_states, hidden_states = self.infer_block(
@@ -449,43 +460,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 image_rotary_emb=image_rotary_emb,
                 modulate_index=modulate_index,
             )
-        return hidden_states
-
-    def _infer_calculating_profiled(
-        self,
-        blocks,
-        hidden_states,
-        encoder_hidden_states,
-        temb_img_silu,
-        temb_txt_silu,
-        image_rotary_emb,
-        modulate_index,
-        trace_path,
-    ):
-        import torch.profiler as torch_profiler
-        from torch.profiler import ProfilerActivity, schedule
-
-        my_schedule = schedule(wait=1, warmup=1, active=1, repeat=1)
-        with torch_profiler.profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=my_schedule,
-            record_shapes=False,
-            profile_memory=False,
-            with_stack=False,
-        ) as prof:
-            for step in range(3):
-                for idx in range(len(blocks)):
-                    encoder_hidden_states, hidden_states = self.infer_block(
-                        block=blocks[idx],
-                        hidden_states=hidden_states,
-                        encoder_hidden_states=encoder_hidden_states,
-                        temb_img_silu=temb_img_silu,
-                        temb_txt_silu=temb_txt_silu,
-                        image_rotary_emb=image_rotary_emb,
-                        modulate_index=modulate_index,
-                    )
-                prof.step()
-        prof.export_chrome_trace(trace_path)
         return hidden_states
 
     if magi_compile is not None:
