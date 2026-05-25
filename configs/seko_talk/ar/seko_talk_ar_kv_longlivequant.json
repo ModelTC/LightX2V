@@ -17,11 +17,11 @@
     "offload_granularity": "block",
     "use_31_block": true,
     "dit_quantized": true,
-    "dit_quantized_ckpt": "/data/nvme5/gushiqiao/models/causal_audio_0515/gen-base_dit-filtered_x2v/converted_fp8.safetensors",
+    "dit_quantized_ckpt": "/models/seko-distill-ar/converted_fp8.safetensors",
     "dit_quant_scheme": "fp8-sgl",
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
-    "adapter_model_path": "/data/nvme4/models/seko_models/causal_audio_0515/-audio_adapter_fp8.pt",
+    "adapter_model_path": "/models/seko-distill-ar/-audio_adapter_fp8.pt",
     "audio_feature_dim": 1024,
     "audio_projection_dim": 1024,
     "audio_num_tokens": 32,
@@ -30,22 +30,17 @@
     "look_ahead": 0.0,
     "audio_feat_window_neighbor_frame": 0,
     "audio_feat_fps": 50,
-    "parallel": {
-        "seq_p_size": 2,
-        "seq_p_attn_type": "ulysses"
-    },
     "ar_config": {
         "num_frame_per_chunk": 1,
         "step_kv_cache": true,
         "sink_size": 2,
         "local_attn_size": 21,
-        "kv_offload": true,
+        "kv_offload": false,
         "async_vae_decode": true,
         "kv_quant": {
-            "quant_scheme": "kivi",
-            "k_cache_type": "int4",
-            "v_cache_type": "int4",
-            "group_size": 64
+            "quant_scheme": "longlive_fp4",
+            "scale_rule": "mse",
+            "backend": "triton"
         }
     }
 }

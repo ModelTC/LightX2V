@@ -5,7 +5,6 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as Fn
-from fouroversix.quantize.quantized_tensor import QuantizedTensor, from_blocked
 from loguru import logger
 from packaging.version import parse
 from scipy import integrate, special
@@ -19,9 +18,10 @@ except ImportError:
 
 try:
     from fouroversix import QuantizationConfig, QuantizeBackend
-    from fouroversix.quantize.quantized_tensor import QuantizedTensor
+    from fouroversix.quantize.quantized_tensor import QuantizedTensor, from_blocked
 except ImportError:
     QuantizedTensor = None
+    from_blocked = None
     QuantizationConfig = None
     QuantizeBackend = None
 
@@ -698,6 +698,7 @@ def _dequant_blocks_triton(
     )
     for block_idx, qt in enumerate(blocks):
         deq = _dequant_qt_triton(qt, dtype)
+        deq = deq[: block_token_size * h]
         t_start = block_idx * block_token_size
         t_end = t_start + block_token_size
         out[0, t_start:t_end, :, :] = deq.view(block_token_size, h, d)
