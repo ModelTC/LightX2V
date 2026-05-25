@@ -6,7 +6,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_ARCHITECTURES 80)
 
-set(INCLUDE_DIR ${PROJECT_SOURCE_DIR}/../../libs/cutlass/include)
+if(CUTLASS_PATH)
+    set(INCLUDE_DIR ${CUTLASS_PATH}/include)
+elseif(DEFINED ENV{CUTLASS_PATH})
+    set(INCLUDE_DIR $ENV{CUTLASS_PATH}/include)
+else()
+    message(FATAL_ERROR "CUTLASS_PATH is not set.")
+endif()
 
 # Enable ccache if available
 find_program(CCACHE_PROGRAM ccache)
