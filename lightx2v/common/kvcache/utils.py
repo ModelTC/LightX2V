@@ -5,8 +5,38 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as Fn
+from fouroversix.quantize.quantized_tensor import QuantizedTensor, from_blocked
 from loguru import logger
+from packaging.version import parse
 from scipy import integrate, special
+
+from .kernel import fp4_dequantize
+
+try:
+    from lightx2v_kernel.kv_cache import dequantize_kv_cache_fp4
+except ImportError:
+    dequantize_kv_cache_fp4 = None
+
+try:
+    from fouroversix import QuantizationConfig, QuantizeBackend
+    from fouroversix.quantize.quantized_tensor import QuantizedTensor
+except ImportError:
+    QuantizedTensor = None
+    QuantizationConfig = None
+    QuantizeBackend = None
+
+_KV_TORCH_VER = None
+_VALID_DEQUANT_BACKENDS = frozenset({"cuda", "triton", "pytorch"})
+
+
+def _kvcache_dma_stream_priority() -> int:
+    """Match WeightAsyncStreamManager cuda_load_stream priority."""
+    global _KV_TORCH_VER
+    if not torch.cuda.is_available():
+        return 0
+    if _KV_TORCH_VER is None:
+        _KV_TORCH_VER = parse(torch.__version__.split("+")[0])
+    return 1 if _KV_TORCH_VER >= parse("2.7") else 0
 
 
 def ranked_calib_path(path: str, rank: int) -> str:
@@ -546,3 +576,238 @@ class TurboQuantProdInference(torch.nn.Module):
         x_qjl = torch.matmul(signs, self.S)
         x_qjl = x_qjl * (self.qjl_scale * comp["residual_norms"].unsqueeze(-1).float())
         return x_mse + x_qjl
+
+
+def normalize_dequant_backend(backend: str | None) -> str:
+    """Map ``kv_quant.backend`` to a KV dequant implementation name."""
+    if backend is None or not str(backend).strip():
+        raise ValueError(
+            f"kv_quant.backend is required for longlive_fp4 dequant. Choose one of: {', '.join(sorted(_VALID_DEQUANT_BACKENDS))}",
+        )
+    name = str(backend).strip().lower()
+    if name == "torch":
+        name = "pytorch"
+    if name == "transformer_engine":
+        name = "cuda"
+    if name not in _VALID_DEQUANT_BACKENDS:
+        allowed = ", ".join(sorted(_VALID_DEQUANT_BACKENDS))
+        raise ValueError(f"Unsupported KV dequant backend {backend!r}. Expected one of: {allowed}")
+    return name
+
+
+def scale_rule_to_fp4_limits(scale_rule) -> tuple[float, float]:
+    if hasattr(scale_rule, "max_allowed_e2m1_value") and hasattr(
+        scale_rule,
+        "max_allowed_e4m3_value",
+    ):
+        return (
+            float(scale_rule.max_allowed_e2m1_value()),
+            float(scale_rule.max_allowed_e4m3_value()),
+        )
+
+    normalized = str(scale_rule).lower()
+    if "." in normalized:
+        normalized = normalized.rsplit(".", 1)[-1]
+    normalized = normalized.strip().strip("\"'")
+
+    if normalized == "static_4":
+        return 4.0, 448.0
+    if normalized == "static_6":
+        return 6.0, 448.0
+    if normalized in {"mse", "mae", "l1_norm", "abs_max"}:
+        return 6.0, 256.0
+
+    raise ValueError(f"Unsupported FP4 scale_rule: {scale_rule}")
+
+
+def _dequant_blocks_cuda(
+    values: list[torch.Tensor],
+    scale_factors: list[torch.Tensor],
+    amax_list: list[torch.Tensor],
+    *,
+    num_heads: int,
+    block_token_size: int,
+    dtype: torch.dtype,
+    scale_rule,
+) -> torch.Tensor:
+    """Fused parallel dequant via ``lightx2v_kernel`` (optional LongLive op fallback)."""
+    if not values or values[0].device.type != "cuda":
+        raise RuntimeError("KV dequant backend=cuda requires CUDA tensors.")
+
+    e2m1_max, e4m3_max = scale_rule_to_fp4_limits(scale_rule)
+    out = dequantize_kv_cache_fp4(
+        values,
+        scale_factors,
+        amax_list,
+        num_heads=num_heads,
+        block_token_size=block_token_size,
+        dtype=dtype,
+        e2m1_max=e2m1_max,
+        e4m3_max=e4m3_max,
+    )
+    return out[0]
+
+
+def _global_scale_for_qt(qt: QuantizedTensor) -> torch.Tensor:
+    e2m1_max, e4m3_max = scale_rule_to_fp4_limits(qt.scale_rule)
+    return qt.amax / (e2m1_max * e4m3_max)
+
+
+def _dequant_qt_triton(qt: QuantizedTensor, dtype: torch.dtype) -> torch.Tensor:
+    """Per-block NVFP4 dequant via LightX2V Triton (fouroversix tensor layout)."""
+    block_size = qt.dtype.block_size()
+    padded_shape = qt.padded_shape
+    scales_2d = from_blocked(
+        qt.scale_factors,
+        (padded_shape[0], padded_shape[1] // block_size),
+    )
+    return fp4_dequantize(
+        qt.values,
+        scales_2d,
+        _global_scale_for_qt(qt),
+        block_size=block_size,
+        dtype=dtype,
+    )
+
+
+def _dequant_blocks_pytorch(
+    blocks: list[QuantizedTensor],
+    num_heads: int,
+    head_dim: int,
+    block_token_size: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    parts = [qt.dequantize(dtype).view(block_token_size, num_heads, head_dim) for qt in blocks]
+    return torch.cat(parts, dim=0)
+
+
+def _dequant_blocks_triton(
+    blocks: list[QuantizedTensor],
+    num_heads: int,
+    head_dim: int,
+    block_token_size: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    n_blks = len(blocks)
+    h, d = num_heads, head_dim
+    out = torch.zeros(
+        [1, n_blks * block_token_size, h, d],
+        dtype=dtype,
+        device=device,
+    )
+    for block_idx, qt in enumerate(blocks):
+        deq = _dequant_qt_triton(qt, dtype)
+        t_start = block_idx * block_token_size
+        t_end = t_start + block_token_size
+        out[0, t_start:t_end, :, :] = deq.view(block_token_size, h, d)
+    return out[0]
+
+
+def dequantize_kv_blocks(
+    blocks: list[QuantizedTensor],
+    num_heads: int,
+    head_dim: int,
+    block_token_size: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    *,
+    backend: str,
+) -> torch.Tensor:
+    """
+    Dequantize block list to ``[T, num_heads, head_dim]`` (T = len(blocks) * block_token_size).
+
+    ``backend`` must be one of ``cuda``, ``triton``, ``pytorch`` (``torch`` aliases ``pytorch``).
+    """
+    if not blocks:
+        return torch.empty(0, num_heads, head_dim, device=device, dtype=dtype)
+
+    mode = normalize_dequant_backend(backend)
+    scale_rule = blocks[0].scale_rule
+    values = [qt.values for qt in blocks]
+    scale_factors = [qt.scale_factors for qt in blocks]
+    amax_list = [qt.amax for qt in blocks]
+
+    if mode == "cuda":
+        return _dequant_blocks_cuda(
+            values,
+            scale_factors,
+            amax_list,
+            num_heads=num_heads,
+            block_token_size=block_token_size,
+            dtype=dtype,
+            scale_rule=scale_rule,
+        )
+
+    if mode == "triton":
+        return _dequant_blocks_triton(
+            blocks,
+            num_heads,
+            head_dim,
+            block_token_size,
+            dtype,
+            device,
+        )
+
+    return _dequant_blocks_pytorch(blocks, num_heads, head_dim, block_token_size, dtype)
+
+
+def dequantize_token_range(
+    blocks: list[QuantizedTensor],
+    attn_start: int,
+    local_end: int,
+    *,
+    cache_size: int,
+    num_heads: int,
+    head_dim: int,
+    block_token_size: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    backend: str,
+) -> torch.Tensor:
+    if local_end <= attn_start:
+        return torch.empty(0, num_heads, head_dim, device=device, dtype=dtype)
+
+    t0 = attn_start
+    t1 = min(local_end, cache_size)
+    b0 = t0 // block_token_size
+    b1 = (t1 - 1) // block_token_size
+    sub = blocks[b0 : b1 + 1]
+    nhd = dequantize_kv_blocks(
+        sub,
+        num_heads,
+        head_dim,
+        block_token_size,
+        dtype,
+        device,
+        backend=backend,
+    )
+    off0 = t0 - b0 * block_token_size
+    off1 = t1 - b0 * block_token_size
+    return nhd[off0:off1].contiguous()
+
+
+def k_smooth(k: torch.Tensor) -> torch.Tensor:
+    """Per-head mean removal before K quantization (LongLive)."""
+    return k - k.mean(dim=-1, keepdim=True)
+
+
+def clone_quantized_tensor(qt: QuantizedTensor) -> QuantizedTensor:
+    return QuantizedTensor(
+        values=qt.values.clone(),
+        scale_factors=qt.scale_factors.clone(),
+        amax=qt.amax.clone() if qt.amax is not None else None,
+        dtype=qt.dtype,
+        original_shape=qt.original_shape,
+        scale_rule=qt.scale_rule,
+        padded_shape=qt.padded_shape,
+    )
+
+
+def build_fp4_quant_config(
+    *,
+    scale_rule: str = "mse",
+    backend: str | None = None,
+) -> QuantizationConfig:
+    backend_enum = QuantizeBackend(backend) if backend is not None else None
+    return QuantizationConfig(scale_rule=scale_rule, backend=backend_enum)

@@ -30,24 +30,25 @@ class WanPreWeights(WeightModule):
                     lora_prefix="diffusion_model.ref_patch_embedding",
                 ),
             )
-            self.add_module(
-                "prev_patch_embedding",
-                CONV3D_WEIGHT_REGISTER["Default"](
-                    "prev_patch_embedding.weight",
-                    "prev_patch_embedding.bias",
-                    stride=self.patch_size,
-                    lora_prefix="diffusion_model.prev_patch_embedding",
-                ),
-            )
-            self.add_module(
-                "cont_patch_embedding",
-                CONV3D_WEIGHT_REGISTER["Default"](
-                    "cont_patch_embedding.weight",
-                    "cont_patch_embedding.bias",
-                    stride=self.patch_size,
-                    lora_prefix="diffusion_model.cont_patch_embedding",
-                ),
-            )
+            if config["model_cls"] != "seko_talk_ar":
+                self.add_module(
+                    "prev_patch_embedding",
+                    CONV3D_WEIGHT_REGISTER["Default"](
+                        "prev_patch_embedding.weight",
+                        "prev_patch_embedding.bias",
+                        stride=self.patch_size,
+                        lora_prefix="diffusion_model.prev_patch_embedding",
+                    ),
+                )
+                self.add_module(
+                    "cont_patch_embedding",
+                    CONV3D_WEIGHT_REGISTER["Default"](
+                        "cont_patch_embedding.weight",
+                        "cont_patch_embedding.bias",
+                        stride=self.patch_size,
+                        lora_prefix="diffusion_model.cont_patch_embedding",
+                    ),
+                )
             self.add_module(
                 "state_embedding",
                 EMBEDDING_WEIGHT_REGISTER["Default"](
