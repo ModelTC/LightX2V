@@ -7,10 +7,9 @@ import torch
 import torchaudio as ta
 from loguru import logger
 
-from lightx2v.utils.audio_io import load_audio_file
-
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
+from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.input_info import UNSET, calculate_target_video_length_from_duration, init_input_info_from_args
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace

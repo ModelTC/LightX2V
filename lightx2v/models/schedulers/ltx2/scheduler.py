@@ -14,6 +14,7 @@ from typing import List, Optional, Tuple
 
 import einops
 import torch
+from loguru import logger
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.envs import *
@@ -415,7 +416,10 @@ class LTX2Scheduler(BaseScheduler):
         self._video_main_num_tokens = None
 
         # Initialize generator
-        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
 
         # Prepare latents
         self.prepare_latents(

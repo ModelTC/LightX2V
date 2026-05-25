@@ -1,4 +1,5 @@
 import torch
+from loguru import logger
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
@@ -55,7 +56,10 @@ class BagelScheduler(BaseScheduler):
 
         query_curr = curr = 0
         seed = int(seed if seed is not None else self.config.get("seed", 42))
-        self.generator = torch.Generator(device="cpu").manual_seed(seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device="cpu").manual_seed(seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
 
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
@@ -137,7 +141,10 @@ class BagelScheduler(BaseScheduler):
         return generation_input
 
     def prepare(self):
-        self.generator = torch.Generator().manual_seed(42)
+        if self.generator is None:
+            self.generator = torch.Generator().manual_seed(42)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
         self.set_timesteps()
         self.generation_input = None
         self.generation_input_cfg_text = None
