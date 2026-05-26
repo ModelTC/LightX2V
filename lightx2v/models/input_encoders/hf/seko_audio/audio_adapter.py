@@ -3,6 +3,7 @@ try:
 except ModuleNotFoundError:
     flash_attn = None
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -223,6 +224,97 @@ class AudioProjection(nn.Module):
         return self.norm(audio_feature)
 
 
+class CausalAudioProjection(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        transformer_dim: int,
+        num_tokens: int = 32,
+        transformer_layers: int = 4,
+    ):
+        super().__init__()
+        self.proj_in = nn.Linear(in_dim, transformer_dim)
+        self.num_tokens = num_tokens
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=transformer_dim,
+            nhead=transformer_dim // 64,
+            dim_feedforward=4 * transformer_dim,
+            dropout=0.0,
+            batch_first=True,
+        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=transformer_layers)
+        self.learnable_queries = nn.Parameter(torch.randn(1, num_tokens, transformer_dim) * 0.02)
+
+    def forward(self, audio_feature: torch.Tensor):
+        audio_feature = self.proj_in(audio_feature)
+        batchsize, latent_length = audio_feature.shape[:2]
+        audio_feature = audio_feature.flatten(0, 1)
+        query = self.learnable_queries.expand(batchsize * latent_length, -1, -1)
+        audio_feature = self.transformer_decoder(query, audio_feature)
+        return audio_feature.reshape(batchsize, latent_length, self.num_tokens, -1)
+
+
+class CausalAudioSlidingProcessor:
+    def __init__(
+        self,
+        audio_window: float = 1.0,
+        look_ahead: float = 0.0,
+        audio_feat_window_neighbor_frame: int = 0,
+        video_fps: float = 16,
+        audio_sr: int = 16000,
+        audio_feat_fps: int = 50,
+    ):
+        max_latent_length = 2048 + 1
+        latent_left_tick = np.arange(max_latent_length) * 4
+        latent_left_tick[1:] = latent_left_tick[1:] - 3
+        latent_right_tick = np.arange(max_latent_length) * 4
+        latent_right_tick[0] = 1
+        latent_right_tick[1:] = latent_right_tick[1:] + 1
+        latent_center_tick = (latent_left_tick + latent_right_tick) / (2 * video_fps)
+        self.look_ahead_idx = ((latent_right_tick / video_fps + look_ahead) * audio_sr).astype(np.int64)
+        self.audio_window_right_idx = ((latent_center_tick + audio_window / 2) * audio_sr).astype(np.int64)
+        self.audio_window_left_idx = self.audio_window_right_idx - int(audio_window * audio_sr)
+        self.audio_feat_per_latent = int(np.ceil((4 + audio_feat_window_neighbor_frame * 2) / video_fps * audio_feat_fps))
+        self.video_fps = video_fps
+        self.audio_sr = audio_sr
+        self.audio_window_samples = int(audio_window * audio_sr)
+
+    def _frame_to_latent_length(self, frame_length: int) -> int:
+        return (frame_length - 1) // 4 + 1
+
+    def get_audio_slices(self, audio_array: torch.Tensor):
+        if audio_array.dim() == 1:
+            audio_array = audio_array.unsqueeze(0)
+        bs, audio_length = audio_array.shape
+        dtype = audio_array.dtype
+        device = audio_array.device
+        frame_length = round(audio_length * self.video_fps / self.audio_sr)
+        latent_length = self._frame_to_latent_length(frame_length)
+        audio_slice_list = torch.zeros((bs, latent_length, self.audio_window_samples), dtype=dtype, device=device)
+        for latent_idx in range(latent_length):
+            left_idx = self.audio_window_left_idx[latent_idx]
+            right_idx = self.audio_window_right_idx[latent_idx]
+            look_ahead_idx = self.look_ahead_idx[latent_idx]
+            left_pad = max(-left_idx, 0)
+            real_audio_length = min(look_ahead_idx, right_idx, audio_length) - max(left_idx, 0)
+            audio_slice_list[:, latent_idx, left_pad : left_pad + real_audio_length] = audio_array[:, max(left_idx, 0) : min(look_ahead_idx, right_idx)]
+        return audio_slice_list
+
+    @torch.no_grad()
+    def preprocess(self, audio_preprocessor, audio_encoder, audio_array: torch.Tensor, device, dtype: torch.dtype):
+        audio_slice_list = self.get_audio_slices(audio_array)
+        bs, latent_length, _ = audio_slice_list.shape
+        audio_slice_list = audio_slice_list.flatten(0, 1)
+        audio_slice_list = audio_preprocessor(audio_slice_list, sampling_rate=self.audio_sr, return_tensors="pt").input_values.squeeze(0)
+        audio_slice_list = audio_slice_list.to(device=device, dtype=dtype)
+        audio_feat = audio_encoder(audio_slice_list, return_dict=True).last_hidden_state
+        audio_feat_length = audio_feat.shape[1]
+        left = audio_feat_length // 2 - self.audio_feat_per_latent // 2
+        assert left >= 0
+        audio_feat = audio_feat[:, left : left + self.audio_feat_per_latent]
+        return audio_feat.reshape(bs, latent_length, self.audio_feat_per_latent, -1).contiguous()
+
+
 class TimeEmbedding(nn.Module):
     def __init__(self, dim, time_freq_dim, time_proj_dim):
         super().__init__()
@@ -265,19 +357,33 @@ class AudioAdapter(nn.Module):
         quantized: bool = False,
         quant_scheme: str = None,
         cpu_offload: bool = False,
+        causal_projection: bool = False,
+        projection_dim: int = None,
     ):
         super().__init__()
         self.cpu_offload = cpu_offload
-        self.audio_proj = AudioProjection(
-            audio_feature_dim=audio_feature_dim,
-            n_neighbors=(2, 2),
-            num_tokens=num_tokens,
-            mlp_dims=mlp_dims,
-            transformer_layers=projection_transformer_layers,
-        )
-        # self.num_tokens = num_tokens * 4
-        self.num_tokens_x4 = num_tokens * 4
-        self.audio_pe = nn.Parameter(torch.randn(self.num_tokens_x4, mlp_dims[-1] // num_tokens) * 0.02)
+        self.causal_projection = causal_projection
+        projection_dim = projection_dim or mlp_dims[-1] // num_tokens
+        if causal_projection:
+            self.audio_proj = CausalAudioProjection(
+                in_dim=audio_feature_dim,
+                transformer_dim=projection_dim,
+                num_tokens=num_tokens,
+                transformer_layers=projection_transformer_layers,
+            )
+            self.num_tokens_x4 = num_tokens
+            self.audio_pe = None
+        else:
+            self.audio_proj = AudioProjection(
+                audio_feature_dim=audio_feature_dim,
+                n_neighbors=(2, 2),
+                num_tokens=num_tokens,
+                mlp_dims=mlp_dims,
+                transformer_layers=projection_transformer_layers,
+            )
+            # self.num_tokens = num_tokens * 4
+            self.num_tokens_x4 = num_tokens * 4
+            self.audio_pe = nn.Parameter(torch.randn(self.num_tokens_x4, mlp_dims[-1] // num_tokens) * 0.02)
         # ca_num = math.ceil(base_num_layers / interval)
         self.base_num_layers = base_num_layers
         self.interval = interval
@@ -314,9 +420,12 @@ class AudioAdapter(nn.Module):
     def forward_audio_proj(self, audio_feat, latent_frame):
         if self.cpu_offload:
             self.audio_proj.to(AI_DEVICE)
-        x = self.audio_proj(audio_feat, latent_frame)
-        x = self.rearange_audio_features(x)
-        x = x + self.audio_pe.to(AI_DEVICE)
+        if self.causal_projection:
+            x = self.audio_proj(audio_feat)
+        else:
+            x = self.audio_proj(audio_feat, latent_frame)
+            x = self.rearange_audio_features(x)
+            x = x + self.audio_pe.to(AI_DEVICE)
         if self.cpu_offload:
             self.audio_proj.to("cpu")
         return x

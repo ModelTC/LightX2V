@@ -148,3 +148,94 @@ class ConsistencyModelScheduler(EulerScheduler):
         self.latents = x_t_next
         if self.config["model_cls"] == "wan2.2_audio" and self.prev_latents is not None:
             self.latents = (1.0 - self.mask) * self.prev_latents + self.mask * self.latents
+
+
+class WanAudioARScheduler(EulerScheduler):
+    def _get_timesteps(self, num_steps, max_steps: int = 1000):
+        return np.linspace(max_steps, 0, num_steps + 1, dtype=np.float32)
+
+    def set_shift(self, shift: float = 1.0):
+        self.sigmas = self.timesteps_ori / self.num_train_timesteps
+        self.sigmas = shift / (shift + (1 / self.sigmas - 1))
+        self.timesteps = self.sigmas * self.num_train_timesteps
+        self._shift = shift
+        return self
+
+    def set_timesteps(self, num_inference_steps: int, device=None):
+        timesteps = self._get_timesteps(num_steps=num_inference_steps, max_steps=self.num_train_timesteps)
+        self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=device or AI_DEVICE)
+        self.timesteps_ori = self.timesteps.clone()
+        self.set_shift(self._shift)
+        self._step_index = None
+        self._begin_index = None
+        return self
+
+    @property
+    def source_step_index(self):
+        return getattr(self, "_step_index", None)
+
+    def _init_step_index(self, timestep):
+        timestep = torch.as_tensor(timestep, device=self.timesteps.device, dtype=self.timesteps.dtype)
+        indices = (self.timesteps == timestep).nonzero()
+        if indices.numel() == 0:
+            indices = torch.argmin((self.timesteps - timestep).abs()).reshape(1, 1)
+        self._step_index = int(indices.flatten()[0].item())
+
+    def step(self, model_output, timestep, sample):
+        if isinstance(timestep, int) or isinstance(timestep, torch.IntTensor) or isinstance(timestep, torch.LongTensor):
+            raise ValueError("Passing integer indices as timesteps is not supported. Pass one of the scheduler timesteps instead.")
+        if self.source_step_index is None:
+            self._init_step_index(timestep)
+        sample = sample.to(torch.float32)
+        sigma = self.unsqueeze_to_ndim(self.sigmas[self.source_step_index], sample.ndim).to(sample.device, sample.dtype)
+        sigma_next = self.unsqueeze_to_ndim(self.sigmas[self.source_step_index + 1], sample.ndim).to(sample.device, sample.dtype)
+        x0 = sample - model_output.to(torch.float32) * sigma
+        x_t_next = sample + (sigma_next - sigma) * model_output.to(torch.float32)
+        self._step_index += 1
+        return x_t_next, x0
+
+    def prepare(self, seed, latent_shape, infer_steps=None, image_encoder_output=None):
+        self.generator = torch.Generator("cpu").manual_seed(seed)
+        self.latents = torch.randn(
+            latent_shape[0],
+            latent_shape[1],
+            latent_shape[2],
+            latent_shape[3],
+            dtype=GET_DTYPE(),
+            device="cpu",
+            generator=self.generator,
+        )
+
+        self.infer_steps = infer_steps if infer_steps is not None else self.config["infer_steps"]
+        self._shift = self.sample_shift
+        self.set_timesteps(self.infer_steps, device=AI_DEVICE)
+        self.noise = self.latents
+        self.noise_pred = torch.zeros_like(self.latents)
+        self.chunk_size = int(self.config.get("ar_config", {}).get("num_frame_per_chunk", 1))
+        self.num_chunks = self.latents.shape[1] // self.chunk_size
+
+    def step_pre_ref(self, step_index, ref_frames):
+        self.step_index = step_index
+        self.seg_index = 0
+        self.timestep_input = torch.full((1, ref_frames), self.timesteps[step_index], dtype=torch.float32, device=AI_DEVICE)
+        self._set_audio_t_emb()
+
+    def step_pre(self, segment_idx, step_index, xt):
+        self.step_index = step_index
+        self.seg_index = segment_idx
+        self.latents = xt
+        frames = xt.shape[1]
+        self.timestep_input = torch.full((1, frames), self.timesteps[step_index], dtype=torch.float32, device=AI_DEVICE)
+        self._set_audio_t_emb()
+
+    def step_post(self, xt):
+        timestep = self.timesteps[self.step_index]
+        x_t_next, _ = self.step(self.noise_pred, timestep, xt)
+        return x_t_next.to(xt.dtype)
+
+    def _set_audio_t_emb(self):
+        if self.audio_adapter.cpu_offload:
+            self.audio_adapter.time_embedding.to(AI_DEVICE)
+        self.audio_adapter_t_emb = self.audio_adapter.time_embedding(self.timestep_input.flatten()).unflatten(1, (3, -1))
+        if self.audio_adapter.cpu_offload:
+            self.audio_adapter.time_embedding.to("cpu")

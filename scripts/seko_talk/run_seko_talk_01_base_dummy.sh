@@ -3,7 +3,7 @@
 lightx2v_path=
 model_path=/data/temp/SekoTalk-v2.5-bf16-step4-dummy
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=7
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

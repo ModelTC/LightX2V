@@ -90,3 +90,13 @@ void cutlass_scaled_mxfp8_mm_sm120(
     torch::Tensor const& B_sf,
     torch::Tensor const& alpha,
     c10::optional<torch::Tensor> const& bias);
+
+at::Tensor dequantize_kv_cache_fp4_cuda(
+    at::TensorList values,
+    at::TensorList scale_factors,
+    at::TensorList amax,
+    int64_t num_heads,
+    int64_t block_token_size,
+    int64_t dtype_code,
+    double e2m1_max,
+    double e4m3_max);

@@ -394,6 +394,19 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         else:
             device = str(self.device)
 
+        ext = os.path.splitext(file_path)[-1]
+        if ext in (".pt", ".pth", ".tar"):
+            state_dict = torch.load(file_path, map_location="cpu", weights_only=True)
+            if isinstance(state_dict, dict) and "state_dict" in state_dict:
+                state_dict = state_dict["state_dict"]
+            return {
+                key: (tensor.to(device=device, dtype=GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else tensor.to(device=device, dtype=GET_SENSITIVE_DTYPE()))
+                for key, tensor in state_dict.items()
+                if isinstance(tensor, torch.Tensor)
+                and not any(remove_key in key for remove_key in remove_keys)
+                and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
+            }
+
         with safe_open(file_path, framework="pt", device=device) as f:
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))

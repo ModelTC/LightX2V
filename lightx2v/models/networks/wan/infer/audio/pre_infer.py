@@ -1,6 +1,8 @@
 import torch
 
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
+from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import WanSFPreInfer
+from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import sinusoidal_embedding_1d as sf_sinusoidal_embedding_1d
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -202,3 +204,110 @@ class WanAudioPreInfer(WanPreInfer):
             valid_latent_num=valid_latent_num,
             adapter_args={"audio_encoder_output": inputs["audio_encoder_output"], "person_mask_latens": person_mask_latens},
         )
+
+
+class WanAudioARPreInfer(WanSFPreInfer):
+    @torch.no_grad()
+    def infer(self, weights, inputs, kv_start=0, kv_end=0):
+        t = self.scheduler.timestep_input
+        is_ref_prefill = bool(inputs.get("_ar_ref_prefill", False))
+
+        if self.scheduler.infer_condition:
+            context = inputs["text_encoder_output"]["context"]
+        else:
+            context = inputs["text_encoder_output"]["context_null"]
+
+        if is_ref_prefill:
+            ref_image_encoder = inputs["image_encoder_output"]["vae_encoder_out"].to(self.infer_dtype)
+            if hasattr(weights, "ref_patch_embedding"):
+                x = weights.ref_patch_embedding.apply(ref_image_encoder.unsqueeze(0))
+            else:
+                x = weights.patch_embedding.apply(ref_image_encoder.unsqueeze(0))
+            grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
+            valid_latent_num = grid_sizes_t
+            x = x.flatten(2).transpose(1, 2).contiguous()
+            if hasattr(weights, "state_embedding"):
+                state_ids = torch.zeros(x.shape[1], dtype=torch.long, device=x.device)
+                state_ids.fill_(inputs.get("ref_state", self.config.get("ref_state", 0)))
+                x = x + weights.state_embedding.apply(state_ids).contiguous()
+        else:
+            x = self.scheduler.latents
+            x = weights.patch_embedding.apply(x.unsqueeze(0).to(GET_DTYPE()))
+            grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
+            valid_latent_num = grid_sizes_t
+            x = x.flatten(2).transpose(1, 2).contiguous()
+
+        seq_lens = torch.tensor(x.size(1), dtype=torch.int32).unsqueeze(0)
+        valid_token_len = x.size(1)
+
+        embed_tmp = sf_sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x)
+        embed = self.time_embedding(weights, embed_tmp)
+        embed0 = self.time_projection(weights, embed)
+
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            out = weights.text_embedding_0.apply(context.squeeze(0).to(self.sensitive_layer_dtype))
+        else:
+            out = weights.text_embedding_0.apply(context.squeeze(0))
+        out = torch.nn.functional.gelu(out, approximate="tanh")
+        context = weights.text_embedding_2.apply(out)
+        if self.clean_cuda_cache:
+            del out
+            torch.cuda.empty_cache()
+
+        if self.task in ["i2v", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+            clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
+            context_clip = weights.proj_0.apply(clip_fea)
+            if self.clean_cuda_cache:
+                del clip_fea
+                torch.cuda.empty_cache()
+            context_clip = weights.proj_1.apply(context_clip)
+            context_clip = torch.nn.functional.gelu(context_clip, approximate="none")
+            context_clip = weights.proj_3.apply(context_clip)
+            context_clip = weights.proj_4.apply(context_clip)
+            context = torch.concat([context_clip, context], dim=0)
+            if self.clean_cuda_cache:
+                del context_clip
+                torch.cuda.empty_cache()
+
+        grid_sizes = GridOutput(
+            tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device),
+            tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
+        )
+        if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
+            freqs = self.freqs.clone()
+            self.grid_sizes = grid_sizes.tuple
+            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+
+        audio_encoder_output = inputs.get("audio_encoder_output")
+        if audio_encoder_output is not None and not is_ref_prefill:
+            segment_idx = self.scheduler.seg_index
+            chunk_size = self.scheduler.chunk_size
+            audio_encoder_output = audio_encoder_output[:, segment_idx * chunk_size : segment_idx * chunk_size + grid_sizes_t]
+        elif is_ref_prefill:
+            audio_encoder_output = None
+
+        person_mask_latens = inputs.get("person_mask_latens")
+        if person_mask_latens is not None and not is_ref_prefill:
+            person_mask_latens = person_mask_latens.expand(-1, grid_sizes_t, -1, -1)
+            person_mask_latens = person_mask_latens.reshape(person_mask_latens.shape[0], -1)
+        else:
+            person_mask_latens = None
+
+        out = WanPreInferModuleOutput(
+            embed=embed,
+            grid_sizes=grid_sizes,
+            x=x.squeeze(0),
+            embed0=embed0.squeeze(0),
+            context=context,
+            cos_sin=self.cos_sin,
+            valid_token_len=valid_token_len,
+            valid_latent_num=valid_latent_num,
+            adapter_args={
+                "audio_encoder_output": audio_encoder_output,
+                "person_mask_latens": person_mask_latens,
+                "is_ref_prefill": is_ref_prefill,
+            },
+        )
+        out.seq_lens = seq_lens
+        out.freqs = self.freqs
+        return out

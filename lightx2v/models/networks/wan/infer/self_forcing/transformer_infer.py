@@ -82,8 +82,9 @@ class WanSFTransformerInfer(WanTransformerInfer):
         pos_freqs = torch.chunk(pos_freqs, world_size, dim=0)[cur_rank][: q.size(0)]
 
         n = q.size(1)
-        q_c = torch.view_as_complex(q.to(torch.float64).reshape(q.size(0), n, -1, 2))
-        k_c = torch.view_as_complex(k.to(torch.float64).reshape(k.size(0), n, -1, 2))
+        q_c = torch.view_as_complex(q.float().reshape(q.size(0), n, -1, 2))
+        k_c = torch.view_as_complex(k.float().reshape(k.size(0), n, -1, 2))
+        pos_freqs = pos_freqs.to(torch.complex64)
         q = torch.view_as_real(q_c * pos_freqs).flatten(2).type_as(q)
         k = torch.view_as_real(k_c * pos_freqs).flatten(2).type_as(k)
         return q, k
@@ -97,13 +98,10 @@ class WanSFTransformerInfer(WanTransformerInfer):
         kv_cache = mgr.self_attn_kv_cache
         num_blocks = len(blocks)
 
-        if self._kv_offload:
-            kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
-
         for block_idx in range(num_blocks):
             self.block_idx = block_idx
             if self._kv_offload:
-                self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
+                self._next_prefetch = None
             x = self.infer_block_func(blocks[block_idx], x, pre_infer_out)
 
         if self._kv_offload:
@@ -122,13 +120,10 @@ class WanSFTransformerInfer(WanTransformerInfer):
         kv_cache = mgr.self_attn_kv_cache
         num_blocks = len(blocks)
 
-        if self._kv_offload:
-            kv_cache.prefetch_initial(list(range(min(2, num_blocks))))
-
         for block_idx in range(num_blocks):
             self.block_idx = block_idx
             if self._kv_offload:
-                self._next_prefetch = block_idx + 2 if block_idx + 2 < num_blocks else None
+                self._next_prefetch = None
 
             if self.offload_manager.need_init_first_buffer:
                 self.offload_manager.init_first_buffer(blocks)
@@ -158,17 +153,18 @@ class WanSFTransformerInfer(WanTransformerInfer):
         return x
 
     def infer_block_with_kvoffload(self, block, x, pre_infer_out):
-        """Run a transformer block with kv cache offload."""
+        """Run a transformer block with KV cache offload.
+
+        ``RollingKVCachePool`` uses OffloadedStaticCache-style whole-layer
+        prefetch inside ``infer_self_attn_with_kvcache`` (after ring roll).
+        """
         kv_cache = self.kv_cache_manager.self_attn_kv_cache
         if self._weight_offload_block_compute:
-            kv_cache.begin_layer(self.block_idx)
             return self.infer_block_with_kvcache(block, x, pre_infer_out)
         comp = getattr(kv_cache, "compute_stream", None)
         if comp is not None:
             with torch_device_module.stream(comp):
-                kv_cache.begin_layer(self.block_idx)
                 return self.infer_block_with_kvcache(block, x, pre_infer_out)
-        kv_cache.begin_layer(self.block_idx)
         return self.infer_block_with_kvcache(block, x, pre_infer_out)
 
     def infer_block_with_kvcache(self, block, x, pre_infer_out):
@@ -241,17 +237,45 @@ class WanSFTransformerInfer(WanTransformerInfer):
         local_per_frame = num_new // self.num_frame_per_chunk if self.num_frame_per_chunk > 0 else 0
         sink_tokens = self.kv_cache_manager.sink_size * local_per_frame
 
-        if self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and num_new + local_end > self.kv_cache_size:
+        need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and num_new + local_end > self.kv_cache_size
+        if need_roll:
             num_evicted = num_new + local_end - self.kv_cache_size
-            kv_cache.roll_window(self.block_idx, sink_tokens, num_evicted)
-            local_end_idx = local_end + current_end - global_end - num_evicted
+            local_end_after_roll = local_end - num_evicted
         else:
-            local_end_idx = local_end + current_end - global_end
+            num_evicted = 0
+            local_end_after_roll = local_end
+
+        local_end_idx = local_end_after_roll + current_end - global_end
         local_start_idx = local_end_idx - num_new
+        attn_start = max(0, local_end_idx - self.max_attention_size)
+
+        if hasattr(kv_cache, "_align") and not getattr(self, "_kivi_align_logged", False):
+            self._kivi_align_logged = True
+            A = kv_cache._align
+            logger.info(
+                "KIVI align: num_new={}, sink={}, num_evicted={}, local_start={}, mods: num_new={}, sink={}, evict={}, local_start={}, align={}",
+                num_new,
+                sink_tokens,
+                num_evicted if need_roll else 0,
+                local_start_idx,
+                num_new % A,
+                sink_tokens % A,
+                (num_evicted if need_roll else 0) % A,
+                local_start_idx % A,
+                A,
+            )
+
+        # Ring rolling is metadata-only. Do it before materializing the
+        # offload GPU window so logical [attn_start:local_end_idx) maps to
+        # the post-roll physical layout.
+        if need_roll:
+            kv_cache.roll_window(self.block_idx, sink_tokens, num_evicted)
+
+        if self._kv_offload:
+            kv_cache.begin_layer(self.block_idx)
 
         kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)
         kv_cache.set_ends(self.block_idx, current_end, local_end_idx)
-        attn_start = max(0, local_end_idx - self.max_attention_size)
 
         if self.clean_cuda_cache:
             del norm1_out, norm1_weight, norm1_bias
@@ -301,7 +325,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         if self._kv_offload:
             self.kv_cache_manager.self_attn_kv_cache.end_layer(
                 self.block_idx,
-                next_prefetch=self._next_prefetch,
+                next_prefetch=None,
             )
         return y
 
