@@ -29,7 +29,7 @@
     },
     {
       "name": "大壹",
-      "voice_type": "zh_male_dayi_saturn_bigtts",
+      "voice_type": "zh_male_dayi_uranus_bigtts",
       "gender": "male",
       "version": "2.0",
       "resource_id": "seed-tts-2.0",
@@ -55,7 +55,7 @@
     },
     {
       "name": "黑猫侦探社咪仔",
-      "voice_type": "zh_female_mizai_saturn_bigtts",
+      "voice_type": "zh_female_mizai_uranus_bigtts",
       "gender": "female",
       "version": "2.0",
       "resource_id": "seed-tts-2.0",
@@ -81,7 +81,7 @@
     },
     {
       "name": "鸡汤女",
-      "voice_type": "zh_female_jitangnv_saturn_bigtts",
+      "voice_type": "zh_female_jitangnv_uranus_bigtts",
       "gender": "female",
       "version": "2.0",
       "resource_id": "seed-tts-2.0",
@@ -107,7 +107,7 @@
     },
     {
       "name": "魅力女友",
-      "voice_type": "zh_female_meilinvyou_saturn_bigtts",
+      "voice_type": "zh_female_meilinvyou_uranus_bigtts",
       "gender": "female",
       "version": "2.0",
       "resource_id": "seed-tts-2.0",
@@ -120,7 +120,7 @@
     },
     {
       "name": "流畅女声",
-      "voice_type": "zh_female_santongyongns_saturn_bigtts",
+      "voice_type": "zh_female_liuchangnv_uranus_bigtts",
       "gender": "female",
       "version": "2.0",
       "resource_id": "seed-tts-2.0",
@@ -133,7 +133,7 @@
     },
     {
       "name": "儒雅逸辰",
-      "voice_type": "zh_male_ruyayichen_saturn_bigtts",
+      "voice_type": "zh_male_ruyayichen_uranus_bigtts",
       "gender": "male",
       "version": "2.0",
       "resource_id": "seed-tts-2.0",
@@ -220,7 +220,7 @@
     },
     {
       "name": "理性圆子",
-      "voice_type": "ICL_zh_female_lixingyuanzi_cs",
+      "voice_type": "ICL_zh_female_lixingyuanzi_cs_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -343,7 +343,7 @@
     },
     {
       "name": "清甜桃桃",
-      "voice_type": "ICL_zh_female_qingtiantaotao_cs",
+      "voice_type": "ICL_zh_female_qingtiantaotao_cs_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -457,7 +457,7 @@
     },
     {
       "name": "清晰小雪",
-      "voice_type": "ICL_zh_female_qingxixiaoxue_cs",
+      "voice_type": "ICL_zh_female_qingxixiaoxue_cs_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -566,7 +566,7 @@
     },
     {
       "name": "清甜莓莓",
-      "voice_type": "ICL_zh_female_qingtianmeimei_cs",
+      "voice_type": "ICL_zh_female_qingtianmeimei_cs_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -674,7 +674,7 @@
     },
     {
       "name": "开朗婷婷",
-      "voice_type": "ICL_zh_female_kailangtingting_cs",
+      "voice_type": "ICL_zh_female_kailangtingting_cs_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -784,7 +784,7 @@
     },
     {
       "name": "清新沐沐",
-      "voice_type": "ICL_zh_male_qingxinmumu_cs",
+      "voice_type": "ICL_zh_male_qingxinmumu_cs_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -894,7 +894,7 @@
     },
     {
       "name": "爽朗小阳",
-      "voice_type": "ICL_zh_male_shuanglangxiaoyang_cs",
+      "voice_type": "ICL_zh_male_shuanglangxiaoyang_cs_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1006,7 +1006,7 @@
     },
     {
       "name": "清新波波",
-      "voice_type": "ICL_zh_male_qingxinbobo_cs",
+      "voice_type": "ICL_zh_male_qingxinbobo_cs_tob",
       "gender": "male",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
@@ -1118,7 +1118,7 @@
     },
     {
       "name": "温婉珊珊",
-      "voice_type": "ICL_zh_female_wenwanshanshan_cs",
+      "voice_type": "ICL_zh_female_wenwanshanshan_cs_tob",
       "gender": "female",
       "version": "1.0",
       "resource_id": "seed-tts-1.0",
