@@ -42,8 +42,9 @@ def load_audio_file(
 
     start = frame_offset if frame_offset > 0 else None
     stop = None if num_frames < 0 else frame_offset + num_frames
-    data, sample_rate = sf.read(uri, always_2d=True, start=start, stop=stop)
-    tensor = torch.from_numpy(data.T.copy()).float()
-    if not channels_first:
-        tensor = tensor.transpose(0, 1)
+    data, sample_rate = sf.read(uri, always_2d=True, start=start, stop=stop, dtype="float32")
+    if channels_first:
+        tensor = torch.from_numpy(data.T.copy())
+    else:
+        tensor = torch.from_numpy(data)
     return tensor, sample_rate
