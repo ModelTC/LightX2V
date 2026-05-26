@@ -347,6 +347,16 @@ class WorldPlayI2VInputInfo:
 
 
 @dataclass
+class Hunyuan3DShapeInputInfo:
+    """Input info for Hunyuan3D-2.1 image-to-3D-mesh shape generation."""
+
+    seed: int = field(default_factory=int)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+
+
+@dataclass
 class WorldMirrorReconInputInfo:
     """Input info for HY-WorldMirror-2.0 3D reconstruction.
 
@@ -407,6 +417,7 @@ task_dict = {
     "worldplay_i2v": WorldPlayI2VInputInfo,
     "worldplay_t2v": WorldPlayT2VInputInfo,
     "recon": WorldMirrorReconInputInfo,
+    "i23d": Hunyuan3DShapeInputInfo,
 }
 
 
