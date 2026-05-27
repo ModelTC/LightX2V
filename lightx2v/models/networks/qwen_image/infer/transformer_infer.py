@@ -12,10 +12,8 @@ from .utils import apply_qwen_rope_with_flashinfer, apply_qwen_rope_with_torch, 
 
 try:
     from magi_compiler import magi_compile
-    from magi_compiler.config import CudaGraphMode
 except ImportError:
     magi_compile = None
-    CudaGraphMode = None
 
 
 class QwenImageTransformerInfer(BaseTransformerInfer):
@@ -442,7 +440,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 update={
                     "enable_inductor_max_autotune": False,
                     "disable_cache": True,
-                    "cudagraph_mode": CudaGraphMode.NONE,
                 }
             )
 
