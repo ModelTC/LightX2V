@@ -196,6 +196,10 @@ class DmdLoraTrainer(LoraTrainer):
         running_fake = 0.0
 
         progress = tqdm(total=max_train_iters, desc="DMD-LoRA iterations", initial=current_iter)
+        if self.infer_every_iters:
+            self.inferencer.set_data(self.dataloader_eval)
+            if current_iter == 0:
+                self.run_inference(current_iter)
 
         while current_iter < max_train_iters:
             for sample in self.dataloader_train:
@@ -233,6 +237,9 @@ class DmdLoraTrainer(LoraTrainer):
 
                 if save_every_iters and current_iter % save_every_iters == 0:
                     self.save_checkpoint(current_iter, save_total_limit)
+
+                if self.infer_every_iters and current_iter % self.infer_every_iters == 0:
+                    self.run_inference(current_iter)
 
                 if current_iter >= max_train_iters:
                     break
