@@ -359,6 +359,11 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
+        target_height = self.config.get("target_height", None)
+        target_width = self.config.get("target_width", None)
+        if target_height and target_width:
+            return (target_width, target_height)
+
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
             logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
