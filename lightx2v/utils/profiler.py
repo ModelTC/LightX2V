@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+from contextlib import contextmanager
 from functools import wraps
 
 import torch
@@ -12,12 +13,37 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 _excluded_time_local = threading.local()
+_no_sync_local = threading.local()
 
 
 def _get_excluded_time_stack():
     if not hasattr(_excluded_time_local, "stack"):
         _excluded_time_local.stack = []
     return _excluded_time_local.stack
+
+
+def _is_profiler_no_sync_active() -> bool:
+    return getattr(_no_sync_local, "active", False)
+
+
+@contextmanager
+def no_sync_profiling(enabled: bool = True):
+    """Scope where ProfilingContext* skip cuda.synchronize on enter/exit.
+
+    Use around AR segment loops with async VAE so nested profilers (step_pre,
+    infer_main, segment end2end, AR segments total) do not insert GPU barriers
+    that flatten DiT/VAE overlap. The region must end with explicit sync
+    (e.g. async_vae_decoder.finish()).
+    """
+    if not enabled:
+        yield
+        return
+    prev = getattr(_no_sync_local, "active", False)
+    _no_sync_local.active = True
+    try:
+        yield
+    finally:
+        _no_sync_local.active = prev
 
 
 class _ProfilingContext:
@@ -38,13 +64,16 @@ class _ProfilingContext:
         self.metrics_labels = metrics_labels
 
     def __enter__(self):
-        torch_device_module.synchronize()
+        self._skip_sync = _is_profiler_no_sync_active()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         self.start_time = time.perf_counter()
         _get_excluded_time_stack().append(0.0)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        torch_device_module.synchronize()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         total_elapsed = time.perf_counter() - self.start_time
         excluded = _get_excluded_time_stack().pop()
         elapsed = total_elapsed - excluded
@@ -54,17 +83,21 @@ class _ProfilingContext:
             else:
                 self.metrics_func.observe(elapsed)
         if self.enable_logger:
-            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
+            suffix = " (non-sync)" if self._skip_sync else ""
+            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds{suffix}")
         return False
 
     async def __aenter__(self):
-        torch_device_module.synchronize()
+        self._skip_sync = _is_profiler_no_sync_active()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         self.start_time = time.perf_counter()
         _get_excluded_time_stack().append(0.0)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        torch_device_module.synchronize()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         total_elapsed = time.perf_counter() - self.start_time
         excluded = _get_excluded_time_stack().pop()
         elapsed = total_elapsed - excluded
@@ -74,7 +107,8 @@ class _ProfilingContext:
             else:
                 self.metrics_func.observe(elapsed)
         if self.enable_logger:
-            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds")
+            suffix = " (non-sync)" if self._skip_sync else ""
+            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds{suffix}")
         return False
 
     def __call__(self, func):
@@ -128,33 +162,41 @@ class _ExcludedProfilingContext:
             self.rank_info = "Single GPU"
 
     def __enter__(self):
-        torch_device_module.synchronize()
+        self._skip_sync = _is_profiler_no_sync_active()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         self.start_time = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        torch_device_module.synchronize()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         elapsed = time.perf_counter() - self.start_time
         stack = _get_excluded_time_stack()
         for i in range(len(stack)):
             stack[i] += elapsed
         if self.name and CHECK_PROFILING_DEBUG_LEVEL(1):
-            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling)")
+            suffix = " (non-sync)" if self._skip_sync else ""
+            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling){suffix}")
         return False
 
     async def __aenter__(self):
-        torch_device_module.synchronize()
+        self._skip_sync = _is_profiler_no_sync_active()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         self.start_time = time.perf_counter()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        torch_device_module.synchronize()
+        if not self._skip_sync:
+            torch_device_module.synchronize()
         elapsed = time.perf_counter() - self.start_time
         stack = _get_excluded_time_stack()
         for i in range(len(stack)):
             stack[i] += elapsed
         if self.name and CHECK_PROFILING_DEBUG_LEVEL(1):
-            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling)")
+            suffix = " (non-sync)" if self._skip_sync else ""
+            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling){suffix}")
         return False
 
     def __call__(self, func):

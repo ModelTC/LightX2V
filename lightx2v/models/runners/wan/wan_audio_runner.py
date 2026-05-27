@@ -930,6 +930,53 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return self.run_clip_main()
 
 
+@RUNNER_REGISTER("wan2.2_audio")
+class Wan22AudioRunner(WanAudioRunner):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def load_vae_decoder(self):
+        # offload config
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if vae_offload:
+            vae_device = torch.device("cpu")
+        else:
+            vae_device = torch.device(AI_DEVICE)
+        vae_config = {
+            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
+            "device": vae_device,
+            "cpu_offload": vae_offload,
+            "offload_cache": self.config.get("vae_offload_cache", False),
+            "dummy_model": self.config.get("dummy_model", False),
+        }
+        vae_decoder = Wan2_2_VAE(**vae_config)
+        return vae_decoder
+
+    def load_vae_encoder(self):
+        # offload config
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        if vae_offload:
+            vae_device = torch.device("cpu")
+        else:
+            vae_device = torch.device(AI_DEVICE)
+        vae_config = {
+            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
+            "device": vae_device,
+            "cpu_offload": vae_offload,
+            "offload_cache": self.config.get("vae_offload_cache", False),
+            "dummy_model": self.config.get("dummy_model", False),
+        }
+        if self.config.task not in ["i2v", "s2v", "rs2v"]:
+            return None
+        else:
+            return Wan2_2_VAE(**vae_config)
+
+    def load_vae(self):
+        vae_encoder = self.load_vae_encoder()
+        vae_decoder = self.load_vae_decoder()
+        return vae_encoder, vae_decoder
+
+
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(WanAudioRunner):
     def __init__(self, config):
@@ -1081,12 +1128,6 @@ class WanAudioARRunner(WanAudioRunner):
         self.inputs["audio_encoder_output"] = torch.stack(features_list, dim=0)
         self.inputs["previmg_encoder_output"] = {"prev_latents": None, "prev_mask": None, "prev_len": 0}
 
-    @ProfilingContext4DebugL1(
-        "Init run segment",
-        recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_run_init_run_segment_duration,
-        metrics_labels=["WanAudioARRunner"],
-    )
     def init_run_segment(self, segment_idx):
         self.segment_idx = segment_idx
 
@@ -1116,7 +1157,7 @@ class WanAudioARRunner(WanAudioRunner):
         self.model.scheduler.set_timesteps(infer_steps, device=AI_DEVICE)
         xt = self.model.scheduler.noise[:, start:end].to(AI_DEVICE)
         for step_index in range(infer_steps):
-            logger.info(f"==> segment: {segment_idx + 1} / {self.video_segment_num}, step_index: {step_index + 1} / {infer_steps}")
+            logger.info(f"==> chunk: {segment_idx + 1} / {self.video_segment_num}, step_index: {step_index + 1} / {infer_steps}")
             self.model.kv_cache_manager.current_step = step_index
             with ProfilingContext4DebugL1("step_pre"):
                 self.model.scheduler.step_pre(segment_idx, step_index, xt)
@@ -1129,6 +1170,11 @@ class WanAudioARRunner(WanAudioRunner):
                 total_all_steps = self.video_segment_num * infer_steps
                 self.progress_callback((current_step / total_all_steps) * 100, 100)
         return xt
+
+    def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
+        is_first = segment_idx == 0
+        is_last = segment_idx == self.video_segment_num - 1
+        return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
 
     def init_kv_cache_manager(self):
         ref_latents = self.inputs["image_encoder_output"]["vae_encoder_out"]
@@ -1163,38 +1209,41 @@ class WanAudioARRunner(WanAudioRunner):
             lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
             if lazy_vae:
                 self.vae_decoder = self.load_vae_decoder()
-            if not hasattr(self.vae_decoder, "cached_decode_withflag"):
-                raise RuntimeError("WanAudioARRunner requires cached_decode_withflag for AR VAE decoding.")
-            async_vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE)
-            if async_vae_decoder.is_async:
-                logger.info("[WanAudioARRunner] async VAE decode enabled")
+            vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder)
 
-            def decode_segment_latents(segment_latents: torch.Tensor, is_first: bool, is_last: bool) -> torch.Tensor:
-                return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
+            with (
+                no_sync_profiling(enabled=vae_decoder.is_async),
+                ProfilingContext4DebugL1(
+                    f"AR chunk total {self.video_segment_num} chunks",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                    metrics_labels=["WanAudioARRunner"],
+                ),
+            ):
+                try:
+                    for segment_idx in range(self.video_segment_num):
+                        logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
 
-            try:
-                for segment_idx in range(self.video_segment_num):
-                    logger.info(f"start segment {segment_idx + 1}/{self.video_segment_num}")
-                    with ProfilingContext4DebugL1(
-                        f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
-                        recorder_mode=GET_RECORDER_MODE(),
-                        metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                        metrics_labels=["WanAudioARRunner"],
-                    ):
-                        self.check_stop()
-                        self.init_run_segment(segment_idx)
-                        segment_latents = self.run_segment(segment_idx)
-                        is_first = segment_idx == 0
-                        is_last = segment_idx == self.video_segment_num - 1
-                        async_vae_decoder.submit(decode_segment_latents, segment_latents, is_first, is_last)
-                segment_videos = async_vae_decoder.finish()
-            finally:
-                if "async_vae_decoder" in locals():
-                    async_vae_decoder.finish()
-                if lazy_vae:
-                    del self.vae_decoder
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                        with ProfilingContext4DebugL1(
+                            f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
+                            recorder_mode=GET_RECORDER_MODE(),
+                            metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                            metrics_labels=["WanAudioARRunner"],
+                        ):
+                            self.check_stop()
+                            self.init_run_segment(segment_idx)
+                            segment_latents = self.run_segment(segment_idx)
+
+                        vae_decoder.submit(self.decode_segment_latents, segment_idx, segment_latents)
+                    segment_videos = vae_decoder.finish()
+                finally:
+                    if "vae_decoder" in locals():
+                        vae_decoder.finish()
+                    if lazy_vae:
+                        del self.vae_decoder
+                        torch.cuda.empty_cache()
+                        gc.collect()
+
             self.gen_video = torch.cat(segment_videos, dim=2)
             self.check_stop()
             self.end_run_segment(0)
@@ -1205,50 +1254,3 @@ class WanAudioARRunner(WanAudioRunner):
             if getattr(self, "va_controller", None) is not None:
                 self.va_controller.clear()
                 self.va_controller = None
-
-
-@RUNNER_REGISTER("wan2.2_audio")
-class Wan22AudioRunner(WanAudioRunner):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def load_vae_decoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device(AI_DEVICE)
-        vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dummy_model": self.config.get("dummy_model", False),
-        }
-        vae_decoder = Wan2_2_VAE(**vae_config)
-        return vae_decoder
-
-    def load_vae_encoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device(AI_DEVICE)
-        vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dummy_model": self.config.get("dummy_model", False),
-        }
-        if self.config.task not in ["i2v", "s2v", "rs2v"]:
-            return None
-        else:
-            return Wan2_2_VAE(**vae_config)
-
-    def load_vae(self):
-        vae_encoder = self.load_vae_encoder()
-        vae_decoder = self.load_vae_decoder()
-        return vae_encoder, vae_decoder
