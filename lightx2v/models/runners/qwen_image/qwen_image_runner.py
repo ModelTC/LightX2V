@@ -17,6 +17,7 @@ from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenIm
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+
 # from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -325,7 +326,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
             with ProfilingContext4DebugL1("🚀 infer_main"):
                 # Example of torch trace profile:
-                #with TorchTraceProfileContext() as profile:
+                # with TorchTraceProfileContext() as profile:
                 #    profile.run(self.model.infer, self.inputs)
                 self.model.infer(self.inputs)
 
@@ -362,6 +363,11 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             width, height = max(width, min_size), max(height, min_size)
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
+
+        target_height = self.config.get("target_height", None)
+        target_width = self.config.get("target_width", None)
+        if target_height and target_width:
+            return (target_width, target_height)
 
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:

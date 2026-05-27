@@ -109,12 +109,15 @@ class WanAnimateRunner(WanRunner):
     def use_auto_target_shape(self):
         return self.config.get("auto_target_shape", True)
 
-    def get_comfy_target_shape(self):
-        height = (int(self.config["target_height"]) // 16) * 16
-        width = (int(self.config["target_width"]) // 16) * 16
+    def align_target_shape(self, height, width):
+        height = (int(height) // 16) * 16
+        width = (int(width) // 16) * 16
         if height <= 0 or width <= 0:
             raise ValueError(f"Invalid WanAnimate target shape: height={height}, width={width}")
         return height, width
+
+    def get_comfy_target_shape(self):
+        return self.align_target_shape(self.config["target_height"], self.config["target_width"])
 
     def center_crop_to_aspect(self, img, height, width):
         ori_height, ori_width = img.shape[:2]
@@ -153,13 +156,17 @@ class WanAnimateRunner(WanRunner):
         height, width = cond_images[0].shape[:2]
         refer_images = cv2.imread(src_ref_path)[..., ::-1]
         if self.use_auto_target_shape():
-            refer_images = self.padding_resize(refer_images, height=height, width=width)
+            target_height, target_width = self.align_target_shape(height, width)
+            logger.info(f"WanAnimate uses auto target shape: height={target_height}, width={target_width}")
+            cond_images = self.comfy_resize_frames(cond_images, target_height, target_width)
+            refer_images = self.padding_resize(refer_images, height=target_height, width=target_width)
         else:
             target_height, target_width = self.get_comfy_target_shape()
             logger.info(f"WanAnimate uses config target shape: height={target_height}, width={target_width}")
             cond_images = self.comfy_resize_frames(cond_images, target_height, target_width)
             refer_images = self.comfy_resize(refer_images, target_height, target_width)
             face_images = self.comfy_resize_frames(face_images, 512, 512, crop="center")
+        self.animate_target_shape = (target_height, target_width)
         return cond_images, face_images, refer_images
 
     def prepare_source_for_replace(self, src_bg_path, src_mask_path):
@@ -173,10 +180,12 @@ class WanAnimateRunner(WanRunner):
         mask_idxs = list(range(mask_len))
         mask_images = mask_video_reader.get_batch(mask_idxs).asnumpy()
         mask_images = mask_images[:, :, :, 0] / 255
-        if not self.use_auto_target_shape():
+        if self.use_auto_target_shape():
+            target_height, target_width = getattr(self, "animate_target_shape", self.align_target_shape(*bg_images[0].shape[:2]))
+        else:
             target_height, target_width = self.get_comfy_target_shape()
-            bg_images = self.comfy_resize_frames(bg_images, target_height, target_width)
-            mask_images = self.comfy_resize_frames(mask_images, target_height, target_width, interpolation=cv2.INTER_NEAREST)
+        bg_images = self.comfy_resize_frames(bg_images, target_height, target_width)
+        mask_images = self.comfy_resize_frames(mask_images, target_height, target_width, interpolation=cv2.INTER_NEAREST)
         return bg_images, mask_images
 
     @ProfilingContext4DebugL2("Run Image Encoders")

@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import torch
 import torch.nn.functional as F
 
@@ -32,7 +34,17 @@ class TorchSDPAWeight(AttnWeightTemplate):
         v = v.transpose(1, 2)
         if attn_mask is not None and attn_mask.dtype != torch.bool:
             attn_mask = attn_mask.to(q.dtype)
-        x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal)
+        # Hunyuan3D upstream Attention uses SDPA flash kernel (see hy3dshape hunyuandit.py).
+        # Matching this context is required for bit-identical attention vs the reference.
+        sdpa_ctx = nullcontext()
+        if kwargs.get("model_cls") == "hunyuan3d":
+            sdpa_ctx = torch.backends.cuda.sdp_kernel(
+                enable_flash=True,
+                enable_math=False,
+                enable_mem_efficient=True,
+            )
+        with sdpa_ctx:
+            x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal)
         x = x.transpose(1, 2)
         b, s, a, d = x.shape
         out = x.reshape(b, s, -1)

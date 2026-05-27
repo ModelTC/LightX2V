@@ -1,9 +1,12 @@
+import os
+
 import torch
 import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile, set_magi_custom_op_mode
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+
 from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
     fuse_scale_shift_kernel,
@@ -421,6 +424,19 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         image_rotary_emb,
         modulate_index,
     ):
+        trace_path = os.environ.get("QWEN_MAGI_PROFILE_TRACE")
+        if trace_path:
+            return self._infer_calculating_profiled(
+                blocks,
+                hidden_states,
+                encoder_hidden_states,
+                temb_img_silu,
+                temb_txt_silu,
+                image_rotary_emb,
+                modulate_index,
+                trace_path,
+            )
+
         for idx in range(len(blocks)):
             encoder_hidden_states, hidden_states = self.infer_block(
                 block=blocks[idx],

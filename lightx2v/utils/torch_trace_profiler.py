@@ -138,10 +138,7 @@ class TorchTraceProfiler:
         if self._profile_owner == label:
             return True
         if label not in self._warned_skipped:
-            logger.warning(
-                f"[Profile] Skip torch trace for '{label}': "
-                f"already profiling '{self._profile_owner}' (one call site per process)"
-            )
+            logger.warning(f"[Profile] Skip torch trace for '{label}': already profiling '{self._profile_owner}' (one call site per process)")
             self._warned_skipped.add(label)
         return False
 
@@ -227,10 +224,7 @@ class TorchTraceProfileContext:
             return
         self._registered_labels.add(label)
         if len(self._registered_labels) > 1:
-            logger.warning(
-                "[Profile] Multiple TorchTraceProfileContext call sites detected: "
-                f"{sorted(self._registered_labels)}. Only the first invoked site will be profiled once."
-            )
+            logger.warning(f"[Profile] Multiple TorchTraceProfileContext call sites detected: {sorted(self._registered_labels)}. Only the first invoked site will be profiled once.")
 
     def __enter__(self):
         return self
