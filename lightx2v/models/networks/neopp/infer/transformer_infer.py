@@ -10,11 +10,9 @@ except ImportError:
 
 try:
     from magi_compiler import magi_compile, magi_register_custom_op
-    from magi_compiler.config import CudaGraphMode
 except ImportError:
     magi_compile = None
     magi_register_custom_op = None
-    CudaGraphMode = None
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
@@ -120,9 +118,21 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.kv_cache.prepare(past_key_values, seq_len_q)
 
         kv_buf = self.kv_cache._kv_buf
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
         for layer_idx, block_weight in enumerate(blocks):
             if self.use_magi_compile:
-                hidden_states = self._decoder_layer_magi(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
+                hidden_states = self._decoder_layer_magi(
+                    block_weight,
+                    layer_idx,
+                    hidden_states,
+                    cos_t,
+                    sin_t,
+                    cos_h,
+                    sin_h,
+                    cos_w,
+                    sin_w,
+                    kv_buf,
+                )
             else:
                 hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
         return hidden_states
@@ -132,17 +142,37 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         def _magi_config_patch(c):
             return c.model_copy(
                 update={
-                    "enable_inductor_max_autotune": True,
                     "disable_cache": True,
-                    "cudagraph_mode": CudaGraphMode.NONE,
                 }
             )
 
         @magi_compile(
-            dynamic_arg_dims={"hidden_states": 0, "kv_buf": 2},
+            dynamic_arg_dims={
+                "hidden_states": 0,
+                "kv_buf": 2,
+                "cos_t": 1,
+                "sin_t": 1,
+                "cos_h": 1,
+                "sin_h": 1,
+                "cos_w": 1,
+                "sin_w": 1,
+            },
             config_patch=_magi_config_patch,
         )
-        def _decoder_layer_magi(self, block_weight, layer_idx, hidden_states, cos_sin, kv_buf):
+        def _decoder_layer_magi(
+            self,
+            block_weight,
+            layer_idx,
+            hidden_states,
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            kv_buf,
+        ):
+            cos_sin = (cos_t, sin_t, cos_h, sin_h, cos_w, sin_w)
             return self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
 
     # @ProfilingContext4DebugL1("Decoder Layer")
