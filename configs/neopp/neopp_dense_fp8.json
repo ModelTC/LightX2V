@@ -7,6 +7,7 @@
     "timestep_shift": 3.0,
     "cfg_interval": [-1, 2],
     "enable_cfg": true,
+    "use_magi_compile": true,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl"
 }
