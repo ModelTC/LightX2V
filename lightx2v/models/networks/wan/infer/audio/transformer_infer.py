@@ -249,18 +249,21 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         seq_parallel = self.config.get("seq_parallel", False)
         num_new = int(q.size(0))
         frames, h, w, sp_world_size, sp_rank = self._audio_grid_meta(grid_sizes)
-        local_ref_tokens = self.kv_cache_manager.ref_tokens_global // sp_world_size if seq_parallel else self.kv_cache_manager.ref_tokens
+        replicated_ref_prefill = bool(seq_parallel and is_ref_prefill)
+        local_ref_tokens = (
+            self.kv_cache_manager.ref_tokens_global if replicated_ref_prefill else self.kv_cache_manager.ref_tokens_global // sp_world_size if seq_parallel else self.kv_cache_manager.ref_tokens
+        )
         cache_ref_tokens = self.kv_cache_manager.ref_tokens
         segment_idx = self.scheduler.seg_index
         local_current_start = 0 if is_ref_prefill else local_ref_tokens + segment_idx * num_new
         local_current_end = local_current_start + num_new
-        cache_num_new = num_new * sp_world_size if seq_parallel else num_new
+        cache_num_new = num_new if replicated_ref_prefill else num_new * sp_world_size if seq_parallel else num_new
         current_start = 0 if is_ref_prefill else cache_ref_tokens + segment_idx * cache_num_new
         current_end = current_start + cache_num_new
         global_end = kv_cache.get_global_end(self.block_idx)
         local_end = kv_cache.get_local_end(self.block_idx)
         local_per_frame = num_new // frames if frames > 0 else 0
-        cache_per_frame = local_per_frame * sp_world_size if seq_parallel else local_per_frame
+        cache_per_frame = local_per_frame if replicated_ref_prefill else local_per_frame * sp_world_size if seq_parallel else local_per_frame
         sink_tokens = self.kv_cache_manager.sink_size * cache_per_frame
 
         need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
@@ -285,11 +288,19 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             kv_cache.begin_layer(self.block_idx)
 
         if seq_parallel:
-            q_rope = self._apply_rope_with_cache_range(q, freqs, h, w, sp_world_size, sp_rank, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
-            k_rope = self._apply_rope_with_cache_range(k, freqs, h, w, sp_world_size, sp_rank, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
-            k_to_store = all2all_seq2head(k_rope, group=self.seq_p_group)
-            v_to_store = all2all_seq2head(v, group=self.seq_p_group)
-            kv_cache.store_kv(k_to_store, v_to_store, local_start_idx, local_end_idx, self.block_idx)
+            if replicated_ref_prefill:
+                q_rope = self._apply_rope_with_cache_range(q, freqs, h, w, 1, 0, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
+                k_rope = self._apply_rope_with_cache_range(k, freqs, h, w, 1, 0, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
+                shard_heads = self.num_heads // sp_world_size
+                h0 = sp_rank * shard_heads
+                h1 = h0 + shard_heads
+                kv_cache.store_kv(k_rope[:, h0:h1], v[:, h0:h1], local_start_idx, local_end_idx, self.block_idx)
+            else:
+                start_frame = segment_idx * frames
+                q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
+                k_to_store = all2all_seq2head(k_rope, group=self.seq_p_group)
+                v_to_store = all2all_seq2head(v, group=self.seq_p_group)
+                kv_cache.store_kv(k_to_store, v_to_store, local_start_idx, local_end_idx, self.block_idx)
         else:
             kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)
         kv_cache.set_ends(self.block_idx, current_end, local_end_idx)
@@ -299,17 +310,29 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             torch_device_module.empty_cache()
 
         if seq_parallel:
-            attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
-            attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
-            attn_out = kv_cache.sp_kvcache_attn_head_shard(
-                q=q_rope,
-                k_cache=attn_k,
-                v_cache=attn_v,
-                attention_module=phase.self_attn_1,
-                seq_p_group=self.seq_p_group,
-                num_heads=self.num_heads,
-                head_dim=self.head_dim,
-            )
+            if replicated_ref_prefill:
+                cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q_rope, k_lens=torch.empty_like(seq_lens).fill_(k_rope.size(0)))
+                attn_out = phase.self_attn_1.apply(
+                    q=q_rope,
+                    k=k_rope,
+                    v=v,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_k,
+                    max_seqlen_q=q_rope.size(0),
+                    max_seqlen_kv=k_rope.size(0),
+                )
+            else:
+                attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
+                attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
+                attn_out = kv_cache.sp_kvcache_attn_head_shard(
+                    q=q_rope,
+                    k_cache=attn_k,
+                    v_cache=attn_v,
+                    attention_module=phase.self_attn_1,
+                    seq_p_group=self.seq_p_group,
+                    num_heads=self.num_heads,
+                    head_dim=self.head_dim,
+                )
         else:
             attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)

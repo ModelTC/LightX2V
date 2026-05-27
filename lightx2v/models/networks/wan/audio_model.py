@@ -200,7 +200,7 @@ class WanAudioARModel(WanAudioModel):
                 self.transformer_weights.non_block_weights_to_cuda()
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
-        if self.config["seq_parallel"]:
+        if self.config["seq_parallel"] and not inputs.get("_ar_ref_prefill", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
