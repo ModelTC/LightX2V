@@ -1,0 +1,7 @@
+FROM registry.ms-sc-01.maoshanwangtech.com/ms-ccr/lightx2v:26052301-cu130-5090 AS base
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir graphviz torchcodec pybind11
+
+WORKDIR /workspace
