@@ -36,7 +36,7 @@ RUN git clone https://github.com/sgl-project/sglang.git && cd sglang/sgl-kernel 
 RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy imageio \
     imageio-ffmpeg einops loguru qtorch ftfy av decord matplotlib debugpy soundfile jsonschema pymongo modelscope \
     Pillow peft omegaconf mooncake-transfer-engine torchao scipy bson aio-pika asyncpg>=0.27.0 aioboto3>=12.0.0 \
-    PyJWT alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0 tos zmq
+    PyJWT alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0 tos zmq graphviz pybind11 torchcodec
 
 RUN git clone https://github.com/Dao-AILab/flash-attention.git --recursive
 

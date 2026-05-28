@@ -27,15 +27,16 @@
 
 #### 1. 拉取镜像
 
-访问 LightX2V 的 [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags)，选择一个最新日期的 tag，比如 `26011201-cu128`：
+访问 LightX2V 的 [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags)，选择一个最新日期的 tag，比如 `26052801-cu130`：
+
+```bash
+docker pull lightx2v/lightx2v:26052801-cu130
+```
+
+我们推荐使用`cuda130`环境，以获得更快的推理速度，若需要使用`cuda128`和`cuda124`环境，可以使用带`-cu128`和`-cu124`后缀的镜像版本：
 
 ```bash
 docker pull lightx2v/lightx2v:26011201-cu128
-```
-
-我们推荐使用`cuda128`环境，以获得更快的推理速度，若需要使用`cuda124`环境，可以使用带`-cu124`后缀的镜像版本：
-
-```bash
 docker pull lightx2v/lightx2v:25101501-cu124
 ```
 
@@ -50,6 +51,9 @@ docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --ent
 对于中国大陆地区，如果拉取镜像时网络不稳定，可以从阿里云上拉取：
 
 ```bash
+# cuda130
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:26052801-cu130
+
 # cuda128
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:26011201-cu128
 
