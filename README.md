@@ -24,7 +24,7 @@
 
 > 🌐 More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)
 
-> 👋 **Join our WeChat group! LightX2V Rotbot WeChat ID: random42seed**
+> 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 
 ## 🧾 Community Code Contribution Guidelines
 
