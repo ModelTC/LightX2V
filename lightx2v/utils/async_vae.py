@@ -11,9 +11,14 @@ from loguru import logger
 class AsyncVAEChunkDecoder:
     """Submit chunk VAE decodes on a side CUDA stream.
 
-    This mirrors LongLive's same-device async VAE mode: after a latent chunk is
-    produced on the default stream, decoding is queued on a dedicated stream so
-    the next autoregressive chunk can start denoising while VAE kernels run.
+    Mirrors LongLive ``streaming-async`` mode (``causal_diffusion_inference.py``):
+    after each chunk's diffusion on the default stream, decode is queued on a
+    dedicated ``vae_stream`` so the next chunk's denoising can overlap.
+
+    Requirements for real overlap (same as LongLive):
+      - VAE must stay resident on GPU for the AR loop (no per-chunk to_cuda/to_cpu).
+      - Decode must not call host-side ``cuda.synchronize()`` inside ``submit``.
+      - Caller should use ``no_sync_profiling`` when measuring with profilers on.
     """
 
     def __init__(self, enabled: bool, device: torch.device | str | None = None) -> None:
@@ -22,7 +27,7 @@ class AsyncVAEChunkDecoder:
         if self._device is not None and self._device.type != "cuda":
             self.enabled = False
         self._stream: torch.cuda.Stream | None = None
-        self._prev_done: torch.cuda.Event | None = None
+        self._prev_vae_done: torch.cuda.Event | None = None
         self._chunks: list[torch.Tensor] = []
         self._decode_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         self._num_submitted = 0
@@ -30,12 +35,19 @@ class AsyncVAEChunkDecoder:
         self._submit_wait_ms = 0.0
         self._finish_wait_ms = 0.0
         self._logged_decode_events = 0
+        self._vae_decoder: Any | None = None
+        self._saved_vae_cpu_offload = False
 
         if bool(enabled) and not self.enabled:
             logger.warning("[AsyncVAEChunkDecoder] async VAE requested but CUDA is unavailable; falling back to sync decode.")
 
     @classmethod
-    def from_config(cls, config: dict[str, Any], device: torch.device | str | None = None) -> "AsyncVAEChunkDecoder":
+    def from_config(
+        cls,
+        config: dict[str, Any],
+        device: torch.device | str | None = None,
+        vae_decoder: Any | None = None,
+    ) -> "AsyncVAEChunkDecoder":
         ar_config = config.get("ar_config", {})
         enabled = bool(
             config.get(
@@ -43,7 +55,32 @@ class AsyncVAEChunkDecoder:
                 ar_config.get("async_vae_decode", config.get("streaming_vae", False) and config.get("async_vae", False)),
             )
         )
-        return cls(enabled=enabled, device=device)
+        decoder = cls(enabled=enabled, device=device)
+        if vae_decoder is not None:
+            decoder.prepare_vae(vae_decoder)
+        return decoder
+
+    def prepare_vae(self, vae_decoder: Any) -> None:
+        """Pin VAE on GPU for async overlap when ``cpu_offload`` would block overlap."""
+        self._vae_decoder = vae_decoder
+        if self.enabled:
+            logger.info("[AsyncVAEChunkDecoder] async VAE decode enabled")
+        if not self.enabled or not getattr(vae_decoder, "cpu_offload", False):
+            return
+        logger.info("[AsyncVAEChunkDecoder] async mode: VAE cpu_offload was True, forcing False and pinning VAE on GPU")
+        self._saved_vae_cpu_offload = True
+        vae_decoder.cpu_offload = False
+        if hasattr(vae_decoder, "to_cuda"):
+            vae_decoder.to_cuda()
+
+    def _restore_vae(self) -> None:
+        vae_decoder = self._vae_decoder
+        if vae_decoder is None or not self._saved_vae_cpu_offload:
+            return
+        vae_decoder.cpu_offload = True
+        if hasattr(vae_decoder, "to_cpu"):
+            vae_decoder.to_cpu()
+        self._saved_vae_cpu_offload = False
 
     @property
     def is_async(self) -> bool:
@@ -82,30 +119,31 @@ class AsyncVAEChunkDecoder:
             chunk_ms = (time.perf_counter() - t0) * 1000.0
             self._sync_decode_ms += chunk_ms
             logger.info(
-                "[AsyncVAEChunkDecoder] sync VAE chunk {}/{} decode={:.2f} ms",
+                "[AsyncVAEChunkDecoder] sync VAE chunk {}/{} decode={:.6f} seconds",
                 self._num_submitted,
                 self._num_submitted,
-                chunk_ms,
+                chunk_ms / 1000.0,
             )
             return
 
         device = self._resolve_device(args)
         stream = self._ensure_stream(device)
-        current_done = torch.cuda.Event()
-        current_done.record(torch.cuda.current_stream(device))
+        # LongLive: diffusion_done.record() then vae_stream.wait_event(diffusion_done)
+        diffusion_done = torch.cuda.Event()
+        diffusion_done.record(torch.cuda.current_stream(device))
 
-        # Wan cached VAE decode is stateful, so keep decode chunks serialized.
-        # This wait happens after the caller has spent time generating the next
-        # chunk, which is where the overlap is gained.
-        if self._prev_done is not None:
+        # LongLive waits for the previous chunk's VAE before queueing the next
+        # decode (stateful cached VAE). Measure exposed wait here; do not block
+        # the next segment's DiT — that overlap happens after submit() returns.
+        if self._prev_vae_done is not None:
             t0 = time.perf_counter()
-            self._prev_done.synchronize()
+            self._prev_vae_done.synchronize()
             wait_ms = (time.perf_counter() - t0) * 1000.0
             self._submit_wait_ms += wait_ms
             self._log_new_async_chunks(wait_ms, wait_kind="submit_wait")
 
         with torch.cuda.stream(stream), torch.no_grad():
-            stream.wait_event(current_done)
+            stream.wait_event(diffusion_done)
             decode_start = torch.cuda.Event(enable_timing=True)
             decode_end = torch.cuda.Event(enable_timing=True)
             decode_start.record(stream)
@@ -113,11 +151,13 @@ class AsyncVAEChunkDecoder:
             decode_end.record(stream)
             self._chunks.append(output)
             self._decode_events.append((decode_start, decode_end))
-            self._prev_done = torch.cuda.Event()
-            self._prev_done.record(stream)
+            self._prev_vae_done = torch.cuda.Event()
+            self._prev_vae_done.record(stream)
         for value in list(args) + list(kwargs.values()):
             if isinstance(value, torch.Tensor) and value.device.type == "cuda":
                 value.record_stream(stream)
+        if isinstance(output, torch.Tensor) and output.device.type == "cuda":
+            output.record_stream(stream)
 
     def finish(self) -> list[torch.Tensor]:
         if self._stream is not None:
@@ -129,13 +169,14 @@ class AsyncVAEChunkDecoder:
         self._log_timing()
         chunks = self._chunks
         self._chunks = []
-        self._prev_done = None
+        self._prev_vae_done = None
         self._decode_events = []
         self._num_submitted = 0
         self._sync_decode_ms = 0.0
         self._submit_wait_ms = 0.0
         self._finish_wait_ms = 0.0
         self._logged_decode_events = 0
+        self._restore_vae()
         return chunks
 
     def _log_new_async_chunks(self, exposed_wait_ms: float, wait_kind: str) -> None:

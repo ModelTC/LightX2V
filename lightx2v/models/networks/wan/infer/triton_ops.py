@@ -342,7 +342,7 @@ def _audio_cache_rope_kernel(
     freqs_real_ptr,
     h: tl.constexpr,
     w: tl.constexpr,
-    token_start: tl.constexpr,
+    token_start,
     ref_tokens: tl.constexpr,
     local_per_frame: tl.constexpr,
     world_size: tl.constexpr,

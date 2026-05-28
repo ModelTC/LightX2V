@@ -99,6 +99,9 @@ class WanSFRunner(WanRunner):
 
         return self.model.scheduler.stream_output
 
+    def decode_segment_latents(self, segment_idx: int, latents: torch.Tensor) -> torch.Tensor:
+        return self.run_vae_decoder(latents.detach().clone())
+
     def init_video_recorder(self):
         output_video_path = self.input_info.save_result_path
         self.video_recorder = None
@@ -131,50 +134,59 @@ class WanSFRunner(WanRunner):
 
         torch.cuda.empty_cache()
 
-    def _use_async_vae_decode(self):
-        ar_config = self.config.get("ar_config", {})
-        return bool(self.config.get("async_vae_decode", ar_config.get("async_vae_decode", False)))
-
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile(self.input_info)
 
-        decoded_chunks = []
-        use_async_vae = self._use_async_vae_decode()
-        async_vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device("cuda")) if use_async_vae else None
-        if async_vae_decoder is not None:
-            logger.info("[WanSFRunner] async VAE decode enabled")
-        for segment_idx in range(self.video_segment_num):
-            logger.info(f"start segment {segment_idx + 1}/{self.video_segment_num}")
-            with ProfilingContext4DebugL1(
-                f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+        lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
+        if lazy_vae:
+            self.vae_decoder = self.load_vae_decoder()
+        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device("cuda"), vae_decoder=self.vae_decoder)
+
+        with (
+            no_sync_profiling(enabled=vae_decoder.is_async),
+            ProfilingContext4DebugL1(
+                f"AR chunk total {self.video_segment_num} chunks",
                 recorder_mode=GET_RECORDER_MODE(),
                 metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
                 metrics_labels=["DefaultRunner"],
-            ):
-                self.check_stop()
-                self.init_run_segment(segment_idx)
-                latents = self.run_segment(segment_idx)
+            ),
+        ):
+            try:
+                for segment_idx in range(self.video_segment_num):
+                    logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
+                    with ProfilingContext4DebugL1(
+                        f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
+                        recorder_mode=GET_RECORDER_MODE(),
+                        metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                        metrics_labels=["DefaultRunner"],
+                    ):
+                        self.check_stop()
+                        self.init_run_segment(segment_idx)
+                        latents = self.run_segment(segment_idx)
 
-                with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                    self.model.scheduler.step_pre(
-                        seg_index=segment_idx,
-                        step_index=self.model.scheduler.infer_steps - 1,
-                        is_rerun=True,
-                    )
-                with ProfilingContext4DebugL1("infer_main_in_rerun"):
-                    self.model.infer(self.inputs)
+                        with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                            self.model.scheduler.step_pre(
+                                seg_index=segment_idx,
+                                step_index=self.model.scheduler.infer_steps - 1,
+                                is_rerun=True,
+                            )
+                        with ProfilingContext4DebugL1("infer_main_in_rerun"):
+                            self.model.infer(self.inputs)
 
-                if async_vae_decoder is not None:
-                    async_vae_decoder.submit(self.run_vae_decoder, latents.detach().clone())
-                else:
-                    decoded_chunks.append(self.run_vae_decoder(latents))
-                torch.cuda.empty_cache()
+                    vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
+                    torch.cuda.empty_cache()
+                decoded_chunks = vae_decoder.finish()
+            finally:
+                if "vae_decoder" in locals():
+                    vae_decoder.finish()
+                if lazy_vae:
+                    del self.vae_decoder
+                    torch.cuda.empty_cache()
+                    gc.collect()
 
-        if async_vae_decoder is not None:
-            decoded_chunks = async_vae_decoder.finish()
         self.gen_video = torch.cat(decoded_chunks, dim=0)
         self.gen_video_final = self.gen_video
         gen_video_final = self.process_images_after_vae_decoder()

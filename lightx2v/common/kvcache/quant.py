@@ -36,11 +36,10 @@ class _QuantTokenRingMixin:
         return int(layer_id)
 
     def _init_ring_metadata(self, *shape: int) -> None:
-        d = self._device
-        self._ring_active = torch.zeros(*shape, dtype=torch.bool, device=d)
-        self._ring_sink_len = torch.zeros(*shape, dtype=torch.long, device=d)
-        self._ring_recent_head = torch.zeros(*shape, dtype=torch.long, device=d)
-        self._ring_recent_len = torch.zeros(*shape, dtype=torch.long, device=d)
+        self._ring_active = torch.zeros(*shape, dtype=torch.bool, device="cpu")
+        self._ring_sink_len = torch.zeros(*shape, dtype=torch.long, device="cpu")
+        self._ring_recent_head = torch.zeros(*shape, dtype=torch.long, device="cpu")
+        self._ring_recent_len = torch.zeros(*shape, dtype=torch.long, device="cpu")
 
     def _ring_is_active(self, layer_id: int) -> bool:
         return bool(self._ring_active[self._ring_index(layer_id)].item())
@@ -254,8 +253,8 @@ class SageQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
         self._k_buffer = torch.zeros(L, N, H, D, dtype=torch.int8, device=self._device)
         v_dtype = torch.float8_e4m3fn if self._v_cache_type == "fp8" else torch.float16
         self._v_buffer = torch.zeros(L, N, H, D, dtype=v_dtype, device=self._device)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata(L)
 
     def _init_kv_buffer_offload(self) -> None:
@@ -265,8 +264,8 @@ class SageQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
         self._v_cpu = torch.zeros(L, N, H, D, dtype=v_dtype, device="cpu").pin_memory()
         self._k_gpu_buf = torch.zeros(N, H, D, dtype=torch.int8, device=self._device)
         self._v_gpu_buf = torch.zeros(N, H, D, dtype=v_dtype, device=self._device)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata(L)
         self._init_offload_state((L,))
 
@@ -506,8 +505,8 @@ class TurboQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
         self._v_group_data = torch.zeros(L, N, H, self._inf_v_width, dtype=torch.uint8, device=d)
         self._v_group_scales = torch.zeros(L, N, H, ng, dtype=torch.float16, device=d)
         self._v_group_zeros = torch.zeros(L, N, H, ng, dtype=torch.float16, device=d)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=d)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=d)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata(L)
 
     def _init_kv_buffer_offload(self) -> None:
@@ -528,8 +527,8 @@ class TurboQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
         self._v_group_data_gpu = torch.zeros(N, H, self._inf_v_width, dtype=torch.uint8, device=d)
         self._v_group_scales_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
         self._v_group_zeros_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=d)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=d)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata(L)
         self._init_offload_state((L,))
 
@@ -772,8 +771,8 @@ class StepTurboQuantRollingKVCachePool(TurboQuantRollingKVCachePool):
             self._v_group_data_gpu = torch.zeros(N, H, self._inf_v_width, dtype=torch.uint8, device=d)
             self._v_group_scales_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
             self._v_group_zeros_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
-            self._global_end = torch.zeros(T, L, dtype=torch.long, device=d)
-            self._local_end = torch.zeros(T, L, dtype=torch.long, device=d)
+            self._global_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+            self._local_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
             self._init_ring_metadata(T, L)
             self._init_offload_state((T, L))
             return
@@ -788,8 +787,8 @@ class StepTurboQuantRollingKVCachePool(TurboQuantRollingKVCachePool):
         self._v_group_data = torch.zeros(T, L, N, H, self._inf_v_width, dtype=torch.uint8, device=d)
         self._v_group_scales = torch.zeros(T, L, N, H, ng, dtype=torch.float16, device=d)
         self._v_group_zeros = torch.zeros(T, L, N, H, ng, dtype=torch.float16, device=d)
-        self._global_end = torch.zeros(T, L, dtype=torch.long, device=d)
-        self._local_end = torch.zeros(T, L, dtype=torch.long, device=d)
+        self._global_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
         self._init_ring_metadata(T, L)
 
     # Step-aware storage helpers.
@@ -933,8 +932,8 @@ class LongLiveQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
         zero_qt = self._make_zero_block_qt()
         self._k_blocks = [[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)]
         self._v_blocks = [[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)]
-        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
         self._init_ring_metadata(self._num_layers)
 
     def _init_kv_buffer_offload(self) -> None:
@@ -943,8 +942,8 @@ class LongLiveQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
         self._v_blocks_cpu = self._make_qt_blocks(zero_qt, (self._num_layers, self._max_blocks), "cpu", pin_memory=True)
         self._k_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
         self._v_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
-        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
         self._init_ring_metadata(self._num_layers)
         self._init_offload_state((self._num_layers,))
 
@@ -1118,8 +1117,8 @@ class StepLongLiveQuantRollingKVCachePool(LongLiveQuantRollingKVCachePool):
         zero_qt = self._make_zero_block_qt()
         self._k_blocks = [[[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)] for _ in range(self.num_steps)]
         self._v_blocks = [[[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)] for _ in range(self.num_steps)]
-        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
         self._init_ring_metadata(self.num_steps, self._num_layers)
 
     def _init_kv_buffer_offload(self) -> None:
@@ -1138,8 +1137,8 @@ class StepLongLiveQuantRollingKVCachePool(LongLiveQuantRollingKVCachePool):
         )
         self._k_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
         self._v_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
-        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
         self._init_ring_metadata(self.num_steps, self._num_layers)
         self._init_offload_state((self.num_steps, self._num_layers))
 

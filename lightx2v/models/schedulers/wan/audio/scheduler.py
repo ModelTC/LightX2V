@@ -33,6 +33,8 @@ class EulerScheduler(WanScheduler):
         self.noise_pred = None
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
+        self._audio_t_emb_cache = {}
+        self._audio_t_emb_cache_sig = None
 
         if self.config["parallel"]:
             self.sp_size = self.config["parallel"].get("seq_p_size", 1)
@@ -45,6 +47,7 @@ class EulerScheduler(WanScheduler):
 
     def set_audio_adapter(self, audio_adapter):
         self.audio_adapter = audio_adapter
+        self._audio_t_emb_cache.clear()
 
     def step_pre(self, step_index):
         super().step_pre(step_index)
@@ -162,6 +165,10 @@ class WanAudioARScheduler(EulerScheduler):
         return self
 
     def set_timesteps(self, num_inference_steps: int, device=None):
+        cache_sig = (int(num_inference_steps), float(self._shift), str(device or AI_DEVICE))
+        if self._audio_t_emb_cache_sig != cache_sig:
+            self._audio_t_emb_cache.clear()
+            self._audio_t_emb_cache_sig = cache_sig
         timesteps = self._get_timesteps(num_steps=num_inference_steps, max_steps=self.num_train_timesteps)
         self.timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=device or AI_DEVICE)
         self.timesteps_ori = self.timesteps.clone()
@@ -234,8 +241,15 @@ class WanAudioARScheduler(EulerScheduler):
         return x_t_next.to(xt.dtype)
 
     def _set_audio_t_emb(self):
+        cache_key = (int(self.step_index), tuple(self.timestep_input.shape), self.timestep_input.device.type, str(self.timestep_input.device))
+        cached = self._audio_t_emb_cache.get(cache_key)
+        if cached is not None:
+            self.audio_adapter_t_emb = cached
+            return
+
         if self.audio_adapter.cpu_offload:
             self.audio_adapter.time_embedding.to(AI_DEVICE)
         self.audio_adapter_t_emb = self.audio_adapter.time_embedding(self.timestep_input.flatten()).unflatten(1, (3, -1))
         if self.audio_adapter.cpu_offload:
             self.audio_adapter.time_embedding.to("cpu")
+        self._audio_t_emb_cache[cache_key] = self.audio_adapter_t_emb

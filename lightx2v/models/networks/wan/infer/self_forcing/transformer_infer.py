@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.ops.attn.utils.all2all import all2all_seq2head
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import causal_rope_apply_triton
 from lightx2v.models.networks.wan.infer.utils import causal_rope_apply
@@ -228,25 +229,29 @@ class WanSFTransformerInfer(WanTransformerInfer):
             k = self.causal_rope_apply_func(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
 
         kv_cache = self.kv_cache_manager.self_attn_kv_cache
+        seq_parallel = self.config.get("seq_parallel", False)
+        sp_world_size = dist.get_world_size(self.seq_p_group) if seq_parallel else 1
 
         num_new = int(q.size(0))
-        current_start = seg_index * num_new
-        current_end = current_start + num_new
+        cache_num_new = num_new * sp_world_size if seq_parallel else num_new
+        current_start = seg_index * cache_num_new
+        current_end = current_start + cache_num_new
         global_end = kv_cache.get_global_end(self.block_idx)
         local_end = kv_cache.get_local_end(self.block_idx)
         local_per_frame = num_new // self.num_frame_per_chunk if self.num_frame_per_chunk > 0 else 0
-        sink_tokens = self.kv_cache_manager.sink_size * local_per_frame
+        cache_per_frame = local_per_frame * sp_world_size if seq_parallel else local_per_frame
+        sink_tokens = self.kv_cache_manager.sink_size * cache_per_frame
 
-        need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and num_new + local_end > self.kv_cache_size
+        need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
         if need_roll:
-            num_evicted = num_new + local_end - self.kv_cache_size
+            num_evicted = cache_num_new + local_end - self.kv_cache_size
             local_end_after_roll = local_end - num_evicted
         else:
             num_evicted = 0
             local_end_after_roll = local_end
 
         local_end_idx = local_end_after_roll + current_end - global_end
-        local_start_idx = local_end_idx - num_new
+        local_start_idx = local_end_idx - cache_num_new
         attn_start = max(0, local_end_idx - self.max_attention_size)
 
         if hasattr(kv_cache, "_align") and not getattr(self, "_kivi_align_logged", False):
@@ -274,17 +279,22 @@ class WanSFTransformerInfer(WanTransformerInfer):
         if self._kv_offload:
             kv_cache.begin_layer(self.block_idx)
 
-        kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)
+        if seq_parallel:
+            k_to_store = all2all_seq2head(k, group=self.seq_p_group)
+            v_to_store = all2all_seq2head(v, group=self.seq_p_group)
+            kv_cache.store_kv(k_to_store, v_to_store, local_start_idx, local_end_idx, self.block_idx)
+        else:
+            kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)
         kv_cache.set_ends(self.block_idx, current_end, local_end_idx)
 
         if self.clean_cuda_cache:
             del norm1_out, norm1_weight, norm1_bias
             torch_device_module.empty_cache()
 
-        if self.config.get("seq_parallel", False):
+        if seq_parallel:
             attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
-            attn_out = kv_cache.sp_kvcache_attn(
+            attn_out = kv_cache.sp_kvcache_attn_head_shard(
                 q=q,
                 k_cache=attn_k,
                 v_cache=attn_v,
@@ -292,8 +302,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
                 seq_p_group=self.seq_p_group,
                 num_heads=self.num_heads,
                 head_dim=self.head_dim,
-                attn_start=attn_start,
-                local_end=local_end_idx,
             )
         else:
             attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)

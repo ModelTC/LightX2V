@@ -29,11 +29,11 @@ def register_self_attn_kv_cache(scheme: str, cache_cls, *, step: bool = False, k
     SELF_ATTN_KV_CACHE_REGISTRY[(scheme, bool(step))] = (cache_cls, kwargs_builder or (lambda _config, _ar_config, _kv_quant: {}))
 
 
-def _kv_cache_common_kwargs(config, kv_size, dtype, device):
+def _kv_cache_common_kwargs(config, kv_size, dtype, device, *, num_heads: int | None = None):
     return dict(
         num_layers=config["num_layers"],
         cache_size=kv_size,
-        num_heads=config["num_heads"],
+        num_heads=config["num_heads"] if num_heads is None else int(num_heads),
         head_dim=config["dim"] // config["num_heads"],
         dtype=dtype,
         device=device,
@@ -150,9 +150,9 @@ register_self_attn_kv_cache(
 )
 
 
-def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame_seq_length: int | None = None):
+def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame_seq_length: int | None = None, num_heads: int | None = None):
     kv_quant = ar_config.get("kv_quant")
-    common = _kv_cache_common_kwargs(config, kv_size, dtype, device)
+    common = _kv_cache_common_kwargs(config, kv_size, dtype, device, num_heads=num_heads)
 
     if not kv_quant:
         scheme = "fp"
@@ -161,7 +161,7 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame
         quant_scheme = kv_quant.get("quant_scheme", "sage")
         registered_schemes = {registered_scheme for registered_scheme, _step in SELF_ATTN_KV_CACHE_REGISTRY if registered_scheme not in {"fp", "calib"}}
         if config.get("parallel"):
-            assert quant_scheme == "kivi", f"Invalid quant_scheme: {quant_scheme} for parallel inference"
+            assert quant_scheme in {"kivi", "longlive_fp4"}, f"Invalid quant_scheme: {quant_scheme} for parallel inference"
         assert quant_scheme in registered_schemes, f"Invalid quant_scheme: {quant_scheme}"
         if kv_quant.get("calibrate", False):
             scheme = "calib"
@@ -203,14 +203,17 @@ class KVCacheManager:
             pool.current_step = value
 
     def _create_self_attn_kv_cache(self):
-        return build_self_attn_kv_cache(
+        cache = build_self_attn_kv_cache(
             self.config,
             self.ar_config,
             self.kv_size,
             self.dtype,
             self.device,
             frame_seq_length=getattr(self, "frame_seq_length", None),
+            num_heads=getattr(self, "cache_num_heads", None),
         )
+        cache.sp_head_sharded = bool(getattr(self, "sp_head_sharded_kv", False))
+        return cache
 
     def _create_cross_attn_kv_cache(self):
         return BaseKVCachePool(
@@ -238,18 +241,26 @@ class KVCacheManager:
 
         self.frame_seq_length, self.num_output_frames = self._compute_frame_seq_length(latent_shape, ref_num_frames=ref_num_frames)
         ws = dist.get_world_size(self.sp_group) if self.sp_group is not None else 1
+        self.sp_head_sharded_kv = bool(ws > 1)
+        if self.sp_head_sharded_kv and self.config["num_heads"] % ws != 0:
+            raise ValueError(f"num_heads={self.config['num_heads']} must be divisible by SP world_size={ws} for head-sharded KV cache")
+        self.cache_num_heads = self.config["num_heads"] // ws if self.sp_head_sharded_kv else self.config["num_heads"]
+
         self.kv_size = self.frame_seq_length * (self.num_output_frames + self.ref_num_frames)
-        self.ref_tokens = self.ref_tokens_global // ws
+        self.ref_tokens = self.ref_tokens_global if self.sp_head_sharded_kv else self.ref_tokens_global // ws
         self.local_attn_size = self.ar_config.get("local_attn_size", -1)
         self.sink_size = self.ar_config.get("sink_size", 0)
         self.max_attention_size = self.ar_config.get("max_attention_size", None)
 
         if self.local_attn_size != -1:
-            self.kv_size = (self.local_attn_size + self.ref_num_frames) * self.frame_seq_length // ws
+            self.kv_size = (self.local_attn_size + self.ref_num_frames) * self.frame_seq_length
+            if not self.sp_head_sharded_kv:
+                self.kv_size = self.kv_size // ws
         else:
-            self.kv_size = self.kv_size // ws
+            if not self.sp_head_sharded_kv:
+                self.kv_size = self.kv_size // ws
 
-        if self.max_attention_size is not None:
+        if self.max_attention_size is not None and not self.sp_head_sharded_kv:
             self.max_attention_size = self.max_attention_size // ws
 
         self.max_attention_size = self.kv_size if self.max_attention_size is None else self.max_attention_size
@@ -261,7 +272,7 @@ class KVCacheManager:
         self._create_matrix_action_kv_caches()
 
         logger.info(
-            "[KVCacheManager] init: frame_seq_length={}, num_output_frames={}, kv_cache_size={}, max_attention_size={}, ws={}, local_attn_size={}, sink_size={}, kv_quant={}, kv_offload={}",
+            "[KVCacheManager] init: frame_seq_length={}, num_output_frames={}, kv_cache_size={}, max_attention_size={}, ws={}, local_attn_size={}, sink_size={}, kv_quant={}, kv_offload={}, sp_head_sharded_kv={}",
             self.frame_seq_length,
             self.num_output_frames,
             self.kv_size,
@@ -271,6 +282,7 @@ class KVCacheManager:
             self.sink_size,
             bool(self.ar_config.get("kv_quant")),
             bool(self.ar_config.get("kv_offload")),
+            self.sp_head_sharded_kv,
         )
 
     def _create_matrix_action_kv_caches(self) -> None:

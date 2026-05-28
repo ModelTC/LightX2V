@@ -233,8 +233,8 @@ class StepCalibRollingKVCachePool(CalibRollingKVCachePool):
         L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
         self._k_buffer = torch.zeros(S, L, N, H, D, dtype=self._dtype, device=self._device)
         self._v_buffer = torch.zeros(S, L, N, H, D, dtype=self._dtype, device=self._device)
-        self._global_end = torch.zeros(S, L, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(S, L, dtype=torch.long, device=self._device)
+        self._global_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
         self._captured_window_size = torch.zeros(S, L, dtype=torch.long, device="cpu")
 
         if self._turboquant_calibrate:
