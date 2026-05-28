@@ -33,9 +33,10 @@ Visit LightX2V's [Docker Hub](https://hub.docker.com/r/lightx2v/lightx2v/tags), 
 docker pull lightx2v/lightx2v:26052801-cu130
 ```
 
-We recommend using the `cuda128` environment for faster inference speed. If you need to use the `cuda124` environment, you can use image versions with the `-cu124` suffix:
+We recommend using the `cuda130` environment for faster inference speed. If you need to use the `cuda128` and `cuda124` environment, you can use image versions with the `-cu128` and `-cu124` suffix:
 
 ```bash
+docker pull lightx2v/lightx2v:26011201-cu128
 docker pull lightx2v/lightx2v:25101501-cu124
 ```
 
@@ -50,8 +51,11 @@ docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings
 For mainland China, if the network is unstable when pulling images, you can pull from Alibaba Cloud:
 
 ```bash
-# cuda128
+# cuda130
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:26052801-cu130
+
+# cuda128
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:26011201-cu128
 
 # cuda124
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25101501-cu124
