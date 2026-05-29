@@ -66,7 +66,11 @@ def auto_calc_config(config):
         if cli_num_iterations is not None:
             config["num_iterations"] = cli_num_iterations
 
-    assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
+    if not os.path.exists(config["model_path"]):
+        if config["model_cls"] == "ernie_image":
+            logger.info(f"Model path {config['model_path']} does not exist locally; Diffusers will resolve it as a Hugging Face repo ID or cached path.")
+        else:
+            raise AssertionError(f"Model path not found: {config['model_path']}")
 
     if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]

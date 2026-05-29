@@ -1,0 +1,1 @@
+from .ernie_image_runner import ErnieImageRunner

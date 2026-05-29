@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
 
 # from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
@@ -72,6 +73,7 @@ def main():
             "wan2.2_moe_distill",
             "wan2.2_moe_vace",
             "qwen_image",
+            "ernie_image",
             "longcat_image",
             "wan2.2_animate",
             "hunyuan_video_1.5",

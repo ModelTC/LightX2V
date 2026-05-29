@@ -1,0 +1,10 @@
+{
+    "infer_steps": 8,
+    "aspect_ratio": "1:1",
+    "target_height": 1024,
+    "target_width": 1024,
+    "cpu_offload": true,
+    "enable_cfg": false,
+    "sample_guide_scale": 1.0,
+    "use_pe": true
+}

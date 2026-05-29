@@ -119,6 +119,14 @@
                         "outputs": ["output_image"]
                     }
                 }
+            },
+            "ernie-image": {
+                "single_stage": {
+                    "pipeline": {
+                        "inputs": [],
+                        "outputs": ["output_image"]
+                    }
+                }
             }
         },
         "s2v": {
@@ -212,6 +220,7 @@
                 "flf2v-wan2.2-14B-480P-single_stage-pipeline": 3600,
                 "flf2v-wan2.2-14B-480P-multi_stage-segment_dit": 3600,
                 "i2i-qwen-image-single_stage-pipeline": 3600,
+                "t2i-ernie-image-single_stage-pipeline": 3600,
                 "animate-wan2.2_animate-single_stage-pipeline": 3600
             },
             "worker_avg_window": 20,
