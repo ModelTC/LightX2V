@@ -113,6 +113,8 @@ class HeliosRunner(DefaultRunner):
     def init_modules(self):
         if self.config["task"] not in ["t2v", "i2v"]:
             raise NotImplementedError(f"HeliosRunner only supports t2v/i2v, got {self.config['task']}")
+        if self.config.get("text_encoder_quantized") or self.config.get("text_encoder_quantized_ckpt") or self.config.get("text_encoder_quant_scheme"):
+            raise NotImplementedError("Helios native integration does not support text-encoder quantization yet.")
         if self.config.get("lazy_load"):
             raise NotImplementedError("Helios native integration does not support lazy_load.")
         if self.config.get("unload_modules"):

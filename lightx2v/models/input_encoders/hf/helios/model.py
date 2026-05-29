@@ -48,7 +48,8 @@ def pack_t5_prompt_embeds(hidden_state, attention_mask, max_sequence_length, num
 class HeliosTextEncoder:
     def __init__(self, config):
         self.config = config
-        self.device = torch.device("cpu") if config.get("t5_cpu_offload", config.get("cpu_offload", False)) else torch.device(AI_DEVICE)
+        use_cpu = config.get("text_encoder_cpu_offload", config.get("t5_cpu_offload", config.get("cpu_offload", False)))
+        self.device = torch.device("cpu") if use_cpu else torch.device(AI_DEVICE)
         self.dtype = GET_DTYPE()
         self.tokenizer = AutoTokenizer.from_pretrained(config["tokenizer_path"])
         self.text_encoder = UMT5EncoderModel.from_pretrained(config["text_encoder_path"], torch_dtype=self.dtype).to(self.device)

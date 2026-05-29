@@ -1,10 +1,9 @@
 import argparse
 
 from lightx2v_train.data import build_data
+from lightx2v_train.infer import build_inferencer
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import load_config
-
-from lightx2v_train.infer import build_inferencer
 
 
 def parse_args():
