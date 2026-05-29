@@ -22,7 +22,6 @@ except ImportError:
     MS_AVAILABLE = False
 import gc
 import importlib.util
-import json
 import re
 
 import psutil
