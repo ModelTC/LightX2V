@@ -18,7 +18,6 @@ from typing import Literal
 
 import numpy as np
 import torch
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils import BaseOutput
@@ -138,9 +137,7 @@ class HeliosDMDScheduler(SchedulerMixin, ConfigMixin):
             timestep_max = min(self.timesteps[int(timestep_ratio[0] * training_steps)], 999)
             timestep_min = self.timesteps[min(int(timestep_ratio[1] * training_steps), training_steps - 1)]
             timesteps = np.linspace(timestep_max, timestep_min, training_steps + 1)
-            self.timesteps_per_stage[i_s] = (
-                timesteps[:-1] if isinstance(timesteps, torch.Tensor) else torch.from_numpy(timesteps[:-1])
-            )
+            self.timesteps_per_stage[i_s] = timesteps[:-1] if isinstance(timesteps, torch.Tensor) else torch.from_numpy(timesteps[:-1])
             stage_sigmas = np.linspace(0.999, 0, training_steps + 1)
             self.sigmas_per_stage[i_s] = torch.from_numpy(stage_sigmas[:-1])
 
@@ -193,9 +190,7 @@ class HeliosDMDScheduler(SchedulerMixin, ConfigMixin):
 
         if self.config.stages == 1:
             if sigmas is None:
-                sigmas = np.linspace(1, 1 / self.config.num_train_timesteps, num_inference_steps + 1)[:-1].astype(
-                    np.float32
-                )
+                sigmas = np.linspace(1, 1 / self.config.num_train_timesteps, num_inference_steps + 1)[:-1].astype(np.float32)
                 if self.config.shift != 1.0:
                     assert not self.config.use_dynamic_shifting
                     sigmas = self.time_shift(self.config.shift, 1.0, sigmas)
@@ -228,9 +223,7 @@ class HeliosDMDScheduler(SchedulerMixin, ConfigMixin):
             if self.config.stages == 1:
                 self.timesteps = self.sigmas[:-1] * self.config.num_train_timesteps
             else:
-                self.timesteps = self.timesteps_per_stage[stage_index].min() + self.sigmas[:-1] * (
-                    self.timesteps_per_stage[stage_index].max() - self.timesteps_per_stage[stage_index].min()
-                )
+                self.timesteps = self.timesteps_per_stage[stage_index].min() + self.sigmas[:-1] * (self.timesteps_per_stage[stage_index].max() - self.timesteps_per_stage[stage_index].min())
 
     # Copied from diffusers.schedulers.scheduling_flow_match_euler_discrete.FlowMatchEulerDiscreteScheduler.time_shift
     def time_shift(self, mu: float, sigma: float, t: torch.Tensor):

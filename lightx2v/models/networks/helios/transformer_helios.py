@@ -18,7 +18,6 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
@@ -31,7 +30,6 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import FP32LayerNorm
 from diffusers.utils import apply_lora_scale, logging
 from diffusers.utils.torch_utils import maybe_allow_in_graph
-
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -102,9 +100,7 @@ class HeliosAttnProcessor:
 
     def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError(
-                "HeliosAttnProcessor requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or higher."
-            )
+            raise ImportError("HeliosAttnProcessor requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or higher.")
 
     def __call__(
         self,
@@ -228,18 +224,14 @@ class HeliosAttention(torch.nn.Module, AttentionModuleMixin):
             out_features, in_features = concatenated_weights.shape
             with torch.device("meta"):
                 self.to_qkv = nn.Linear(in_features, out_features, bias=True)
-            self.to_qkv.load_state_dict(
-                {"weight": concatenated_weights, "bias": concatenated_bias}, strict=True, assign=True
-            )
+            self.to_qkv.load_state_dict({"weight": concatenated_weights, "bias": concatenated_bias}, strict=True, assign=True)
         else:
             concatenated_weights = torch.cat([self.to_k.weight.data, self.to_v.weight.data])
             concatenated_bias = torch.cat([self.to_k.bias.data, self.to_v.bias.data])
             out_features, in_features = concatenated_weights.shape
             with torch.device("meta"):
                 self.to_kv = nn.Linear(in_features, out_features, bias=True)
-            self.to_kv.load_state_dict(
-                {"weight": concatenated_weights, "bias": concatenated_bias}, strict=True, assign=True
-            )
+            self.to_kv.load_state_dict({"weight": concatenated_weights, "bias": concatenated_bias}, strict=True, assign=True)
 
         if self.added_kv_proj_dim is not None:
             concatenated_weights = torch.cat([self.add_k_proj.weight.data, self.add_v_proj.weight.data])
@@ -247,9 +239,7 @@ class HeliosAttention(torch.nn.Module, AttentionModuleMixin):
             out_features, in_features = concatenated_weights.shape
             with torch.device("meta"):
                 self.to_added_kv = nn.Linear(in_features, out_features, bias=True)
-            self.to_added_kv.load_state_dict(
-                {"weight": concatenated_weights, "bias": concatenated_bias}, strict=True, assign=True
-            )
+            self.to_added_kv.load_state_dict({"weight": concatenated_weights, "bias": concatenated_bias}, strict=True, assign=True)
 
         self.fused_projections = True
 
@@ -430,9 +420,7 @@ class HeliosTransformerBlock(nn.Module):
         original_context_length: int = None,
     ) -> torch.Tensor:
         if temb.ndim == 4:
-            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table.unsqueeze(0) + temb.float()
-            ).chunk(6, dim=2)
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (self.scale_shift_table.unsqueeze(0) + temb.float()).chunk(6, dim=2)
             # batch_size, seq_len, 1, inner_dim
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)
@@ -441,9 +429,7 @@ class HeliosTransformerBlock(nn.Module):
             c_scale_msa = c_scale_msa.squeeze(2)
             c_gate_msa = c_gate_msa.squeeze(2)
         else:
-            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table + temb.float()
-            ).chunk(6, dim=1)
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (self.scale_shift_table + temb.float()).chunk(6, dim=1)
 
         # 1. Self-attention
         norm_hidden_states = (self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa).type_as(hidden_states)
@@ -460,9 +446,7 @@ class HeliosTransformerBlock(nn.Module):
         if self.guidance_cross_attn:
             history_seq_len = hidden_states.shape[1] - original_context_length
 
-            history_hidden_states, hidden_states = torch.split(
-                hidden_states, [history_seq_len, original_context_length], dim=1
-            )
+            history_hidden_states, hidden_states = torch.split(hidden_states, [history_seq_len, original_context_length], dim=1)
             norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
             attn_output = self.attn2(
                 norm_hidden_states,
@@ -485,18 +469,14 @@ class HeliosTransformerBlock(nn.Module):
             hidden_states = hidden_states + attn_output
 
         # 3. Feed-forward
-        norm_hidden_states = (self.norm3(hidden_states.float()) * (1 + c_scale_msa) + c_shift_msa).type_as(
-            hidden_states
-        )
+        norm_hidden_states = (self.norm3(hidden_states.float()) * (1 + c_scale_msa) + c_shift_msa).type_as(hidden_states)
         ff_output = self.ffn(norm_hidden_states)
         hidden_states = (hidden_states.float() + ff_output.float() * c_gate_msa).type_as(hidden_states)
 
         return hidden_states
 
 
-class HeliosTransformer3DModel(
-    ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin, AttentionMixin
-):
+class HeliosTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin, AttentionMixin):
     r"""
     A Transformer model for video-like data used in the Helios model.
 
@@ -751,15 +731,9 @@ class HeliosTransformer3DModel(
 
         if indices_hidden_states is not None and self.zero_history_timestep:
             timestep_t0 = torch.zeros((1), dtype=timestep.dtype, device=timestep.device)
-            temb_t0, timestep_proj_t0, _ = self.condition_embedder(
-                timestep_t0, encoder_hidden_states, is_return_encoder_hidden_states=False
-            )
+            temb_t0, timestep_proj_t0, _ = self.condition_embedder(timestep_t0, encoder_hidden_states, is_return_encoder_hidden_states=False)
             temb_t0 = temb_t0.unsqueeze(1).expand(batch_size, history_context_length, -1)
-            timestep_proj_t0 = (
-                timestep_proj_t0.unflatten(-1, (6, -1))
-                .view(1, 6, 1, -1)
-                .expand(batch_size, -1, history_context_length, -1)
-            )
+            timestep_proj_t0 = timestep_proj_t0.unflatten(-1, (6, -1)).view(1, 6, 1, -1).expand(batch_size, -1, history_context_length, -1)
 
         temb, timestep_proj, encoder_hidden_states = self.condition_embedder(timestep, encoder_hidden_states)
         timestep_proj = timestep_proj.unflatten(-1, (6, -1))
@@ -807,9 +781,7 @@ class HeliosTransformer3DModel(
         hidden_states = self.proj_out(hidden_states)
 
         # 8. Unpatchify
-        hidden_states = hidden_states.reshape(
-            batch_size, post_patch_num_frames, post_patch_height, post_patch_width, p_t, p_h, p_w, -1
-        )
+        hidden_states = hidden_states.reshape(batch_size, post_patch_num_frames, post_patch_height, post_patch_width, p_t, p_h, p_w, -1)
         hidden_states = hidden_states.permute(0, 7, 1, 4, 2, 5, 3, 6)
         output = hidden_states.flatten(6, 7).flatten(4, 5).flatten(2, 3)
 

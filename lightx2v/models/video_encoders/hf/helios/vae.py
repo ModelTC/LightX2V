@@ -6,7 +6,6 @@ from diffusers import AutoencoderKLWan
 from diffusers.utils import load_image
 from diffusers.video_processor import VideoProcessor
 
-from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -59,8 +58,8 @@ class HeliosVAE:
 
     def decode(self, latents):
         self._to_device()
-        latents_mean = self.latents_mean.to(device=latents.device, dtype=latents.dtype)
-        latents_std = self.latents_std.to(device=latents.device, dtype=latents.dtype)
+        latents_mean = self.latents_mean.to(device=self.model.device, dtype=self.model.dtype)
+        latents_std = self.latents_std.to(device=self.model.device, dtype=self.model.dtype)
         current_latents = latents.to(self.model.device, dtype=self.model.dtype) / latents_std + latents_mean
         decoded = self.model.decode(current_latents, return_dict=False)[0]
         self._to_cpu()

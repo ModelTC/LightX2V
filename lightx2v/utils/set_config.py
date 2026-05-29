@@ -161,14 +161,16 @@ def auto_calc_config(config):
                 if key in scheduler_config:
                     config[key] = scheduler_config[key]
 
-        is_distilled = bool(model_index.get("is_distilled", config.get("is_distilled", False))) or "Distilled" in (modular_model_index.get("_class_name") or "") or config.get("scheduler_type") == "HeliosDMDScheduler"
+        is_distilled = (
+            bool(model_index.get("is_distilled", config.get("is_distilled", False)))
+            or "Distilled" in (modular_model_index.get("_class_name") or "")
+            or config.get("scheduler_type") == "HeliosDMDScheduler"
+        )
         config["is_distilled"] = is_distilled
         if not is_distilled:
             scheduler_hint = config.get("scheduler_type", "unknown")
             raise ValueError(
-                f"Unsupported Helios checkpoint at {config['model_path']}: "
-                f"LightX2V only supports Helios-Distilled checkpoints, but detected base/unsupported metadata "
-                f"(scheduler={scheduler_hint})."
+                f"Unsupported Helios checkpoint at {config['model_path']}: LightX2V only supports Helios-Distilled checkpoints, but detected base/unsupported metadata (scheduler={scheduler_hint})."
             )
         config["model_cls"] = "helios_distilled"
         config["model_variant"] = "distilled"

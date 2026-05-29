@@ -5,7 +5,6 @@ from loguru import logger
 
 from lightx2v.models.networks.helios.transformer_helios import HeliosTransformer3DModel
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class HeliosModel:

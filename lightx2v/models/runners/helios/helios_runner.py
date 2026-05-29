@@ -12,7 +12,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.helios import HeliosDistilledScheduler
 from lightx2v.models.video_encoders.hf.helios import HeliosVAE
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -45,19 +45,10 @@ def _apply_image_condition_noise(
     video_noise_sigma_min,
     video_noise_sigma_max,
 ):
-    image_noise_sigma = (
-        torch.rand(1, device=device, generator=generator) * (image_noise_sigma_max - image_noise_sigma_min) + image_noise_sigma_min
-    )
-    image_latents = (
-        image_noise_sigma * torch.randn(image_latents.shape, generator=generator, device=device) + (1 - image_noise_sigma) * image_latents
-    )
-    fake_image_noise_sigma = (
-        torch.rand(1, device=device, generator=generator) * (video_noise_sigma_max - video_noise_sigma_min) + video_noise_sigma_min
-    )
-    fake_image_latents = (
-        fake_image_noise_sigma * torch.randn(fake_image_latents.shape, generator=generator, device=device)
-        + (1 - fake_image_noise_sigma) * fake_image_latents
-    )
+    image_noise_sigma = torch.rand(1, device=device, generator=generator) * (image_noise_sigma_max - image_noise_sigma_min) + image_noise_sigma_min
+    image_latents = image_noise_sigma * torch.randn(image_latents.shape, generator=generator, device=device) + (1 - image_noise_sigma) * image_latents
+    fake_image_noise_sigma = torch.rand(1, device=device, generator=generator) * (video_noise_sigma_max - video_noise_sigma_min) + video_noise_sigma_min
+    fake_image_latents = fake_image_noise_sigma * torch.randn(fake_image_latents.shape, generator=generator, device=device) + (1 - fake_image_noise_sigma) * fake_image_latents
     return image_latents, fake_image_latents
 
 
@@ -368,7 +359,9 @@ class HeliosRunner(DefaultRunner):
                     gamma = self.scheduler.inner.config.gamma
                     alpha = 1 / (math.sqrt(1 + (1 / gamma)) * (1 - ori_sigma) + ori_sigma)
                     beta = alpha * (1 - ori_sigma) / math.sqrt(gamma)
-                    noise = self.sample_block_noise(batch_size, num_channels_latents, latents.shape[2], pyramid_height, pyramid_width, patch_size, device, self.scheduler.generator).to(dtype=transformer_dtype)
+                    noise = self.sample_block_noise(batch_size, num_channels_latents, latents.shape[2], pyramid_height, pyramid_width, patch_size, device, self.scheduler.generator).to(
+                        dtype=transformer_dtype
+                    )
                     latents = alpha * latents + beta * noise
                     start_point_list.append(latents)
 
@@ -426,10 +419,10 @@ class HeliosRunner(DefaultRunner):
         self.gen_video = history_video
         self.gen_video_final = _pt_video_output_to_frames(
             _finalize_video_output(
-            history_video=self.gen_video,
-            video_processor=self.vae_decoder.video_processor,
-            temporal_scale_factor=self.vae_decoder.vae_scale_factor_temporal,
-            output_type="pt",
+                history_video=self.gen_video,
+                video_processor=self.vae_decoder.video_processor,
+                temporal_scale_factor=self.vae_decoder.vae_scale_factor_temporal,
+                output_type="pt",
             )
         )
         result = self.process_images_after_vae_decoder_helios()
@@ -450,7 +443,11 @@ class HeliosRunner(DefaultRunner):
         if self.input_info.return_result_tensor:
             return {"video": self.gen_video_final}
         elif self.input_info.save_result_path is not None:
-            fps = self.config["video_frame_interpolation"]["target_fps"] if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps") else self.config.get("fps", 16)
+            fps = (
+                self.config["video_frame_interpolation"]["target_fps"]
+                if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps")
+                else self.config.get("fps", 16)
+            )
             if not dist.is_initialized() or dist.get_rank() == 0:
                 out_path = self.input_info.save_result_path
                 logger.info("🎬 Start to save video 🎬")
