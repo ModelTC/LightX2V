@@ -74,9 +74,5 @@ def apply_fsdp2(model, config):
     if fsdp_config.get("log_memory", True):
         after = _cuda_memory_gb()
         if before is not None and after is not None:
-            rank_zero_print(
-                "FSDP2 transformer sharded: "
-                f"allocated {before[0]:.2f} -> {after[0]:.2f} GiB, "
-                f"reserved {before[1]:.2f} -> {after[1]:.2f} GiB"
-            )
+            rank_zero_print(f"FSDP2 transformer sharded: allocated {before[0]:.2f} -> {after[0]:.2f} GiB, reserved {before[1]:.2f} -> {after[1]:.2f} GiB")
     return model
