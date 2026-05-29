@@ -6,7 +6,9 @@ from diffusers.optimization import get_scheduler
 from tqdm.auto import tqdm
 
 from lightx2v_train.infer import build_inferencer
-from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, prune_checkpoints
+from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
+from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, rank_zero_print, reduce_mean
+from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -50,8 +52,10 @@ class LoraTrainer(BaseTrainer):
 
     def setup(self, resume_ckpt_path=None):
         self.model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
-
         self.model.set_lora_trainable()
+
+        apply_fsdp2(self.model, self.config)
+
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
 
@@ -59,8 +63,9 @@ class LoraTrainer(BaseTrainer):
             self.inferencer = build_inferencer(self.config)
             self.inferencer.set_model(self.model)
 
+        self.trainable_params = list(self.model.trainable_parameters())
         self.optimizer = torch.optim.AdamW(
-            self.model.trainable_parameters(),
+            self.trainable_params,
             lr=self.optimizer_learning_rate,
             betas=(self.optimizer_adam_beta1, self.optimizer_adam_beta2),
             weight_decay=self.optimizer_weight_decay,
@@ -74,15 +79,67 @@ class LoraTrainer(BaseTrainer):
         )
 
         if resume_ckpt_path is not None:
-            training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
-            if os.path.exists(training_state_path):
-                state = torch.load(training_state_path, map_location="cpu", weights_only=False)
-                self.model.load_lora_weights_for_resume(resume_ckpt_path)
-                self.optimizer.load_state_dict(state["optimizer"])
-                self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-                print(f"Restored training state from {training_state_path}")
-            else:
-                print(f"Warning: training_state.pt not found in {resume_ckpt_path}. States not restored.")
+            self._load_resume_state(resume_ckpt_path)
+
+    def _load_resume_state(self, resume_ckpt_path):
+        if self.model.is_fsdp2_wrapped():
+            self._load_distributed_state(resume_ckpt_path)
+            return
+
+        self._load_single_process_state(resume_ckpt_path)
+
+    def _load_single_process_state(self, resume_ckpt_path):
+        training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
+        if not os.path.exists(training_state_path):
+            raise RuntimeError(f"training_state.pt not found in {resume_ckpt_path}")
+
+        state = torch.load(training_state_path, map_location="cpu", weights_only=False)
+        self._validate_checkpoint_metadata(state, training_state_path, resume_ckpt_path)
+        self.model.load_lora_weights_for_resume(resume_ckpt_path)
+        self.optimizer.load_state_dict(state["optimizer"])
+        self.lr_scheduler.load_state_dict(state["lr_scheduler"])
+        rank_zero_print(f"Restored training state from {training_state_path}")
+
+    def _load_distributed_state(self, resume_ckpt_path):
+        import torch.distributed.checkpoint as dcp
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
+
+        dist_state_path = os.path.join(resume_ckpt_path, "dist_state")
+        if not os.path.exists(dist_state_path):
+            raise RuntimeError(f"FSDP2 resume requires dist_state/, but it was not found in {resume_ckpt_path}")
+
+        trainer_state_path = os.path.join(resume_ckpt_path, "trainer_state.pt")
+        if not os.path.exists(trainer_state_path):
+            raise RuntimeError(f"trainer_state.pt not found in {resume_ckpt_path}")
+        trainer_state = torch.load(trainer_state_path, map_location="cpu", weights_only=False)
+        self._validate_checkpoint_metadata(trainer_state, trainer_state_path, resume_ckpt_path)
+
+        options = StateDictOptions(ignore_frozen_params=True, strict=False)
+        state_module = self.model.fsdp2_state_module()
+        model_state, optim_state = get_state_dict(state_module, self.optimizer, options=options)
+        state = {"model": model_state, "optimizer": optim_state}
+        dcp.load(state, checkpoint_id=dist_state_path)
+        set_state_dict(
+            state_module,
+            self.optimizer,
+            model_state_dict=state["model"],
+            optim_state_dict=state["optimizer"],
+            options=options,
+        )
+
+        self.lr_scheduler.load_state_dict(trainer_state["lr_scheduler"])
+        rank_zero_print(f"Restored distributed training state from {resume_ckpt_path}")
+
+    def _validate_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
+        checkpoint_world_size = state.get("world_size")
+        current_world_size = get_world_size()
+        if checkpoint_world_size != current_world_size:
+            raise RuntimeError(f"Cannot resume checkpoint saved with world_size={checkpoint_world_size} using world_size={current_world_size}: {state_path}")
+
+        expected_iteration = parse_checkpoint_iteration(resume_ckpt_path)
+        checkpoint_iteration = state.get("iteration")
+        if checkpoint_iteration != expected_iteration:
+            raise RuntimeError(f"Cannot resume checkpoint with iteration={checkpoint_iteration} in {state_path}, expected iteration={expected_iteration} from {resume_ckpt_path}")
 
     def compute_loss_on_sample(self, sample):
         with torch.no_grad():
@@ -107,15 +164,17 @@ class LoraTrainer(BaseTrainer):
             return None, 0
         ckpt_path, current_iter = find_latest_checkpoint(self.output_train_dir)
         if ckpt_path is None:
-            print(f"Auto-resume enabled but no checkpoint found in '{self.output_train_dir}'. Starting from scratch.")
+            rank_zero_print(f"Auto-resume enabled but no checkpoint found in '{self.output_train_dir}'. Starting from scratch.")
         else:
-            print(f"Auto-resuming from checkpoint: {ckpt_path} (iteration {current_iter})")
+            rank_zero_print(f"Auto-resuming from checkpoint: {ckpt_path} (iteration {current_iter})")
         return ckpt_path, current_iter
 
     def train(self):
         resume_ckpt_path, current_iter = self._resolve_resume()
         self.setup(resume_ckpt_path=resume_ckpt_path)
-        os.makedirs(self.output_train_dir, exist_ok=True)
+        if is_main_process():
+            os.makedirs(self.output_train_dir, exist_ok=True)
+        barrier()
 
         max_train_iters = self.max_train_iters
         grad_accum_iters = self.gradient_accumulation_iters
@@ -125,14 +184,22 @@ class LoraTrainer(BaseTrainer):
         grad_accum_counter = 0
         running_loss = 0.0
 
-        progress = tqdm(total=max_train_iters, desc="Training iterations", initial=current_iter)
+        progress = tqdm(total=max_train_iters, desc="Training iterations", initial=current_iter, disable=not is_main_process())
         if self.infer_every_iters:
             self.inferencer.set_data(self.dataloader_eval)
             if current_iter == 0:
                 self.run_inference(current_iter)
 
+        epoch = 0
         while current_iter < max_train_iters:
+            sampler = getattr(self.dataloader_train, "sampler", None)
+            if hasattr(sampler, "set_epoch"):
+                sampler.set_epoch(epoch)
+
             for sample in self.dataloader_train:
+                sync_grad = (grad_accum_counter + 1) % grad_accum_iters == 0
+                self._set_gradient_sync(sync_grad)
+
                 loss = self.compute_loss_on_sample(sample)
                 (loss / grad_accum_iters).backward()
                 running_loss += loss.item() / grad_accum_iters
@@ -141,14 +208,15 @@ class LoraTrainer(BaseTrainer):
                 if grad_accum_counter % grad_accum_iters != 0:
                     continue
 
-                torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.trainable_params, max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
 
                 current_iter += 1
+                display_loss = reduce_mean(running_loss)
                 progress.update(1)
-                progress.set_postfix(loss=running_loss, lr=self.lr_scheduler.get_last_lr()[0])
+                progress.set_postfix(loss=display_loss, lr=self.lr_scheduler.get_last_lr()[0])
                 running_loss = 0.0
 
                 if save_every_iters and current_iter % save_every_iters == 0:
@@ -160,7 +228,12 @@ class LoraTrainer(BaseTrainer):
                 if current_iter >= max_train_iters:
                     break
 
+            epoch += 1
+
         progress.close()
+
+    def _set_gradient_sync(self, enabled):
+        self.model.set_fsdp2_gradient_sync(enabled)
 
     def run_inference(self, current_iter):
         base_output_dir = self.infer_config.get("output_dir", "./output_infer")
@@ -169,23 +242,61 @@ class LoraTrainer(BaseTrainer):
         self.inferencer.output_infer_dir = iter_output_dir
         os.makedirs(iter_output_dir, exist_ok=True)
         self.inferencer.infer()
+        barrier()
 
         self.model.set_lora_trainable()
 
     def save_checkpoint(self, iteration, save_total_limit):
-        prune_checkpoints(self.output_train_dir, save_total_limit)
+        if is_main_process():
+            prune_checkpoints(self.output_train_dir, save_total_limit)
 
         save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
-        os.makedirs(save_dir, exist_ok=True)
+        if is_main_process():
+            os.makedirs(save_dir, exist_ok=True)
+        barrier()
+
         self.model.save_lora_weights(save_dir)
+        barrier()
 
         config_path = self.config.get("config_path")
-        if config_path is not None:
+        if is_main_process() and config_path is not None:
             shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
+
+        if self.model.is_fsdp2_wrapped():
+            self._save_distributed_state(save_dir, iteration)
+            barrier()
+            return
 
         training_state = {
             "iteration": iteration,
+            "world_size": get_world_size(),
             "optimizer": self.optimizer.state_dict(),
             "lr_scheduler": self.lr_scheduler.state_dict(),
         }
-        torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
+        if is_main_process():
+            torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
+        barrier()
+
+    def _save_distributed_state(self, save_dir, iteration):
+        import torch.distributed.checkpoint as dcp
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
+
+        dist_state_path = os.path.join(save_dir, "dist_state")
+        if is_main_process():
+            os.makedirs(dist_state_path, exist_ok=True)
+            torch.save(
+                {
+                    "iteration": iteration,
+                    "world_size": get_world_size(),
+                    "lr_scheduler": self.lr_scheduler.state_dict(),
+                },
+                os.path.join(save_dir, "trainer_state.pt"),
+            )
+        barrier()
+
+        options = StateDictOptions(ignore_frozen_params=True, strict=False)
+        model_state, optim_state = get_state_dict(self.model.fsdp2_state_module(), self.optimizer, options=options)
+        dcp.save(
+            {"model": model_state, "optimizer": optim_state},
+            checkpoint_id=dist_state_path,
+        )

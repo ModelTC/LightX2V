@@ -2,6 +2,7 @@ from pathlib import Path
 
 import torch
 
+from lightx2v_train.runtime.distributed import is_distributed
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
 from .base import BaseInferencer
@@ -11,6 +12,9 @@ from .base import BaseInferencer
 class NativeImageInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
+        if is_distributed():
+            raise NotImplementedError("image_native_infer is not supported with torchrun. Use image_infer instead.")
+
         prompts = [sample["prompt"] for sample in self.dataloader_eval.dataset.samples]
         enable_cfg = self.infer_config.get("enable_cfg", False)
         negative_prompt = self.infer_config.get("negative_prompt", " ") if enable_cfg else None
@@ -28,7 +32,7 @@ class NativeImageInferencer(BaseInferencer):
             pipe.load_lora_weights(lora_path)
 
         saved_paths = []
-        self.model.transformer.eval()
+        self.model.set_denoiser_eval()
         with torch.no_grad():
             for i, prompt in enumerate(prompts):
                 generator = torch.Generator(device=self.model.device).manual_seed(base_seed + i)
