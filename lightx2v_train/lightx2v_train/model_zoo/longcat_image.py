@@ -36,6 +36,26 @@ class LongCatImageModel(BaseModel):
         self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
         self.vae.requires_grad_(False)
 
+    def denoiser_module(self):
+        return self.transformer
+
+    def fsdp2_shard_plan(self, fsdp_config):
+        reshard_config = fsdp_config["reshard_after_forward"]
+        return [
+            {
+                "modules": self.transformer.transformer_blocks,
+                "reshard_after_forward": reshard_config["block_reshard"],
+            },
+            {
+                "modules": self.transformer.single_transformer_blocks,
+                "reshard_after_forward": reshard_config["block_reshard"],
+            },
+            {
+                "module": self.transformer,
+                "reshard_after_forward": reshard_config["root_reshard"],
+            },
+        ]
+
     @property
     def vae_scale_factor(self):
         return 2 ** (len(self.vae.config.block_out_channels) - 1)

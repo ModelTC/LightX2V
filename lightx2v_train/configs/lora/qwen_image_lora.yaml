@@ -4,6 +4,20 @@ model:
     max_sequence_length: 1024
     running_dtype: bf16
 
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    fsdp2:
+        enabled: true
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
 data:
     train:
         name: image_dataset

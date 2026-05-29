@@ -20,9 +20,9 @@
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI视频生成平台，提供LTX2.3 / Wan 2.2 / SekoTalk / Qwen-Image / SeedVR2等多个模型多种任务的免费体验使用。
 
-> 🤗 **HuggingFace 模型仓库：** [lightx2v](https://huggingface.co/lightx2v)
+> 🤗 **HuggingFace 模型仓库: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
-> 🌐 更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)
+> 📝 **更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)**
 
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 

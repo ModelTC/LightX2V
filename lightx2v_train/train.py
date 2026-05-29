@@ -2,7 +2,7 @@ import argparse
 
 from lightx2v_train.data import build_data
 from lightx2v_train.model_zoo import build_model
-from lightx2v_train.runtime import load_config
+from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config
 from lightx2v_train.trainers import build_trainer
 
 
@@ -15,18 +15,22 @@ def parse_args():
 def main():
     args = parse_args()
     config = load_config(args.config)
+    init_distributed(config)
 
-    model = build_model(config)
-    model.load_components()
+    try:
+        model = build_model(config)
+        model.load_components()
 
-    dataloader_train = build_data(config, train_or_val="train")
-    dataloader_eval = build_data(config, train_or_val="val")
+        dataloader_train = build_data(config, train_or_val="train")
+        dataloader_eval = build_data(config, train_or_val="val")
 
-    trainer = build_trainer(config)
-    trainer.set_model(model)
-    trainer.set_data(dataloader_train, dataloader_eval)
+        trainer = build_trainer(config)
+        trainer.set_model(model)
+        trainer.set_data(dataloader_train, dataloader_eval)
 
-    trainer.train()
+        trainer.train()
+    finally:
+        cleanup_distributed()
 
 
 if __name__ == "__main__":

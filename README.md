@@ -20,9 +20,9 @@
 
 > 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Online Service](https://x2v.light-ai.top/login)** — a free, lightweight AI video platform with **LTX 2.3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SeedVR2**, and more models and tasks.
 
-> 🤗 **HuggingFace Model Repository:** [lightx2v](https://huggingface.co/lightx2v)
+> 🤗 **HuggingFace Model Repository: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
-> 🌐 More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)
+> 📝 **More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
 > 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 
