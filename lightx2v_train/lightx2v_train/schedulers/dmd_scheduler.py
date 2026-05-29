@@ -29,6 +29,43 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         self.sigmas = self.linear_shift(self.inference_shift, timesteps / self.num_train_timesteps)
         self.timesteps = self.sigmas * self.num_train_timesteps
 
+    def set_random_timesteps(
+        self,
+        num_steps_min,
+        num_steps_max,
+        sigma_min=0.25,
+        sigma_max=0.95,
+        sampling_method="stratified",
+        device=None,
+    ):
+        device = device or self.device
+        num_steps = int(torch.randint(num_steps_min, num_steps_max + 1, (1,), device=device).item())
+        inner_count = max(0, num_steps - 1)
+        if inner_count:
+            if sampling_method == "uniform":
+                inner_sigmas = torch.empty(inner_count, dtype=torch.float32, device=device).uniform_(sigma_min, sigma_max)
+            elif sampling_method == "stratified":
+                bin_edges = torch.linspace(sigma_min, sigma_max, inner_count + 1, dtype=torch.float32, device=device)
+                bin_lows = bin_edges[:-1]
+                bin_highs = bin_edges[1:]
+                inner_sigmas = bin_lows + torch.rand(inner_count, dtype=torch.float32, device=device) * (bin_highs - bin_lows)
+            else:
+                raise ValueError(f"Unsupported random sigma sampling_method: {sampling_method}")
+            inner_sigmas = self.linear_shift(self.inference_shift, inner_sigmas)
+            inner_sigmas = torch.sort(inner_sigmas, descending=True).values
+            sigmas = torch.cat(
+                [
+                    torch.ones(1, dtype=torch.float32, device=device),
+                    inner_sigmas,
+                    torch.zeros(1, dtype=torch.float32, device=device),
+                ]
+            )
+        else:
+            sigmas = torch.tensor([1.0, 0.0], dtype=torch.float32, device=device)
+        self.sigmas = sigmas
+        self.timesteps = self.sigmas * self.num_train_timesteps
+        self.num_inference_steps = int(sigmas.numel() - 1)
+
     def sigma_at(self, step_idx, batch_size, device=None, dtype=None):
         sigma = self.sigmas[int(step_idx)].expand(int(batch_size))
         if device is not None or dtype is not None:

@@ -34,6 +34,32 @@ class DmdLoraTrainer(LoraTrainer):
         self.cfg_norm = self.dmd_config.get("cfg_norm", "layer_norm")
         self.image_sizes = self.dmd_config.get("image_sizes", [])
 
+        random_schedule_config = self.dmd_config.get("random_schedule", {})
+        self.random_schedule_enabled = bool(
+            random_schedule_config.get("enabled", False)
+        )
+        self.random_schedule_num_steps_min = int(
+            random_schedule_config.get("num_steps_min", 1)
+        )
+        self.random_schedule_num_steps_max = int(
+            random_schedule_config.get("num_steps_max", self.num_inference_steps)
+        )
+        self.random_schedule_sigma_min = float(
+            random_schedule_config.get("sigma_min", 0.02)
+        )
+        self.random_schedule_sigma_max = float(
+            random_schedule_config.get("sigma_max", 0.98)
+        )
+        self.random_schedule_sampling_method = random_schedule_config.get(
+            "sampling_method", "stratified"
+        )
+
+        self.cdm_config = self.dmd_config.get("cdm", {})
+        self.cdm_enabled = bool(self.cdm_config.get("enabled", False))
+        self.cdm_weight = float(self.cdm_config.get("weight", 1.0))
+        self.cdm_warmup_iters = int(self.cdm_config.get("warmup_iters", 0))
+        self.cdm_norm_clip_min = float(self.cdm_config.get("norm_clip_min", 0.1))
+
     def setup(self, resume_ckpt_path=None):
         super().setup(resume_ckpt_path=resume_ckpt_path)
         self.fake_model = build_model(self.config)
@@ -69,6 +95,18 @@ class DmdLoraTrainer(LoraTrainer):
 
         print(f"[dmd_lora] student trainable params={self._count_trainable(self.model.transformer)}")
         print(f"[dmd_lora] fake trainable params={self._count_trainable(self.fake_model.transformer)}")
+        if self.random_schedule_enabled:
+            print(
+                "[dmd_lora] random sigma schedule enabled: "
+                f"steps=[{self.random_schedule_num_steps_min}, {self.random_schedule_num_steps_max}], "
+                f"sigma=[{self.random_schedule_sigma_min}, {self.random_schedule_sigma_max}], "
+                f"sampling_method={self.random_schedule_sampling_method}"
+            )
+        if self.cdm_enabled:
+            print(
+                "[dmd_lora] CDM enabled: "
+                f"weight={self.cdm_weight}, warmup_iters={self.cdm_warmup_iters}"
+            )
 
     @staticmethod
     def _count_trainable(module):
@@ -90,13 +128,34 @@ class DmdLoraTrainer(LoraTrainer):
         raise ValueError(f"Unsupported cfg_norm: {cfg_norm}")
 
     @staticmethod
-    def _dmd_loss(latents, x_pred_fake_flow, x_pred_teacher):
+    def _dmd_loss(latents, x_pred_fake_flow, x_pred_teacher, norm_clip_min=None):
         with torch.no_grad():
             grad = x_pred_fake_flow - x_pred_teacher
             dims = tuple(range(1, latents.ndim))
             normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True)
+            if norm_clip_min is not None:
+                normalizer = normalizer.clamp(min=float(norm_clip_min))
             grad = torch.nan_to_num(grad / normalizer)
         return 0.5 * F.mse_loss(latents.float(), (latents.float() - grad.float()).detach(), reduction="mean")
+
+    def _prepare_sampling_schedule(self):
+        if self.random_schedule_enabled:
+            self.scheduler.set_random_timesteps(
+                self.random_schedule_num_steps_min,
+                self.random_schedule_num_steps_max,
+                sigma_min=self.random_schedule_sigma_min,
+                sigma_max=self.random_schedule_sigma_max,
+                sampling_method=self.random_schedule_sampling_method,
+                device=self.model.device,
+            )
+        else:
+            self.scheduler.set_timesteps(self.num_inference_steps, device=self.model.device)
+
+    def _effective_cdm_weight(self, current_iter=None):
+        if self.cdm_warmup_iters <= 0 or current_iter is None:
+            return self.cdm_weight
+        progress = min(1.0, max(0.0, float(current_iter) / float(self.cdm_warmup_iters)))
+        return progress * self.cdm_weight
 
     def _latent_shape(self, sample):
         image = sample["target_image"]
@@ -138,27 +197,56 @@ class DmdLoraTrainer(LoraTrainer):
         return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
 
     def sample_end_step(self):
-        return int(torch.randint(0, self.num_inference_steps, (1,), device=self.model.device).item())
+        return int(torch.randint(0, self.scheduler.num_inference_steps, (1,), device=self.model.device).item())
 
-    def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
-        self.scheduler.set_timesteps(self.num_inference_steps)
+    def run_back_simulation(self, condition, latent_shape, end_step_idx, xt=None):
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
         x0 = None
+        xt_end = None
+        vt_end = None
         self.model.transformer.train()
         for idx in range(end_step_idx + 1):
             sigma = self.scheduler.sigma_at(idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
-            context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
-            with context():
+            with torch.no_grad():
                 velocity = self._predict_velocity(self.model, xt, sigma, condition)
+            if idx == end_step_idx:
+                xt_end = xt.detach()
+                vt_end = velocity.detach()
             xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
-        return x0
+        return x0.detach(), xt_end, vt_end
 
-    def forward_loss(self, latent_shape, conditions, stage):
+    def _compute_cdm_loss(self, xt, vt, end_step_idx, condition):
+        batch_size = xt.shape[0]
+
+        traj_sigma = self.scheduler.sigma_at(end_step_idx, batch_size, device=self.model.device, dtype=torch.float32)
+        student_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=torch.float32)
+        student_xt = xt + (student_sigma - traj_sigma) * vt
+
+        student_prediction = self._predict_velocity(self.model, student_xt.to(self.running_dtype), student_sigma, condition)
+        student_x0 = student_xt - student_sigma * student_prediction
+        student_x0 = student_x0.to(self.running_dtype)
+
+        teacher_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=self.running_dtype)
+        teacher_noise = torch.randn_like(student_x0)
+        teacher_xt = self.scheduler.add_noise(student_x0, teacher_noise, teacher_sigma)
+
+        with torch.no_grad():
+            self.fake_model.transformer.eval()
+            velocity_fake = self._predict_velocity(self.fake_model, teacher_xt, teacher_sigma, condition)
+            velocity_teacher = self._predict_velocity(self.teacher_model, teacher_xt, teacher_sigma, condition)
+
+        x_pred_fake = teacher_xt - teacher_sigma * velocity_fake
+        x_pred_teacher = teacher_xt - teacher_sigma * velocity_teacher
+        loss = self._dmd_loss(student_x0, x_pred_fake, x_pred_teacher, norm_clip_min=self.cdm_norm_clip_min)
+        return loss
+
+    def forward_loss(self, latent_shape, conditions, stage, current_iter=None):
         condition, negative_condition = conditions
+        self._prepare_sampling_schedule()
         end_step_idx = self.sample_end_step()
         xt_start = self.sample_initial_latents(latent_shape)
-        x0_ref = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=False, xt=xt_start)
+        x0_ref, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, xt=xt_start)
 
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
@@ -168,7 +256,8 @@ class DmdLoraTrainer(LoraTrainer):
             self.fake_model.transformer.train()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
             velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
-            return F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
+            loss_fake = F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
+            return {"fake": loss_fake}
 
         with torch.no_grad():
             self.fake_model.transformer.eval()
@@ -179,8 +268,20 @@ class DmdLoraTrainer(LoraTrainer):
 
         x_pred_fake = renoised_xt - sigma * velocity_fake
         x_pred_teacher = renoised_xt - sigma * velocity_teacher
-        x0 = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=True, xt=xt_start)
-        return self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
+        sigma_end = self.scheduler.sigma_at(end_step_idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
+        xt_velocity = self._predict_velocity(self.model, xt_end, sigma_end, condition)
+        x0 = xt_end - sigma_end * xt_velocity
+
+        loss_dmd = self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
+        total_loss = loss_dmd
+
+        cdm_weight = self._effective_cdm_weight(current_iter)
+        if self.cdm_enabled and cdm_weight != 0:
+            loss_cdm = self._compute_cdm_loss(xt_end, vt_end, end_step_idx, condition)
+            total_loss = total_loss + cdm_weight * loss_cdm
+        else:
+            loss_cdm = torch.zeros_like(total_loss)
+        return {"student": total_loss, "dmd": loss_dmd, "cdm": loss_cdm, "cdm_weight": cdm_weight}
 
     def train(self):
         resume_ckpt_path, current_iter = self._resolve_resume()
@@ -193,6 +294,7 @@ class DmdLoraTrainer(LoraTrainer):
         save_every_iters = self.save_every_iters
         save_total_limit = self.save_total_limit
         running_dmd = 0.0
+        running_cdm = 0.0
         running_fake = 0.0
 
         progress = tqdm(total=max_train_iters, desc="DMD-LoRA iterations", initial=current_iter)
@@ -206,17 +308,21 @@ class DmdLoraTrainer(LoraTrainer):
                 conditions = self._encode_conditions(sample)
                 latent_shape = self._latent_shape(sample)
 
-                loss_dmd = self.forward_loss(latent_shape, conditions, stage="student")
-                loss_dmd.backward()
+                res_student = self.forward_loss(latent_shape, conditions, stage="student", current_iter=current_iter)
+                loss_student = res_student["student"]
+                loss_student.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.transformer.parameters(), max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad(set_to_none=True)
-                running_dmd += loss_dmd.item()
+                running_dmd += res_student["dmd"].item()
+                running_cdm += res_student["cdm"].item()
+                running_cdm_weight = res_student["cdm_weight"]
 
                 fake_loss = 0.0
                 for _ in range(fake_update_ratio):
-                    loss_fake = self.forward_loss(latent_shape, conditions, stage="fake")
+                    res_fake = self.forward_loss(latent_shape, conditions, stage="fake")
+                    loss_fake = res_fake["fake"]
                     loss_fake.backward()
                     torch.nn.utils.clip_grad_norm_(self.fake_model.transformer.parameters(), max_grad_norm)
                     self.fake_optimizer.step()
@@ -229,10 +335,13 @@ class DmdLoraTrainer(LoraTrainer):
                 progress.update(1)
                 progress.set_postfix(
                     dmd=running_dmd,
+                    cdm=running_cdm,
+                    cdm_w=running_cdm_weight,
                     fake=running_fake,
                     lr=self.lr_scheduler.get_last_lr()[0],
                 )
                 running_dmd = 0.0
+                running_cdm = 0.0
                 running_fake = 0.0
 
                 if save_every_iters and current_iter % save_every_iters == 0:

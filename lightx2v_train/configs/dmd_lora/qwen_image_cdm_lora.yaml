@@ -1,0 +1,121 @@
+model:
+    name: qwen_image
+    pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
+    max_sequence_length: 1024
+    running_dtype: bf16
+
+data:
+    train:
+        name: image_dataset
+        num_workers: 8
+        prompt_dropout_rate: 0.0
+        target_area: 1048576 # 1024 * 1024
+        shuffle: true
+        data_path:
+            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+    val:
+        name: image_dataset
+        num_workers: 8
+        shuffle: false
+        data_path:
+            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
+        time_shift_power: 1.0
+        dynamic_shift: true
+        patch_size: [2, 2]  # [H, W]
+        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
+        shift_x1: 256
+        shift_x2: 4096
+        shift_y1: 0.5
+        shift_y2: 1.15
+
+training:
+    method: dmd_lora
+    max_train_iters: 1000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 100
+    save_total_limit: 10
+    lora:
+        rank: 32
+        alpha: 32
+        target_modules:
+            - to_k
+            - to_q
+            - to_v
+            - to_out.0
+            # - add_q_proj
+            # - add_k_proj
+            # - add_v_proj
+            # - to_add_out
+            # - img_mlp.net.0.proj
+            # - img_mlp.net.2
+            # - txt_mlp.net.0.proj
+            # - txt_mlp.net.2
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.001
+        adam_epsilon: 0.00000001
+    fake:
+        optimizer:
+            learning_rate: 0.00002
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
+    dmd:
+        num_inference_steps: 4
+        fake_update_ratio: 2
+        guidance_scale: 4.0
+        negative_prompt: " "
+        cfg_norm: layer_norm
+        image_sizes:
+            - [1024, 1024]
+            - [768, 1344]
+            - [1344, 768]
+        sigma_min: 0.02
+        sigma_max: 1.0
+        discrete_samples: 1000
+        renoise_shift: 5.0
+        inference_shift: 3.0
+        random_schedule:
+            enabled: true
+            num_steps_min: 2
+            num_steps_max: 16
+            sigma_min: 0.02
+            sigma_max: 0.98
+            sampling_method: stratified
+        cdm:
+            enabled: true
+            norm_clip_min: 0.1
+            weight: 1.0
+            warmup_iters: 200
+    output_dir: ./output_train/qwen_image_cdm_lora
+
+inference:
+    method: image_infer
+    default_width: 1024
+    default_height: 1024
+    num_inference_steps: 4
+    cfg_guidance_scale: 4.0
+    negative_prompt: " "
+    enable_cfg: false
+    output_dir: ./output_infer/qwen_image_cdm_lora
+    infer_every_iters: ${training.save_every_iters}
+
+resume:
+    auto_resume: true
