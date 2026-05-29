@@ -1,5 +1,5 @@
 {
-    "model_cls": "helios",
+    "model_cls": "helios_distilled",
     "model_variant": "distilled",
     "infer_steps": 6,
     "target_video_length": 99,

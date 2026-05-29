@@ -91,7 +91,6 @@ class LightX2VPipeline:
         self.low_noise_original_ckpt = low_noise_original_ckpt
         self.high_noise_original_ckpt = high_noise_original_ckpt
         self.transformer_model_name = transformer_model_name
-
         if self.model_cls in [
             "wan2.1",
             "wan2.1_distill",
@@ -117,7 +116,7 @@ class LightX2VPipeline:
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
-        elif self.model_cls in ["helios"]:
+        elif self.model_cls in ["helios_distilled"]:
             self.vae_stride = (4, 8, 8)
             self.num_channels_latents = 16
         elif self.model_cls in ["ltx2"]:
@@ -252,7 +251,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image", "helios"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image", "helios_distilled"]:
             self.attn_type = attn_mode
         self.norm_modulate_backend = norm_modulate_backend
 
@@ -308,7 +307,7 @@ class LightX2VPipeline:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = text_encoder_quant_scheme
-        elif self.model_cls == "helios":
+        elif self.model_cls == "helios_distilled":
             self.text_encoder_quantized = text_encoder_quantized
             self.text_encoder_quantized_ckpt = text_encoder_quantized_ckpt
             self.text_encoder_quant_scheme = text_encoder_quant_scheme
@@ -353,7 +352,7 @@ class LightX2VPipeline:
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload
-        elif self.model_cls == "helios":
+        elif self.model_cls == "helios_distilled":
             self.text_encoder_cpu_offload = text_encoder_offload
         elif self.model_cls in ["qwen_image", "longcat_image"]:
             self.qwen25vl_cpu_offload = text_encoder_offload

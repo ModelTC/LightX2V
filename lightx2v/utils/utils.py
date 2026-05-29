@@ -736,7 +736,7 @@ def validate_config_paths(config: dict) -> None:
         check_path_exists(config["dit_original_ckpt"])
         logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
 
-    if config.get("model_cls") == "helios":
+    if config.get("model_cls") == "helios_distilled":
         for key in ("transformer_model_path", "text_encoder_path", "tokenizer_path", "vae_path", "scheduler_path"):
             if key in config and config[key] is not None:
                 check_path_exists(config[key])

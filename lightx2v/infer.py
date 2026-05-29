@@ -40,6 +40,45 @@ from lightx2v.utils.set_config import print_config, set_config, set_parallel_con
 from lightx2v.utils.utils import seed_all, validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
+SUPPORTED_MODEL_CLASSES = [
+    "wan2.1",
+    "wan2.1_distill",
+    "wan2.1_mean_flow_distill",
+    "wan2.1_vace",
+    "wan2.1_sf",
+    "wan2.1_sf_mtxg2",
+    "seko_talk",
+    "seko_talk_ar",
+    "wan2.2_moe",
+    "lingbot_world",
+    "wan2.2",
+    "wan2.2_matrix_game3",
+    "wan2.2_moe_audio",
+    "wan2.2_audio",
+    "wan2.2_moe_distill",
+    "wan2.2_moe_vace",
+    "qwen_image",
+    "longcat_image",
+    "wan2.2_animate",
+    "hunyuan_video_1.5",
+    "hunyuan_video_1.5_distill",
+    "helios_distilled",
+    "hunyuan3d",
+    "worldplay_distill",
+    "worldplay_ar",
+    "worldplay_bi",
+    "z_image",
+    "flux2_klein",
+    "flux2_dev",
+    "ltx2",
+    "bagel",
+    "seedvr2",
+    "neopp",
+    "motus",
+    "lingbot_world_fast",
+    "worldmirror",
+]
+
 
 def init_runner(config):
     torch.set_grad_enabled(False)
@@ -55,44 +94,6 @@ def main():
         "--model_cls",
         type=str,
         required=True,
-        choices=[
-            "wan2.1",
-            "wan2.1_distill",
-            "wan2.1_mean_flow_distill",
-            "wan2.1_vace",
-            "wan2.1_sf",
-            "wan2.1_sf_mtxg2",
-            "seko_talk",
-            "seko_talk_ar",
-            "wan2.2_moe",
-            "lingbot_world",
-            "wan2.2",
-            "wan2.2_matrix_game3",
-            "wan2.2_moe_audio",
-            "wan2.2_audio",
-            "wan2.2_moe_distill",
-            "wan2.2_moe_vace",
-            "qwen_image",
-            "longcat_image",
-            "wan2.2_animate",
-            "hunyuan_video_1.5",
-            "hunyuan_video_1.5_distill",
-            "helios",
-            "hunyuan3d",
-            "worldplay_distill",
-            "worldplay_ar",
-            "worldplay_bi",
-            "z_image",
-            "flux2_klein",
-            "flux2_dev",
-            "ltx2",
-            "bagel",
-            "seedvr2",
-            "neopp",
-            "motus",
-            "lingbot_world_fast",
-            "worldmirror",
-        ],
         default="wan2.1",
     )
 
@@ -223,6 +224,8 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
+    if args.model_cls not in SUPPORTED_MODEL_CLASSES:
+        parser.error(f"invalid --model_cls '{args.model_cls}'. Supported values: {', '.join(SUPPORTED_MODEL_CLASSES)}")
     # validate_task_arguments(args)
 
     seed_all(args.seed)

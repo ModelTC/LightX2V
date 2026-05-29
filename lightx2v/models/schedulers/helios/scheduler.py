@@ -14,6 +14,8 @@ class HeliosDistilledScheduler(BaseScheduler):
         self.sample_guide_scale = config.get("sample_guide_scale", 1.0)
         self.generator = None
         self.latents = None
+        self.latent_shape = None
+        self.image_encoder_output = None
         self.timesteps = None
         self.sigmas = None
 
@@ -42,6 +44,9 @@ class HeliosDistilledScheduler(BaseScheduler):
         self.step_index = step_index
 
     def clear(self):
+        self.generator = None
         self.latents = None
+        self.latent_shape = None
+        self.image_encoder_output = None
         self.timesteps = None
         self.sigmas = None

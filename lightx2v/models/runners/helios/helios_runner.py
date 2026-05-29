@@ -9,7 +9,6 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.helios import HeliosTextEncoder
 from lightx2v.models.networks.helios import HeliosModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.helios.runtime_utils import apply_image_condition_noise, finalize_video_output, pt_video_output_to_comfy_frames
 from lightx2v.models.schedulers.helios import HeliosDistilledScheduler
 from lightx2v.models.video_encoders.hf.helios import HeliosVAE
 from lightx2v.server.metrics import monitor_cli
@@ -36,12 +35,62 @@ def randn_tensor(shape, generator=None, device=None, dtype=None):
     return torch.randn(shape, generator=generator, device=device, dtype=dtype)
 
 
-@RUNNER_REGISTER("helios")
+def _apply_image_condition_noise(
+    image_latents,
+    fake_image_latents,
+    generator,
+    device,
+    image_noise_sigma_min,
+    image_noise_sigma_max,
+    video_noise_sigma_min,
+    video_noise_sigma_max,
+):
+    image_noise_sigma = (
+        torch.rand(1, device=device, generator=generator) * (image_noise_sigma_max - image_noise_sigma_min) + image_noise_sigma_min
+    )
+    image_latents = (
+        image_noise_sigma * torch.randn(image_latents.shape, generator=generator, device=device) + (1 - image_noise_sigma) * image_latents
+    )
+    fake_image_noise_sigma = (
+        torch.rand(1, device=device, generator=generator) * (video_noise_sigma_max - video_noise_sigma_min) + video_noise_sigma_min
+    )
+    fake_image_latents = (
+        fake_image_noise_sigma * torch.randn(fake_image_latents.shape, generator=generator, device=device)
+        + (1 - fake_image_noise_sigma) * fake_image_latents
+    )
+    return image_latents, fake_image_latents
+
+
+def _trim_generated_frames(frame_count, temporal_scale_factor):
+    return ((frame_count - 1) // temporal_scale_factor) * temporal_scale_factor + 1
+
+
+def _finalize_video_output(history_video, video_processor, temporal_scale_factor, output_type="pt"):
+    generated_frames = _trim_generated_frames(history_video.size(2), temporal_scale_factor)
+    history_video = history_video[:, :, :generated_frames]
+    return video_processor.postprocess_video(history_video, output_type=output_type)
+
+
+def _pt_video_output_to_frames(video):
+    if video.dim() != 5:
+        raise ValueError(f"Expected [B, T, C, H, W] tensor, got shape {tuple(video.shape)}")
+    return video.permute(0, 1, 3, 4, 2).flatten(0, 1).cpu()
+
+
+@RUNNER_REGISTER("helios_distilled")
 class HeliosRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
         self.keep_first_frame = self.config.get("keep_first_frame", True)
         self.request_generator = None
+
+    def set_inputs(self, inputs):
+        self.request_generator = None
+        super().set_inputs(inputs)
+
+    def end_run(self):
+        self.request_generator = None
+        super().end_run()
 
     def get_request_generator(self):
         if self.request_generator is None:
@@ -71,15 +120,21 @@ class HeliosRunner(DefaultRunner):
         return vae, vae
 
     def init_modules(self):
-        super().init_modules()
         if self.config["task"] not in ["t2v", "i2v"]:
             raise NotImplementedError(f"HeliosRunner only supports t2v/i2v, got {self.config['task']}")
+        if self.config.get("lazy_load"):
+            raise NotImplementedError("Helios native integration does not support lazy_load.")
+        if self.config.get("unload_modules"):
+            raise NotImplementedError("Helios native integration does not support unload_modules.")
+        if self.config.get("cpu_offload"):
+            raise NotImplementedError("Helios native integration does not support generic cpu_offload.")
         if self.config.get("compile"):
             raise NotImplementedError("Helios native integration does not support compile yet.")
         if self.config.get("enable_low_vram_mode"):
             raise NotImplementedError("Helios native integration does not support group offload yet.")
         if self.config.get("enable_parallelism"):
             raise NotImplementedError("Helios native integration does not support context parallelism yet.")
+        super().init_modules()
 
     def get_latent_shape_with_target_hw(self):
         target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
@@ -137,7 +192,7 @@ class HeliosRunner(DefaultRunner):
             width=self.config["target_width"],
             dtype=torch.float32,
         )
-        image_latents, fake_image_latents = apply_image_condition_noise(
+        image_latents, fake_image_latents = _apply_image_condition_noise(
             image_latents=image_latents,
             fake_image_latents=fake_image_latents,
             generator=generator,
@@ -369,8 +424,8 @@ class HeliosRunner(DefaultRunner):
             history_video = current_video if history_video is None else torch.cat([history_video, current_video], dim=2)
 
         self.gen_video = history_video
-        self.gen_video_final = pt_video_output_to_comfy_frames(
-            finalize_video_output(
+        self.gen_video_final = _pt_video_output_to_frames(
+            _finalize_video_output(
             history_video=self.gen_video,
             video_processor=self.vae_decoder.video_processor,
             temporal_scale_factor=self.vae_decoder.vae_scale_factor_temporal,
