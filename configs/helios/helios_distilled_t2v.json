@@ -1,0 +1,19 @@
+{
+    "model_cls": "helios",
+    "model_variant": "distilled",
+    "infer_steps": 6,
+    "target_video_length": 99,
+    "target_height": 384,
+    "target_width": 640,
+    "sample_guide_scale": 1.0,
+    "enable_cfg": false,
+    "fps": 24,
+    "history_sizes": [16, 2, 1],
+    "num_latent_frames_per_chunk": 9,
+    "use_zero_init": false,
+    "zero_steps": 1,
+    "is_enable_stage2": false,
+    "pyramid_num_inference_steps_list": [2, 2, 2],
+    "is_skip_first_chunk": false,
+    "is_amplify_first_chunk": false
+}

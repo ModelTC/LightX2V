@@ -12,6 +12,7 @@ from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DSh
 # from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.helios.helios_runner import HeliosRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
@@ -76,6 +77,7 @@ def main():
             "wan2.2_animate",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
+            "helios",
             "hunyuan3d",
             "worldplay_distill",
             "worldplay_ar",

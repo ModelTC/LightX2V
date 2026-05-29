@@ -121,6 +121,38 @@ def auto_calc_config(config):
                 config["config_path"] = wm_config
             if wm_ckpt:
                 config["ckpt_path"] = wm_ckpt
+    elif config["model_cls"] == "helios":
+        transformer_path = os.path.join(config["model_path"], "transformer")
+        config["transformer_model_path"] = transformer_path
+        config["text_encoder_path"] = config.get("text_encoder_path", os.path.join(config["model_path"], "text_encoder"))
+        config["tokenizer_path"] = config.get("tokenizer_path", os.path.join(config["model_path"], "tokenizer"))
+        config["vae_path"] = config.get("vae_path", os.path.join(config["model_path"], "vae"))
+        config["scheduler_path"] = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
+        config["max_sequence_length"] = config.get("max_sequence_length", 512)
+
+        model_index_path = os.path.join(config["model_path"], "model_index.json")
+        if os.path.exists(model_index_path):
+            with open(model_index_path, "r", encoding="utf-8") as f:
+                model_index = json.load(f)
+            config["is_distilled"] = bool(model_index.get("is_distilled", config.get("is_distilled", False)))
+            config["model_variant"] = config.get("model_variant", "distilled" if config["is_distilled"] else "base")
+            scheduler_entry = model_index.get("scheduler")
+            if isinstance(scheduler_entry, list) and len(scheduler_entry) >= 2:
+                config["scheduler_type"] = scheduler_entry[1]
+
+        if os.path.exists(os.path.join(transformer_path, "config.json")):
+            with open(os.path.join(transformer_path, "config.json"), "r", encoding="utf-8") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+
+        scheduler_config_path = os.path.join(config["model_path"], "scheduler", "scheduler_config.json")
+        if os.path.exists(scheduler_config_path):
+            with open(scheduler_config_path, "r", encoding="utf-8") as f:
+                scheduler_config = json.load(f)
+            config["scheduler_type"] = scheduler_config.get("_class_name", config.get("scheduler_type"))
+            for key in ("stages", "stage_range", "shift", "prediction_type", "time_shift_type", "use_dynamic_shifting", "use_flow_sigmas"):
+                if key in scheduler_config:
+                    config[key] = scheduler_config[key]
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:

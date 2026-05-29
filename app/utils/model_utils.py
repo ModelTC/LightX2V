@@ -22,6 +22,7 @@ except ImportError:
     MS_AVAILABLE = False
 import gc
 import importlib.util
+import json
 import re
 
 import psutil
@@ -469,6 +470,68 @@ def get_quant_scheme(quant_detected, quant_op_val):
         return f"{quant_detected}-triton"
     else:
         return f"{quant_detected}-{quant_op_val}"
+
+
+def _load_json_if_exists(path):
+    if path and os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def detect_helios_variant(model_path_input):
+    model_index = _load_json_if_exists(os.path.join(model_path_input, "model_index.json")) or {}
+    modular_model_index = _load_json_if_exists(os.path.join(model_path_input, "modular_model_index.json")) or {}
+
+    scheduler_name = ""
+    scheduler_entry = model_index.get("scheduler")
+    if isinstance(scheduler_entry, list) and len(scheduler_entry) >= 2:
+        scheduler_name = scheduler_entry[1]
+
+    if not scheduler_name:
+        scheduler_entry = modular_model_index.get("scheduler")
+        if isinstance(scheduler_entry, list) and len(scheduler_entry) >= 2:
+            scheduler_name = scheduler_entry[1]
+
+    is_distilled = bool(model_index.get("is_distilled")) or "Distilled" in (modular_model_index.get("_class_name") or "") or scheduler_name == "HeliosDMDScheduler"
+    variant = "distilled" if is_distilled else "base"
+    return variant, scheduler_name or ("HeliosDMDScheduler" if is_distilled else "HeliosScheduler"), model_index, modular_model_index
+
+
+def build_helios(model_path_input):
+    variant, scheduler_type, model_index, modular_model_index = detect_helios_variant(model_path_input)
+    transformer_config = _load_json_if_exists(os.path.join(model_path_input, "transformer", "config.json")) or {}
+    scheduler_config = _load_json_if_exists(os.path.join(model_path_input, "scheduler", "scheduler_config.json")) or {}
+
+    helios_config = {
+        "model_cls": "helios",
+        "model_variant": variant,
+        "is_distilled": variant == "distilled",
+        "model_path": model_path_input,
+        "transformer_model_path": os.path.join(model_path_input, "transformer"),
+        "text_encoder_path": os.path.join(model_path_input, "text_encoder"),
+        "tokenizer_path": os.path.join(model_path_input, "tokenizer"),
+        "vae_path": os.path.join(model_path_input, "vae"),
+        "scheduler_path": os.path.join(model_path_input, "scheduler"),
+        "scheduler_type": scheduler_type,
+        "model_index_class": model_index.get("_class_name") or modular_model_index.get("_class_name"),
+        "guider_config_path": os.path.join(model_path_input, "guider", "guider_config.json"),
+        "transformer_ode_model_path": os.path.join(model_path_input, "transformer_ode"),
+        "history_sizes": [16, 2, 1],
+        "num_latent_frames_per_chunk": 9,
+        "use_zero_init": False,
+        "zero_steps": 1,
+        "is_enable_stage2": False,
+        "pyramid_num_inference_steps_list": [20, 20, 20],
+        "is_skip_first_chunk": False,
+        "is_amplify_first_chunk": False,
+        "image_noise_sigma_min": 0.111,
+        "image_noise_sigma_max": 0.135,
+        "use_dynamic_shifting": scheduler_config.get("use_dynamic_shifting"),
+        "use_flow_sigmas": scheduler_config.get("use_flow_sigmas"),
+    }
+    helios_config.update(transformer_config)
+    return helios_config
 
 
 def build_wan21(
@@ -942,6 +1005,11 @@ def get_model_configs(
             qwen3_encoder_path_input,
             quant_op,
         )
+        if lora_configs:
+            config["lora_configs"] = lora_configs
+        return config
+    elif model_type_input == "Helios":
+        config = build_helios(model_path_input)
         if lora_configs:
             config["lora_configs"] = lora_configs
         return config
