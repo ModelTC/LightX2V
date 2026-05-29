@@ -35,24 +35,12 @@ class DmdLoraTrainer(LoraTrainer):
         self.image_sizes = self.dmd_config.get("image_sizes", [])
 
         random_schedule_config = self.dmd_config.get("random_schedule", {})
-        self.random_schedule_enabled = bool(
-            random_schedule_config.get("enabled", False)
-        )
-        self.random_schedule_num_steps_min = int(
-            random_schedule_config.get("num_steps_min", 1)
-        )
-        self.random_schedule_num_steps_max = int(
-            random_schedule_config.get("num_steps_max", self.num_inference_steps)
-        )
-        self.random_schedule_sigma_min = float(
-            random_schedule_config.get("sigma_min", 0.02)
-        )
-        self.random_schedule_sigma_max = float(
-            random_schedule_config.get("sigma_max", 0.98)
-        )
-        self.random_schedule_sampling_method = random_schedule_config.get(
-            "sampling_method", "stratified"
-        )
+        self.random_schedule_enabled = bool(random_schedule_config.get("enabled", False))
+        self.random_schedule_num_steps_min = int(random_schedule_config.get("num_steps_min", 1))
+        self.random_schedule_num_steps_max = int(random_schedule_config.get("num_steps_max", self.num_inference_steps))
+        self.random_schedule_sigma_min = float(random_schedule_config.get("sigma_min", 0.02))
+        self.random_schedule_sigma_max = float(random_schedule_config.get("sigma_max", 0.98))
+        self.random_schedule_sampling_method = random_schedule_config.get("sampling_method", "stratified")
 
         self.cdm_config = self.dmd_config.get("cdm", {})
         self.cdm_enabled = bool(self.cdm_config.get("enabled", False))
@@ -103,10 +91,7 @@ class DmdLoraTrainer(LoraTrainer):
                 f"sampling_method={self.random_schedule_sampling_method}"
             )
         if self.cdm_enabled:
-            print(
-                "[dmd_lora] CDM enabled: "
-                f"weight={self.cdm_weight}, warmup_iters={self.cdm_warmup_iters}"
-            )
+            print(f"[dmd_lora] CDM enabled: weight={self.cdm_weight}, warmup_iters={self.cdm_warmup_iters}")
 
     @staticmethod
     def _count_trainable(module):
