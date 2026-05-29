@@ -48,6 +48,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
+
 - **2026年4月30日：** 🚀 支持 天数智芯 的部署，感谢天数智芯团队。
 
 - **2026年4月20日：** 🚀 我们很高兴发布 [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) 和 [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) 两个新模型。与之前的版本相比，这一版本基于高质量的720p数据集进行训练，并采用了优化过的低噪声训练算法。这些改进显著提升了模型在细粒度细节渲染以及视觉纹理方面的表现。
