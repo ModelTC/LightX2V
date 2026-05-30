@@ -1062,7 +1062,7 @@ class WanAudioARRunner(WanAudioRunner):
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
         else:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
-    
+
         logger.info(f"[wan_audio_ar] image resize target_h: {target_h}, target_w: {target_w}, latent_h: {latent_h}, latent_w: {latent_w}")
         return ref_img, latent_shape, target_shape
 
