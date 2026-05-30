@@ -401,7 +401,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
 
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None:
+        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
             target_video_length = self.input_info.target_video_length
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
         else:
@@ -520,7 +520,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None:
+        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
             target_video_length = self.input_info.target_video_length
         else:
             target_video_length = self.config["target_video_length"]
@@ -849,7 +849,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.audio_adapter = self.load_audio_adapter()
 
     def get_latent_shape_with_lat_hw(self, latent_h, latent_w, target_video_length=None):
-        target_video_length = target_video_length if target_video_length is not None else self.config["target_video_length"]
+        target_video_length = target_video_length if target_video_length is not None and target_video_length > 0 else self.config["target_video_length"]
         latent_shape = [
             self.config.get("num_channels_latents", 16),
             (target_video_length - 1) // self.config["vae_stride"][0] + 1,
@@ -1058,7 +1058,7 @@ class WanAudioARRunner(WanAudioRunner):
         latent_h = target_h // self.config["vae_stride"][1]
         latent_w = target_w // self.config["vae_stride"][2]
         target_video_length = getattr(self.input_info, "target_video_length", None)
-        if target_video_length is not None and target_video_length is not UNSET:
+        if target_video_length is not None and target_video_length is not UNSET and target_video_length > 0:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
         else:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
