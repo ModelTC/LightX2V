@@ -3,9 +3,11 @@ import os
 import torch
 from diffusers.utils import convert_state_dict_to_diffusers
 from diffusers.utils.peft_utils import get_adapter_name
+from loguru import logger
 from peft import LoraConfig
-from peft.utils import get_peft_model_state_dict
-from safetensors.torch import save_file
+from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
+from safetensors.torch import load_file, save_file
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
@@ -135,8 +137,6 @@ class BaseModel:
         if not is_fsdp2_module(denoiser):
             return get_peft_model_state_dict(denoiser)
 
-        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
-
         options = StateDictOptions(
             full_state_dict=True,
             cpu_offload=True,
@@ -149,9 +149,6 @@ class BaseModel:
         return get_peft_model_state_dict(denoiser, state_dict=state_dict)
 
     def load_lora_weights_for_resume(self, lora_path):
-        from peft.utils import set_peft_model_state_dict
-        from safetensors.torch import load_file
-
         raw = load_file(os.path.join(lora_path, "pytorch_lora_weights.safetensors"))
         peft_state_dict = {}
         for key, value in raw.items():
@@ -162,7 +159,7 @@ class BaseModel:
 
         incompatible = set_peft_model_state_dict(self.denoiser_module(), peft_state_dict)
         if incompatible and incompatible.unexpected_keys:
-            print(f"Warning: unexpected keys when resuming LoRA: {incompatible.unexpected_keys}")
+            logger.warning("Unexpected keys when resuming LoRA: {}", incompatible.unexpected_keys)
 
     def save_full_model(self, save_dir):
         self.denoiser_module().save_pretrained(f"{save_dir}/transformer", safe_serialization=True)

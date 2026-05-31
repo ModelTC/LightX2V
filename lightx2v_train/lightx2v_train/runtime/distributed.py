@@ -62,11 +62,6 @@ def barrier():
         dist.barrier()
 
 
-def rank_zero_print(*args, **kwargs):
-    if is_main_process():
-        print(*args, **kwargs)
-
-
 def reduce_mean(value):
     if not is_distributed():
         return value
